@@ -134,7 +134,10 @@ jobs:
           SENTRY_FRAMEWORK="$APP_PATH/Contents/Frameworks/Sentry.framework"
           codesign -f -s "$DEVELOPER_ID_IDENTITY_SHA" -o runtime --timestamp -v "$SENTRY_FRAMEWORK/Versions/A/Sentry"
           codesign -f -s "$DEVELOPER_ID_IDENTITY_SHA" -o runtime --timestamp -v "$SENTRY_FRAMEWORK"
-          codesign -f -s "$DEVELOPER_ID_IDENTITY_SHA" -o runtime --timestamp -v "$APP_PATH"
+          codesign -f -s "$DEVELOPER_ID_IDENTITY_SHA" -o runtime --timestamp --preserve-metadata=entitlements,requirements,flags -v "$APP_PATH"
+
+          codesign -d --entitlements - "$APP_PATH/Contents/MacOS/supacode" 2>&1 | tee /tmp/supacode-entitlements.txt
+          grep -q "com.apple.security.device.audio-input" /tmp/supacode-entitlements.txt
 
           codesign -vvv --deep --strict "$APP_PATH"
       - name: Store notarization credentials

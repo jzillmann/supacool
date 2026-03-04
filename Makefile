@@ -40,7 +40,7 @@ $(GHOSTTY_BUILD_OUTPUTS):
 	rsync -a --delete "$$terminfo_src/" "$$terminfo_dst/"
 
 build-app: build-ghostty-xcframework # Build the macOS app (Debug)
-	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -clonedSourcePackagesDirPath $(SPM_CACHE_DIR) 2>&1 | mise exec -- xcsift -qw --format toon'
+	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug build -skipMacroValidation -clonedSourcePackagesDirPath $(SPM_CACHE_DIR) 2>&1 | mise exec -- xcsift -qw --format toon'
 
 run-app: build-app # Build then launch (Debug) with log streaming
 	@settings="$$(xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug -showBuildSettings -json 2>/dev/null)"; \
