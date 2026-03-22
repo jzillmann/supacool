@@ -33,8 +33,6 @@ runs:
           Resources/ghostty
           Resources/terminfo
         key: ${{ runner.os }}-${{ runner.arch }}-ghostty-${{ env.GHOSTTY_SHA }}
-        restore-keys: |
-          ${{ runner.os }}-${{ runner.arch }}-ghostty-
     - name: Build ghostty
       if: steps.ghostty_cache.outputs.cache-hit != 'true'
       shell: bash
