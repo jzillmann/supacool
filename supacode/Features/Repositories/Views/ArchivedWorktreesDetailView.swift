@@ -85,7 +85,7 @@ struct ArchivedWorktreesDetailView: View {
         selectedArchivedWorktreeIDs = selectedArchivedWorktreeIDs.intersection(newValue)
       }
       .animation(.easeOut(duration: 0.2), value: archivedRowIDs)
-      .focusedSceneValue(\.deleteWorktreeAction, deleteWorktreeAction)
+      .focusedValue(\.deleteWorktreeAction, deleteWorktreeAction)
       .focusedSceneValue(\.confirmWorktreeAction, confirmWorktreeAction)
       .toolbar {
         let deleteShortcut = KeyboardShortcut(.delete, modifiers: [.command, .shift]).display

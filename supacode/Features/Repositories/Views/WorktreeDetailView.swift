@@ -171,8 +171,8 @@ struct WorktreeDetailView: View {
     content
       .focusedSceneValue(\.openSelectedWorktreeAction, actions.openSelectedWorktree)
       .focusedSceneValue(\.newTerminalAction, actions.newTerminal)
-      .focusedSceneValue(\.closeTabAction, actions.closeTab)
-      .focusedSceneValue(\.closeSurfaceAction, actions.closeSurface)
+      .focusedValue(\.closeTabAction, actions.closeTab)
+      .focusedValue(\.closeSurfaceAction, actions.closeSurface)
       .focusedSceneValue(\.startSearchAction, actions.startSearch)
       .focusedSceneValue(\.searchSelectionAction, actions.searchSelection)
       .focusedSceneValue(\.navigateSearchNextAction, actions.navigateSearchNext)

@@ -30,8 +30,8 @@ struct SidebarView: View {
       terminalManager: terminalManager
     )
     .focusedSceneValue(\.confirmWorktreeAction, confirmWorktreeAction)
-    .focusedSceneValue(\.archiveWorktreeAction, archiveWorktreeAction)
-    .focusedSceneValue(\.deleteWorktreeAction, deleteWorktreeAction)
+    .focusedValue(\.archiveWorktreeAction, archiveWorktreeAction)
+    .focusedValue(\.deleteWorktreeAction, deleteWorktreeAction)
     .focusedSceneValue(\.visibleHotkeyWorktreeRows, visibleHotkeyRows)
     .onAppear { syncSidebarSelections(state: state, visibleWorktreeIDs: visibleWorktreeIDs) }
     .onChange(of: state.selection) { _, _ in
