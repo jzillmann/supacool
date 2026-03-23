@@ -114,12 +114,6 @@ struct SettingsView: View {
         }
       }
     }
-    .toolbar {
-      ToolbarItem(placement: .principal) {
-        Color.clear
-          .frame(width: 1, height: 1)
-      }
-    }
     .navigationSplitViewStyle(.balanced)
     .alert(store: settingsStore.scope(state: \.$alert, action: \.alert))
     .alert(store: store.scope(state: \.$alert, action: \.alert))
