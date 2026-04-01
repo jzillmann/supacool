@@ -18,6 +18,11 @@
 	<string>A program running within Supacode would like to access the local network.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>A program running within Supacode would like to access your location information.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>TemporaryLocationAccess</key>
+		<string>A program running within Supacode would like to use your location temporarily.</string>
+	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>A program running within Supacode would like to use your microphone.</string>
 	<key>NSMotionUsageDescription</key>
