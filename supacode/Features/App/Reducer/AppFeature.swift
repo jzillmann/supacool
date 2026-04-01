@@ -228,6 +228,12 @@ struct AppFeature {
           await terminalClient.send(.runBlockingScript(worktree, kind: kind, script: script))
         }
 
+      case .repositories(.delegate(.selectTerminalTab(let worktreeID, let tabId))):
+        guard let worktree = state.repositories.worktree(for: worktreeID) else { return .none }
+        return .run { _ in
+          await terminalClient.send(.selectTab(worktree, tabId: tabId))
+        }
+
       case .settings(.setSelection(let selection)):
         let resolvedSelection = selection ?? .general
         switch resolvedSelection {
@@ -675,14 +681,14 @@ struct AppFeature {
       case .terminalEvent(.setupScriptConsumed(let worktreeID)):
         return .send(.repositories(.consumeSetupScript(worktreeID)))
 
-      case .terminalEvent(.blockingScriptCompleted(let worktreeID, let kind, let exitCode)):
+      case .terminalEvent(.blockingScriptCompleted(let worktreeID, let kind, let exitCode, let tabId)):
         switch kind {
         case .run:
-          return .send(.repositories(.runScriptCompleted(worktreeID: worktreeID, exitCode: exitCode)))
+          return .send(.repositories(.runScriptCompleted(worktreeID: worktreeID, exitCode: exitCode, tabId: tabId)))
         case .archive:
-          return .send(.repositories(.archiveScriptCompleted(worktreeID: worktreeID, exitCode: exitCode)))
+          return .send(.repositories(.archiveScriptCompleted(worktreeID: worktreeID, exitCode: exitCode, tabId: tabId)))
         case .delete:
-          return .send(.repositories(.deleteScriptCompleted(worktreeID: worktreeID, exitCode: exitCode)))
+          return .send(.repositories(.deleteScriptCompleted(worktreeID: worktreeID, exitCode: exitCode, tabId: tabId)))
         }
 
       case .terminalEvent:

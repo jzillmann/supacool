@@ -44,6 +44,8 @@ final class WorktreeTerminalManager {
       state.ensureInitialTab(focusing: focusing)
     case .stopRunScript(let worktree):
       _ = state(for: worktree).stopRunScript()
+    case .selectTab(let worktree, let tabId):
+      state(for: worktree).selectTab(tabId)
     case .runBlockingScript(let worktree, let kind, let script):
       _ = state(for: worktree).runBlockingScript(kind: kind, script)
     case .closeFocusedTab(let worktree):
@@ -159,8 +161,8 @@ final class WorktreeTerminalManager {
     state.onTaskStatusChanged = { [weak self] status in
       self?.emit(.taskStatusChanged(worktreeID: worktree.id, status: status))
     }
-    state.onBlockingScriptCompleted = { [weak self] kind, exitCode in
-      self?.emit(.blockingScriptCompleted(worktreeID: worktree.id, kind: kind, exitCode: exitCode))
+    state.onBlockingScriptCompleted = { [weak self] kind, exitCode, tabId in
+      self?.emit(.blockingScriptCompleted(worktreeID: worktree.id, kind: kind, exitCode: exitCode, tabId: tabId))
     }
     state.onCommandPaletteToggle = { [weak self] in
       self?.emit(.commandPaletteToggleRequested(worktreeID: worktree.id))

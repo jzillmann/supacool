@@ -95,7 +95,7 @@ struct WorktreeEnvironmentTests {
       launch.directoryURL.deletingLastPathComponent().path(percentEncoded: false)
         == FileManager.default.temporaryDirectory.path(percentEncoded: false)
     )
-    #expect(launch.commandInput == shellSingleQuoted(launch.runnerURL.path(percentEncoded: false)) + "\nexit\n")
+    #expect(launch.commandInput == shellSingleQuoted(launch.runnerURL.path(percentEncoded: false)) + "\n")
     #expect(scriptContents == "docker compose down\ncodex exec \"test\"\n")
     #expect(rootPathContents == "/tmp/repo\n")
     #expect(worktreePathContents == "/tmp/repo/wt-1\n")
@@ -120,10 +120,11 @@ struct WorktreeEnvironmentTests {
     )
     #expect(
       runnerContents.contains(
-        "exec \"$SUPACODE_SHELL_PATH\" -l \(shellSingleQuoted(launch.scriptURL.path(percentEncoded: false)))"
+        "\"$SUPACODE_SHELL_PATH\" -l \(shellSingleQuoted(launch.scriptURL.path(percentEncoded: false)))"
       )
         == true
     )
+    #expect(runnerContents.contains("exec") == false)
     #expect(runnerContents.contains("docker compose down") == false)
     #expect(runnerContents.contains("codex exec \"test\"") == false)
   }
@@ -142,7 +143,7 @@ struct WorktreeEnvironmentTests {
     #expect(
       try makeBlockingScriptLaunch(
         script: """
-            
+
           """,
         environment: [
           "SUPACODE_ROOT_PATH": "/tmp/repo",

@@ -26,8 +26,6 @@ final class WorktreeTerminalState {
   var tabIsRunningById: [TerminalTabID: Bool] = [:]
   private var blockingScripts: [TerminalTabID: BlockingScriptKind] = [:]
   private var blockingScriptLaunchDirectories: [TerminalTabID: URL] = [:]
-  private var blockingScriptCommandFinished: Set<TerminalTabID> = []
-  private var blockingScriptLastCommandExitCode: [TerminalTabID: Int] = [:]
   private var lastBlockingScriptTabByKind: [BlockingScriptKind: TerminalTabID] = [:]
   private var pendingSetupScript: Bool
   private var isEnsuringInitialTab = false
@@ -47,7 +45,7 @@ final class WorktreeTerminalState {
   var onTabClosed: (() -> Void)?
   var onFocusChanged: ((UUID) -> Void)?
   var onTaskStatusChanged: ((WorktreeTaskStatus) -> Void)?
-  var onBlockingScriptCompleted: ((BlockingScriptKind, Int?) -> Void)?
+  var onBlockingScriptCompleted: ((BlockingScriptKind, Int?, TerminalTabID?) -> Void)?
   var onCommandPaletteToggle: (() -> Void)?
   var onSetupScriptConsumed: (() -> Void)?
 
@@ -152,7 +150,7 @@ final class WorktreeTerminalState {
       launch = prepared
     } catch {
       blockingScriptLogger.warning("Failed to prepare \(kind.tabTitle) for worktree \(worktree.id): \(error)")
-      onBlockingScriptCompleted?(kind, nil)
+      onBlockingScriptCompleted?(kind, 1, nil)
       return nil
     }
     // Close any previous tab of the same kind (active or lingering
@@ -160,8 +158,6 @@ final class WorktreeTerminalState {
     // so closeTab doesn't fire a premature completion callback.
     if let active = blockingScripts.first(where: { $0.value == kind })?.key {
       blockingScripts.removeValue(forKey: active)
-      blockingScriptCommandFinished.remove(active)
-      blockingScriptLastCommandExitCode.removeValue(forKey: active)
       lastBlockingScriptTabByKind.removeValue(forKey: kind)
       closeTab(active)
     } else if let lingering = lastBlockingScriptTabByKind.removeValue(forKey: kind) {
@@ -182,7 +178,7 @@ final class WorktreeTerminalState {
     guard let tabId else {
       cleanupBlockingScriptLaunchDirectory(at: launch.directoryURL)
       blockingScriptLogger.warning("Failed to create \(kind.tabTitle) tab for worktree \(worktree.id)")
-      onBlockingScriptCompleted?(kind, nil)
+      onBlockingScriptCompleted?(kind, 1, nil)
       return nil
     }
     blockingScripts[tabId] = kind
@@ -226,6 +222,10 @@ final class WorktreeTerminalState {
   }
 
   func selectTab(_ tabId: TerminalTabID) {
+    guard tabManager.tabs.contains(where: { $0.id == tabId }) else {
+      blockingScriptLogger.warning("selectTab: tab \(tabId.rawValue) not found in worktree \(worktree.id)")
+      return
+    }
     tabManager.selectTab(tabId)
     focusSurface(in: tabId)
     emitTaskStatusIfChanged()
@@ -364,10 +364,8 @@ final class WorktreeTerminalState {
     emitTaskStatusIfChanged()
 
     if let closedBlockingKind {
-      blockingScriptCommandFinished.remove(tabId)
-      blockingScriptLastCommandExitCode.removeValue(forKey: tabId)
       blockingScriptLogger.info("\(closedBlockingKind.tabTitle) cancelled (tab closed)")
-      onBlockingScriptCompleted?(closedBlockingKind, nil)
+      onBlockingScriptCompleted?(closedBlockingKind, nil, nil)
     }
     onTabClosed?()
   }
@@ -541,12 +539,10 @@ final class WorktreeTerminalState {
     tabIsRunningById.removeAll()
     let pendingKinds = Set(blockingScripts.values)
     blockingScripts.removeAll()
-    blockingScriptCommandFinished.removeAll()
-    blockingScriptLastCommandExitCode.removeAll()
     lastBlockingScriptTabByKind.removeAll()
 
     for kind in pendingKinds {
-      onBlockingScriptCompleted?(kind, nil)
+      onBlockingScriptCompleted?(kind, nil, nil)
     }
     tabManager.closeAll()
   }
@@ -649,64 +645,47 @@ final class WorktreeTerminalState {
     )
   }
 
-  // Detects signal-based termination (e.g. Ctrl+C = exit code 130)
-  // and reports failure immediately without waiting for SHOW_CHILD_EXITED,
-  // since the exit code is already available from COMMAND_FINISHED.
+  // Fires when the blocking command finishes. The shell stays alive
+  // so the user can inspect output. Completion is reported here for
+  // all exit codes. `handleBlockingScriptChildExited` covers the
+  // separate case where the shell exits before the command finishes.
   private func handleBlockingScriptCommandFinished(tabId: TerminalTabID, exitCode: Int?) {
-    guard let kind = blockingScripts[tabId] else { return }
-    blockingScriptCommandFinished.insert(tabId)
-    if let exitCode {
-      blockingScriptLastCommandExitCode[tabId] = exitCode
-    }
-    guard let exitCode, exitCode >= 128 else { return }
-    blockingScriptLogger.info("\(kind.tabTitle) interrupted by signal (exit code \(exitCode))")
-    blockingScripts.removeValue(forKey: tabId)
-    blockingScriptCommandFinished.remove(tabId)
-    blockingScriptLastCommandExitCode.removeValue(forKey: tabId)
-    tabManager.unlockAndUpdateTitle(tabId, title: "\(worktree.name) \(nextTabIndex())")
-
-    Task { @MainActor [weak self] in
-      // Bail out if a new script of the same kind started before this ran.
-      guard self?.blockingScripts.values.contains(kind) != true else {
-        blockingScriptLogger.info("\(kind.tabTitle) completion superseded by new script of same kind")
-        return
-      }
-      self?.onBlockingScriptCompleted?(kind, exitCode)
-    }
+    guard let kind = blockingScripts.removeValue(forKey: tabId) else { return }
+    blockingScriptLogger.info("\(kind.tabTitle) finished with exit code \(exitCode.map(String.init) ?? "nil")")
+    completeBlockingScript(kind, tabId: tabId, exitCode: exitCode, reportedTabId: tabId)
   }
 
-  // Fires when the shell process exits. The completion callback is dispatched
-  // asynchronously to avoid reentrancy into Ghostty's callback during surface teardown.
+  // Fires when the shell process exits on its own (e.g. user types
+  // exit or presses Ctrl+D). If the command already finished, this
+  // is a no-op because `blockingScripts[tabId]` was cleared in
+  // `handleBlockingScriptCommandFinished`. Otherwise the script was
+  // interrupted before completing, so we treat it as cancellation.
   private func handleBlockingScriptChildExited(tabId: TerminalTabID, exitCode: UInt32) {
     guard let kind = blockingScripts.removeValue(forKey: tabId) else { return }
+    blockingScriptLogger.info("\(kind.tabTitle) cancelled (shell exited before command finished)")
+    completeBlockingScript(kind, tabId: tabId, exitCode: nil, reportedTabId: nil)
+  }
+
+  // Unlocks the tab and asynchronously fires the completion callback,
+  // unless a new script of the same kind has already started.
+  private func completeBlockingScript(
+    _ kind: BlockingScriptKind,
+    tabId: TerminalTabID,
+    exitCode: Int?,
+    reportedTabId: TerminalTabID?
+  ) {
     tabManager.unlockAndUpdateTitle(tabId, title: "\(worktree.name) \(nextTabIndex())")
 
-    guard blockingScriptCommandFinished.remove(tabId) != nil else {
-      blockingScriptLastCommandExitCode.removeValue(forKey: tabId)
-      // No command ran to completion — user pressed Ctrl+D or
-      // the shell exited before the script ran. Treat as cancellation.
-      blockingScriptLogger.info("\(kind.tabTitle) cancelled (no command finished before child exit)")
-      Task { @MainActor [weak self] in
-        guard self?.blockingScripts.values.contains(kind) != true else {
-          blockingScriptLogger.info("\(kind.tabTitle) completion superseded by new script of same kind")
-          return
-        }
-        self?.onBlockingScriptCompleted?(kind, nil)
-      }
-      return
-    }
-    let code = blockingScriptLastCommandExitCode.removeValue(forKey: tabId) ?? Int(exitCode)
-    blockingScriptLogger.info("\(kind.tabTitle) completed with exit code \(code)")
     Task { @MainActor [weak self] in
-      // Bail out if a new script of the same kind started before this ran.
-      guard self?.blockingScripts.values.contains(kind) != true else {
+      guard let self else {
+        blockingScriptLogger.debug("\(kind.tabTitle) completion dropped (state deallocated)")
+        return
+      }
+      guard !self.blockingScripts.values.contains(kind) else {
         blockingScriptLogger.info("\(kind.tabTitle) completion superseded by new script of same kind")
         return
       }
-      self?.onBlockingScriptCompleted?(kind, code)
-      if code == 0, self?.trees[tabId] != nil {
-        self?.closeTab(tabId)
-      }
+      self.onBlockingScriptCompleted?(kind, exitCode, reportedTabId)
     }
   }
 
@@ -1018,11 +997,9 @@ final class WorktreeTerminalState {
       cleanupBlockingScriptLaunchDirectory(for: tabId)
       tabManager.closeTab(tabId)
       if let kind = blockingScripts.removeValue(forKey: tabId) {
-        blockingScriptCommandFinished.remove(tabId)
-        blockingScriptLastCommandExitCode.removeValue(forKey: tabId)
         lastBlockingScriptTabByKind.removeValue(forKey: kind)
 
-        onBlockingScriptCompleted?(kind, nil)
+        onBlockingScriptCompleted?(kind, nil, nil)
       } else {
         for (kind, tracked) in lastBlockingScriptTabByKind where tracked == tabId {
           lastBlockingScriptTabByKind.removeValue(forKey: kind)
@@ -1171,7 +1148,7 @@ nonisolated func makeBlockingScriptLaunch(
     rootPathURL: rootPathURL,
     worktreePathURL: worktreePathURL,
     shellPathURL: shellPathURL,
-    commandInput: shellSingleQuoted(runnerURL.path(percentEncoded: false)) + "\nexit\n"
+    commandInput: shellSingleQuoted(runnerURL.path(percentEncoded: false)) + "\n"
   )
 }
 
@@ -1193,7 +1170,7 @@ nonisolated func blockingScriptRunnerContents(
     IFS= read -r SUPACODE_WORKTREE_PATH < \(quotedWorktreePath)
     IFS= read -r SUPACODE_SHELL_PATH < \(quotedShellPath)
     export SUPACODE_ROOT_PATH SUPACODE_WORKTREE_PATH
-    exec "$SUPACODE_SHELL_PATH" -l \(quotedScriptPath)
+    "$SUPACODE_SHELL_PATH" -l \(quotedScriptPath)
     """
 }
 
