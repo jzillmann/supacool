@@ -425,10 +425,10 @@ private struct ShimmerModifier: ViewModifier {
           startPoint: phase ? UnitPoint(x: 1, y: 1) : UnitPoint(x: -0.5, y: -0.5),
           endPoint: phase ? UnitPoint(x: 1.5, y: 1.5) : UnitPoint(x: 0, y: 0)
         )
-      )
-      .animation(
-        isActive ? .linear(duration: 1.5).delay(0.25).repeatForever(autoreverses: false) : nil,
-        value: phase
+        .animation(
+          isActive ? .linear(duration: 1.5).delay(0.25).repeatForever(autoreverses: false) : nil,
+          value: phase
+        )
       )
       .task(id: isActive) { phase = isActive }
   }
