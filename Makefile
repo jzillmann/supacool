@@ -42,7 +42,7 @@ help:  # Display this help.
 build-ghostty-xcframework: $(GHOSTTY_BUILD_OUTPUTS) # Build ghostty framework
 
 $(GHOSTTY_BUILD_OUTPUTS):
-	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false
+	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false -Dxcframework-target=native
 	rsync -a ThirdParty/ghostty/macos/GhosttyKit.xcframework Frameworks
 	@src="ThirdParty/ghostty/zig-out/share/ghostty"; \
 	dst="$(GHOSTTY_RESOURCE_PATH)"; \
