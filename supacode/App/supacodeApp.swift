@@ -54,6 +54,10 @@ final class SupacodeAppDelegate: NSObject, NSApplicationDelegate {
     UserDefaults.standard.register(defaults: [
       "ApplePressAndHoldEnabled": false
     ])
+    // Activate on launch so the app lands in front instead of behind whatever
+    // terminal launched it (via `make run-app`). Also useful when re-launched
+    // from Finder/Dock with no visible windows yet.
+    NSApplication.shared.activate(ignoringOtherApps: true)
     appStore?.send(.appLaunched)
   }
 
