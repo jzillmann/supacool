@@ -196,14 +196,14 @@ private struct SidebarRepositorySectionActionsView: View {
       store.send(.createRandomWorktreeInRepository(repositoryID))
     } label: {
       Image(systemName: "plus")
-        .accessibilityLabel("New Worktree")
+        .accessibilityLabel("New Workspace")
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
     .disabled(isRemovingRepository)
     .foregroundStyle(.secondary)
-    .help("New Worktree")
+    .help("New Workspace")
     .padding(.trailing, 4)
   }
 }
