@@ -6,6 +6,7 @@ struct SidebarView: View {
   @Bindable var store: StoreOf<RepositoriesFeature>
   let terminalManager: WorktreeTerminalManager
   @Shared(.settingsFile) private var settingsFile
+  @Shared(.appStorage("sidebarViewMode")) private var sidebarViewMode: SidebarViewMode = .pinned
 
   var body: some View {
     let state = store.state
@@ -21,6 +22,9 @@ struct SidebarView: View {
       terminalManager: terminalManager
     )
     .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        SidebarViewModePicker()
+      }
       ToolbarItem(placement: .primaryAction) {
         Button {
           store.send(.setOpenPanelPresented(true))
@@ -66,6 +70,25 @@ struct SidebarView: View {
       } else {
         store.send(.requestArchiveWorktrees(targets))
       }
+    }
+  }
+
+  private struct SidebarViewModePicker: View {
+    @Shared(.appStorage("sidebarViewMode")) private var sidebarViewMode: SidebarViewMode = .pinned
+
+    var body: some View {
+      let isShowingAll = sidebarViewMode == .all
+      Button {
+        $sidebarViewMode.withLock { $0 = isShowingAll ? .pinned : .all }
+      } label: {
+        Image(systemName: isShowingAll ? "pin.slash" : "pin.fill")
+          .accessibilityLabel(isShowingAll ? "Show Pinned Only" : "Show All Worktrees")
+      }
+      .help(
+        isShowingAll
+          ? "Showing all worktrees — click to show pinned only"
+          : "Showing pinned only — click to show all worktrees"
+      )
     }
   }
 

@@ -1267,7 +1267,14 @@ struct RepositoriesFeature {
           setSingleWorktreeSelection(worktree.id, state: &state)
         }
         insertWorktree(worktree, repositoryID: repositoryID, state: &state)
+        // Auto-pin newly created worktrees so they show in the default Pinned view.
+        state.pinnedWorktreeIDs.removeAll { $0 == worktree.id }
+        state.pinnedWorktreeIDs.insert(worktree.id, at: 0)
+        let pinnedWorktreeIDs = state.pinnedWorktreeIDs
         return .merge(
+          .run { _ in
+            await repositoryPersistence.savePinnedWorktreeIDs(pinnedWorktreeIDs)
+          },
           .send(.reloadRepositories(animated: false)),
           .send(.delegate(.repositoriesChanged(state.repositories))),
           .send(.delegate(.selectedWorktreeChanged(state.worktree(for: state.selectedWorktreeID)))),
@@ -3370,11 +3377,9 @@ extension RepositoriesFeature.State {
   func orderedUnpinnedWorktreeIDs(in repository: Repository) -> [Worktree.ID] {
     let mainID = repository.worktrees.first(where: { isMainWorktree($0) })?.id
     let pinnedSet = Set(pinnedWorktreeIDs)
-    let archivedSet = archivedWorktreeIDSet
     let available = repository.worktrees.filter { worktree in
       worktree.id != mainID
         && !pinnedSet.contains(worktree.id)
-        && !archivedSet.contains(worktree.id)
     }
     let orderedIDs = worktreeOrderByRepository[repository.id] ?? []
     let availableIDs = Set(available.map(\.id))

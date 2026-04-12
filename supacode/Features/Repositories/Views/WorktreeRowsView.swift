@@ -20,8 +20,12 @@ struct WorktreeRowsView: View {
   let terminalManager: WorktreeTerminalManager
   @Environment(CommandKeyObserver.self) private var commandKeyObserver
   @State private var draggingWorktreeIDs: Set<Worktree.ID> = []
+  // Observed so the row list re-renders when the sidebar view mode toggles.
+  @Shared(.appStorage("sidebarViewMode")) private var sidebarViewMode: SidebarViewMode = .pinned
 
   var body: some View {
+    // Reading the shared value here ensures this view re-renders when it changes.
+    let _ = sidebarViewMode
     let state = store.state
     let sections = state.worktreeRowSections(in: repository)
     let isSoleDefaultWorktree = sections.allRows.count == 1 && sections.main != nil
