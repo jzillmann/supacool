@@ -99,7 +99,8 @@ struct GitClient {
           detail: detail,
           workingDirectory: worktreeURL,
           repositoryRootURL: repositoryRootURL,
-          createdAt: createdAt
+          createdAt: createdAt,
+          branch: entry.branch.isEmpty ? nil : entry.branch
         ),
         createdAt: sortDate,
         index: index
@@ -355,7 +356,8 @@ struct GitClient {
                   detail: detail,
                   workingDirectory: worktreeURL,
                   repositoryRootURL: repositoryRootURL,
-                  createdAt: createdAt
+                  createdAt: createdAt,
+                  branch: name
                 )
                 continuation.yield(.finished(worktree))
                 continuation.finish()

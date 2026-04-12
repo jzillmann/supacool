@@ -3158,6 +3158,7 @@ extension RepositoriesFeature.State {
       info: worktreeInfo(for: pending.id),
       isPinned: false,
       isMainWorktree: false,
+      isWorktree: true,
       status: status
     )
   }
@@ -3188,6 +3189,7 @@ extension RepositoriesFeature.State {
       info: worktreeInfo(for: worktree.id),
       isPinned: isPinned,
       isMainWorktree: isMainWorktree,
+      isWorktree: worktree.isWorktree,
       status: status
     )
   }
@@ -3705,7 +3707,8 @@ private func updateWorktreeName(
       detail: worktree.detail,
       workingDirectory: worktree.workingDirectory,
       repositoryRootURL: worktree.repositoryRootURL,
-      createdAt: worktree.createdAt
+      createdAt: worktree.createdAt,
+      branch: worktree.isWorktree ? name : worktree.branch
     )
     repository = Repository(
       id: repository.id,

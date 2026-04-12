@@ -15,6 +15,7 @@ struct WorktreeRowModel: Identifiable, Hashable {
   let info: WorktreeInfoEntry?
   let isPinned: Bool
   let isMainWorktree: Bool
+  let isWorktree: Bool
   let status: Status
 
   var isPending: Bool { status == .pending }

@@ -48,13 +48,14 @@ struct WorktreeDetailView: View {
       if hasActiveWorktree, let selectedWorktree {
         let pullRequest = repositories.worktreeInfo(for: selectedWorktree.id)?.pullRequest
         let matchesBranch =
-          if let pullRequest {
+          if let pullRequest, selectedWorktree.isWorktree {
             pullRequest.headRefName == nil || pullRequest.headRefName == selectedWorktree.name
           } else {
             false
           }
         let toolbarState = WorktreeToolbarState(
           branchName: selectedWorktree.name,
+          canRenameBranch: selectedWorktree.isWorktree,
           statusToast: repositories.statusToast,
           pullRequest: matchesBranch ? pullRequest : nil,
           notificationGroups: notificationGroups,
@@ -241,6 +242,7 @@ struct WorktreeDetailView: View {
 
   fileprivate struct WorktreeToolbarState {
     let branchName: String
+    let canRenameBranch: Bool
     let statusToast: RepositoriesFeature.StatusToast?
     let pullRequest: GithubPullRequest?
     let notificationGroups: [ToolbarNotificationRepositoryGroup]
@@ -276,10 +278,20 @@ struct WorktreeDetailView: View {
 
     var body: some ToolbarContent {
       ToolbarItem {
-        WorktreeDetailTitleView(
-          branchName: toolbarState.branchName,
-          onSubmit: onRenameBranch
-        )
+        if toolbarState.canRenameBranch {
+          WorktreeDetailTitleView(
+            branchName: toolbarState.branchName,
+            onSubmit: onRenameBranch
+          )
+        } else {
+          HStack(spacing: 6) {
+            Image(systemName: "folder")
+              .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
+            Text(toolbarState.branchName)
+              .font(.headline)
+          }
+        }
       }
 
       ToolbarSpacer(.flexible)
@@ -558,6 +570,7 @@ private struct WorktreeToolbarPreview: View {
   init() {
     toolbarState = WorktreeDetailView.WorktreeToolbarState(
       branchName: "feature/toolbar-preview",
+      canRenameBranch: true,
       statusToast: nil,
       pullRequest: nil,
       notificationGroups: [],

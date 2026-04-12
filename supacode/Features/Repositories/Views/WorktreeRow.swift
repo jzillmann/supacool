@@ -125,8 +125,11 @@ struct WorktreeRow: View {
         self.gitIconName = "git-branch"
         self.gitIconColor = AnyShapeStyle(.secondary)
       }
-    } else {
+    } else if row.isWorktree {
       self.gitIconName = "git-branch"
+      self.gitIconColor = AnyShapeStyle(.secondary)
+    } else {
+      self.gitIconName = "folder"
       self.gitIconColor = AnyShapeStyle(.secondary)
     }
 

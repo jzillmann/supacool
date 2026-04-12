@@ -7,6 +7,7 @@ struct Worktree: Identifiable, Hashable, Sendable {
   let workingDirectory: URL
   let repositoryRootURL: URL
   let createdAt: Date?
+  let branch: String?
 
   nonisolated init(
     id: String,
@@ -14,7 +15,8 @@ struct Worktree: Identifiable, Hashable, Sendable {
     detail: String,
     workingDirectory: URL,
     repositoryRootURL: URL,
-    createdAt: Date? = nil
+    createdAt: Date? = nil,
+    branch: String? = nil
   ) {
     self.id = id
     self.name = name
@@ -22,7 +24,10 @@ struct Worktree: Identifiable, Hashable, Sendable {
     self.workingDirectory = workingDirectory
     self.repositoryRootURL = repositoryRootURL
     self.createdAt = createdAt
+    self.branch = branch
   }
+
+  var isWorktree: Bool { branch != nil }
 }
 
 extension Worktree {
