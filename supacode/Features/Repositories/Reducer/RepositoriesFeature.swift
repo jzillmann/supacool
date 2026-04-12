@@ -99,6 +99,7 @@ struct RepositoriesFeature {
     var nextPendingSidebarRevealID = 0
     var pendingSidebarReveal: PendingSidebarReveal?
     @Shared(.appStorage("sidebarCollapsedRepositoryIDs")) var collapsedRepositoryIDs: [Repository.ID] = []
+    @Shared(.appStorage("sidebarViewMode")) var sidebarViewMode: SidebarViewMode = .pinned
     @Presents var worktreeCreationPrompt: WorktreeCreationPromptFeature.State?
     @Presents var alert: AlertState<Alert>?
   }
@@ -167,7 +168,8 @@ struct RepositoriesFeature {
       repositoryID: Repository.ID,
       baseRefOptions: [String],
       automaticBaseRef: String,
-      selectedBaseRef: String?
+      selectedBaseRef: String?,
+      availableWorktrees: [Worktree]
     )
     case startPromptedWorktreeCreation(
       repositoryID: Repository.ID,
@@ -749,12 +751,17 @@ struct RepositoriesFeature {
           guard !Task.isCancelled else {
             return
           }
+          let availableWorktrees = (try? await gitClient.worktrees(rootURL)) ?? []
+          guard !Task.isCancelled else {
+            return
+          }
           await send(
             .promptedWorktreeCreationDataLoaded(
               repositoryID: repositoryID,
               baseRefOptions: baseRefOptions,
               automaticBaseRef: automaticBaseRef,
-              selectedBaseRef: selectedBaseRef
+              selectedBaseRef: selectedBaseRef,
+              availableWorktrees: availableWorktrees
             )
           )
         }
@@ -764,7 +771,8 @@ struct RepositoriesFeature {
         let repositoryID,
         let baseRefOptions,
         let automaticBaseRef,
-        let selectedBaseRef
+        let selectedBaseRef,
+        let availableWorktrees
       ):
         guard let repository = state.repositories[id: repositoryID] else {
           return .none
@@ -776,6 +784,7 @@ struct RepositoriesFeature {
           repositoryRootURL: repository.rootURL,
           automaticBaseRef: automaticBaseRef,
           baseRefOptions: baseRefOptions,
+          availableWorktrees: availableWorktrees,
           branchName: "",
           selectedBaseRef: selectedBaseRef,
           fetchOrigin: promptSettingsFile.global.fetchOriginBeforeWorktreeCreation,
@@ -825,16 +834,35 @@ struct RepositoriesFeature {
         return .none
 
       case .worktreeCreationPrompt(
-        .presented(.delegate(.submitExistingWorktree(let repositoryID, let branchName, let fetchOrigin)))
+        .presented(.delegate(.submitExistingWorktree(let repositoryID, let worktreeID)))
       ):
-        return .send(
-          .startPromptedWorktreeCreation(
-            repositoryID: repositoryID,
-            branchName: branchName,
-            baseRef: nil,
-            fetchOrigin: fetchOrigin
+        // Capture the chosen worktree from the prompt state before dismissing.
+        let chosen = state.worktreeCreationPrompt?.availableWorktrees.first(where: { $0.id == worktreeID })
+        state.worktreeCreationPrompt = nil
+
+        if state.repositories[id: repositoryID]?.worktrees[id: worktreeID] != nil {
+          state.selection = .worktree(worktreeID)
+          return .none
+        }
+        guard let repository = state.repositories[id: repositoryID] else {
+          return .none
+        }
+        let worktree: Worktree
+        if let chosen {
+          worktree = chosen
+        } else {
+          let url = URL(fileURLWithPath: worktreeID).standardizedFileURL
+          worktree = Worktree(
+            id: worktreeID,
+            name: url.lastPathComponent,
+            detail: "",
+            workingDirectory: url,
+            repositoryRootURL: repository.rootURL
           )
-        )
+        }
+        insertWorktree(worktree, repositoryID: repositoryID, state: &state)
+        state.selection = .worktree(worktreeID)
+        return .none
 
       case .startPromptedWorktreeCreation(let repositoryID, let branchName, let baseRef, let fetchOrigin):
         guard let repository = state.repositories[id: repositoryID] else {
@@ -2853,8 +2881,14 @@ struct RepositoriesFeature {
         let gitClient = self.gitClient
         group.addTask {
           do {
-            let worktrees = try await gitClient.worktrees(root)
-            return WorktreesFetchResult(root: root, worktrees: worktrees, errorMessage: nil)
+            let allWorktrees = try await gitClient.worktrees(root)
+            // Supacool: don't open all worktrees by default — only the main worktree
+            // (repo root). Additional worktrees are added explicitly via the
+            // "Existing Worktree" option in the creation dialog.
+            let normalizedRoot = root.standardizedFileURL
+            let mainOnly = allWorktrees.filter { $0.workingDirectory == normalizedRoot }
+            let filtered = mainOnly.isEmpty ? allWorktrees : mainOnly
+            return WorktreesFetchResult(root: root, worktrees: filtered, errorMessage: nil)
           } catch {
             return WorktreesFetchResult(
               root: root,
@@ -3409,7 +3443,10 @@ extension RepositoriesFeature.State {
   func worktreeRowSections(in repository: Repository) -> WorktreeRowSections {
     let mainWorktree = repository.worktrees.first(where: { isMainWorktree($0) })
     let pinnedWorktrees = orderedPinnedWorktrees(in: repository)
-    let unpinnedWorktrees = orderedUnpinnedWorktrees(in: repository)
+    let unpinnedWorktrees =
+      sidebarViewMode == .pinned
+      ? []
+      : orderedUnpinnedWorktrees(in: repository)
     let pendingEntries = pendingWorktrees.filter { $0.repositoryID == repository.id }
     let mainRow: WorktreeRowModel? =
       if let mainWorktree, !isWorktreeArchived(mainWorktree.id) {

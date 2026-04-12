@@ -16,10 +16,11 @@ struct WorktreeCreationPromptFeature {
     let repositoryRootURL: URL
     let automaticBaseRef: String
     let baseRefOptions: [String]
+    let availableWorktrees: [Worktree]
     var mode: WorkspaceMode = .directory
     var branchName: String
     var selectedBaseRef: String?
-    var selectedExistingBranch: String?
+    var selectedExistingWorktreeID: Worktree.ID?
     var fetchOrigin: Bool
     var validationMessage: String?
     var isValidating = false
@@ -38,7 +39,7 @@ struct WorktreeCreationPromptFeature {
   enum Delegate: Equatable {
     case cancel
     case submit(repositoryID: Repository.ID, branchName: String, baseRef: String?, fetchOrigin: Bool)
-    case submitExistingWorktree(repositoryID: Repository.ID, branchName: String, fetchOrigin: Bool)
+    case submitExistingWorktree(repositoryID: Repository.ID, worktreeID: Worktree.ID)
     case submitDirectory(repositoryID: Repository.ID, path: URL)
   }
 
@@ -78,8 +79,8 @@ struct WorktreeCreationPromptFeature {
           )
 
         case .existingWorktree:
-          guard let branch = state.selectedExistingBranch else {
-            state.validationMessage = "Select a branch."
+          guard let worktreeID = state.selectedExistingWorktreeID else {
+            state.validationMessage = "Select a worktree."
             return .none
           }
           state.validationMessage = nil
@@ -87,8 +88,7 @@ struct WorktreeCreationPromptFeature {
             .delegate(
               .submitExistingWorktree(
                 repositoryID: state.repositoryID,
-                branchName: branch,
-                fetchOrigin: state.fetchOrigin
+                worktreeID: worktreeID
               )
             )
           )

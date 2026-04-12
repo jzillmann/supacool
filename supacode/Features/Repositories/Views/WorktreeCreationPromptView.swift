@@ -70,24 +70,22 @@ struct WorktreeCreationPromptView: View {
 
       case .existingWorktree:
         Section {
-          Picker(selection: $store.selectedExistingBranch) {
-            Text("Select a branch…")
+          if selectableWorktrees.isEmpty {
+            Text("No additional worktrees found for this repository.")
               .foregroundStyle(.secondary)
-              .tag(Optional<String>.none)
-            ForEach(store.baseRefOptions, id: \.self) { ref in
-              Text(ref)
-                .tag(Optional(ref))
+          } else {
+            Picker(selection: $store.selectedExistingWorktreeID) {
+              Text("Select a worktree…")
+                .foregroundStyle(.secondary)
+                .tag(Optional<Worktree.ID>.none)
+              ForEach(selectableWorktrees, id: \.id) { worktree in
+                Text(worktreeLabel(worktree))
+                  .tag(Optional(worktree.id))
+              }
+            } label: {
+              Text("Worktree")
+              Text("Open an existing worktree as a workspace.")
             }
-          } label: {
-            Text("Branch")
-            Text("Create a worktree from an existing branch.")
-          }
-
-          Toggle(isOn: $store.fetchOrigin) {
-            Text("Fetch remote branch")
-            Text(
-              "Runs `git fetch` to ensure the branch is up to date before creating the worktree."
-            )
           }
         } footer: {
           if let validationMessage = store.validationMessage, !validationMessage.isEmpty {
@@ -169,5 +167,19 @@ struct WorktreeCreationPromptView: View {
     let ref = store.automaticBaseRef
     guard !ref.isEmpty else { return Text("Auto") }
     return Text("Auto \(Text(ref).foregroundStyle(.secondary))")
+  }
+
+  private var selectableWorktrees: [Worktree] {
+    store.availableWorktrees.filter {
+      $0.workingDirectory.standardizedFileURL != store.repositoryRootURL.standardizedFileURL
+    }
+  }
+
+  private func worktreeLabel(_ worktree: Worktree) -> String {
+    if let branch = worktree.branch, !branch.isEmpty {
+      branch
+    } else {
+      worktree.name
+    }
   }
 }
