@@ -558,6 +558,7 @@ struct RepositoriesFeatureTests {
       $0.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
         repositoryID: repository.id,
         repositoryName: repository.name,
+        repositoryRootURL: repository.rootURL,
         automaticBaseRef: "origin/main",
         baseRefOptions: ["origin/dev", "origin/main"],
         branchName: "",
@@ -576,6 +577,7 @@ struct RepositoriesFeatureTests {
     state.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
       repositoryID: repository.id,
       repositoryName: repository.name,
+      repositoryRootURL: repository.rootURL,
       automaticBaseRef: "origin/main",
       baseRefOptions: ["origin/main"],
       branchName: "feature/new-branch",
@@ -606,6 +608,7 @@ struct RepositoriesFeatureTests {
     state.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
       repositoryID: repository.id,
       repositoryName: repository.name,
+      repositoryRootURL: repository.rootURL,
       automaticBaseRef: "origin/main",
       baseRefOptions: ["origin/main"],
       branchName: "feature/new",
@@ -665,6 +668,7 @@ struct RepositoriesFeatureTests {
     state.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
       repositoryID: repository.id,
       repositoryName: repository.name,
+      repositoryRootURL: repository.rootURL,
       automaticBaseRef: "origin/main",
       baseRefOptions: ["origin/main"],
       branchName: "feature/existing",
@@ -748,6 +752,7 @@ struct RepositoriesFeatureTests {
       $0.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
         repositoryID: repoB.id,
         repositoryName: repoB.name,
+        repositoryRootURL: repoB.rootURL,
         automaticBaseRef: "origin/main",
         baseRefOptions: ["origin/main"],
         branchName: "",
@@ -768,6 +773,7 @@ struct RepositoriesFeatureTests {
     state.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
       repositoryID: repository.id,
       repositoryName: repository.name,
+      repositoryRootURL: repository.rootURL,
       automaticBaseRef: "origin/main",
       baseRefOptions: ["origin/main"],
       branchName: "feature/new-branch",

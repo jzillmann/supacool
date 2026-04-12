@@ -9,8 +9,9 @@ struct WorktreeCreationPromptView: View {
     Form {
       Section {
         Picker("Mode", selection: $store.mode) {
-          Text("Worktree").tag(WorkspaceMode.worktree)
           Text("Directory").tag(WorkspaceMode.directory)
+          Text("New Worktree").tag(WorkspaceMode.newWorktree)
+          Text("Existing Worktree").tag(WorkspaceMode.existingWorktree)
         }
         .pickerStyle(.segmented)
       } header: {
@@ -19,7 +20,20 @@ struct WorktreeCreationPromptView: View {
       }
       .headerProminence(.increased)
 
-      if store.mode == .worktree {
+      switch store.mode {
+      case .directory:
+        Section {
+          LabeledContent("Path") {
+            Text(store.repositoryRootURL.path(percentEncoded: false))
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
+          }
+        } footer: {
+          Text("Opens the repository root as a workspace without creating a git worktree.")
+            .foregroundStyle(.secondary)
+        }
+
+      case .newWorktree:
         Section {
           TextField("Branch name", text: $store.branchName)
             .focused($isBranchFieldFocused)
@@ -53,21 +67,41 @@ struct WorktreeCreationPromptView: View {
               .foregroundStyle(.red)
           }
         }
-      } else {
+
+      case .existingWorktree:
         Section {
-          LabeledContent("Path") {
-            Text(store.repositoryRootURL.path(percentEncoded: false))
+          Picker(selection: $store.selectedExistingBranch) {
+            Text("Select a branch…")
               .foregroundStyle(.secondary)
-              .textSelection(.enabled)
+              .tag(Optional<String>.none)
+            ForEach(store.baseRefOptions, id: \.self) { ref in
+              Text(ref)
+                .tag(Optional(ref))
+            }
+          } label: {
+            Text("Branch")
+            Text("Create a worktree from an existing branch.")
+          }
+
+          Toggle(isOn: $store.fetchOrigin) {
+            Text("Fetch remote branch")
+            Text(
+              "Runs `git fetch` to ensure the branch is up to date before creating the worktree."
+            )
           }
         } footer: {
-          Text("Opens the repository root as a workspace without creating a git worktree.")
-            .foregroundStyle(.secondary)
+          if let validationMessage = store.validationMessage, !validationMessage.isEmpty {
+            Text(validationMessage)
+              .foregroundStyle(.red)
+          }
         }
       }
     }
     .formStyle(.grouped)
     .scrollBounceBehavior(.basedOnSize)
+    .background {
+      modeShortcuts
+    }
     .safeAreaInset(edge: .bottom, spacing: 0) {
       HStack {
         if store.isValidating {
@@ -80,30 +114,54 @@ struct WorktreeCreationPromptView: View {
         }
         .keyboardShortcut(.cancelAction)
         .help("Cancel (Esc)")
-        Button(store.mode == .worktree ? "Create" : "Open") {
+        Button(submitButtonTitle) {
           store.send(.createButtonTapped)
         }
         .keyboardShortcut(.defaultAction)
-        .help(store.mode == .worktree ? "Create (↩)" : "Open (↩)")
+        .help("\(submitButtonTitle) (↩)")
         .disabled(store.isValidating)
       }
       .padding(.horizontal, 20)
       .padding(.bottom, 20)
     }
     .frame(minWidth: 420)
-    .task {
-      if store.mode == .worktree {
+    .onChange(of: store.mode) { _, newMode in
+      if newMode == .newWorktree {
         isBranchFieldFocused = true
       }
     }
   }
 
+  private var modeShortcuts: some View {
+    Group {
+      Button("") { store.mode = .directory }
+        .keyboardShortcut("1", modifiers: .command)
+        .hidden()
+      Button("") { store.mode = .newWorktree }
+        .keyboardShortcut("2", modifiers: .command)
+        .hidden()
+      Button("") { store.mode = .existingWorktree }
+        .keyboardShortcut("3", modifiers: .command)
+        .hidden()
+    }
+  }
+
   private var headerSubtitle: String {
     switch store.mode {
-    case .worktree:
-      "Create a branch in `\(store.repositoryName)`."
     case .directory:
       "Open `\(store.repositoryName)` as a workspace."
+    case .newWorktree:
+      "Create a new branch in `\(store.repositoryName)`."
+    case .existingWorktree:
+      "Check out an existing branch in `\(store.repositoryName)`."
+    }
+  }
+
+  private var submitButtonTitle: String {
+    switch store.mode {
+    case .directory: "Open"
+    case .newWorktree: "Create"
+    case .existingWorktree: "Create"
     }
   }
 

@@ -2,8 +2,9 @@ import ComposableArchitecture
 import Foundation
 
 nonisolated enum WorkspaceMode: String, CaseIterable, Equatable, Sendable {
-  case worktree
   case directory
+  case newWorktree
+  case existingWorktree
 }
 
 @Reducer
@@ -15,9 +16,10 @@ struct WorktreeCreationPromptFeature {
     let repositoryRootURL: URL
     let automaticBaseRef: String
     let baseRefOptions: [String]
-    var mode: WorkspaceMode = .worktree
+    var mode: WorkspaceMode = .directory
     var branchName: String
     var selectedBaseRef: String?
+    var selectedExistingBranch: String?
     var fetchOrigin: Bool
     var validationMessage: String?
     var isValidating = false
@@ -36,6 +38,7 @@ struct WorktreeCreationPromptFeature {
   enum Delegate: Equatable {
     case cancel
     case submit(repositoryID: Repository.ID, branchName: String, baseRef: String?, fetchOrigin: Bool)
+    case submitExistingWorktree(repositoryID: Repository.ID, branchName: String, fetchOrigin: Bool)
     case submitDirectory(repositoryID: Repository.ID, path: URL)
   }
 
@@ -52,7 +55,7 @@ struct WorktreeCreationPromptFeature {
 
       case .createButtonTapped:
         switch state.mode {
-        case .worktree:
+        case .newWorktree:
           let trimmed = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
           guard !trimmed.isEmpty else {
             state.validationMessage = "Branch name required."
@@ -69,6 +72,22 @@ struct WorktreeCreationPromptFeature {
                 repositoryID: state.repositoryID,
                 branchName: trimmed,
                 baseRef: state.selectedBaseRef,
+                fetchOrigin: state.fetchOrigin
+              )
+            )
+          )
+
+        case .existingWorktree:
+          guard let branch = state.selectedExistingBranch else {
+            state.validationMessage = "Select a branch."
+            return .none
+          }
+          state.validationMessage = nil
+          return .send(
+            .delegate(
+              .submitExistingWorktree(
+                repositoryID: state.repositoryID,
+                branchName: branch,
                 fetchOrigin: state.fetchOrigin
               )
             )

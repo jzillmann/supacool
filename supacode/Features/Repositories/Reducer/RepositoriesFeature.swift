@@ -824,6 +824,18 @@ struct RepositoriesFeature {
         state.selection = .worktree(worktreeID)
         return .none
 
+      case .worktreeCreationPrompt(
+        .presented(.delegate(.submitExistingWorktree(let repositoryID, let branchName, let fetchOrigin)))
+      ):
+        return .send(
+          .startPromptedWorktreeCreation(
+            repositoryID: repositoryID,
+            branchName: branchName,
+            baseRef: nil,
+            fetchOrigin: fetchOrigin
+          )
+        )
+
       case .startPromptedWorktreeCreation(let repositoryID, let branchName, let baseRef, let fetchOrigin):
         guard let repository = state.repositories[id: repositoryID] else {
           state.worktreeCreationPrompt = nil
