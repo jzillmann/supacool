@@ -773,6 +773,7 @@ struct RepositoriesFeature {
         state.worktreeCreationPrompt = WorktreeCreationPromptFeature.State(
           repositoryID: repository.id,
           repositoryName: repository.name,
+          repositoryRootURL: repository.rootURL,
           automaticBaseRef: automaticBaseRef,
           baseRefOptions: baseRefOptions,
           branchName: "",
@@ -800,6 +801,28 @@ struct RepositoriesFeature {
             fetchOrigin: fetchOrigin
           )
         )
+
+      case .worktreeCreationPrompt(
+        .presented(.delegate(.submitDirectory(let repositoryID, let path)))
+      ):
+        state.worktreeCreationPrompt = nil
+        let standardizedPath = path.standardizedFileURL
+        let worktreeID = standardizedPath.path(percentEncoded: false)
+        if state.repositories[id: repositoryID]?.worktrees[id: worktreeID] != nil {
+          state.selection = .worktree(worktreeID)
+          return .none
+        }
+        let dirName = standardizedPath.lastPathComponent
+        let worktree = Worktree(
+          id: worktreeID,
+          name: dirName,
+          detail: "",
+          workingDirectory: standardizedPath,
+          repositoryRootURL: state.repositories[id: repositoryID]?.rootURL ?? standardizedPath
+        )
+        insertWorktree(worktree, repositoryID: repositoryID, state: &state)
+        state.selection = .worktree(worktreeID)
+        return .none
 
       case .startPromptedWorktreeCreation(let repositoryID, let branchName, let baseRef, let fetchOrigin):
         guard let repository = state.repositories[id: repositoryID] else {

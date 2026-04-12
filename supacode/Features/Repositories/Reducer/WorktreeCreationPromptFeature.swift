@@ -1,14 +1,21 @@
 import ComposableArchitecture
 import Foundation
 
+nonisolated enum WorkspaceMode: String, CaseIterable, Equatable, Sendable {
+  case worktree
+  case directory
+}
+
 @Reducer
 struct WorktreeCreationPromptFeature {
   @ObservableState
   struct State: Equatable {
     let repositoryID: Repository.ID
     let repositoryName: String
+    let repositoryRootURL: URL
     let automaticBaseRef: String
     let baseRefOptions: [String]
+    var mode: WorkspaceMode = .worktree
     var branchName: String
     var selectedBaseRef: String?
     var fetchOrigin: Bool
@@ -29,6 +36,7 @@ struct WorktreeCreationPromptFeature {
   enum Delegate: Equatable {
     case cancel
     case submit(repositoryID: Repository.ID, branchName: String, baseRef: String?, fetchOrigin: Bool)
+    case submitDirectory(repositoryID: Repository.ID, path: URL)
   }
 
   var body: some Reducer<State, Action> {
@@ -43,26 +51,39 @@ struct WorktreeCreationPromptFeature {
         return .send(.delegate(.cancel))
 
       case .createButtonTapped:
-        let trimmed = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-          state.validationMessage = "Branch name required."
-          return .none
-        }
-        guard !trimmed.contains(where: \.isWhitespace) else {
-          state.validationMessage = "Branch names can't contain spaces."
-          return .none
-        }
-        state.validationMessage = nil
-        return .send(
-          .delegate(
-            .submit(
-              repositoryID: state.repositoryID,
-              branchName: trimmed,
-              baseRef: state.selectedBaseRef,
-              fetchOrigin: state.fetchOrigin
+        switch state.mode {
+        case .worktree:
+          let trimmed = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !trimmed.isEmpty else {
+            state.validationMessage = "Branch name required."
+            return .none
+          }
+          guard !trimmed.contains(where: \.isWhitespace) else {
+            state.validationMessage = "Branch names can't contain spaces."
+            return .none
+          }
+          state.validationMessage = nil
+          return .send(
+            .delegate(
+              .submit(
+                repositoryID: state.repositoryID,
+                branchName: trimmed,
+                baseRef: state.selectedBaseRef,
+                fetchOrigin: state.fetchOrigin
+              )
             )
           )
-        )
+
+        case .directory:
+          return .send(
+            .delegate(
+              .submitDirectory(
+                repositoryID: state.repositoryID,
+                path: state.repositoryRootURL
+              )
+            )
+          )
+        }
 
       case .setValidationMessage(let message):
         state.validationMessage = message
