@@ -44,6 +44,7 @@ struct PromptTextEditor: NSViewRepresentable {
       width: 0,
       height: CGFloat.greatestFiniteMagnitude
     )
+    textView.textContainer?.lineFragmentPadding = 0
     textView.textContainer?.widthTracksTextView = true
     textView.string = text
 
