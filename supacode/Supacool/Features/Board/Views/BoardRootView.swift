@@ -16,8 +16,15 @@ struct BoardRootView: View {
       if let focusedID = store.focusedSessionID,
         let session = store.sessions.first(where: { $0.id == focusedID })
       {
-        // Phase 4e replaces this placeholder with the real terminal view.
-        fullScreenPlaceholder(for: session)
+        FullScreenTerminalView(
+          session: session,
+          repositories: repositories,
+          terminalManager: terminalManager,
+          onBackToBoard: { store.send(.focusSession(id: nil)) },
+          onNewTerminal: {
+            store.send(.openNewTerminalSheet(repositories: Array(repositories)))
+          }
+        )
       } else {
         boardContents
       }
@@ -59,33 +66,6 @@ struct BoardRootView: View {
       store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
     ) { sheetStore in
       NewTerminalSheet(store: sheetStore)
-    }
-  }
-
-  private func fullScreenPlaceholder(for session: AgentSession) -> some View {
-    VStack(spacing: 16) {
-      HStack {
-        Button {
-          store.send(.focusSession(id: nil))
-        } label: {
-          Label("Back to Board", systemImage: "chevron.left")
-        }
-        .keyboardShortcut(.escape, modifiers: [])
-        .help("Return to board (Esc)")
-        Spacer()
-      }
-      .padding()
-      VStack(spacing: 10) {
-        Image(systemName: "terminal.fill")
-          .font(.system(size: 48))
-          .foregroundStyle(.secondary)
-        Text(session.displayName)
-          .font(.title2)
-        Text("Full-screen terminal will render here in Phase 4e.")
-          .font(.callout)
-          .foregroundStyle(.secondary)
-      }
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
   }
 
