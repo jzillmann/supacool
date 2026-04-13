@@ -42,7 +42,8 @@ struct ContentView: View {
         BoardRootView(
           store: boardStore,
           repositories: store.repositories.repositories,
-          terminalManager: terminalManager
+          terminalManager: terminalManager,
+          onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) }
         )
       } else {
         AppLoadingView()

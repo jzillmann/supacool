@@ -10,6 +10,7 @@ struct BoardView: View {
   let repositories: IdentifiedArrayOf<Repository>
   let terminalManager: WorktreeTerminalManager
   let classify: (AgentSession) -> SessionCardView.Status
+  let onAddRepository: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
@@ -56,12 +57,28 @@ struct BoardView: View {
       Image(systemName: "square.grid.3x3")
         .font(.system(size: 42))
         .foregroundStyle(.tertiary)
-      Text("No terminals yet")
-        .font(.title3.weight(.medium))
-        .foregroundStyle(.secondary)
-      Text("Press ⌘N to create a new terminal.")
-        .font(.callout)
-        .foregroundStyle(.tertiary)
+      if repositories.isEmpty {
+        Text("No repositories yet")
+          .font(.title3.weight(.medium))
+          .foregroundStyle(.secondary)
+        Text("Register a repository to start spawning terminals.")
+          .font(.callout)
+          .foregroundStyle(.tertiary)
+        Button {
+          onAddRepository()
+        } label: {
+          Label("Add Repository", systemImage: "folder.badge.plus")
+        }
+        .keyboardShortcut("o", modifiers: .command)
+        .help("Add Repository (⌘O)")
+      } else {
+        Text("No terminals yet")
+          .font(.title3.weight(.medium))
+          .foregroundStyle(.secondary)
+        Text("Press ⌘N to create a new terminal.")
+          .font(.callout)
+          .foregroundStyle(.tertiary)
+      }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .padding()

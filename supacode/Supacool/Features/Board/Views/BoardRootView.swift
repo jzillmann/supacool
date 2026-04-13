@@ -2,14 +2,17 @@ import ComposableArchitecture
 import SwiftUI
 
 /// Top-level Matrix Board container. Swaps between the board grid and a
-/// full-screen terminal view based on `focusedSessionID`.
+/// full-screen terminal view based on `focusedSessionID`. Since Phase 4f
+/// this is the primary root view of the app.
 ///
-/// Wired into `ContentView` behind a debug toggle in Phase 4b; becomes the
-/// primary root in Phase 4f when the sidebar is retired.
+/// `onAddRepository` is a callback up to the parent (ContentView) which
+/// owns the file importer — the board itself doesn't know how to trigger
+/// the macOS open panel.
 struct BoardRootView: View {
   @Bindable var store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
   let terminalManager: WorktreeTerminalManager
+  let onAddRepository: () -> Void
 
   var body: some View {
     Group {
@@ -40,6 +43,22 @@ struct BoardRootView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
+    // Global shortcuts available in both board and full-screen modes.
+    .background(
+      Button("") {
+        store.send(.openNewTerminalSheet(repositories: Array(repositories)))
+      }
+      .keyboardShortcut("n", modifiers: .command)
+      .hidden()
+      .disabled(repositories.isEmpty)
+    )
+    // Sheet lives at the root so it's reachable whether you're looking at
+    // the board or at a full-screen terminal.
+    .sheet(
+      store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
+    ) { sheetStore in
+      NewTerminalSheet(store: sheetStore)
+    }
   }
 
   private var boardContents: some View {
@@ -47,7 +66,8 @@ struct BoardRootView: View {
       store: store,
       repositories: repositories,
       terminalManager: terminalManager,
-      classify: { classify($0) }
+      classify: { classify($0) },
+      onAddRepository: onAddRepository
     )
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
@@ -57,7 +77,6 @@ struct BoardRootView: View {
           Label("New Terminal", systemImage: "plus")
         }
         .help("New Terminal (⌘N)")
-        .keyboardShortcut("n", modifiers: .command)
         .disabled(repositories.isEmpty)
       }
       #if DEBUG
@@ -70,11 +89,6 @@ struct BoardRootView: View {
           .help("Insert a fake session for UI testing (DEBUG only)")
         }
       #endif
-    }
-    .sheet(
-      store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
-    ) { sheetStore in
-      NewTerminalSheet(store: sheetStore)
     }
   }
 
