@@ -96,16 +96,27 @@ struct BoardView: View {
           spacing: 14
         ) {
           ForEach(sessions) { session in
+            let sessionStatus = classify(session)
             SessionCardContainer(
               session: session,
               repositoryName: repositories[id: session.repositoryID]?.name,
-              status: classify(session),
+              status: sessionStatus,
               isBusyNow: terminalManager.isAgentBusy(
                 worktreeID: session.worktreeID,
                 tabID: TerminalTabID(rawValue: session.id)
               ),
               onTap: { store.send(.focusSession(id: session.id)) },
               onRemove: { store.send(.removeSession(id: session.id)) },
+              onRerun: sessionStatus == .detached
+                ? {
+                  store.send(
+                    .rerunDetachedSession(
+                      id: session.id,
+                      repositories: Array(repositories)
+                    )
+                  )
+                }
+                : nil,
               onBusyToIdleTransition: {
                 if !session.hasCompletedAtLeastOnce {
                   store.send(.markSessionCompletedOnce(id: session.id))
@@ -137,6 +148,7 @@ private struct SessionCardContainer: View {
   let isBusyNow: Bool
   let onTap: () -> Void
   let onRemove: () -> Void
+  let onRerun: (() -> Void)?
   let onBusyToIdleTransition: () -> Void
 
   var body: some View {
@@ -145,7 +157,8 @@ private struct SessionCardContainer: View {
       repositoryName: repositoryName,
       status: status,
       onTap: onTap,
-      onRemove: onRemove
+      onRemove: onRemove,
+      onRerun: onRerun
     )
     .onChange(of: isBusyNow) { oldValue, newValue in
       if oldValue && !newValue {

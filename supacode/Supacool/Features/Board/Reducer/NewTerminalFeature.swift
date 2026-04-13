@@ -25,10 +25,21 @@ struct NewTerminalFeature {
 
     init(availableRepositories: IdentifiedArrayOf<Repository>) {
       self.availableRepositories = availableRepositories
-      // Auto-pick if there's exactly one registered repo.
-      selectedRepositoryID = availableRepositories.count == 1
-        ? availableRepositories.first?.id
-        : availableRepositories.first?.id
+      selectedRepositoryID = availableRepositories.first?.id
+    }
+
+    /// Constructor for "rerun": pre-fills the sheet with values from an
+    /// existing session so the user can relaunch the same prompt with
+    /// optional tweaks.
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      rerunFrom previous: AgentSession
+    ) {
+      self.availableRepositories = availableRepositories
+      selectedRepositoryID = availableRepositories[id: previous.repositoryID]?.id
+        ?? availableRepositories.first?.id
+      prompt = previous.initialPrompt
+      agent = previous.agent
     }
   }
 

@@ -14,6 +14,8 @@ struct FullScreenTerminalView: View {
   let terminalManager: WorktreeTerminalManager
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
+  let onRerun: () -> Void
+  let onRemove: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
@@ -106,19 +108,47 @@ struct FullScreenTerminalView: View {
   }
 
   private var detachedState: some View {
-    VStack(spacing: 12) {
+    VStack(spacing: 14) {
       Image(systemName: "moon.zzz.fill")
         .font(.system(size: 48))
         .foregroundStyle(.secondary)
       Text("Session detached")
         .font(.title3.weight(.medium))
-      Text("The underlying terminal process is gone. Relaunch to reattach, or remove this card.")
+      Text("""
+        The underlying terminal process is gone — most likely because the app \
+        relaunched. The original prompt is preserved.
+        """)
         .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
-        .frame(maxWidth: 380)
-      Button("Back to Board", action: onBackToBoard)
+        .frame(maxWidth: 420)
+
+      VStack(alignment: .leading, spacing: 4) {
+        Label("Original prompt", systemImage: "quote.opening")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Text(session.initialPrompt)
+          .font(.callout)
+          .padding(10)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(Color.secondary.opacity(0.08))
+          .clipShape(RoundedRectangle(cornerRadius: 8))
+      }
+      .frame(maxWidth: 460)
+      .padding(.top, 6)
+
+      HStack(spacing: 10) {
+        Button(role: .destructive) {
+          onRemove()
+        } label: {
+          Label("Remove", systemImage: "trash")
+        }
+        Button("Rerun", systemImage: "arrow.clockwise") {
+          onRerun()
+        }
         .keyboardShortcut(.defaultAction)
+        Button("Back to Board", action: onBackToBoard)
+      }
     }
     .padding(40)
     .frame(maxWidth: .infinity, maxHeight: .infinity)

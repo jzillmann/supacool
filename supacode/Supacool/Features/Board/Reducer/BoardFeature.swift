@@ -47,6 +47,7 @@ struct BoardFeature {
 
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
+    case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
   }
 
@@ -115,6 +116,20 @@ struct BoardFeature {
       case .openNewTerminalSheet(let repositories):
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories)
+        )
+        return .none
+
+      case .rerunDetachedSession(let id, let repositories):
+        guard let previous = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        // Drop the detached card and pop focus so the user lands on the
+        // sheet with the board behind it.
+        state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
+        state.focusedSessionID = nil
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          rerunFrom: previous
         )
         return .none
 

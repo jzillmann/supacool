@@ -23,7 +23,16 @@ struct BoardRootView: View {
           onBackToBoard: { store.send(.focusSession(id: nil)) },
           onNewTerminal: {
             store.send(.openNewTerminalSheet(repositories: Array(repositories)))
-          }
+          },
+          onRerun: {
+            store.send(
+              .rerunDetachedSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          },
+          onRemove: { store.send(.removeSession(id: session.id)) }
         )
       } else {
         boardContents

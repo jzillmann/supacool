@@ -10,6 +10,7 @@ struct SessionCardView: View {
   let status: Status
   let onTap: () -> Void
   let onRemove: () -> Void
+  var onRerun: (() -> Void)? = nil
 
   enum Status: Equatable {
     case inProgress
@@ -92,6 +93,10 @@ struct SessionCardView: View {
     }
     .buttonStyle(.plain)
     .contextMenu {
+      if let onRerun {
+        Button("Rerun with Same Prompt", systemImage: "arrow.clockwise", action: onRerun)
+        Divider()
+      }
       Button("Remove", role: .destructive, action: onRemove)
     }
   }
