@@ -69,11 +69,16 @@ struct BoardRootView: View {
       classify: { classify($0) },
       onAddRepository: onAddRepository
     )
-    // Hide the macOS-auto-rendered window title so we can put our own
-    // "Supacool" label in the toolbar, AFTER the repo picker.
+    // Hide the macOS-auto-rendered window title so we control order:
+    // we want [Supacool title] [repo picker] ... [+ New Terminal].
     .toolbar(removing: .title)
     .toolbar {
-      // Leading: repo picker first, then our custom title text.
+      // Leading: title first, then the repo picker immediately after.
+      ToolbarItem(placement: .navigation) {
+        Text("Supacool")
+          .font(.headline)
+          .foregroundStyle(.primary)
+      }
       ToolbarItem(placement: .navigation) {
         RepoPickerButton(
           repositories: repositories,
@@ -83,11 +88,9 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository
         )
       }
-      ToolbarItem(placement: .navigation) {
-        Text("Supacool")
-          .font(.headline)
-          .foregroundStyle(.primary)
-      }
+      // Push the + button to the far right so there's breathing room
+      // between the title/repo block and the action.
+      ToolbarSpacer(.flexible)
       ToolbarItem(placement: .primaryAction) {
         Button {
           store.send(.openNewTerminalSheet(repositories: Array(repositories)))
