@@ -69,8 +69,11 @@ struct BoardRootView: View {
       classify: { classify($0) },
       onAddRepository: onAddRepository
     )
+    // Hide the macOS-auto-rendered window title so we can put our own
+    // "Supacool" label in the toolbar, AFTER the repo picker.
+    .toolbar(removing: .title)
     .toolbar {
-      // Leading: repo picker next to the window title.
+      // Leading: repo picker first, then our custom title text.
       ToolbarItem(placement: .navigation) {
         RepoPickerButton(
           repositories: repositories,
@@ -79,6 +82,11 @@ struct BoardRootView: View {
           onShowAll: { store.send(.showAllRepositories) },
           onAddRepository: onAddRepository
         )
+      }
+      ToolbarItem(placement: .navigation) {
+        Text("Supacool")
+          .font(.headline)
+          .foregroundStyle(.primary)
       }
       ToolbarItem(placement: .primaryAction) {
         Button {
