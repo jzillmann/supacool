@@ -286,7 +286,8 @@ final class AgentHookSocketServer {
       agent: agent,
       event: payload.hookEventName ?? "unknown",
       title: payload.title,
-      body: body
+      body: body,
+      sessionID: payload.sessionId
     )
   }
 }
@@ -297,6 +298,9 @@ nonisolated struct AgentHookNotification: Equatable, Sendable {
   let event: String
   let title: String?
   let body: String?
+  /// Agent-native session identifier (Claude Code's `session_id`, Codex's
+  /// equivalent). Used to auto-resume sessions across app relaunches.
+  let sessionID: String?
 }
 
 /// Raw JSON payload from a coding agent hook event.
@@ -305,11 +309,13 @@ private nonisolated struct AgentHookPayload: Decodable {
   let title: String?
   let message: String?
   let lastAssistantMessage: String?
+  let sessionId: String?
 
   enum CodingKeys: String, CodingKey {
     case hookEventName = "hook_event_name"
     case title
     case message
     case lastAssistantMessage = "last_assistant_message"
+    case sessionId = "session_id"
   }
 }

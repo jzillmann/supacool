@@ -92,14 +92,16 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var terminalBody: some View {
     if let worktree = resolveWorktree() {
-      WorktreeTerminalTabsView(
+      // Render only THIS session's tab — not the worktree's whole tab
+      // bar + all sibling tabs. The board is the tab-bar-equivalent in
+      // Supacool; each card is one session, and clicking one should
+      // show only that session's terminal tree.
+      SingleSessionTerminalView(
         worktree: worktree,
-        manager: terminalManager,
-        shouldRunSetupScript: false,
-        forceAutoFocus: true,
-        createTab: onNewTerminal
+        tabID: TerminalTabID(rawValue: session.id),
+        manager: terminalManager
       )
-      .id(worktree.id)
+      .id(session.id)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .ignoresSafeArea(.container, edges: .bottom)
     } else {

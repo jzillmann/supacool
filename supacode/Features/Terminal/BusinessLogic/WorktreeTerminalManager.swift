@@ -14,6 +14,8 @@ final class WorktreeTerminalManager {
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
   private var pendingEvents: [TerminalClient.Event] = []
+  @ObservationIgnored
+  @Shared(.agentSessions) private var agentSessions: [AgentSession]
   var selectedWorktreeID: Worktree.ID?
   var saveLayoutSnapshot: ((Worktree.ID, TerminalLayoutSnapshot?) -> Void)?
   var loadLayoutSnapshot: ((Worktree.ID) -> TerminalLayoutSnapshot?)?
@@ -43,7 +45,7 @@ final class WorktreeTerminalManager {
         active: active
       )
     }
-    server.onNotification = { [weak self] worktreeID, _, surfaceID, notification in
+    server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
@@ -52,6 +54,26 @@ final class WorktreeTerminalManager {
       let title = notification.title ?? notification.agent
       let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
+      self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
+    }
+  }
+
+  /// Persists the agent-native session identifier from a hook payload onto
+  /// the matching `AgentSession` (by tabID). Silently no-ops when no session
+  /// exists for the tab yet, or when the payload carried no session id.
+  private func captureAgentNativeSessionID(
+    tabID: UUID,
+    notification: AgentHookNotification
+  ) {
+    guard let sessionID = notification.sessionID, !sessionID.isEmpty else { return }
+    $agentSessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == tabID }) else { return }
+      guard sessions[index].agentNativeSessionID != sessionID else { return }
+      sessions[index].agentNativeSessionID = sessionID
+      sessions[index].lastActivityAt = Date()
+      terminalLogger.info(
+        "Captured \(notification.agent) session id \(sessionID) for tab \(tabID)"
+      )
     }
   }
 

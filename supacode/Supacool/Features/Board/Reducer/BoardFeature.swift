@@ -1,6 +1,8 @@
 import ComposableArchitecture
 import Foundation
 
+private nonisolated let boardLogger = SupaLogger("Board")
+
 /// The Matrix Board — the top-level view of agent sessions as cards.
 ///
 /// Owns:
@@ -49,8 +51,12 @@ struct BoardFeature {
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    case resumeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
   }
+
+  @Dependency(TerminalClient.self) var terminalClient
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -61,7 +67,9 @@ struct BoardFeature {
 
       case .createSession(let session):
         state.$sessions.withLock { $0.append(session) }
-        state.focusedSessionID = session.id
+        // Intentionally do NOT focus the new session. Spawning an agent
+        // is background work; the user stays on the board and sees the
+        // new card appear in "In Progress." They can tap in when ready.
         return .none
 
       case .renameSession(let id, let newName):
@@ -127,6 +135,48 @@ struct BoardFeature {
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories)
         )
+        return .none
+
+      case .resumeDetachedSession(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard let sessionID = session.agentNativeSessionID, !sessionID.isEmpty else {
+          return .send(.resumeFailed(id: id, message: "No captured session id to resume."))
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
+        }
+        let rootURL = repository.rootURL.standardizedFileURL
+        let worktree = repository.worktrees.first { $0.id == session.worktreeID }
+          ?? Worktree(
+            id: rootURL.path(percentEncoded: false),
+            name: repository.name,
+            detail: "",
+            workingDirectory: rootURL,
+            repositoryRootURL: rootURL
+          )
+        // Reset transient status so the card immediately reflects the new run.
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastActivityAt = Date()
+        }
+        state.focusedSessionID = id
+        let command = session.agent.resumeCommand(sessionID: sessionID) + "\r"
+        return .run { _ in
+          await terminalClient.send(
+            .createTabWithInput(
+              worktree,
+              input: command,
+              runSetupScriptIfNew: false,
+              id: id
+            )
+          )
+        }
+
+      case .resumeFailed(let id, let message):
+        boardLogger.warning("Resume failed for session \(id): \(message)")
         return .none
 
       case .rerunDetachedSession(let id, let repositories):

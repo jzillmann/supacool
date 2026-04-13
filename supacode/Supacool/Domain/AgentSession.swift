@@ -47,6 +47,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// app died" (`.interrupted` — its turn was lost).
   var lastKnownBusy: Bool
 
+  /// Agent-native session identifier captured from the hook payload:
+  /// Claude Code's `session_id`, or the Codex equivalent. Absent until the
+  /// first hook event arrives. Used to auto-resume (`claude --resume <id>` /
+  /// `codex resume <id>`) across app relaunches.
+  var agentNativeSessionID: String?
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -57,7 +63,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     createdAt: Date = Date(),
     lastActivityAt: Date = Date(),
     hasCompletedAtLeastOnce: Bool = false,
-    lastKnownBusy: Bool = false
+    lastKnownBusy: Bool = false,
+    agentNativeSessionID: String? = nil
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -69,6 +76,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastActivityAt = lastActivityAt
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
     self.lastKnownBusy = lastKnownBusy
+    self.agentNativeSessionID = agentNativeSessionID
   }
 
   // Forward-compatible Codable — convention documented in
@@ -85,6 +93,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy
+    case agentNativeSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -101,6 +110,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     hasCompletedAtLeastOnce =
       try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
     lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
+    agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

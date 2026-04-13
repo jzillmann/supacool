@@ -137,6 +137,17 @@ struct BoardView: View {
                   )
                 }
                 : nil,
+              onResume: ((sessionStatus == .detached || sessionStatus == .interrupted)
+                && session.agentNativeSessionID != nil)
+                ? {
+                  store.send(
+                    .resumeDetachedSession(
+                      id: session.id,
+                      repositories: Array(repositories)
+                    )
+                  )
+                }
+                : nil,
               onBusyStateChange: { newBusy in
                 store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
               },
@@ -173,6 +184,7 @@ private struct SessionCardContainer: View {
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRerun: (() -> Void)?
+  let onResume: (() -> Void)?
   let onBusyStateChange: (Bool) -> Void
   let onBusyToIdleTransition: () -> Void
 
@@ -185,7 +197,8 @@ private struct SessionCardContainer: View {
       status: status,
       onTap: onTap,
       onRemove: onRemove,
-      onRerun: onRerun
+      onRerun: onRerun,
+      onResume: onResume
     )
     .opacity(dimmed && !isHovered ? 0.55 : 1.0)
     .animation(.easeOut(duration: 0.12), value: isHovered)
