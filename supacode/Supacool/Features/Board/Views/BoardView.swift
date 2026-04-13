@@ -13,19 +13,10 @@ struct BoardView: View {
   let onAddRepository: () -> Void
 
   var body: some View {
-    VStack(spacing: 0) {
-      if repositories.count > 1 {
-        RepoFilterHeaderView(
-          repositories: repositories,
-          filters: store.filters,
-          onToggleRepository: { store.send(.toggleRepository(id: $0)) },
-          onShowAll: { store.send(.showAllRepositories) }
-        )
-        Divider()
-      }
-      bodyContent
-    }
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // The repo filter moved to a toolbar popover (RepoPickerButton) next
+    // to the window title. What's left here is just the grid body.
+    bodyContent
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   @ViewBuilder

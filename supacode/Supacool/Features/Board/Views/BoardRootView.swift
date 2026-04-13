@@ -70,6 +70,16 @@ struct BoardRootView: View {
       onAddRepository: onAddRepository
     )
     .toolbar {
+      // Leading: repo picker next to the window title.
+      ToolbarItem(placement: .navigation) {
+        RepoPickerButton(
+          repositories: repositories,
+          filters: store.filters,
+          onToggleRepository: { store.send(.toggleRepository(id: $0)) },
+          onShowAll: { store.send(.showAllRepositories) },
+          onAddRepository: onAddRepository
+        )
+      }
       ToolbarItem(placement: .primaryAction) {
         Button {
           store.send(.openNewTerminalSheet(repositories: Array(repositories)))
