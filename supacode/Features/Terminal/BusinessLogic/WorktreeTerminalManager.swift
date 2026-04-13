@@ -55,6 +55,23 @@ final class WorktreeTerminalManager {
     }
   }
 
+  // MARK: - Supacool Matrix Board queries
+
+  /// Whether the Ghostty tab with the given ID is currently busy (agent
+  /// active or long-running command in progress). Reads flow through the
+  /// @Observable tracking so callers re-render when state changes.
+  func isAgentBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
+    states[worktreeID]?.isTabBusy(tabID) ?? false
+  }
+
+  /// Whether the session's tab still exists in any terminal state — false
+  /// means the session is "detached" (PTY gone, e.g. after a relaunch).
+  /// Supacool-specific; distinct from the existing `hasTab(tabID:)` which
+  /// checks the currently-selected worktree only.
+  func sessionTabExists(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
+    states[worktreeID]?.containsTabTree(tabID) ?? false
+  }
+
   func handleCommand(_ command: TerminalClient.Command) {
     if handleTabCommand(command) {
       return

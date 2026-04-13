@@ -30,6 +30,7 @@ struct BoardRootView: View {
     BoardView(
       store: store,
       repositories: repositories,
+      terminalManager: terminalManager,
       classify: { classify($0) }
     )
     .toolbar {
@@ -88,12 +89,29 @@ struct BoardRootView: View {
     }
   }
 
-  /// Phase 4b classifier: simple heuristic based on `hasCompletedAtLeastOnce`
-  /// so the two sections populate correctly in DEBUG. Phase 4d replaces this
-  /// with a live busy-state observer from WorktreeTerminalManager, and
-  /// Phase 4g adds the `.detached` case.
+  /// Phase 4d classifier: reads live busy state from WorktreeTerminalManager.
+  /// Detached sessions (tab no longer exists) sink to the Waiting section
+  /// with a moon icon — common after app relaunch since PTYs don't survive.
+  /// Fresh sessions (<3s old) stay in the In Progress section even if the
+  /// agent hasn't signalled busy yet, so they don't immediately pop to
+  /// "Waiting" while claude/codex is still starting up.
   private func classify(_ session: AgentSession) -> SessionCardView.Status {
-    session.hasCompletedAtLeastOnce ? .waitingOnMe : .fresh
+    let tabID = TerminalTabID(rawValue: session.id)
+    if !terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) {
+      return session.hasCompletedAtLeastOnce ? .detached : .fresh
+    }
+    if terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID) {
+      return .inProgress
+    }
+    // Not busy and tab exists: either the agent finished a turn (→ waiting)
+    // or it's still warming up (→ fresh grace period).
+    let graceSeconds: TimeInterval = 3
+    if !session.hasCompletedAtLeastOnce,
+      Date().timeIntervalSince(session.createdAt) < graceSeconds
+    {
+      return .fresh
+    }
+    return .waitingOnMe
   }
 
   #if DEBUG

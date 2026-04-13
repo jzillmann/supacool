@@ -82,12 +82,23 @@ final class WorktreeTerminalState {
     trees.keys.contains(where: { isTabBusy($0) }) ? .running : .idle
   }
 
-  private func isTabBusy(_ tabId: TerminalTabID) -> Bool {
+  /// Whether the tab with the given ID is currently busy (agent running or
+  /// long-running command in progress). Exposed for Supacool's Matrix Board
+  /// classifier; used internally by `taskStatus`.
+  func isTabBusy(_ tabId: TerminalTabID) -> Bool {
     guard let tree = trees[tabId] else { return false }
     return tree.leaves().contains { surface in
       isRunningProgressState(surface.bridge.state.progressState)
         || surface.bridge.state.agentBusy
     }
+  }
+
+  /// Whether a tab tree exists for the given ID — regardless of busy
+  /// status. Used by Supacool's Matrix Board to detect "detached"
+  /// sessions whose tab no longer exists (e.g. after an app restart
+  /// where PTYs don't survive).
+  func containsTabTree(_ tabId: TerminalTabID) -> Bool {
+    trees[tabId] != nil
   }
 
   func isBlockingScriptRunning(kind: BlockingScriptKind) -> Bool {

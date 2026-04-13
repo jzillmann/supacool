@@ -8,11 +8,7 @@ import SwiftUI
 struct BoardView: View {
   @Bindable var store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
-
-  /// Callback to classify a session. Injected by BoardRootView which has
-  /// access to WorktreeTerminalManager and can check agent-busy state.
-  /// Phase 4b uses a static classifier (everything .fresh); Phase 4d wires
-  /// the live classifier.
+  let terminalManager: WorktreeTerminalManager
   let classify: (AgentSession) -> SessionCardView.Status
 
   var body: some View {
@@ -100,12 +96,21 @@ struct BoardView: View {
           spacing: 14
         ) {
           ForEach(sessions) { session in
-            SessionCardView(
+            SessionCardContainer(
               session: session,
               repositoryName: repositories[id: session.repositoryID]?.name,
               status: classify(session),
+              isBusyNow: terminalManager.isAgentBusy(
+                worktreeID: session.worktreeID,
+                tabID: TerminalTabID(rawValue: session.id)
+              ),
               onTap: { store.send(.focusSession(id: session.id)) },
-              onRemove: { store.send(.removeSession(id: session.id)) }
+              onRemove: { store.send(.removeSession(id: session.id)) },
+              onBusyToIdleTransition: {
+                if !session.hasCompletedAtLeastOnce {
+                  store.send(.markSessionCompletedOnce(id: session.id))
+                }
+              }
             )
           }
         }
@@ -117,6 +122,35 @@ struct BoardView: View {
     switch status {
     case .waitingOnMe, .detached: true
     case .inProgress, .fresh: false
+    }
+  }
+}
+
+/// Thin wrapper around SessionCardView that watches the underlying agent
+/// busy state per session so we can detect the busy→idle transition and
+/// mark `hasCompletedAtLeastOnce`. Without this, a session never leaves
+/// the "fresh" grace period bucket.
+private struct SessionCardContainer: View {
+  let session: AgentSession
+  let repositoryName: String?
+  let status: SessionCardView.Status
+  let isBusyNow: Bool
+  let onTap: () -> Void
+  let onRemove: () -> Void
+  let onBusyToIdleTransition: () -> Void
+
+  var body: some View {
+    SessionCardView(
+      session: session,
+      repositoryName: repositoryName,
+      status: status,
+      onTap: onTap,
+      onRemove: onRemove
+    )
+    .onChange(of: isBusyNow) { oldValue, newValue in
+      if oldValue && !newValue {
+        onBusyToIdleTransition()
+      }
     }
   }
 }
