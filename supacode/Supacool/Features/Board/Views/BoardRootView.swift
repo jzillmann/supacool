@@ -73,12 +73,14 @@ struct BoardRootView: View {
     // we want [Supacool title] [repo picker] ... [+ New Terminal].
     .toolbar(removing: .title)
     .toolbar {
-      // Leading: title first, then the repo picker immediately after.
+      // Leading: title first. A fixed spacer keeps macOS from merging
+      // this item with the repo picker into a single pill.
       ToolbarItem(placement: .navigation) {
         Text("Supacool")
           .font(.headline)
           .foregroundStyle(.primary)
       }
+      ToolbarSpacer(.fixed)
       ToolbarItem(placement: .navigation) {
         RepoPickerButton(
           repositories: repositories,
