@@ -16,12 +16,6 @@ struct ContentView: View {
   let terminalManager: WorktreeTerminalManager
   @Environment(\.scenePhase) private var scenePhase
   @Environment(GhosttyShortcutManager.self) private var ghosttyShortcuts
-  @State private var leftSidebarVisibility: NavigationSplitViewVisibility = .all
-
-  /// Supacool debug toggle: when true, renders the Matrix Board instead of
-  /// supacode's NavigationSplitView. Persisted so relaunches keep the choice.
-  /// Phase 4f removes this toggle and makes the board the only root.
-  @AppStorage("supacool.useBoardRoot") private var useBoardRoot: Bool = false
 
   init(store: StoreOf<AppFeature>, terminalManager: WorktreeTerminalManager) {
     self.store = store
@@ -41,38 +35,21 @@ struct ContentView: View {
     )
     Group {
       if store.repositories.isInitialLoadComplete {
-        if useBoardRoot {
-          BoardRootView(
-            store: boardStore,
-            repositories: store.repositories.repositories,
-            terminalManager: terminalManager
-          )
-        } else {
-          NavigationSplitView(columnVisibility: $leftSidebarVisibility) {
-            SidebarView(store: repositoriesStore, terminalManager: terminalManager)
-              .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
-          } detail: {
-            WorktreeDetailView(store: store, terminalManager: terminalManager)
-          }
-          .navigationSplitViewStyle(.automatic)
-        }
+        // Supacool: the Matrix Board is the primary (and only) root view.
+        // The old NavigationSplitView + SidebarView + WorktreeDetailView
+        // code remains on disk for reference but is no longer wired to any
+        // Scene. See Supacool/Features/Board/ for the new UI.
+        BoardRootView(
+          store: boardStore,
+          repositories: store.repositories.repositories,
+          terminalManager: terminalManager
+        )
       } else {
         AppLoadingView()
           .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(.background)
       }
     }
-    #if DEBUG
-      .toolbar {
-        ToolbarItem(placement: .automatic) {
-          Toggle(isOn: $useBoardRoot) {
-            Label("Board", systemImage: "square.grid.3x3.fill")
-          }
-          .toggleStyle(.button)
-          .help("Supacool: switch between sidebar layout and Matrix Board (DEBUG only)")
-        }
-      }
-    #endif
     .environment(\.surfaceBackgroundOpacity, terminalManager.surfaceBackgroundOpacity())
     .onChange(of: scenePhase) { _, newValue in
       store.send(.scenePhaseChanged(newValue))
@@ -119,8 +96,6 @@ struct ContentView: View {
         }
       )
     }
-    .focusedSceneValue(\.toggleLeftSidebarAction, toggleLeftSidebar)
-    .focusedSceneValue(\.revealInSidebarAction, revealInSidebarAction)
     .overlay {
       CommandPaletteOverlayView(
         store: store.scope(state: \.commandPalette, action: \.commandPalette),
@@ -131,24 +106,6 @@ struct ContentView: View {
       )
     }
     .background(WindowTabbingDisabler())
-  }
-
-  private func toggleLeftSidebar() {
-    withAnimation(.easeOut(duration: 0.2)) {
-      leftSidebarVisibility = leftSidebarVisibility == .detailOnly ? .all : .detailOnly
-    }
-  }
-
-  private var revealInSidebarAction: (() -> Void)? {
-    guard store.repositories.selectedWorktreeID != nil else { return nil }
-    return { revealInSidebar() }
-  }
-
-  private func revealInSidebar() {
-    withAnimation(.easeOut(duration: 0.2)) {
-      leftSidebarVisibility = .all
-    }
-    store.send(.repositories(.revealSelectedWorktreeInSidebar))
   }
 
 }

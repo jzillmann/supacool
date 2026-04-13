@@ -230,7 +230,8 @@ struct SupacodeApp: App {
     .environment(commandKeyObserver)
     .commands {
       WorktreeCommands(store: store)
-      SidebarCommands()
+      // Supacool: SidebarCommands dropped — the sidebar-toggle / reveal-in-sidebar
+      // commands don't make sense without a sidebar. Menu stays cleaner.
       TerminalCommands(ghosttyShortcuts: ghosttyShortcuts)
       WindowCommands(ghosttyShortcuts: ghosttyShortcuts)
       CommandGroup(after: .textEditing) {
