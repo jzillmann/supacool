@@ -12,7 +12,9 @@ struct RepoFilterHeaderView: View {
   let onShowAll: () -> Void
 
   var body: some View {
-    if repositories.isEmpty {
+    if repositories.count <= 1 {
+      // Single repo (or none): no point offering a filter. Keeps the header
+      // clean when the only choice is "All" vs. "the one repo you have."
       EmptyView()
     } else {
       ScrollView(.horizontal, showsIndicators: false) {

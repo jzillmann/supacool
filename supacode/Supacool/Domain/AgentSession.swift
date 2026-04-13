@@ -41,6 +41,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// In Progress) from "agent finished, waiting on me" (moves to Waiting on Me).
   var hasCompletedAtLeastOnce: Bool
 
+  /// The last busy state we observed for this session, persisted. Used on
+  /// relaunch to distinguish "the session was idle when the app went away"
+  /// (`.detached` — safe) from "the agent was actively working when the
+  /// app died" (`.interrupted` — its turn was lost).
+  var lastKnownBusy: Bool
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -50,7 +56,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     displayName: String? = nil,
     createdAt: Date = Date(),
     lastActivityAt: Date = Date(),
-    hasCompletedAtLeastOnce: Bool = false
+    hasCompletedAtLeastOnce: Bool = false,
+    lastKnownBusy: Bool = false
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -61,6 +68,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.createdAt = createdAt
     self.lastActivityAt = lastActivityAt
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
+    self.lastKnownBusy = lastKnownBusy
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

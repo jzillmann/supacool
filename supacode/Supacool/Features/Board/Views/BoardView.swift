@@ -14,13 +14,15 @@ struct BoardView: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      RepoFilterHeaderView(
-        repositories: repositories,
-        filters: store.filters,
-        onToggleRepository: { store.send(.toggleRepository(id: $0)) },
-        onShowAll: { store.send(.showAllRepositories) }
-      )
-      Divider()
+      if repositories.count > 1 {
+        RepoFilterHeaderView(
+          repositories: repositories,
+          filters: store.filters,
+          onToggleRepository: { store.send(.toggleRepository(id: $0)) },
+          onShowAll: { store.send(.showAllRepositories) }
+        )
+        Divider()
+      }
       bodyContent
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -134,7 +136,7 @@ struct BoardView: View {
               ),
               onTap: { store.send(.focusSession(id: session.id)) },
               onRemove: { store.send(.removeSession(id: session.id)) },
-              onRerun: sessionStatus == .detached
+              onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
                 ? {
                   store.send(
                     .rerunDetachedSession(
@@ -144,6 +146,9 @@ struct BoardView: View {
                   )
                 }
                 : nil,
+              onBusyStateChange: { newBusy in
+                store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
+              },
               onBusyToIdleTransition: {
                 if !session.hasCompletedAtLeastOnce {
                   store.send(.markSessionCompletedOnce(id: session.id))
@@ -158,7 +163,7 @@ struct BoardView: View {
 
   private func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
     switch status {
-    case .waitingOnMe, .detached: true
+    case .waitingOnMe, .detached, .interrupted: true
     case .inProgress, .fresh: false
     }
   }
@@ -177,6 +182,7 @@ private struct SessionCardContainer: View {
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRerun: (() -> Void)?
+  let onBusyStateChange: (Bool) -> Void
   let onBusyToIdleTransition: () -> Void
 
   @State private var isHovered: Bool = false
@@ -194,10 +200,25 @@ private struct SessionCardContainer: View {
     .animation(.easeOut(duration: 0.12), value: isHovered)
     .onHover { hovering in
       isHovered = hovering
+      if hovering {
+        NSCursor.pointingHand.push()
+      } else {
+        NSCursor.pop()
+      }
     }
     .onChange(of: isBusyNow) { oldValue, newValue in
+      // Persist the new busy state so relaunches can tell .detached
+      // (was idle) from .interrupted (was working).
+      onBusyStateChange(newValue)
       if oldValue && !newValue {
         onBusyToIdleTransition()
+      }
+    }
+    .onAppear {
+      // Reconcile: if our stored busy flag doesn't match reality at mount
+      // time (e.g. freshly loaded), sync it once.
+      if session.lastKnownBusy != isBusyNow {
+        onBusyStateChange(isBusyNow)
       }
     }
   }

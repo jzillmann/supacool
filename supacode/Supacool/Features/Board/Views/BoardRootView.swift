@@ -92,22 +92,29 @@ struct BoardRootView: View {
     }
   }
 
-  /// Phase 4d classifier: reads live busy state from WorktreeTerminalManager.
-  /// Detached sessions (tab no longer exists) sink to the Waiting section
-  /// with a moon icon — common after app relaunch since PTYs don't survive.
-  /// Fresh sessions (<3s old) stay in the In Progress section even if the
-  /// agent hasn't signalled busy yet, so they don't immediately pop to
-  /// "Waiting" while claude/codex is still starting up.
+  /// Classifier reads live busy state from WorktreeTerminalManager and the
+  /// persisted last-known-busy flag on the session.
+  ///
+  /// Tab doesn't exist anymore:
+  /// - `lastKnownBusy=true`: the agent was working when the app went away
+  ///   (crash / quit mid-turn). Card reads as .interrupted (yellow warning).
+  /// - `lastKnownBusy=false`: the agent was idle. Card reads as .detached
+  ///   (moon icon, gray). Safe and expected after a normal relaunch.
+  ///
+  /// Tab exists:
+  /// - Busy → .inProgress.
+  /// - Not busy, inside the 3s grace period after creation → .fresh so
+  ///   cards don't immediately flip to Waiting while claude/codex is
+  ///   starting up.
+  /// - Not busy, past grace or has completed at least once → .waitingOnMe.
   private func classify(_ session: AgentSession) -> SessionCardView.Status {
     let tabID = TerminalTabID(rawValue: session.id)
     if !terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) {
-      return session.hasCompletedAtLeastOnce ? .detached : .fresh
+      return session.lastKnownBusy ? .interrupted : .detached
     }
     if terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID) {
       return .inProgress
     }
-    // Not busy and tab exists: either the agent finished a turn (→ waiting)
-    // or it's still warming up (→ fresh grace period).
     let graceSeconds: TimeInterval = 3
     if !session.hasCompletedAtLeastOnce,
       Date().timeIntervalSince(session.createdAt) < graceSeconds

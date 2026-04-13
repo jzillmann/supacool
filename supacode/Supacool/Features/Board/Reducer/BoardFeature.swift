@@ -37,6 +37,7 @@ struct BoardFeature {
     case removeSession(id: AgentSession.ID)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
+    case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -91,6 +92,15 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           guard !sessions[index].hasCompletedAtLeastOnce else { return }
           sessions[index].hasCompletedAtLeastOnce = true
+          sessions[index].lastActivityAt = Date()
+        }
+        return .none
+
+      case .updateSessionBusyState(let id, let busy):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          guard sessions[index].lastKnownBusy != busy else { return }
+          sessions[index].lastKnownBusy = busy
           sessions[index].lastActivityAt = Date()
         }
         return .none

@@ -16,13 +16,15 @@ struct SessionCardView: View {
     case inProgress
     case waitingOnMe
     case detached
+    case interrupted  // was busy when the app went away; agent's turn lost
     case fresh  // just created, agent hasn't started busy-looping yet
 
     var label: String {
       switch self {
       case .inProgress: "Working"
       case .waitingOnMe: "Waiting"
-      case .detached: "Detached"
+      case .detached: "Idle"
+      case .interrupted: "Interrupted"
       case .fresh: "Starting"
       }
     }
@@ -32,6 +34,7 @@ struct SessionCardView: View {
       case .inProgress: .green
       case .waitingOnMe: .orange
       case .detached: .secondary
+      case .interrupted: .yellow
       case .fresh: .blue
       }
     }
@@ -41,6 +44,7 @@ struct SessionCardView: View {
       case .inProgress: "circle.fill"
       case .waitingOnMe: "exclamationmark.circle.fill"
       case .detached: "moon.zzz.fill"
+      case .interrupted: "exclamationmark.triangle.fill"
       case .fresh: "sparkles"
       }
     }
