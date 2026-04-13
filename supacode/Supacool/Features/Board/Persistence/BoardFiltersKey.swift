@@ -23,7 +23,7 @@ nonisolated struct BoardFilters: Equatable, Codable, Sendable {
   }
 
   // Forward-compatible Codable — convention documented in
-  // Supacool/docs/persistence-convention.md. Missing fields decode to
+  // docs/agent-guides/persistence.md. Missing fields decode to
   // empty/default so adding new fields in future versions doesn't wipe
   // existing saved filters.
   enum CodingKeys: String, CodingKey { case selectedRepositoryIDs }

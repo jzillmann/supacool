@@ -1,3 +1,127 @@
+# Supacool
+
+Personal macOS terminal, forked from [`supabitapp/supacode`](https://github.com/supabitapp/supacode).
+
+This is the master document for anyone (human or AI agent) working in this repo. `CLAUDE.md` is a symlink to this file, so Claude Code and other tooling read it by default.
+
+---
+
+## Read this first: the four things that bite
+
+1. **This is a fork.** `main` mirrors upstream supacode bit-identically; personal work lives on the `supacool` branch. Editing upstream-owned files casually creates merge pain on every future `git pull upstream main`. Rule of thumb: **new code goes under `supacode/Supacool/`** (an additive subtree of supacode's synchronized folder). In-place edits to existing `supacode/…` source should be small, surgical injection points, not rewrites.
+
+2. **The UI is not supacode's.** Supacool replaced the `NavigationSplitView(sidebar:, detail:)` layout with the **Matrix Board** — a grid of cards, each one a persistent agent session (claude-code or codex). The old sidebar/detail files still exist on disk but are orphaned (not wired to any Scene). Don't touch them expecting UI changes to take effect.
+
+3. **Persisted Codable types have a non-obvious invariant.** Every `@Shared` struct needs a manual `init(from decoder:)` using `decodeIfPresent ?? default`. Synthesized Codable silently wipes user data on schema changes. Hard-won lesson. See [`docs/agent-guides/persistence.md`](./docs/agent-guides/persistence.md).
+
+4. **Swift 6 global `@MainActor` isolation is on.** Plain `enum` types used in `Picker(selection:)` must be declared `nonisolated enum` or the `Equatable` conformance is actor-isolated and doesn't satisfy `Sendable`. `@Dependency(\.keyPath)` key-path form breaks Sendable in `.run` blocks — use `@Dependency(Type.self)` instead. Details in [`docs/agent-guides/swift6-gotchas.md`](./docs/agent-guides/swift6-gotchas.md).
+
+---
+
+## Quickstart
+
+```bash
+# One-time
+brew install mise
+mise trust && mise install           # zig, swiftlint, xcsift, create-dmg
+
+# Every build
+make build-ghostty-xcframework       # Zig compiles ghostty → Frameworks/GhosttyKit.xcframework
+make build-app                       # Xcode build
+make run-app                         # Build + launch with log stream
+make test                            # Run full test suite
+
+# Only the Supacool tests (faster iteration)
+xcodebuild test -project supacode.xcodeproj -scheme supacode \
+  -destination "platform=macOS" \
+  -only-testing:supacodeTests/BoardFeatureTests \
+  -only-testing:supacodeTests/NewTerminalFeatureTests \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+  -skipMacroValidation
+```
+
+If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to missing Metal Toolchain`: the Makefile already passes `-Dxcframework-target=native` to keep the ghostty build macOS-only. If you still hit it, the fallback is `xcodebuild -downloadComponent MetalToolchain` (~1GB one-time). See [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md).
+
+---
+
+## Repo layout
+
+```
+.
+├── AGENTS.md                 # THIS FILE — master doc (Supacool + upstream supacode notes)
+├── CLAUDE.md → AGENTS.md     # symlink (Claude Code convention)
+├── supacode/                 # upstream sources, auto-compiled (synchronized folder)
+│   └── Supacool/             # fork code lives here (auto-compiled as subtree)
+│       ├── Domain/           # AgentSession, AgentType
+│       └── Features/Board/   # the Matrix Board feature (reducer + views + persistence)
+├── supacodeTests/            # tests, flat. BoardFeatureTests, NewTerminalFeatureTests, etc.
+├── supacode.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups)
+├── Supacool/                 # NON-code: assets (app-icon.svg) + README; NOT in Xcode target
+├── docs/agent-guides/        # deep reference docs (start here when doing architecture work)
+├── .claude/skills/           # Claude-invokable skill modules (recurring workflows)
+├── ThirdParty/ghostty/       # Ghostty submodule → GhosttyKit.xcframework
+└── Makefile                  # build-ghostty-xcframework, build-app, run-app, test, etc.
+```
+
+---
+
+## Branch strategy
+
+- **`main`** — read-only mirror of upstream `supabitapp/supacode`. Receives `git pull upstream main` fast-forwards. **Never commit to main.**
+- **`supacool`** — all personal work. Periodically `git rebase main` after an upstream pull.
+- **Remotes**: `upstream` → `supabitapp/supacode` (SSH), `origin` → `jzillmann/supacool`.
+
+```bash
+# The sync dance (see docs/agent-guides/upstream-sync.md for the full playbook)
+git checkout main && git pull upstream main && git push origin main
+git checkout supacool && git rebase main
+```
+
+---
+
+## What's in (recent) and what's explicitly out
+
+**In, shipped** (as of the last commits on `supacool`):
+- Matrix Board primary UI — card per agent session, Waiting on Me / In Progress buckets, repo filter, full-screen terminal on tap.
+- Session persistence across relaunches; detached vs interrupted state; Rerun (fresh) and Resume (with captured agent session id) affordances.
+- New Terminal sheet: prompt, agent (Claude/Codex), repo picker, optional worktree creation.
+- Forward-compatible Codable on all persisted types.
+- App icon, bundle identity (`app.morethan.supacool`, display name "Supacool"), Metal-free ghostty build.
+
+**Out of scope** (deliberately — see [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md)):
+- Workflow engine / autonomous orchestration. The earlier forgn+forgin merger idea is parked.
+- PTY survival across relaunches (tmux-style). Detached/Resume is the substitute.
+- Separate "Ready" vs "Wants Input" buckets. Needs a hook-protocol extension we haven't built.
+- Stock supacode's sidebar/detail UI. Files exist but aren't wired; don't edit them.
+
+---
+
+## Deep references
+
+| You want to… | Read |
+|---|---|
+| Understand the data model and reducer flow | [`docs/agent-guides/architecture.md`](./docs/agent-guides/architecture.md) |
+| Add a new field to a persisted Codable | [`docs/agent-guides/persistence.md`](./docs/agent-guides/persistence.md) |
+| Understand a Swift 6 compiler error | [`docs/agent-guides/swift6-gotchas.md`](./docs/agent-guides/swift6-gotchas.md) |
+| Build / run / test quirks | [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md) |
+| Touch the toolbar, cursor, or text input | [`docs/agent-guides/ui-patterns.md`](./docs/agent-guides/ui-patterns.md) |
+| Pull upstream changes in | [`docs/agent-guides/upstream-sync.md`](./docs/agent-guides/upstream-sync.md) |
+| Know what NOT to build | [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md) |
+| Add a new feature end-to-end | Skill: [`.claude/skills/add-feature/SKILL.md`](./.claude/skills/add-feature/SKILL.md) |
+| Sync fork with upstream | Skill: [`.claude/skills/upstream-sync/SKILL.md`](./.claude/skills/upstream-sync/SKILL.md) |
+
+---
+
+## License
+
+FSL-1.1-ALv2 (inherited from supacode). Personal / internal use fine; auto-converts to Apache-2.0 in 2028.
+
+---
+
+# Upstream supacode notes
+
+Everything below this line is inherited from upstream supacode. Some of it is stale under Supacool (e.g. the sidebar-based architecture diagram), but we preserve it verbatim to keep `git pull upstream main` clean. Supacool-accurate information is in the Supacool-specific docs linked above; treat this section as "what upstream currently thinks this app is."
+
 ## Build Commands
 
 ```bash

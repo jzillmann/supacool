@@ -1,33 +1,15 @@
-# Supacool — supacode fork
+# Supacool assets directory
 
-Personal macOS terminal built on a fork of [`supabitapp/supacode`](https://github.com/supabitapp/supacode). Source lives on the `supacool` branch of this repo; the `main` branch tracks upstream bit-identically so `git pull upstream main` stays clean.
+This directory holds Supacool's **non-code** artefacts: the app icon source (`assets/app-icon.svg`) and this README. Nothing here is compiled into the Xcode target.
 
-## Repo layout
+For everything else — the project overview, quickstart, and deep reference docs — see:
 
-- `supacode/` — the upstream Swift sources. Synchronized folder in the Xcode target.
-- `supacode/Supacool/` — **Supacool's own Swift code** (new domain types, reducers, views). Auto-compiled as a subtree of the synchronized group. New code goes here.
-- `supacode.xcodeproj/` — the Xcode project.
-- `Supacool/assets/` — non-code assets (app icon SVG).
-- `Supacool/docs/` — developer conventions + design notes (start here if you're joining).
-- `ThirdParty/ghostty/` — Ghostty submodule, compiled into `GhosttyKit.xcframework`.
+- [`/AGENTS.md`](../AGENTS.md) — master doc: fork orientation, quickstart, upstream supacode notes. `CLAUDE.md` symlinks to it.
+- [`/docs/agent-guides/`](../docs/agent-guides/) — architecture, persistence convention, Swift 6 gotchas, upstream-sync playbook, and the explicit out-of-scope list.
+- [`/.claude/skills/`](../.claude/skills/) — invokable skill modules for recurring workflows.
 
-## Conventions
+## Why code lives under `supacode/Supacool/`, not here
 
-- [Persistence convention](docs/persistence-convention.md) — every Supacool Codable struct that lands on disk uses a manual `init(from decoder:)` with `decodeIfPresent ?? default`. Synthesized Codable is BANNED for persisted types because it wipes user data on any field addition. Mandatory reading before touching anything under `supacode/Supacool/Features/Board/Persistence/` or `supacode/Supacool/Domain/`.
+Supacool's Xcode project uses `PBXFileSystemSynchronizedRootGroup` (objectVersion 77), which auto-discovers `.swift` files inside the synchronized folders. The only synchronized roots are `supacode/` and `supacodeTests/`. Putting code under `supacode/Supacool/` means it auto-compiles without any project-file surgery.
 
-## Build
-
-- `make build-ghostty-xcframework` — build `GhosttyKit.xcframework` from the submodule (macOS-only slice via `-Dxcframework-target=native`).
-- `make build-app` — debug build.
-- `make run-app` — build + launch, streaming logs.
-- `make test` — full test suite.
-
-## Branch strategy
-
-- `main` — read-only mirror of upstream `supabitapp/supacode`. Receives `git pull upstream main` fast-forwards.
-- `supacool` — personal work, periodically `git rebase main` onto upstream HEAD.
-
-```
-git checkout main && git pull upstream main && git push origin main
-git checkout supacool && git rebase main
-```
+Adding **top-level** `Supacool/` as a new synchronized root would require hand-editing `supacode.xcodeproj/project.pbxproj` — risky and for no real benefit. So this directory stays for docs/assets only, and `supacode/Supacool/` is where the actual Supacool Swift code lives.

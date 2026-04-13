@@ -80,7 +80,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   }
 
   // Forward-compatible Codable — convention documented in
-  // Supacool/docs/persistence-convention.md.
+  // docs/agent-guides/persistence.md.
   //
   // Missing fields decode to their struct default rather than failing the
   // whole file. Prevents "all sessions disappeared" regressions any time
