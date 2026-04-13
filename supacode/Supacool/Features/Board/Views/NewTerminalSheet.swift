@@ -6,7 +6,6 @@ import SwiftUI
 /// name, and hits Create.
 struct NewTerminalSheet: View {
   @Bindable var store: StoreOf<NewTerminalFeature>
-  @FocusState private var isPromptFocused: Bool
 
   var body: some View {
     Form {
@@ -57,25 +56,21 @@ struct NewTerminalSheet: View {
       agentShortcuts
     }
     .frame(minWidth: 460, minHeight: 420)
-    .task { isPromptFocused = true }
   }
 
   private var promptEditor: some View {
-    // TextEditor on macOS has an internal NSTextView with an inset around
-    // (5pt horizontal, ~0pt top). The placeholder padding mirrors that so
-    // the cursor lines up with "D" in "Describe...".
+    // PromptTextEditor has a KNOWN textContainerInset of (5, 6). The
+    // placeholder below uses those exact numbers for padding so the
+    // cursor lines up with the first glyph. Auto-focuses on appear.
     ZStack(alignment: .topLeading) {
-      TextEditor(text: $store.prompt)
-        .font(.body)
-        .focused($isPromptFocused)
-        .scrollContentBackground(.hidden)
+      PromptTextEditor(text: $store.prompt, autoFocus: true)
         .frame(minHeight: 100, maxHeight: 220)
       if store.prompt.isEmpty {
         Text("Describe what the agent should do…")
           .font(.body)
           .foregroundStyle(.tertiary)
-          .padding(.leading, 5)
-          .padding(.top, 0)
+          .padding(.leading, PromptTextEditor.inset.width)
+          .padding(.top, PromptTextEditor.inset.height)
           .allowsHitTesting(false)
       }
     }

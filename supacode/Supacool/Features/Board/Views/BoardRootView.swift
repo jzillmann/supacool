@@ -69,18 +69,11 @@ struct BoardRootView: View {
       classify: { classify($0) },
       onAddRepository: onAddRepository
     )
-    // Hide the macOS-auto-rendered window title so we control order:
-    // we want [Supacool title] [repo picker] ... [+ New Terminal].
+    // The window title is still "Supacool" (visible in the menu bar
+    // and Window menu) but we hide it from the toolbar chrome — the
+    // leading item is just the repo picker.
     .toolbar(removing: .title)
     .toolbar {
-      // Leading: title first. A fixed spacer keeps macOS from merging
-      // this item with the repo picker into a single pill.
-      ToolbarItem(placement: .navigation) {
-        Text("Supacool")
-          .font(.headline)
-          .foregroundStyle(.primary)
-      }
-      ToolbarSpacer(.fixed)
       ToolbarItem(placement: .navigation) {
         RepoPickerButton(
           repositories: repositories,
