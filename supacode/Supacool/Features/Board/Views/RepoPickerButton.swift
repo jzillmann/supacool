@@ -30,10 +30,8 @@ struct RepoPickerButton: View {
     } label: {
       HStack(spacing: 6) {
         Image(systemName: repositories.isEmpty ? "folder.badge.plus" : "folder.fill")
-          .font(.callout)
           .foregroundStyle(repositories.isEmpty ? .blue : .yellow)
         Text(summary)
-          .font(.callout.weight(.medium))
           .lineLimit(1)
         if !repositories.isEmpty {
           Image(systemName: "chevron.down")
@@ -41,12 +39,7 @@ struct RepoPickerButton: View {
             .foregroundStyle(.secondary)
         }
       }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 5)
-      .background(Color.secondary.opacity(0.12))
-      .clipShape(Capsule())
     }
-    .buttonStyle(.plain)
     .help(helpText)
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
       popoverContent
