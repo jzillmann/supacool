@@ -61,19 +61,32 @@ struct NewTerminalSheet: View {
   }
 
   private var promptEditor: some View {
+    // TextEditor on macOS has an internal NSTextView with an inset around
+    // (5pt horizontal, ~0pt top). The placeholder padding mirrors that so
+    // the cursor lines up with "D" in "Describe...".
     ZStack(alignment: .topLeading) {
       TextEditor(text: $store.prompt)
         .font(.body)
         .focused($isPromptFocused)
-        .frame(minHeight: 100)
+        .scrollContentBackground(.hidden)
+        .frame(minHeight: 100, maxHeight: 220)
       if store.prompt.isEmpty {
         Text("Describe what the agent should do…")
+          .font(.body)
           .foregroundStyle(.tertiary)
-          .padding(.top, 8)
           .padding(.leading, 5)
+          .padding(.top, 0)
           .allowsHitTesting(false)
       }
     }
+    .background(
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(Color(nsColor: .textBackgroundColor).opacity(0.4))
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
+    )
   }
 
   private var agentPicker: some View {

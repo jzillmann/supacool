@@ -32,19 +32,27 @@ struct BoardView: View {
     if visible.isEmpty {
       emptyState
     } else {
+      let waiting = visible.filter { isWaitingStatus(classify($0)) }
+      let inProgress = visible.filter { !isWaitingStatus(classify($0)) }
       ScrollView {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 20) {
           section(
             title: "Waiting on Me",
             systemImage: "exclamationmark.circle.fill",
             color: .orange,
-            sessions: visible.filter { isWaitingStatus(classify($0)) }
+            sessions: waiting,
+            dimmed: false
           )
+          if !waiting.isEmpty && !inProgress.isEmpty {
+            Divider()
+              .padding(.vertical, 4)
+          }
           section(
             title: "In Progress",
             systemImage: "circle.fill",
             color: .green,
-            sessions: visible.filter { !isWaitingStatus(classify($0)) }
+            sessions: inProgress,
+            dimmed: true
           )
         }
         .padding(20)
@@ -89,7 +97,8 @@ struct BoardView: View {
     title: String,
     systemImage: String,
     color: Color,
-    sessions: [AgentSession]
+    sessions: [AgentSession],
+    dimmed: Bool
   ) -> some View {
     if sessions.isEmpty {
       EmptyView()
@@ -118,6 +127,7 @@ struct BoardView: View {
               session: session,
               repositoryName: repositories[id: session.repositoryID]?.name,
               status: sessionStatus,
+              dimmed: dimmed,
               isBusyNow: terminalManager.isAgentBusy(
                 worktreeID: session.worktreeID,
                 tabID: TerminalTabID(rawValue: session.id)
@@ -162,11 +172,14 @@ private struct SessionCardContainer: View {
   let session: AgentSession
   let repositoryName: String?
   let status: SessionCardView.Status
+  let dimmed: Bool
   let isBusyNow: Bool
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRerun: (() -> Void)?
   let onBusyToIdleTransition: () -> Void
+
+  @State private var isHovered: Bool = false
 
   var body: some View {
     SessionCardView(
@@ -177,6 +190,11 @@ private struct SessionCardContainer: View {
       onRemove: onRemove,
       onRerun: onRerun
     )
+    .opacity(dimmed && !isHovered ? 0.55 : 1.0)
+    .animation(.easeOut(duration: 0.12), value: isHovered)
+    .onHover { hovering in
+      isHovered = hovering
+    }
     .onChange(of: isBusyNow) { oldValue, newValue in
       if oldValue && !newValue {
         onBusyToIdleTransition()
