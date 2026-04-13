@@ -71,6 +71,32 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastKnownBusy = lastKnownBusy
   }
 
+  // Forward-compatible Codable: missing fields decode to their struct
+  // default rather than failing the whole file. This prevents "all
+  // sessions disappeared" regressions any time we add a new field to
+  // AgentSession and relaunch against a previously-written sessions file.
+  // Keep this manual; add a `decodeIfPresent ?? default` line per new field.
+  enum CodingKeys: String, CodingKey {
+    case id, repositoryID, worktreeID, agent, initialPrompt, displayName
+    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy
+  }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    id = try c.decode(UUID.self, forKey: .id)
+    repositoryID = try c.decode(String.self, forKey: .repositoryID)
+    worktreeID = try c.decode(String.self, forKey: .worktreeID)
+    agent = try c.decode(AgentType.self, forKey: .agent)
+    initialPrompt = try c.decode(String.self, forKey: .initialPrompt)
+    displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+      ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
+    createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    lastActivityAt = try c.decodeIfPresent(Date.self, forKey: .lastActivityAt) ?? Date()
+    hasCompletedAtLeastOnce =
+      try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
+    lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
+  }
+
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,
   /// and truncates to a short label. Falls back to "Session <short-id>".
   nonisolated static func deriveDisplayName(from prompt: String, fallbackID: UUID) -> String {

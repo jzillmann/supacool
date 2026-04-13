@@ -21,6 +21,15 @@ nonisolated struct BoardFilters: Equatable, Codable, Sendable {
   func includes(repositoryID: String) -> Bool {
     showsAllRepositories || selectedRepositoryIDs.contains(repositoryID)
   }
+
+  // Forward-compatible Codable: missing fields decode to empty/default so
+  // adding new fields in future versions doesn't wipe existing saved filters.
+  enum CodingKeys: String, CodingKey { case selectedRepositoryIDs }
+
+  init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    selectedRepositoryIDs = try c.decodeIfPresent(Set<String>.self, forKey: .selectedRepositoryIDs) ?? []
+  }
 }
 
 nonisolated struct BoardFiltersKeyID: Hashable, Sendable {}
