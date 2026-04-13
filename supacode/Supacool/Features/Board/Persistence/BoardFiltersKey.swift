@@ -22,8 +22,10 @@ nonisolated struct BoardFilters: Equatable, Codable, Sendable {
     showsAllRepositories || selectedRepositoryIDs.contains(repositoryID)
   }
 
-  // Forward-compatible Codable: missing fields decode to empty/default so
-  // adding new fields in future versions doesn't wipe existing saved filters.
+  // Forward-compatible Codable — convention documented in
+  // Supacool/docs/persistence-convention.md. Missing fields decode to
+  // empty/default so adding new fields in future versions doesn't wipe
+  // existing saved filters.
   enum CodingKeys: String, CodingKey { case selectedRepositoryIDs }
 
   init(from decoder: Decoder) throws {

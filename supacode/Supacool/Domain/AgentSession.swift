@@ -71,11 +71,17 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastKnownBusy = lastKnownBusy
   }
 
-  // Forward-compatible Codable: missing fields decode to their struct
-  // default rather than failing the whole file. This prevents "all
-  // sessions disappeared" regressions any time we add a new field to
-  // AgentSession and relaunch against a previously-written sessions file.
-  // Keep this manual; add a `decodeIfPresent ?? default` line per new field.
+  // Forward-compatible Codable — convention documented in
+  // Supacool/docs/persistence-convention.md.
+  //
+  // Missing fields decode to their struct default rather than failing the
+  // whole file. Prevents "all sessions disappeared" regressions any time
+  // we add a new field to AgentSession and relaunch against a previously-
+  // written sessions file.
+  //
+  // When adding a new field: bump CodingKeys, add one
+  // `decodeIfPresent ?? default` line below. Do NOT fall back to the
+  // synthesized init — it will break backward compat silently.
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy
