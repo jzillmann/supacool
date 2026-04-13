@@ -35,12 +35,13 @@ struct BoardRootView: View {
     .toolbar {
       ToolbarItem(placement: .primaryAction) {
         Button {
-          store.send(.openNewTerminalSheet)
+          store.send(.openNewTerminalSheet(repositories: Array(repositories)))
         } label: {
           Label("New Terminal", systemImage: "plus")
         }
         .help("New Terminal (⌘N)")
         .keyboardShortcut("n", modifiers: .command)
+        .disabled(repositories.isEmpty)
       }
       #if DEBUG
         ToolbarItem(placement: .automatic) {
@@ -52,6 +53,11 @@ struct BoardRootView: View {
           .help("Insert a fake session for UI testing (DEBUG only)")
         }
       #endif
+    }
+    .sheet(
+      store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
+    ) { sheetStore in
+      NewTerminalSheet(store: sheetStore)
     }
   }
 

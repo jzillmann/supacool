@@ -46,7 +46,7 @@ struct BoardFeature {
     case showAllRepositories
 
     // MARK: New-terminal sheet
-    case openNewTerminalSheet
+    case openNewTerminalSheet(repositories: [Repository])
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
   }
 
@@ -112,8 +112,10 @@ struct BoardFeature {
         state.$filters.withLock { $0.selectedRepositoryIDs = [] }
         return .none
 
-      case .openNewTerminalSheet:
-        state.newTerminalSheet = NewTerminalFeature.State()
+      case .openNewTerminalSheet(let repositories):
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories)
+        )
         return .none
 
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
@@ -149,26 +151,5 @@ extension BoardFeature.State {
   }
 }
 
-// MARK: - Stub for new-terminal feature (filled in during Phase 4c)
-
-/// Placeholder so BoardFeature compiles in Phase 4a. Phase 4c replaces this
-/// with the real sheet reducer backing NewTerminalSheet.swift.
-@Reducer
-struct NewTerminalFeature {
-  @ObservableState
-  struct State: Equatable {}
-
-  enum Action: Equatable {
-    case delegate(Delegate)
-
-    @CasePathable
-    enum Delegate: Equatable {
-      case cancel
-      case created(AgentSession)
-    }
-  }
-
-  var body: some Reducer<State, Action> {
-    Reduce { _, _ in .none }
-  }
-}
+// Real `NewTerminalFeature` lives in
+// Supacool/Features/Board/Reducer/NewTerminalFeature.swift
