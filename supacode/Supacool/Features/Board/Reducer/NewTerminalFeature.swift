@@ -167,7 +167,13 @@ struct NewTerminalFeature {
               .createTabWithInput(
                 worktree,
                 input: input,
-                runSetupScriptIfNew: false,
+                // Run the repo's setup script (Settings → Repository Settings →
+                // Setup Script) before the agent command. `createTab` writes
+                // `setupInput + commandInput` to the pty in order, so the
+                // setup runs first and the agent launches into the prepared
+                // worktree (env files, deps, etc.). Resume paths keep this
+                // `false` — their worktree is already initialized.
+                runSetupScriptIfNew: true,
                 id: sessionID
               )
             )

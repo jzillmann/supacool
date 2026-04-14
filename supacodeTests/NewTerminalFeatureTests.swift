@@ -99,6 +99,36 @@ struct NewTerminalFeatureTests {
     #expect(spawnedID.value != nil)
   }
 
+  // MARK: - Setup script
+
+  /// Regression: agent sessions created from the board must run the repo's
+  /// configured setup script (Settings → Repository Settings → Setup Script)
+  /// before the agent command, so hooks like pre-commit have the env/files
+  /// they expect. A previous revision passed `runSetupScriptIfNew: false`
+  /// unconditionally, which meant fresh worktrees landed un-initialized.
+  @Test(.dependencies) func createRunsSetupScriptForNewWorktree() async {
+    var state = Self.makeState()
+    state.prompt = "Do the thing"
+
+    let runSetupScript = LockIsolated<Bool?>(nil)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput(_, _, let runSetup, _) = command {
+          runSetupScript.setValue(runSetup)
+        }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(runSetupScript.value == true)
+  }
+
   // MARK: - Codex agent
 
   @Test(.dependencies) func codexAgentSpawnsWithCodexBinary() async {
