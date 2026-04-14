@@ -23,6 +23,9 @@ struct FullScreenTerminalView: View {
   /// never captured a native session id.
   let onResumePicker: (() -> Void)?
   let onRemove: () -> Void
+  /// Opens the rename alert owned by `BoardRootView`. Triggered from the
+  /// header title (double-click) and its context menu.
+  let onRename: () -> Void
 
   var body: some View {
     VStack(spacing: 0) {
@@ -57,12 +60,18 @@ struct FullScreenTerminalView: View {
 
       Divider().frame(height: 18)
 
-      agentChip
+      repoChip
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2, perform: onRename)
+        .contextMenu {
+          Button("Rename…", systemImage: "pencil", action: onRename)
+        }
+        .help("Double-click to rename")
       Spacer()
-      repoChip
+      agentChip
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
@@ -108,8 +117,31 @@ struct FullScreenTerminalView: View {
         Text(repo.name)
           .font(.caption)
           .foregroundStyle(.secondary)
+        if let worktreeLabel {
+          Image(systemName: "arrow.triangle.branch")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+          Text(worktreeLabel)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
     }
+  }
+
+  /// The worktree's branch (or its directory name as a fallback) — shown
+  /// only when the session is running in a dedicated worktree, not at the
+  /// repo root. Returns `nil` for directory-mode sessions so we don't
+  /// duplicate the repo name.
+  private var worktreeLabel: String? {
+    guard let repo = repositories[id: session.repositoryID] else { return nil }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    guard session.worktreeID != rootPath else { return nil }
+    if let worktree = repo.worktrees.first(where: { $0.id == session.worktreeID }) {
+      return worktree.branch ?? worktree.name
+    }
+    return URL(fileURLWithPath: session.worktreeID).lastPathComponent
   }
 
   @ViewBuilder

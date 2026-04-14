@@ -10,6 +10,7 @@ struct SessionCardView: View {
   let status: Status
   let onTap: () -> Void
   let onRemove: () -> Void
+  var onRename: (() -> Void)? = nil
   var onRerun: (() -> Void)? = nil
   var onResume: (() -> Void)? = nil
   var onResumePicker: (() -> Void)? = nil
@@ -103,6 +104,10 @@ struct SessionCardView: View {
     }
     .buttonStyle(.plain)
     .contextMenu {
+      if let onRename {
+        Button("Rename…", systemImage: "pencil", action: onRename)
+        Divider()
+      }
       if let onResume {
         Button("Resume Session", systemImage: "play.circle", action: onResume)
       }

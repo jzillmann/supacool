@@ -11,6 +11,7 @@ struct BoardView: View {
   let terminalManager: WorktreeTerminalManager
   let classify: (AgentSession) -> SessionCardView.Status
   let onAddRepository: () -> Void
+  let onRenameSession: (AgentSession) -> Void
 
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
@@ -29,14 +30,18 @@ struct BoardView: View {
       let inProgress = visible.filter { !isWaitingStatus(classify($0)) }
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
+          // "Waiting on Me" always renders — when empty it shows a subtle
+          // "Nothing waiting on you" message so the bucket stays visible and
+          // the board never looks like the attention-zone just vanished.
           section(
             title: "Waiting on Me",
             systemImage: "exclamationmark.circle.fill",
             color: .orange,
             sessions: waiting,
-            dimmed: false
+            dimmed: false,
+            emptyMessage: "Nothing waiting on you."
           )
-          if !waiting.isEmpty && !inProgress.isEmpty {
+          if !inProgress.isEmpty {
             Divider()
               .padding(.vertical, 4)
           }
@@ -45,7 +50,8 @@ struct BoardView: View {
             systemImage: "circle.fill",
             color: .green,
             sessions: inProgress,
-            dimmed: true
+            dimmed: true,
+            emptyMessage: nil
           )
         }
         .padding(20)
@@ -91,9 +97,10 @@ struct BoardView: View {
     systemImage: String,
     color: Color,
     sessions: [AgentSession],
-    dimmed: Bool
+    dimmed: Bool,
+    emptyMessage: String?
   ) -> some View {
-    if sessions.isEmpty {
+    if sessions.isEmpty && emptyMessage == nil {
       EmptyView()
     } else {
       VStack(alignment: .leading, spacing: 12) {
@@ -108,6 +115,13 @@ struct BoardView: View {
         } icon: {
           Image(systemName: systemImage)
             .foregroundStyle(color)
+        }
+
+        if sessions.isEmpty, let emptyMessage {
+          Text(emptyMessage)
+            .font(.callout)
+            .foregroundStyle(.tertiary)
+            .padding(.vertical, 6)
         }
 
         LazyVGrid(
@@ -127,6 +141,7 @@ struct BoardView: View {
               ),
               onTap: { store.send(.focusSession(id: session.id)) },
               onRemove: { store.send(.removeSession(id: session.id)) },
+              onRename: { onRenameSession(session) },
               onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
                 ? {
                   store.send(
@@ -196,6 +211,7 @@ private struct SessionCardContainer: View {
   let isBusyNow: Bool
   let onTap: () -> Void
   let onRemove: () -> Void
+  let onRename: () -> Void
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
@@ -211,6 +227,7 @@ private struct SessionCardContainer: View {
       status: status,
       onTap: onTap,
       onRemove: onRemove,
+      onRename: onRename,
       onRerun: onRerun,
       onResume: onResume,
       onResumePicker: onResumePicker

@@ -15,6 +15,12 @@ struct BoardRootView: View {
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
 
+  /// The session being renamed right now (nil = alert hidden). Owned here so
+  /// both the board cards and the full-screen header can trigger rename
+  /// through a single code path.
+  @State private var renamingSessionID: AgentSession.ID?
+  @State private var renameDraft: String = ""
+
   var body: some View {
     Group {
       if let focusedID = store.focusedSessionID,
@@ -56,7 +62,8 @@ struct BoardRootView: View {
               )
             }
             : nil,
-          onRemove: { store.send(.removeSession(id: session.id)) }
+          onRemove: { store.send(.removeSession(id: session.id)) },
+          onRename: { beginRename(session) }
         )
       } else {
         boardContents
@@ -80,6 +87,29 @@ struct BoardRootView: View {
     ) { sheetStore in
       NewTerminalSheet(store: sheetStore)
     }
+    .alert(
+      "Rename session",
+      isPresented: Binding(
+        get: { renamingSessionID != nil },
+        set: { if !$0 { renamingSessionID = nil } }
+      ),
+      presenting: renamingSessionID
+    ) { id in
+      TextField("Name", text: $renameDraft)
+      Button("Cancel", role: .cancel) { renamingSessionID = nil }
+      Button("Save") {
+        let trimmed = renameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+          store.send(.renameSession(id: id, newName: trimmed))
+        }
+        renamingSessionID = nil
+      }
+    }
+  }
+
+  private func beginRename(_ session: AgentSession) {
+    renameDraft = session.displayName
+    renamingSessionID = session.id
   }
 
   private var boardContents: some View {
@@ -88,7 +118,8 @@ struct BoardRootView: View {
       repositories: repositories,
       terminalManager: terminalManager,
       classify: { classify($0) },
-      onAddRepository: onAddRepository
+      onAddRepository: onAddRepository,
+      onRenameSession: { session in beginRename(session) }
     )
     // The window title is still "Supacool" (visible in the menu bar
     // and Window menu) but we hide it from the toolbar chrome — the
