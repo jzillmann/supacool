@@ -48,32 +48,25 @@ struct SessionSwitcherOverlay: View {
   }
 
   private var panel: some View {
-    VStack(alignment: .leading, spacing: 14) {
+    let waiting = sessions.filter { BoardNavOrder.isWaitingStatus(classify($0)) }
+    let working = sessions.filter { !BoardNavOrder.isWaitingStatus(classify($0)) }
+    return VStack(alignment: .leading, spacing: 14) {
       header
-      LazyVGrid(
-        columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 12)],
-        spacing: 12
-      ) {
-        ForEach(sessions) { session in
-          SessionCardView(
-            session: session,
-            repositoryName: repositories[id: session.repositoryID]?.name,
-            status: classify(session),
-            onTap: {
-              highlightedSessionID = session.id
-              onCommit()
-            },
-            onRemove: {}
-          )
-          .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-              .strokeBorder(
-                Color.accentColor,
-                lineWidth: highlightedSessionID == session.id ? 2 : 0
-              )
-          )
-          .animation(.easeOut(duration: 0.08), value: highlightedSessionID)
-        }
+      if !waiting.isEmpty {
+        sessionSection(
+          title: "Waiting",
+          systemImage: "hand.raised.fill",
+          tint: .orange,
+          sessions: waiting,
+        )
+      }
+      if !working.isEmpty {
+        sessionSection(
+          title: "Working",
+          systemImage: "circle.fill",
+          tint: .green,
+          sessions: working,
+        )
       }
     }
     .padding(18)
@@ -87,6 +80,56 @@ struct SessionSwitcherOverlay: View {
     )
     .shadow(color: .black.opacity(0.35), radius: 24, y: 12)
     .compositingGroup()
+  }
+
+  private func sessionSection(
+    title: String,
+    systemImage: String,
+    tint: Color,
+    sessions: [AgentSession]
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 6) {
+        Image(systemName: systemImage)
+          .font(.caption2)
+          .foregroundStyle(tint)
+        Text(title)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Text("\(sessions.count)")
+          .font(.caption2.monospacedDigit())
+          .foregroundStyle(.tertiary)
+      }
+      LazyVGrid(
+        columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 12)],
+        spacing: 12,
+      ) {
+        ForEach(sessions) { session in
+          cardView(for: session)
+        }
+      }
+    }
+  }
+
+  private func cardView(for session: AgentSession) -> some View {
+    SessionCardView(
+      session: session,
+      repositoryName: repositories[id: session.repositoryID]?.name,
+      status: classify(session),
+      onTap: {
+        highlightedSessionID = session.id
+        onCommit()
+      },
+      onRemove: {},
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(
+          Color.accentColor,
+          lineWidth: highlightedSessionID == session.id ? 2 : 0,
+        )
+    )
+    .animation(.easeOut(duration: 0.08), value: highlightedSessionID)
   }
 
   private var header: some View {
