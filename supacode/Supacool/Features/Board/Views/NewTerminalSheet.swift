@@ -139,7 +139,6 @@ struct NewTerminalSheet: View {
       Text(worktreeModeFooter)
     }
     .pickerStyle(.segmented)
-    .disabled(!existingWorktreesAvailable && store.worktreeMode == .none)
     .onChange(of: store.worktreeMode) { _, newMode in
       // Default to the first non-root worktree on mode-switch so the
       // picker isn't empty on first paint.
@@ -186,10 +185,6 @@ struct NewTerminalSheet: View {
     else { return [] }
     let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
     return repo.worktrees.filter { $0.id != rootPath && $0.isWorktree }
-  }
-
-  private var existingWorktreesAvailable: Bool {
-    !availableExistingWorktrees.isEmpty
   }
 
   private var firstExistingWorktreeID: String? {
