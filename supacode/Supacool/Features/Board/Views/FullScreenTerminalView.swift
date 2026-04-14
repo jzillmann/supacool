@@ -27,6 +27,15 @@ struct FullScreenTerminalView: View {
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
 
+  /// The macOS app opened when the user clicks the diff button. Swap via
+  /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
+  /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
+  @AppStorage("supacool.gitGuiApp") private var gitGuiApp: String = "Fork"
+
+  /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
+  @State private var isEditingGitGuiApp: Bool = false
+  @State private var gitGuiAppDraft: String = ""
+
   var body: some View {
     VStack(spacing: 0) {
       header
@@ -56,11 +65,12 @@ struct FullScreenTerminalView: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
-      .help("Return to board (⌘B or Esc)")
+      .help("Return to board (⌘B or ⌘.)")
 
       Divider().frame(height: 18)
 
       repoChip
+      gitGuiButton
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -127,6 +137,81 @@ struct FullScreenTerminalView: View {
             .lineLimit(1)
         }
       }
+    }
+  }
+
+  /// Opens the configured git GUI (Fork by default) on the session's
+  /// working directory. We let the GUI decide whether there's anything
+  /// interesting to show — Fork/Tower handle a clean tree fine — rather
+  /// than shelling out to `git status` on every render.
+  /// Right-click picks a preset or opens a "Set Custom…" alert.
+  @ViewBuilder
+  private var gitGuiButton: some View {
+    let url = URL(fileURLWithPath: session.worktreeID)
+    Button {
+      openInGitGui(url: url)
+    } label: {
+      Image(systemName: "plus.forwardslash.minus")
+        .font(.system(size: 13, weight: .medium))
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(.secondary)
+    .help("Open in \(gitGuiApp) (right-click to change)")
+    .contextMenu {
+      Section("Open diff in") {
+        ForEach(Self.gitGuiPresets, id: \.self) { preset in
+          Button {
+            gitGuiApp = preset
+          } label: {
+            if preset == gitGuiApp {
+              Label(preset, systemImage: "checkmark")
+            } else {
+              Text(preset)
+            }
+          }
+        }
+        Divider()
+        Button("Set Custom…") {
+          gitGuiAppDraft = gitGuiApp
+          isEditingGitGuiApp = true
+        }
+      }
+    }
+    .alert("Git GUI app", isPresented: $isEditingGitGuiApp) {
+      TextField("App name", text: $gitGuiAppDraft)
+      Button("Cancel", role: .cancel) {}
+      Button("Save") {
+        let trimmed = gitGuiAppDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { gitGuiApp = trimmed }
+      }
+    } message: {
+      Text("Name of the macOS app to launch (as it appears in /Applications). Used with `open -a`.")
+    }
+  }
+
+  /// Built-in presets for the right-click menu. Manually curated — these
+  /// are the common macOS git GUIs. Custom entries go through the
+  /// "Set Custom…" alert.
+  private static let gitGuiPresets: [String] = [
+    "Fork",
+    "Tower",
+    "GitUp",
+    "SourceTree",
+    "GitHub Desktop",
+    "Sublime Merge",
+    "GitKraken",
+  ]
+
+  private func openInGitGui(url: URL) {
+    let process = Process()
+    process.launchPath = "/usr/bin/open"
+    process.arguments = ["-a", gitGuiApp, url.path]
+    do {
+      try process.run()
+    } catch {
+      // Fall back to Finder if the configured app isn't installed. Users
+      // see Finder instead of silence; they can then set a different app.
+      NSWorkspace.shared.open(url)
     }
   }
 
