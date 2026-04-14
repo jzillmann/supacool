@@ -24,6 +24,7 @@ enum GitOperation: String {
   case statusPorcelain = "status_porcelain"
   case diffFile = "diff_file"
   case numstatFile = "numstat_file"
+  case diffAgainstBase = "diff_against_base"
 }
 
 enum GitClientError: LocalizedError {
@@ -470,6 +471,112 @@ struct GitClient {
     if cached { args.append("--cached") }
     args += ["--", path]
     return try await runGit(operation: .diffFile, arguments: args)
+  }
+
+  /// Three-dot diff of a single path between the branch's fork point
+  /// on `baseRef` and the current HEAD — what the branch has *introduced*
+  /// since diverging, so pulling `main` in doesn't inflate the output.
+  nonisolated func diffForFile(
+    at worktreeURL: URL,
+    path: String,
+    baseRef: String
+  ) async throws -> String {
+    let repoPath = worktreeURL.path(percentEncoded: false)
+    return try await runGit(
+      operation: .diffFile,
+      arguments: ["-C", repoPath, "diff", "\(baseRef)...HEAD", "--", path]
+    )
+  }
+
+  /// Changed files between `baseRef` and HEAD (three-dot — merge-base
+  /// relative, so `main` merges don't bloat the list). Each entry is
+  /// populated with its status + added/removed counts, so the caller
+  /// doesn't need per-file numstat round-trips.
+  nonisolated func changedFilesAgainst(
+    baseRef: String,
+    at worktreeURL: URL
+  ) async throws -> [ChangedFile] {
+    let repoPath = worktreeURL.path(percentEncoded: false)
+    let range = "\(baseRef)...HEAD"
+    // Two parallel calls: --name-status for the change kind, --numstat
+    // for the line deltas. Same ref range so they agree on file set.
+    async let nameStatusOutput = runGit(
+      operation: .diffAgainstBase,
+      arguments: ["-C", repoPath, "diff", range, "--name-status"]
+    )
+    async let numstatOutput = runGit(
+      operation: .diffAgainstBase,
+      arguments: ["-C", repoPath, "diff", range, "--numstat"]
+    )
+    let (statusRaw, numstatRaw) = try await (nameStatusOutput, numstatOutput)
+    return Self.mergeNameStatusAndNumstat(
+      nameStatus: statusRaw,
+      numstat: numstatRaw
+    )
+  }
+
+  /// Parse and align `git diff --name-status` and `git diff --numstat`
+  /// output (both tab-separated, one entry per line). Renames carry an
+  /// extra column in `--name-status` (`R<score>\told\tnew`) and in
+  /// `--numstat` (`<added>\t<removed>\told => new` or
+  /// `<added>\t<removed>\t{old => new}` — the subshell form we just
+  /// collapse to the `new` segment).
+  nonisolated static func mergeNameStatusAndNumstat(
+    nameStatus: String,
+    numstat: String
+  ) -> [ChangedFile] {
+    var statusByPath: [String: ChangeStatus] = [:]
+    var orderedPaths: [String] = []
+    for line in nameStatus.split(separator: "\n", omittingEmptySubsequences: true) {
+      let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+      guard let first = parts.first, !first.isEmpty else { continue }
+      let code = first.first ?? Character(" ")
+      // Rename/copy lines have 3 cols: code, old, new.
+      let path = parts.count >= 3 ? String(parts[2]) : String(parts.last ?? "")
+      guard !path.isEmpty else { continue }
+      statusByPath[path] = ChangeStatus.fromPorcelain(
+        index: code,
+        worktree: " "
+      )
+      orderedPaths.append(path)
+    }
+    var countsByPath: [String: (Int, Int)] = [:]
+    for line in numstat.split(separator: "\n", omittingEmptySubsequences: true) {
+      let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+      guard parts.count >= 3 else { continue }
+      let path = Self.renameNewPath(String(parts[2]))
+      let added = Int(parts[0]) ?? 0
+      let removed = Int(parts[1]) ?? 0
+      countsByPath[path] = (added, removed)
+    }
+    var seen = Set<String>()
+    return orderedPaths.compactMap { path -> ChangedFile? in
+      guard seen.insert(path).inserted else { return nil }
+      let status = statusByPath[path] ?? .modified
+      let counts = countsByPath[path]
+      return ChangedFile(
+        path: path,
+        status: status,
+        linesAdded: counts?.0,
+        linesRemoved: counts?.1
+      )
+    }
+  }
+
+  /// `git diff --numstat` emits renames as `old => new` or
+  /// `dir/{old => new}` — extract just the `new` path.
+  nonisolated private static func renameNewPath(_ raw: String) -> String {
+    guard raw.contains("=>") else { return raw }
+    if let openIdx = raw.firstIndex(of: "{"), let closeIdx = raw.firstIndex(of: "}") {
+      let prefix = raw[..<openIdx]
+      let inside = raw[raw.index(after: openIdx)..<closeIdx]
+      let suffix = raw[raw.index(after: closeIdx)...]
+      let arrowParts = inside.components(separatedBy: "=>")
+      let newInside = arrowParts.count >= 2 ? arrowParts[1].trimmingCharacters(in: .whitespaces) : ""
+      return String(prefix) + newInside + String(suffix)
+    }
+    let arrowParts = raw.components(separatedBy: "=>")
+    return arrowParts.last?.trimmingCharacters(in: .whitespaces) ?? raw
   }
 
   /// Per-file added/removed line counts via `git diff HEAD --numstat`.

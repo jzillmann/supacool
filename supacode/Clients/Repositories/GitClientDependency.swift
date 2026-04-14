@@ -47,6 +47,14 @@ struct GitClientDependency: Sendable {
   /// `git diff --cached`, else working-tree vs. HEAD.
   var diffForFile:
     @Sendable (_ worktreeURL: URL, _ path: String, _ cached: Bool) async throws -> String
+  /// Three-dot diff (merge-base relative) of a single path between
+  /// `baseRef` and HEAD. Used by the QuickDiffSheet's "vs. base" mode.
+  var diffForFileAgainstBase:
+    @Sendable (_ worktreeURL: URL, _ path: String, _ baseRef: String) async throws -> String
+  /// Changed files between `baseRef` and HEAD (three-dot). Returns the
+  /// list with per-file status + line counts already populated.
+  var changedFilesAgainst:
+    @Sendable (_ baseRef: String, _ worktreeURL: URL) async throws -> [ChangedFile]
   /// Per-file added/removed counts via `git diff HEAD --numstat`.
   /// Returns `nil` for binary files or unparseable output.
   var numstatForFile:
@@ -104,6 +112,12 @@ extension GitClientDependency: DependencyKey {
     statusPorcelain: { try await GitClient().statusPorcelain(at: $0) },
     diffForFile: { worktreeURL, path, cached in
       try await GitClient().diffForFile(at: worktreeURL, path: path, cached: cached)
+    },
+    diffForFileAgainstBase: { worktreeURL, path, baseRef in
+      try await GitClient().diffForFile(at: worktreeURL, path: path, baseRef: baseRef)
+    },
+    changedFilesAgainst: { baseRef, worktreeURL in
+      try await GitClient().changedFilesAgainst(baseRef: baseRef, at: worktreeURL)
     },
     numstatForFile: { worktreeURL, path in
       await GitClient().numstatForFile(at: worktreeURL, path: path)

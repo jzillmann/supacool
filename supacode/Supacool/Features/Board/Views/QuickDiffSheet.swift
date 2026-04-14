@@ -17,6 +17,17 @@ struct QuickDiffSheet: View {
   @State private var errorMessage: String?
   @State private var refreshTrigger: Int = 0
 
+  /// Two source options: uncommitted working-tree changes vs. HEAD
+  /// (default) or the branch's committed delta vs. its merge base.
+  enum DiffMode: Hashable { case workingTree; case branchVsBase }
+  @State private var diffMode: DiffMode = .workingTree
+  /// Default branch ref (e.g. `origin/main`). `nil` when it can't be
+  /// resolved — in which case the `.branchVsBase` segment is disabled.
+  @State private var baseRef: String?
+  /// Current branch name (or `nil` when detached). Used to disable the
+  /// vs-base segment when we're already *on* the base.
+  @State private var currentBranch: String?
+
   @Dependency(GitClientDependency.self) private var gitClient
 
   var body: some View {
@@ -26,7 +37,8 @@ struct QuickDiffSheet: View {
       content
     }
     .frame(minWidth: 860, minHeight: 560)
-    .task(id: refreshTrigger) { await loadFiles() }
+    .task { await resolveBranchRefs() }
+    .task(id: "\(refreshTrigger)-\(diffMode)") { await loadFiles() }
   }
 
   private var header: some View {
@@ -39,6 +51,7 @@ struct QuickDiffSheet: View {
         .font(.subheadline)
         .foregroundStyle(.secondary)
         .lineLimit(1)
+      modePicker
       Spacer()
       Button {
         refreshTrigger &+= 1
@@ -52,6 +65,38 @@ struct QuickDiffSheet: View {
         .keyboardShortcut(.cancelAction)
     }
     .padding(14)
+  }
+
+  /// Two-segment source picker. Hidden when a base ref can't be
+  /// resolved — presenting a disabled segment we can never enable would
+  /// just be noise. On hide we also force diffMode back to
+  /// `.workingTree` so a stale selection from a prior session doesn't
+  /// leave the sheet fetching against a ref we no longer have.
+  @ViewBuilder
+  private var modePicker: some View {
+    if let base = resolvedBaseRef {
+      Picker("Source", selection: $diffMode) {
+        Text("Working tree").tag(DiffMode.workingTree)
+        Text("vs. \(base)").tag(DiffMode.branchVsBase)
+      }
+      .pickerStyle(.segmented)
+      .fixedSize()
+      .help("Switch between uncommitted work and the branch's committed delta.")
+    } else {
+      EmptyView()
+    }
+  }
+
+  /// The base ref we can actually diff against — nil when the toggle
+  /// should be disabled (no remote, detached HEAD, or sitting on base).
+  private var resolvedBaseRef: String? {
+    guard let baseRef else { return nil }
+    // "On the base" check: compare the short branch name against the
+    // trailing component of baseRef (`origin/main` → `main`).
+    if let currentBranch, baseRef.hasSuffix("/\(currentBranch)") {
+      return nil
+    }
+    return baseRef
   }
 
   @ViewBuilder
@@ -119,10 +164,11 @@ struct QuickDiffSheet: View {
     }
   }
 
-  /// Re-runs the diff load when either the selection or the user-
-  /// requested refresh bumps.
+  /// Re-runs the diff load when the selection, the user-requested
+  /// refresh, or the diff mode changes (so flipping the header toggle
+  /// with a file already selected refetches against the right base).
   private var diffTaskID: String {
-    "\(selectedPath ?? "")#\(refreshTrigger)"
+    "\(selectedPath ?? "")#\(refreshTrigger)#\(diffMode)"
   }
 
   private func diffPaneHeader(file: ChangedFile) -> some View {
@@ -183,14 +229,28 @@ struct QuickDiffSheet: View {
       Image(systemName: "sparkles")
         .font(.system(size: 42))
         .foregroundStyle(.tertiary)
-      Text("Working tree clean")
+      Text(emptyStateTitle)
         .font(.title3.weight(.medium))
         .foregroundStyle(.secondary)
-      Text("No uncommitted changes in this worktree.")
+      Text(emptyStateSubtitle)
         .font(.callout)
         .foregroundStyle(.tertiary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var emptyStateTitle: String {
+    switch diffMode {
+    case .workingTree: "Working tree clean"
+    case .branchVsBase: "Branch matches \(baseRef ?? "base")"
+    }
+  }
+
+  private var emptyStateSubtitle: String {
+    switch diffMode {
+    case .workingTree: "No uncommitted changes in this worktree."
+    case .branchVsBase: "No commits since diverging from the base branch."
+    }
   }
 
   private func errorState(_ message: String) -> some View {
@@ -214,42 +274,71 @@ struct QuickDiffSheet: View {
 
   // MARK: - Loading
 
+  /// One-shot lookup of the default branch ref + current branch so the
+  /// header picker can decide whether "vs. base" is offered at all.
+  /// Failures downgrade silently — the picker just hides its second
+  /// segment.
+  private func resolveBranchRefs() async {
+    async let base = (try? await gitClient.defaultRemoteBranchRef(worktreeURL)) ?? nil
+    async let branch = await gitClient.branchName(worktreeURL)
+    let (resolvedBase, resolvedBranch) = await (base, branch)
+    baseRef = resolvedBase
+    currentBranch = resolvedBranch
+  }
+
   private func loadFiles() async {
     isLoadingFiles = true
     errorMessage = nil
     defer { isLoadingFiles = false }
     do {
-      let output = try await gitClient.statusPorcelain(worktreeURL)
-      let parsed = PorcelainStatusParser.parse(output)
-      // Enrich with numstat (fire-and-forget per file, collected in
-      // parallel). Untracked files get skipped — numstat has nothing
-      // to say there.
-      let enriched = await withTaskGroup(of: ChangedFile.self) { group -> [ChangedFile] in
-        for file in parsed {
-          group.addTask { [gitClient, worktreeURL] in
-            guard file.status != .untracked else { return file }
-            guard let stats = await gitClient.numstatForFile(worktreeURL, file.path) else {
-              return file
-            }
-            var copy = file
-            copy.linesAdded = stats.added
-            copy.linesRemoved = stats.removed
-            return copy
-          }
+      let fetched: [ChangedFile]
+      switch diffMode {
+      case .workingTree:
+        fetched = try await fetchWorkingTreeFiles()
+      case .branchVsBase:
+        guard let base = resolvedBaseRef else {
+          // Fell through (e.g. rapid toggle while base ref was still
+          // resolving). Bail gracefully; the picker will vanish once
+          // resolveBranchRefs completes.
+          files = []
+          selectedPath = nil
+          return
         }
-        var out: [ChangedFile] = []
-        for await result in group { out.append(result) }
-        // Preserve the original `git status` ordering.
-        let order = Dictionary(uniqueKeysWithValues: parsed.enumerated().map { ($1.path, $0) })
-        out.sort { (order[$0.path] ?? 0) < (order[$1.path] ?? 0) }
-        return out
+        fetched = try await gitClient.changedFilesAgainst(base, worktreeURL)
       }
-      files = enriched
+      files = fetched
       if selectedPath == nil || files.first(where: { $0.path == selectedPath }) == nil {
         selectedPath = files.first?.path
       }
     } catch {
       errorMessage = error.localizedDescription
+    }
+  }
+
+  /// Working-tree file listing: porcelain status + parallel per-file
+  /// numstat enrichment (untracked skipped — numstat has nothing for
+  /// them). Extracted so `loadFiles` stays readable.
+  private func fetchWorkingTreeFiles() async throws -> [ChangedFile] {
+    let output = try await gitClient.statusPorcelain(worktreeURL)
+    let parsed = PorcelainStatusParser.parse(output)
+    return await withTaskGroup(of: ChangedFile.self) { group -> [ChangedFile] in
+      for file in parsed {
+        group.addTask { [gitClient, worktreeURL] in
+          guard file.status != .untracked else { return file }
+          guard let stats = await gitClient.numstatForFile(worktreeURL, file.path) else {
+            return file
+          }
+          var copy = file
+          copy.linesAdded = stats.added
+          copy.linesRemoved = stats.removed
+          return copy
+        }
+      }
+      var out: [ChangedFile] = []
+      for await result in group { out.append(result) }
+      let order = Dictionary(uniqueKeysWithValues: parsed.enumerated().map { ($1.path, $0) })
+      out.sort { (order[$0.path] ?? 0) < (order[$1.path] ?? 0) }
+      return out
     }
   }
 
@@ -261,11 +350,20 @@ struct QuickDiffSheet: View {
     isLoadingDiff = true
     defer { isLoadingDiff = false }
     do {
-      // `cached` is false here — `git diff <path>` covers unstaged
-      // changes; combined with `git diff --cached` we'd need two
-      // calls. v1 shows working-tree vs. index (what most users
-      // want); staged-only review is a future enhancement.
-      diffText = try await gitClient.diffForFile(worktreeURL, file.path, false)
+      switch diffMode {
+      case .workingTree:
+        // `cached` is false here — `git diff <path>` covers unstaged
+        // changes; combined with `git diff --cached` we'd need two
+        // calls. v1 shows working-tree vs. index (what most users
+        // want); staged-only review is a future enhancement.
+        diffText = try await gitClient.diffForFile(worktreeURL, file.path, false)
+      case .branchVsBase:
+        guard let base = resolvedBaseRef else {
+          diffText = ""
+          return
+        }
+        diffText = try await gitClient.diffForFileAgainstBase(worktreeURL, file.path, base)
+      }
     } catch {
       diffText = ""
       errorMessage = error.localizedDescription
