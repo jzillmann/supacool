@@ -147,7 +147,7 @@ struct SessionCardView: View {
       {
         Divider()
       }
-      Button("Remove", role: .destructive, action: onRemove)
+      Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
     }
   }
 
