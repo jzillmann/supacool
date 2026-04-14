@@ -13,11 +13,85 @@ struct BoardView: View {
   let onAddRepository: () -> Void
   let onRenameSession: (AgentSession) -> Void
 
+  /// Keyboard-nav cursor. Tracks the currently highlighted card; arrow
+  /// keys move it, Return focuses the card (same path as a tap). Falls
+  /// back to the first visible card on appear or if the prior highlight
+  /// disappears (session removed, filter changed).
+  @State private var highlightedSessionID: AgentSession.ID?
+  /// Must be true for `.onKeyPress` to receive anything. `.focusable()`
+  /// alone makes the view focus-eligible but doesn't *grant* focus —
+  /// without this FocusState binding, arrow keys just beep.
+  @FocusState private var hasKeyboardFocus: Bool
+
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
     // to the window title. What's left here is just the grid body.
     bodyContent
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .focusable()
+      .focusEffectDisabled()
+      .focused($hasKeyboardFocus)
+      .task {
+        // Grant focus once the view is on screen. Without this, `.focusable()`
+        // just marks the view focus-eligible — arrow keys still beep.
+        hasKeyboardFocus = true
+      }
+      .onKeyPress(.leftArrow) { moveHighlight(by: -1); return .handled }
+      .onKeyPress(.upArrow) { moveHighlight(by: -1); return .handled }
+      .onKeyPress(.rightArrow) { moveHighlight(by: +1); return .handled }
+      .onKeyPress(.downArrow) { moveHighlight(by: +1); return .handled }
+      .onKeyPress(.return) {
+        if let id = highlightedSessionID {
+          store.send(.focusSession(id: id))
+          return .handled
+        }
+        return .ignored
+      }
+      .onAppear { ensureHighlightValid() }
+      .onChange(of: currentNavOrder) { _, _ in ensureHighlightValid() }
+      // Symmetric to the full-screen terminal's ⌘. / ⌘B shortcut that
+      // returns to the board: press ⌘. on the board to enter the
+      // highlighted card's terminal.
+      .background(
+        Button("Enter Session") {
+          if let id = highlightedSessionID {
+            store.send(.focusSession(id: id))
+          }
+        }
+        .keyboardShortcut(".", modifiers: .command)
+        .hidden()
+        .disabled(highlightedSessionID == nil)
+      )
+  }
+
+  /// Flat visit order for arrow keys: waiting cards first, then
+  /// in-progress. Recomputed on every read — cheap; the grid is small.
+  private var currentNavOrder: [AgentSession.ID] {
+    let visible = store.visibleSessions
+    let waiting = visible.filter { isWaitingStatus(classify($0)) }
+    let inProgress = visible.filter { !isWaitingStatus(classify($0)) }
+    return waiting.map(\.id) + inProgress.map(\.id)
+  }
+
+  private func moveHighlight(by delta: Int) {
+    let order = currentNavOrder
+    guard !order.isEmpty else { return }
+    let currentIndex = highlightedSessionID.flatMap { order.firstIndex(of: $0) } ?? -1
+    let nextIndex: Int
+    if currentIndex < 0 {
+      // Nothing highlighted yet — step from one end of the list based on
+      // travel direction so ↑/← jumps to the last card and ↓/→ to the first.
+      nextIndex = delta < 0 ? order.count - 1 : 0
+    } else {
+      nextIndex = (currentIndex + delta + order.count) % order.count
+    }
+    highlightedSessionID = order[nextIndex]
+  }
+
+  private func ensureHighlightValid() {
+    let order = currentNavOrder
+    if let current = highlightedSessionID, order.contains(current) { return }
+    highlightedSessionID = order.first
   }
 
   @ViewBuilder
@@ -135,6 +209,7 @@ struct BoardView: View {
               repositoryName: repositories[id: session.repositoryID]?.name,
               status: sessionStatus,
               dimmed: dimmed,
+              isHighlighted: highlightedSessionID == session.id,
               isBusyNow: terminalManager.isAgentBusy(
                 worktreeID: session.worktreeID,
                 tabID: TerminalTabID(rawValue: session.id)
@@ -208,6 +283,7 @@ private struct SessionCardContainer: View {
   let repositoryName: String?
   let status: SessionCardView.Status
   let dimmed: Bool
+  let isHighlighted: Bool
   let isBusyNow: Bool
   let onTap: () -> Void
   let onRemove: () -> Void
@@ -232,8 +308,15 @@ private struct SessionCardContainer: View {
       onResume: onResume,
       onResumePicker: onResumePicker
     )
-    .opacity(dimmed && !isHovered ? 0.55 : 1.0)
+    .opacity(dimmed && !isHovered && !isHighlighted ? 0.55 : 1.0)
+    .overlay(
+      // Keyboard-nav highlight ring. Uses the accent color so it's
+      // visibly distinct from the per-status border colors on the card.
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .strokeBorder(Color.accentColor, lineWidth: isHighlighted ? 2 : 0)
+    )
     .animation(.easeOut(duration: 0.12), value: isHovered)
+    .animation(.easeOut(duration: 0.08), value: isHighlighted)
     .onHover { hovering in
       isHovered = hovering
       if hovering {

@@ -7,7 +7,7 @@ import SwiftUI
 /// pane uses to render a worktree's tab+split tree), wrapped in a minimal
 /// Supacool header with a back button.
 ///
-/// `Esc` returns to the board.
+/// `⌘.` or `⌘B` returns to the board.
 struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
@@ -44,8 +44,10 @@ struct FullScreenTerminalView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(
-      Button("Escape") { onBackToBoard() }
-        .keyboardShortcut(.escape, modifiers: [])
+      // ⌘. is macOS's canonical "cancel/dismiss" and — unlike Esc — isn't
+      // swallowed by vim/readline inside the terminal surface.
+      Button("Back to Board") { onBackToBoard() }
+        .keyboardShortcut(".", modifiers: .command)
         .hidden()
     )
     .background(
