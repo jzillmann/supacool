@@ -23,7 +23,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// `WorktreeTerminalManager` states dictionary.
   let worktreeID: String
 
-  let agent: AgentType
+  /// The coding-agent CLI this session was spawned with. `nil` means a raw
+   /// shell session — no agent CLI was invoked, just a terminal tab (with an
+   /// optional initial command piped in).
+   let agent: AgentType?
 
   /// What the user typed when creating the session. We keep this verbatim
   /// so "rerun" can replay it after a relaunch.
@@ -57,7 +60,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     id: UUID = UUID(),
     repositoryID: String,
     worktreeID: String,
-    agent: AgentType,
+    agent: AgentType?,
     initialPrompt: String,
     displayName: String? = nil,
     createdAt: Date = Date(),
@@ -101,7 +104,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     id = try c.decode(UUID.self, forKey: .id)
     repositoryID = try c.decode(String.self, forKey: .repositoryID)
     worktreeID = try c.decode(String.self, forKey: .worktreeID)
-    agent = try c.decode(AgentType.self, forKey: .agent)
+    agent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
     initialPrompt = try c.decode(String.self, forKey: .initialPrompt)
     displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
       ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)

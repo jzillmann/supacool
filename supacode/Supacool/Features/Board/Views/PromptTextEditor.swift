@@ -12,17 +12,18 @@ import SwiftUI
 /// precise alignment control.
 struct PromptTextEditor: NSViewRepresentable {
   @Binding var text: String
+  var placeholder: String = ""
   var autoFocus: Bool = true
 
-  /// The NSTextView's text container inset. Placeholder views in ZStack
-  /// over this editor should pad by these exact values to align the
-  /// placeholder with the cursor / first glyph.
+  /// The NSTextView's text container inset. Exposed so callers that need
+  /// to align other chrome to the first glyph can use the same numbers.
   static let inset = NSSize(width: 5, height: 6)
 
   func makeCoordinator() -> Coordinator { Coordinator(text: $text) }
 
   func makeNSView(context: Context) -> NSScrollView {
-    let textView = NSTextView(frame: .zero)
+    let textView = PlaceholderTextView(frame: .zero)
+    textView.placeholder = placeholder
     textView.delegate = context.coordinator
     textView.drawsBackground = false
     textView.isRichText = false
@@ -66,9 +67,12 @@ struct PromptTextEditor: NSViewRepresentable {
   }
 
   func updateNSView(_ nsView: NSScrollView, context: Context) {
-    guard let textView = nsView.documentView as? NSTextView else { return }
+    guard let textView = nsView.documentView as? PlaceholderTextView else { return }
     if textView.string != text {
       textView.string = text
+    }
+    if textView.placeholder != placeholder {
+      textView.placeholder = placeholder
     }
   }
 
@@ -80,5 +84,53 @@ struct PromptTextEditor: NSViewRepresentable {
       guard let textView = notification.object as? NSTextView else { return }
       text = textView.string
     }
+  }
+}
+
+/// NSTextView that draws a placeholder string when empty. Because the
+/// placeholder is drawn by the text view itself, it shares the exact
+/// same glyph origin as real text — no ZStack alignment fudging needed.
+final class PlaceholderTextView: NSTextView {
+  var placeholder: String = "" {
+    didSet { needsDisplay = true }
+  }
+
+  override func draw(_ dirtyRect: NSRect) {
+    super.draw(dirtyRect)
+    guard string.isEmpty, !placeholder.isEmpty else { return }
+    let attrs: [NSAttributedString.Key: Any] = [
+      .font: font ?? NSFont.preferredFont(forTextStyle: .body),
+      .foregroundColor: NSColor.tertiaryLabelColor,
+    ]
+    let placeholderString = NSAttributedString(string: placeholder, attributes: attrs)
+    placeholderString.draw(
+      with: placeholderRect,
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      context: nil
+    )
+  }
+
+  override func didChangeText() {
+    super.didChangeText()
+    needsDisplay = true
+  }
+
+  private var placeholderRect: NSRect {
+    guard let textContainer else {
+      return NSRect(origin: textContainerOrigin, size: bounds.size)
+    }
+
+    let origin = textContainerOrigin
+    let lineFragmentPadding = textContainer.lineFragmentPadding
+    let horizontalInset = origin.x + lineFragmentPadding
+    let width = max(bounds.width - (horizontalInset * 2), 0)
+    let height = max(bounds.height - origin.y, 0)
+
+    return NSRect(
+      x: horizontalInset,
+      y: origin.y,
+      width: width,
+      height: height
+    )
   }
 }

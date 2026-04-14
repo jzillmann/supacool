@@ -13,6 +13,7 @@ struct BoardRootView: View {
   let repositories: IdentifiedArrayOf<Repository>
   let terminalManager: WorktreeTerminalManager
   let onAddRepository: () -> Void
+  let onConfigureRepositories: () -> Void
 
   var body: some View {
     Group {
@@ -35,6 +36,26 @@ struct BoardRootView: View {
               )
             )
           },
+          onResume: (session.agent != nil && session.agentNativeSessionID != nil)
+            ? {
+              store.send(
+                .resumeDetachedSession(
+                  id: session.id,
+                  repositories: Array(repositories)
+                )
+              )
+            }
+            : nil,
+          onResumePicker: (session.agent != nil && session.agentNativeSessionID == nil)
+            ? {
+              store.send(
+                .resumeDetachedSessionWithPicker(
+                  id: session.id,
+                  repositories: Array(repositories)
+                )
+              )
+            }
+            : nil,
           onRemove: { store.send(.removeSession(id: session.id)) }
         )
       } else {
@@ -80,7 +101,8 @@ struct BoardRootView: View {
           filters: store.filters,
           onToggleRepository: { store.send(.toggleRepository(id: $0)) },
           onShowAll: { store.send(.showAllRepositories) },
-          onAddRepository: onAddRepository
+          onAddRepository: onAddRepository,
+          onConfigureRepositories: onConfigureRepositories
         )
       }
       // Push the + button to the far right so there's breathing room

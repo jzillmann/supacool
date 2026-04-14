@@ -6,6 +6,7 @@ import SwiftUI
 /// name, and hits Create.
 struct NewTerminalSheet: View {
   @Bindable var store: StoreOf<NewTerminalFeature>
+  @AppStorage("supacool.bypassPermissions") private var bypassPermissions: Bool = true
 
   var body: some View {
     Form {
@@ -13,12 +14,15 @@ struct NewTerminalSheet: View {
         promptEditor
       } header: {
         Text("New Terminal")
-        Text("Start an interactive \(store.agent.displayName) session with this prompt.")
+        Text(headerSubtitle)
       }
       .headerProminence(.increased)
 
       Section {
         agentPicker
+        if store.agent != nil {
+          bypassPermissionsToggle
+        }
         repoPicker
         worktreeToggle
         if store.useWorktree {
@@ -59,21 +63,14 @@ struct NewTerminalSheet: View {
   }
 
   private var promptEditor: some View {
-    // PromptTextEditor has a KNOWN textContainerInset of (5, 6). The
-    // placeholder below uses those exact numbers for padding so the
-    // cursor lines up with the first glyph. Auto-focuses on appear.
-    ZStack(alignment: .topLeading) {
-      PromptTextEditor(text: $store.prompt, autoFocus: true)
-        .frame(minHeight: 100, maxHeight: 220)
-      if store.prompt.isEmpty {
-        Text("Describe what the agent should do…")
-          .font(.body)
-          .foregroundStyle(.tertiary)
-          .padding(.leading, PromptTextEditor.inset.width)
-          .padding(.top, PromptTextEditor.inset.height)
-          .allowsHitTesting(false)
-      }
-    }
+    PromptTextEditor(
+      text: $store.prompt,
+      placeholder: store.agent == nil
+        ? "Optional shell command to run…"
+        : "Describe what the agent should do (optional)…",
+      autoFocus: true
+    )
+    .frame(minHeight: 100, maxHeight: 220)
     .background(
       RoundedRectangle(cornerRadius: 6, style: .continuous)
         .fill(Color(nsColor: .textBackgroundColor).opacity(0.4))
@@ -86,14 +83,22 @@ struct NewTerminalSheet: View {
 
   private var agentPicker: some View {
     Picker(selection: $store.agent) {
+      Text("Shell").tag(Optional<AgentType>.none)
       ForEach(AgentType.allCases) { agent in
-        Text(agent.displayName).tag(agent)
+        Text(agent.displayName).tag(Optional(agent))
       }
     } label: {
       Text("Agent")
-      Text("Which CLI spawns for this session.")
+      Text("Pick a CLI to spawn, or Shell for a raw terminal.")
     }
     .pickerStyle(.segmented)
+  }
+
+  private var headerSubtitle: String {
+    if let agent = store.agent {
+      return "Start an interactive \(agent.displayName) session with this prompt."
+    }
+    return "Start a raw terminal session. The prompt (if any) runs as a shell command."
   }
 
   private var repoPicker: some View {
@@ -112,6 +117,13 @@ struct NewTerminalSheet: View {
     .disabled(store.availableRepositories.count <= 1)
   }
 
+  private var bypassPermissionsToggle: some View {
+    Toggle(isOn: $bypassPermissions) {
+      Text("Skip permission prompts")
+      Text("Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use.")
+    }
+  }
+
   private var worktreeToggle: some View {
     Toggle(isOn: $store.useWorktree) {
       Text("Create worktree")
@@ -121,6 +133,9 @@ struct NewTerminalSheet: View {
 
   private var agentShortcuts: some View {
     Group {
+      Button("") { store.agent = nil }
+        .keyboardShortcut("0", modifiers: .command)
+        .hidden()
       Button("") { store.agent = .claude }
         .keyboardShortcut("1", modifiers: .command)
         .hidden()

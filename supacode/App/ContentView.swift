@@ -43,7 +43,13 @@ struct ContentView: View {
           store: boardStore,
           repositories: store.repositories.repositories,
           terminalManager: terminalManager,
-          onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) }
+          onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
+          onConfigureRepositories: {
+            let firstRepo = store.repositories.repositories.first
+            let section: SettingsSection =
+              firstRepo.map { .repository($0.id) } ?? .general
+            store.send(.settings(.setSelection(section)))
+          }
         )
       } else {
         AppLoadingView()

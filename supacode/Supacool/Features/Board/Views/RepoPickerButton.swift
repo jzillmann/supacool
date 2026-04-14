@@ -17,6 +17,7 @@ struct RepoPickerButton: View {
   let onToggleRepository: (String) -> Void
   let onShowAll: () -> Void
   let onAddRepository: () -> Void
+  let onConfigureRepositories: () -> Void
 
   @State private var isPresented: Bool = false
 
@@ -133,6 +134,25 @@ struct RepoPickerButton: View {
       }
       .buttonStyle(.plain)
       .keyboardShortcut("o", modifiers: .command)
+
+      if !repositories.isEmpty {
+        Button {
+          isPresented = false
+          onConfigureRepositories()
+        } label: {
+          HStack {
+            Image(systemName: "gearshape")
+              .foregroundStyle(.secondary)
+            Text("Configure Repositories…")
+              .font(.callout.weight(.medium))
+            Spacer()
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
     }
     .frame(minWidth: 240)
     .padding(.vertical, 4)

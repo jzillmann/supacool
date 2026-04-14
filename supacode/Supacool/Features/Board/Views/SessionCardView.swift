@@ -12,6 +12,7 @@ struct SessionCardView: View {
   let onRemove: () -> Void
   var onRerun: (() -> Void)? = nil
   var onResume: (() -> Void)? = nil
+  var onResumePicker: (() -> Void)? = nil
 
   enum Status: Equatable {
     case inProgress
@@ -58,7 +59,7 @@ struct SessionCardView: View {
           Image(systemName: agentIcon)
             .font(.caption)
             .foregroundStyle(agentColor)
-          Text(session.agent.displayName)
+          Text(AgentType.displayName(for: session.agent))
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
           Spacer()
@@ -101,10 +102,13 @@ struct SessionCardView: View {
       if let onResume {
         Button("Resume Session", systemImage: "play.circle", action: onResume)
       }
+      if let onResumePicker {
+        Button("Resume via Picker…", systemImage: "play.circle", action: onResumePicker)
+      }
       if let onRerun {
         Button("Rerun with Same Prompt", systemImage: "arrow.clockwise", action: onRerun)
       }
-      if onResume != nil || onRerun != nil {
+      if onResume != nil || onResumePicker != nil || onRerun != nil {
         Divider()
       }
       Button("Remove", role: .destructive, action: onRemove)
@@ -133,6 +137,7 @@ struct SessionCardView: View {
     switch session.agent {
     case .claude: "brain"
     case .codex: "terminal.fill"
+    case .none: "apple.terminal"
     }
   }
 
@@ -140,6 +145,7 @@ struct SessionCardView: View {
     switch session.agent {
     case .claude: .purple
     case .codex: .cyan
+    case .none: .secondary
     }
   }
 

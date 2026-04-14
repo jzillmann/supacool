@@ -52,6 +52,9 @@ struct BoardFeature {
     case openNewTerminalSheet(repositories: [Repository])
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    /// Fallback resume path: no captured id, so we launch the agent's own
+    /// built-in resume picker scoped to the session's working directory.
+    case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
   }
@@ -144,18 +147,21 @@ struct BoardFeature {
         guard let sessionID = session.agentNativeSessionID, !sessionID.isEmpty else {
           return .send(.resumeFailed(id: id, message: "No captured session id to resume."))
         }
+        guard let agent = session.agent else {
+          return .send(.resumeFailed(id: id, message: "Shell sessions can't be resumed."))
+        }
         guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
           return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
         }
-        let rootURL = repository.rootURL.standardizedFileURL
-        let worktree = repository.worktrees.first { $0.id == session.worktreeID }
-          ?? Worktree(
-            id: rootURL.path(percentEncoded: false),
-            name: repository.name,
-            detail: "",
-            workingDirectory: rootURL,
-            repositoryRootURL: rootURL
-          )
+        // CRITICAL: the worktree object we pass to the terminal client MUST
+        // have `id == session.worktreeID`. `WorktreeTerminalManager` keys its
+        // `states` dictionary by `worktree.id`, and `FullScreenTerminalView`
+        // probes that dictionary with `session.worktreeID` verbatim. Supacode
+        // may discover a worktree record with a slightly different id (e.g.
+        // trailing-slash normalization), so if we picked up that record here
+        // the tab would land under a different key and the detached view
+        // would never resolve it — looking like "resume does nothing".
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
         // Reset transient status so the card immediately reflects the new run.
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
@@ -163,7 +169,36 @@ struct BoardFeature {
           sessions[index].lastActivityAt = Date()
         }
         state.focusedSessionID = id
-        let command = session.agent.resumeCommand(sessionID: sessionID) + "\r"
+        let command = agent.resumeCommand(sessionID: sessionID) + "\r"
+        return .run { _ in
+          await terminalClient.send(
+            .createTabWithInput(
+              worktree,
+              input: command,
+              runSetupScriptIfNew: false,
+              id: id
+            )
+          )
+        }
+
+      case .resumeDetachedSessionWithPicker(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard let agent = session.agent else {
+          return .send(.resumeFailed(id: id, message: "Shell sessions can't be resumed."))
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
+        }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastActivityAt = Date()
+        }
+        state.focusedSessionID = id
+        let command = agent.resumePickerCommand + "\r"
         return .run { _ in
           await terminalClient.send(
             .createTabWithInput(
@@ -208,6 +243,28 @@ struct BoardFeature {
     .ifLet(\.$newTerminalSheet, action: \.newTerminalSheet) {
       NewTerminalFeature()
     }
+  }
+
+  /// Build the `Worktree` value handed to `TerminalClient` when resuming. The
+  /// returned `worktree.id` is pinned to `session.worktreeID` verbatim so the
+  /// new tab lands under the same key the detached view probes for.
+  fileprivate static func resumeWorktree(
+    for session: AgentSession,
+    repository: Repository
+  ) -> Worktree {
+    let workingDirectory: URL = {
+      if let existing = repository.worktrees.first(where: { $0.id == session.worktreeID }) {
+        return existing.workingDirectory
+      }
+      return URL(fileURLWithPath: session.worktreeID).standardizedFileURL
+    }()
+    return Worktree(
+      id: session.worktreeID,
+      name: workingDirectory.lastPathComponent,
+      detail: "",
+      workingDirectory: workingDirectory,
+      repositoryRootURL: repository.rootURL.standardizedFileURL
+    )
   }
 }
 

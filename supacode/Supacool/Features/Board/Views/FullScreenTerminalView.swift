@@ -15,6 +15,13 @@ struct FullScreenTerminalView: View {
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
   let onRerun: () -> Void
+  /// Present only when the session has a captured agent-native id and an
+  /// agent CLI — shell sessions and pre-hook sessions can't be resumed.
+  let onResume: (() -> Void)?
+  /// Fallback resume path: invokes the agent's own built-in resume picker
+  /// (e.g. `claude --resume`). Present for any agent session even if we
+  /// never captured a native session id.
+  let onResumePicker: (() -> Void)?
   let onRemove: () -> Void
 
   var body: some View {
@@ -63,16 +70,32 @@ struct FullScreenTerminalView: View {
 
   private var agentChip: some View {
     HStack(spacing: 4) {
-      Image(systemName: session.agent == .claude ? "brain" : "terminal.fill")
+      Image(systemName: agentIcon)
         .font(.caption)
-      Text(session.agent.displayName)
+      Text(AgentType.displayName(for: session.agent))
         .font(.caption.weight(.medium))
     }
-    .foregroundStyle(session.agent == .claude ? Color.purple : Color.cyan)
+    .foregroundStyle(agentColor)
     .padding(.horizontal, 8)
     .padding(.vertical, 3)
-    .background((session.agent == .claude ? Color.purple : Color.cyan).opacity(0.12))
+    .background(agentColor.opacity(0.12))
     .clipShape(Capsule())
+  }
+
+  private var agentIcon: String {
+    switch session.agent {
+    case .claude: "brain"
+    case .codex: "terminal.fill"
+    case .none: "apple.terminal"
+    }
+  }
+
+  private var agentColor: Color {
+    switch session.agent {
+    case .claude: .purple
+    case .codex: .cyan
+    case .none: .secondary
+    }
   }
 
   @ViewBuilder
@@ -145,10 +168,19 @@ struct FullScreenTerminalView: View {
         } label: {
           Label("Remove", systemImage: "trash")
         }
-        Button("Rerun", systemImage: "arrow.clockwise") {
-          onRerun()
+        let rerunIsDefault = onResume == nil && onResumePicker == nil
+        Button("Rerun", systemImage: "arrow.clockwise", action: onRerun)
+          .keyboardShortcut(rerunIsDefault ? KeyboardShortcut.defaultAction : nil)
+        if let onResume {
+          Button("Resume", systemImage: "play.circle", action: onResume)
+            .keyboardShortcut(.defaultAction)
+            .help("Resume the captured \(AgentType.displayName(for: session.agent)) session")
+        } else if let onResumePicker {
+          Button("Resume…", systemImage: "play.circle", action: onResumePicker)
+            .help(
+              "No session id was captured. Launches \(AgentType.displayName(for: session.agent))'s built-in session picker for this directory."
+            )
         }
-        .keyboardShortcut(.defaultAction)
         Button("Back to Board", action: onBackToBoard)
       }
     }
