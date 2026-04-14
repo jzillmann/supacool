@@ -21,7 +21,7 @@ struct WorktreeTerminalStateSplitTests {
       in: TerminalTabID(rawValue: UUID()),
       direction: .right,
     )
-    #expect(result == false)
+    #expect(result == nil)
   }
 
   @Test(.dependencies) func splitAddsSecondLeafToTab() {
@@ -30,14 +30,14 @@ struct WorktreeTerminalStateSplitTests {
     let before = fixture.state.splitTree(for: fixture.tabId).leaves()
     #expect(before.count == 1)
 
-    let result = fixture.state.splitFocusedSurface(in: fixture.tabId, direction: .right)
-    #expect(result == true)
+    let newID = fixture.state.splitFocusedSurface(in: fixture.tabId, direction: .right)
+    #expect(newID != nil)
 
     let after = fixture.state.splitTree(for: fixture.tabId).leaves()
     #expect(after.count == 2)
-    // The new leaf is a distinct surface — confirms we actually split
-    // rather than reusing the source.
-    #expect(after.contains(where: { $0.id != fixture.surface.id }))
+    // The returned id must match the newly-created leaf (not the source).
+    #expect(after.contains(where: { $0.id == newID }))
+    #expect(newID != fixture.surface.id)
   }
 
   // MARK: - Helpers

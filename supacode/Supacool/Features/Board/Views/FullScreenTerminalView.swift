@@ -40,6 +40,13 @@ struct FullScreenTerminalView: View {
   /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
   @State private var isEditingGitGuiApp: Bool = false
   @State private var gitGuiAppDraft: String = ""
+  @State private var isInfoPopoverShown: Bool = false
+
+  /// Surface id of the split we created via the header button — `nil`
+  /// when the button is in "create" mode, non-nil when in "close" mode.
+  /// Reconciled from the live leaf set so closing the split via
+  /// Ghostty's own keybindings (⌘D) flips the button back to "create".
+  @State private var managedSplitSurfaceID: UUID?
 
   var body: some View {
     VStack(spacing: 0) {
@@ -58,6 +65,14 @@ struct FullScreenTerminalView: View {
     .background(
       Button("Board") { onBackToBoard() }
         .keyboardShortcut("b", modifiers: .command)
+        .hidden()
+    )
+    .background(
+      // ⌘W closes the focused terminal if the tab has splits, else
+      // dismisses back to the board. Matches the macOS convention of
+      // ⌘W = "close the nearest pane/window".
+      Button("Close Terminal or Board") { closeCurrentTerminalOrBack() }
+        .keyboardShortcut("w", modifiers: .command)
         .hidden()
     )
     // ⌘-Tab-style session switcher. ⌘← / ⌘↑ cycle backward, ⌘→ / ⌘↓
@@ -98,6 +113,7 @@ struct FullScreenTerminalView: View {
       repoChip
       gitGuiButton
       splitButton
+      infoButton
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -181,8 +197,9 @@ struct FullScreenTerminalView: View {
       Image(systemName: "plus.forwardslash.minus")
         .font(.system(size: 13, weight: .medium))
     }
-    .buttonStyle(.plain)
-    .foregroundStyle(.secondary)
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .tint(.secondary)
     .help("Open in \(gitGuiApp) (right-click to change)")
     .contextMenu {
       Section("Open diff in") {
@@ -216,27 +233,102 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Opens a plain-shell split beside the agent surface in this session's
-  /// tab. Splitting is delegated to `WorktreeTerminalState` which inherits
-  /// the source surface's cwd/env and injects no input — exactly the
-  /// "just a shell in the same worktree" behavior the board wants. Only
-  /// enabled when the session's tab is live; detached sessions have no
-  /// focused surface to split from.
-  @ViewBuilder
-  private var splitButton: some View {
-    let worktree = resolveWorktree()
+  /// Toggles a plain-shell split beside the agent surface in this
+  /// session's tab. First click splits; second click closes the split
+  /// we created (does NOT open a third). If the user closed our split
+  /// via Ghostty's own ⌘D, `managedSplitSurfaceID` is reconciled to nil
+  /// Small ⓘ button in the header that surfaces the session's initial
+  /// config (prompt, agent, repo, worktree, captured resume id). Shares
+  /// the same `SessionInfoPopover` view used by the board card.
+  private var infoButton: some View {
     Button {
-      guard let worktree else { return }
-      let state = terminalManager.state(for: worktree) { false }
-      state.splitFocusedSurface(in: TerminalTabID(rawValue: session.id), direction: .right)
+      isInfoPopoverShown.toggle()
     } label: {
-      Image(systemName: "rectangle.split.2x1")
+      Image(systemName: "info.circle")
         .font(.system(size: 13, weight: .medium))
     }
     .buttonStyle(.plain)
     .foregroundStyle(.secondary)
+    .help("Show session details")
+    .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
+      SessionInfoPopover(
+        session: session,
+        repositoryName: repositories[id: session.repositoryID]?.name,
+        worktreeLabel: worktreeLabel
+      )
+    }
+  }
+
+  /// on the next render so the button flips back to "create" mode.
+  @ViewBuilder
+  private var splitButton: some View {
+    let worktree = resolveWorktree()
+    let managedStillLive = managedSplitStillLive(worktree: worktree)
+    Button {
+      guard let worktree else { return }
+      let state = terminalManager.state(for: worktree) { false }
+      let tabID = TerminalTabID(rawValue: session.id)
+      if let id = managedSplitSurfaceID, managedStillLive {
+        state.closeSurface(id: id)
+        managedSplitSurfaceID = nil
+      } else {
+        managedSplitSurfaceID = state.splitFocusedSurface(in: tabID, direction: .right)
+      }
+    } label: {
+      Image(systemName: managedStillLive ? "rectangle" : "rectangle.split.2x1")
+        .font(.system(size: 13, weight: .medium))
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .tint(.secondary)
     .disabled(worktree == nil)
-    .help("Open a plain shell split in this session")
+    .help(managedStillLive ? "Close the shell split" : "Open a plain shell split in this session")
+    .onChange(of: session.id) { _, _ in managedSplitSurfaceID = nil }
+    .task(id: session.id) { reconcileManagedSplit() }
+  }
+
+  /// Whether our tracked split surface is still in the tab's leaf set.
+  /// If the user closed it via Ghostty's own ⌘D we shouldn't stay in
+  /// "close" mode — the next click should split again.
+  private func managedSplitStillLive(worktree: Worktree?) -> Bool {
+    guard let worktree, let id = managedSplitSurfaceID else { return false }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: session.id)
+    guard state.containsTabTree(tabID) else { return false }
+    return state.splitTree(for: tabID).leaves().contains { $0.id == id }
+  }
+
+  private func reconcileManagedSplit() {
+    guard let worktree = resolveWorktree() else {
+      managedSplitSurfaceID = nil
+      return
+    }
+    if !managedSplitStillLive(worktree: worktree) {
+      managedSplitSurfaceID = nil
+    }
+  }
+
+  /// Backs ⌘W. If the session's tab has multiple leaves, close the
+  /// focused one (native Ghostty behavior). Otherwise fall back to
+  /// "back to board" — the less destructive of the two options the
+  /// user suggested.
+  private func closeCurrentTerminalOrBack() {
+    guard let worktree = resolveWorktree() else {
+      onBackToBoard()
+      return
+    }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: session.id)
+    guard state.containsTabTree(tabID) else {
+      onBackToBoard()
+      return
+    }
+    let leaves = state.splitTree(for: tabID).leaves()
+    if leaves.count > 1 {
+      state.closeFocusedSurface()
+    } else {
+      onBackToBoard()
+    }
   }
 
   /// Built-in presets for the right-click menu. Manually curated — these

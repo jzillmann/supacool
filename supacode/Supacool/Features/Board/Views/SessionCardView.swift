@@ -17,6 +17,9 @@ struct SessionCardView: View {
   var onPark: (() -> Void)? = nil
   var onUnpark: (() -> Void)? = nil
 
+  @State private var isHovered: Bool = false
+  @State private var isInfoPopoverShown: Bool = false
+
   enum Status: Equatable {
     case inProgress
     case waitingOnMe
@@ -74,6 +77,7 @@ struct SessionCardView: View {
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
           Spacer()
+          infoButton
           statusChip
         }
 
@@ -107,8 +111,14 @@ struct SessionCardView: View {
           .strokeBorder(status.color.opacity(0.25), lineWidth: 1)
       )
       .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+      .overlay {
+        if status == .parked, isHovered, let onUnpark {
+          parkedHoverOverlay(onUnpark: onUnpark)
+        }
+      }
     }
     .buttonStyle(.plain)
+    .onHover { isHovered = $0 }
     .contextMenu {
       if let onRename {
         Button("Rename…", systemImage: "pencil", action: onRename)
@@ -136,6 +146,48 @@ struct SessionCardView: View {
       }
       Button("Remove", role: .destructive, action: onRemove)
     }
+  }
+
+  /// Small ⓘ button on the card header that shows the session's initial
+  /// config (prompt, agent, repo, worktree, etc.). Uses `.popover` so the
+  /// click doesn't fall through to the card's `onTap` (which would enter
+  /// the full-screen terminal).
+  private var infoButton: some View {
+    Button {
+      isInfoPopoverShown.toggle()
+    } label: {
+      Image(systemName: "info.circle")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .buttonStyle(.plain)
+    .help("Show session details")
+    .popover(isPresented: $isInfoPopoverShown, arrowEdge: .top) {
+      SessionInfoPopover(
+        session: session,
+        repositoryName: repositoryName,
+        worktreeLabel: nil
+      )
+    }
+  }
+
+  /// Shown on hover for parked cards — a big centered play symbol over a
+  /// translucent scrim. Clicking it unparks the session directly, so the
+  /// user doesn't have to reach for the right-click menu.
+  private func parkedHoverOverlay(onUnpark: @escaping () -> Void) -> some View {
+    Button(action: onUnpark) {
+      ZStack {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(.background.opacity(0.55))
+        Image(systemName: "play.circle.fill")
+          .font(.system(size: 44, weight: .semibold))
+          .foregroundStyle(.primary, .background)
+          .symbolRenderingMode(.palette)
+      }
+    }
+    .buttonStyle(.plain)
+    .help("Unpark session")
+    .transition(.opacity)
   }
 
   private var statusChip: some View {
