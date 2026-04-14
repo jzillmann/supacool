@@ -24,10 +24,15 @@ struct NewTerminalSheet: View {
           bypassPermissionsToggle
         }
         repoPicker
-        worktreeToggle
-        if store.useWorktree {
+        worktreeModePicker
+        switch store.worktreeMode {
+        case .none:
+          EmptyView()
+        case .newBranch:
           TextField("Branch name", text: $store.branchName)
             .onSubmit { store.send(.createButtonTapped) }
+        case .existing:
+          existingWorktreePicker
         }
       } footer: {
         if let message = store.validationMessage, !message.isEmpty {
@@ -41,7 +46,7 @@ struct NewTerminalSheet: View {
       HStack {
         if store.isCreating {
           ProgressView().controlSize(.small)
-          Text(store.useWorktree ? "Creating worktree…" : "Starting terminal…")
+          Text(store.worktreeMode == .newBranch ? "Creating worktree…" : "Starting terminal…")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -124,11 +129,75 @@ struct NewTerminalSheet: View {
     }
   }
 
-  private var worktreeToggle: some View {
-    Toggle(isOn: $store.useWorktree) {
-      Text("Create worktree")
-      Text("Isolate the agent's changes on a new git worktree branched from HEAD.")
+  private var worktreeModePicker: some View {
+    Picker(selection: $store.worktreeMode) {
+      ForEach(WorktreeMode.allCases) { mode in
+        Text(mode.label).tag(mode)
+      }
+    } label: {
+      Text("Worktree")
+      Text(worktreeModeFooter)
     }
+    .pickerStyle(.segmented)
+    .disabled(!existingWorktreesAvailable && store.worktreeMode == .none)
+    .onChange(of: store.worktreeMode) { _, newMode in
+      // Default to the first non-root worktree on mode-switch so the
+      // picker isn't empty on first paint.
+      if newMode == .existing, store.existingWorktreeID == nil {
+        store.existingWorktreeID = firstExistingWorktreeID
+      }
+    }
+    .onChange(of: store.selectedRepositoryID) { _, _ in
+      // Repo changed — drop any stale existing-worktree pick.
+      store.existingWorktreeID = firstExistingWorktreeID
+    }
+  }
+
+  private var existingWorktreePicker: some View {
+    Picker(selection: $store.existingWorktreeID) {
+      if availableExistingWorktrees.isEmpty {
+        Text("No worktrees registered").tag(Optional<String>.none)
+      } else {
+        ForEach(availableExistingWorktrees, id: \.id) { worktree in
+          Text(worktreeDisplayName(worktree)).tag(Optional(worktree.id))
+        }
+      }
+    } label: {
+      Text("Worktree")
+      Text("Run inside an already-registered worktree of this repo.")
+    }
+    .disabled(availableExistingWorktrees.isEmpty)
+  }
+
+  private var worktreeModeFooter: String {
+    switch store.worktreeMode {
+    case .none: "Run at the repo root."
+    case .newBranch: "Create a fresh worktree branched from HEAD."
+    case .existing: "Attach to an already-registered worktree."
+    }
+  }
+
+  /// Non-root worktrees of the selected repo, available for the Existing
+  /// picker. We exclude the root directory-mode entry because that's
+  /// already covered by `.none`.
+  private var availableExistingWorktrees: [Worktree] {
+    guard let repoID = store.selectedRepositoryID,
+      let repo = store.availableRepositories[id: repoID]
+    else { return [] }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    return repo.worktrees.filter { $0.id != rootPath && $0.isWorktree }
+  }
+
+  private var existingWorktreesAvailable: Bool {
+    !availableExistingWorktrees.isEmpty
+  }
+
+  private var firstExistingWorktreeID: String? {
+    availableExistingWorktrees.first?.id
+  }
+
+  private func worktreeDisplayName(_ worktree: Worktree) -> String {
+    worktree.branch ?? worktree.name
   }
 
   private var agentShortcuts: some View {

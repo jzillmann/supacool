@@ -39,7 +39,7 @@ struct NewTerminalFeatureTests {
   @Test(.dependencies) func worktreeModeRequiresBranchName() async {
     var state = Self.makeState()
     state.prompt = "Explore the codebase"
-    state.useWorktree = true
+    state.worktreeMode = .newBranch
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -54,7 +54,7 @@ struct NewTerminalFeatureTests {
   @Test(.dependencies) func worktreeModeRejectsBranchWithWhitespace() async {
     var state = Self.makeState()
     state.prompt = "Explore"
-    state.useWorktree = true
+    state.worktreeMode = .newBranch
     state.branchName = "feat with spaces"
 
     let store = TestStore(initialState: state) {
@@ -188,7 +188,7 @@ struct NewTerminalFeatureTests {
     #expect(state.prompt == "Write tests for auth")
     #expect(state.agent == .codex)
     #expect(state.selectedRepositoryID == "/tmp/repo")
-    #expect(state.useWorktree == false)
+    #expect(state.worktreeMode == .none)
     #expect(state.branchName.isEmpty)
   }
 

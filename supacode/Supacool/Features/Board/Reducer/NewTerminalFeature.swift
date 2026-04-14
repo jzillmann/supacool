@@ -2,6 +2,27 @@ import ComposableArchitecture
 import Foundation
 import IdentifiedCollections
 
+/// Where the new terminal session's working directory comes from.
+nonisolated enum WorktreeMode: String, CaseIterable, Equatable, Sendable, Identifiable {
+  /// Run at the repo root (directory mode). No new worktree created.
+  case none
+  /// Create a new git worktree branched from HEAD for this session.
+  case newBranch
+  /// Attach the session to an existing worktree already registered in
+  /// the repo.
+  case existing
+
+  var id: String { rawValue }
+
+  var label: String {
+    switch self {
+    case .none: "None"
+    case .newBranch: "New"
+    case .existing: "Existing"
+    }
+  }
+}
+
 /// Sheet reducer for "+ New Terminal". Collects prompt, repo, agent, and an
 /// optional worktree toggle. On submit:
 ///  1. Resolves the backing workspace (repo root for directory mode, or
@@ -19,8 +40,15 @@ struct NewTerminalFeature {
     var prompt: String = ""
     /// `nil` = raw shell session (no agent CLI invoked).
     var agent: AgentType? = .claude
-    var useWorktree: Bool = false
+    /// Where the agent's terminal should run: repo root (None), a freshly
+    /// created git worktree (New), or an already-existing worktree picked
+    /// from the repo (Existing).
+    var worktreeMode: WorktreeMode = .none
+    /// Only consulted when `worktreeMode == .newBranch`.
     var branchName: String = ""
+    /// Only consulted when `worktreeMode == .existing`. Defaults to the
+    /// first non-root worktree when the repo picker changes.
+    var existingWorktreeID: String?
     var validationMessage: String?
     var isCreating: Bool = false
 
@@ -83,7 +111,10 @@ struct NewTerminalFeature {
           state.validationMessage = "Pick a repository."
           return .none
         }
-        if state.useWorktree {
+        switch state.worktreeMode {
+        case .none:
+          break
+        case .newBranch:
           let trimmedBranch = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
           guard !trimmedBranch.isEmpty else {
             state.validationMessage = "Branch name required."
@@ -93,12 +124,20 @@ struct NewTerminalFeature {
             state.validationMessage = "Branch names can't contain spaces."
             return .none
           }
+        case .existing:
+          guard let worktreeID = state.existingWorktreeID,
+            repository.worktrees.contains(where: { $0.id == worktreeID })
+          else {
+            state.validationMessage = "Pick an existing worktree."
+            return .none
+          }
         }
         state.validationMessage = nil
         state.isCreating = true
 
-        let useWorktree = state.useWorktree
+        let worktreeMode = state.worktreeMode
         let branchName = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let existingWorktreeID = state.existingWorktreeID
         let agent = state.agent
         // The UI toggle is an @AppStorage-backed mirror of this key; read it
         // fresh here so the reducer stays free of view-owned state.
@@ -111,7 +150,8 @@ struct NewTerminalFeature {
         return .run { send in
           do {
             let worktree: Worktree
-            if useWorktree {
+            switch worktreeMode {
+            case .newBranch:
               let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
               let baseDirectory = SupacodePaths.worktreeBaseDirectory(
                 for: repository.rootURL,
@@ -126,7 +166,18 @@ struct NewTerminalFeature {
                 false,
                 baseRef
               )
-            } else {
+            case .existing:
+              // Pinned by the sheet's picker. If the record vanished
+              // between picker-time and submit we bail. `Identifiable`
+              // on Worktree is @MainActor-isolated, so do the lookup
+              // there.
+              let picked: Worktree? = await MainActor.run {
+                guard let id = existingWorktreeID else { return nil }
+                return repository.worktrees.first { $0.id == id }
+              }
+              guard let picked else { throw NewTerminalError.worktreeMissing }
+              worktree = picked
+            case .none:
               // Directory mode: resolve the repo-root worktree (guaranteed to
               // exist after Phase 3c), or synthesize one if discovery hasn't
               // caught up yet.
@@ -211,6 +262,19 @@ struct NewTerminalFeature {
       case .delegate:
         return .none
       }
+    }
+  }
+}
+
+/// Error surfaced from the create effect when the state snapshot taken at
+/// submit-time no longer matches reality (e.g. the picked existing
+/// worktree was removed between picker-time and submit).
+nonisolated enum NewTerminalError: LocalizedError {
+  case worktreeMissing
+
+  var errorDescription: String? {
+    switch self {
+    case .worktreeMissing: "Picked worktree is no longer available."
     }
   }
 }
