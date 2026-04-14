@@ -216,12 +216,14 @@ struct SessionCardView: View {
         .font(.caption2)
       Text(status.label)
         .font(.caption2.weight(.semibold))
+        .lineLimit(1)
     }
     .foregroundStyle(status.color)
     .padding(.horizontal, 6)
     .padding(.vertical, 2)
     .background(status.color.opacity(0.12))
     .clipShape(Capsule())
+    .fixedSize()
   }
 
   private var cardBackground: some ShapeStyle {
