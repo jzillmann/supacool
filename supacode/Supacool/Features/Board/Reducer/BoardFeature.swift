@@ -203,7 +203,9 @@ struct BoardFeature {
           sessions[index].parked = false
         }
         state.focusedSessionID = id
-        let command = agent.resumeCommand(sessionID: sessionID) + "\r"
+        let command =
+          agent.resumeCommand(sessionID: sessionID, bypassPermissions: Self.readBypassPermissions())
+          + "\r"
         return .run { _ in
           await terminalClient.send(
             .createTabWithInput(
@@ -233,7 +235,8 @@ struct BoardFeature {
           sessions[index].parked = false
         }
         state.focusedSessionID = id
-        let command = agent.resumePickerCommand + "\r"
+        let command =
+          agent.resumePickerCommand(bypassPermissions: Self.readBypassPermissions()) + "\r"
         return .run { _ in
           await terminalClient.send(
             .createTabWithInput(
@@ -283,6 +286,14 @@ struct BoardFeature {
   /// Build the `Worktree` value handed to `TerminalClient` when resuming. The
   /// returned `worktree.id` is pinned to `session.worktreeID` verbatim so the
   /// new tab lands under the same key the detached view probes for.
+  /// Current value of the New Terminal sheet's "Skip permission prompts"
+  /// toggle. Mirrored via @AppStorage in the view layer; the reducer
+  /// reads it on demand so resume paths stay in sync with whatever the
+  /// user last chose, without threading the flag through state.
+  fileprivate static func readBypassPermissions() -> Bool {
+    UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+  }
+
   fileprivate static func resumeWorktree(
     for session: AgentSession,
     repository: Repository

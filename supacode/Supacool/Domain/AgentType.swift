@@ -44,11 +44,14 @@ nonisolated enum AgentType: String, CaseIterable, Codable, Sendable, Identifiabl
 
   /// Shell command that resumes a prior session by its agent-native id.
   /// Claude Code: `claude --resume <id>`. Codex: `codex resume <id>`.
-  func resumeCommand(sessionID: String) -> String {
+  /// Passes the skip-permissions flag when asked, so resumed sessions
+  /// match the autonomy level of the initial launch.
+  func resumeCommand(sessionID: String, bypassPermissions: Bool = false) -> String {
     let quoted = Self.shellQuote(sessionID)
+    let flag = bypassPermissions ? " \(bypassPermissionsFlag)" : ""
     switch self {
-    case .claude: return "\(binary) --resume \(quoted)"
-    case .codex: return "\(binary) resume \(quoted)"
+    case .claude: return "\(binary) --resume \(quoted)\(flag)"
+    case .codex: return "\(binary) resume \(quoted)\(flag)"
     }
   }
 
@@ -56,10 +59,11 @@ nonisolated enum AgentType: String, CaseIterable, Codable, Sendable, Identifiabl
   /// current directory (no session id). Used when Supacool never captured an
   /// agent-native session id (hook not installed / pre-hook session).
   /// Claude Code: `claude --resume`. Codex: `codex resume`.
-  var resumePickerCommand: String {
+  func resumePickerCommand(bypassPermissions: Bool = false) -> String {
+    let flag = bypassPermissions ? " \(bypassPermissionsFlag)" : ""
     switch self {
-    case .claude: return "\(binary) --resume"
-    case .codex: return "\(binary) resume"
+    case .claude: return "\(binary) --resume\(flag)"
+    case .codex: return "\(binary) resume\(flag)"
     }
   }
 
