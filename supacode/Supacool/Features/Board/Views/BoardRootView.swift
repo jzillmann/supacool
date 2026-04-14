@@ -33,6 +33,13 @@ struct BoardRootView: View {
   /// release (see `SessionSwitcherOverlay`).
   @State private var isSessionSwitcherPresented: Bool = false
 
+  /// Auto-zoom back to the board the moment a submitted prompt kicks the
+  /// agent from idle → busy, so the user can see the whole fleet at a
+  /// glance while the agent works. Gated on
+  /// `session.hasCompletedAtLeastOnce` so a session's *initial* launch
+  /// doesn't bounce out.
+  @AppStorage("supacool.autoZoomBackOnPrompt") private var autoZoomBackOnPrompt: Bool = true
+
   var body: some View {
     Group {
       if let focusedID = store.focusedSessionID,
@@ -110,6 +117,19 @@ struct BoardRootView: View {
     // returns to that same card when they come back to the board.
     .onChange(of: store.focusedSessionID) { _, newValue in
       if let newValue { highlightedSessionID = newValue }
+    }
+    // Auto-zoom back to the board when the focused session's agent
+    // transitions idle → busy — that's the signal the user just
+    // submitted a prompt. Gated on hasCompletedAtLeastOnce so we don't
+    // bounce out of a session's initial auto-launch.
+    .onChange(of: focusedSessionBusyState) { oldValue, newValue in
+      guard autoZoomBackOnPrompt else { return }
+      guard oldValue == false, newValue == true else { return }
+      guard let focusedID = store.focusedSessionID,
+        let session = store.sessions.first(where: { $0.id == focusedID }),
+        session.hasCompletedAtLeastOnce
+      else { return }
+      store.send(.focusSession(id: nil))
     }
     // Sheet lives at the root so it's reachable whether you're looking at
     // the board or at a full-screen terminal.
@@ -239,6 +259,21 @@ struct BoardRootView: View {
   ///   cards don't immediately flip to Waiting while claude/codex is
   ///   starting up.
   /// - Not busy, past grace or has completed at least once → .waitingOnMe.
+  /// Busy state of whichever session is currently focused, if any.
+  /// `.onChange` on this drives the auto-zoom-back-on-prompt behavior.
+  /// Reading `terminalManager.isAgentBusy(...)` within this computed
+  /// property hooks into @Observable tracking so the value refreshes
+  /// when the agent's busy flag flips.
+  private var focusedSessionBusyState: Bool {
+    guard let focusedID = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == focusedID })
+    else { return false }
+    return terminalManager.isAgentBusy(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: session.id)
+    )
+  }
+
   private func classify(_ session: AgentSession) -> SessionCardView.Status {
     // User-parked wins over everything else: we've deliberately freed the
     // PTY, so tab-existence checks below would flag it as .detached.
