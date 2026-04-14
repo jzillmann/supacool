@@ -41,6 +41,7 @@ struct FullScreenTerminalView: View {
   @State private var isEditingGitGuiApp: Bool = false
   @State private var gitGuiAppDraft: String = ""
   @State private var isInfoPopoverShown: Bool = false
+  @State private var isQuickDiffPresented: Bool = false
 
   /// Surface id of the split we created via the header button — `nil`
   /// when the button is in "create" mode, non-nil when in "close" mode.
@@ -73,6 +74,12 @@ struct FullScreenTerminalView: View {
       // ⌘W = "close the nearest pane/window".
       Button("Close Terminal or Board") { closeCurrentTerminalOrBack() }
         .keyboardShortcut("w", modifiers: .command)
+        .hidden()
+    )
+    .background(
+      // ⌘⇧D opens the in-house quick-diff sheet.
+      Button("Quick Diff") { isQuickDiffPresented = true }
+        .keyboardShortcut("d", modifiers: [.command, .shift])
         .hidden()
     )
     // ⌘-Tab-style session switcher. ⌘← / ⌘↑ cycle backward, ⌘→ / ⌘↓
@@ -112,6 +119,7 @@ struct FullScreenTerminalView: View {
 
       repoChip
       gitGuiButton
+      diffDialogButton
       splitButton
       infoButton
       Text(session.displayName)
@@ -237,6 +245,28 @@ struct FullScreenTerminalView: View {
   /// session's tab. First click splits; second click closes the split
   /// we created (does NOT open a third). If the user closed our split
   /// via Ghostty's own ⌘D, `managedSplitSurfaceID` is reconciled to nil
+  /// In-house "what did I change?" button. Opens `QuickDiffSheet` on
+  /// the session's working directory — shows changed files + diff
+  /// against HEAD without leaving Supacool.
+  private var diffDialogButton: some View {
+    Button {
+      isQuickDiffPresented = true
+    } label: {
+      Image(systemName: "text.magnifyingglass")
+        .font(.system(size: 13, weight: .medium))
+    }
+    .buttonStyle(.bordered)
+    .controlSize(.small)
+    .tint(.secondary)
+    .help("Quick diff (⌘⇧D)")
+    .sheet(isPresented: $isQuickDiffPresented) {
+      QuickDiffSheet(
+        worktreeURL: URL(fileURLWithPath: session.worktreeID),
+        onDismiss: { isQuickDiffPresented = false }
+      )
+    }
+  }
+
   /// Small ⓘ button in the header that surfaces the session's initial
   /// config (prompt, agent, repo, worktree, captured resume id). Shares
   /// the same `SessionInfoPopover` view used by the board card.

@@ -39,6 +39,18 @@ struct GitClientDependency: Sendable {
   var remoteNames: @Sendable (_ repoRoot: URL) async throws -> [String]
   var fetchRemote: @Sendable (_ remote: String, _ repoRoot: URL) async throws -> Void
   var remoteInfo: @Sendable (_ repositoryRoot: URL) async -> GithubRemoteInfo?
+  /// `git status --porcelain=v1 -z` output for the worktree. The `-z`
+  /// byte-delimiter keeps paths with spaces / newlines intact — callers
+  /// split on `\0`.
+  var statusPorcelain: @Sendable (_ worktreeURL: URL) async throws -> String
+  /// Full diff for a single path. `cached == true` yields
+  /// `git diff --cached`, else working-tree vs. HEAD.
+  var diffForFile:
+    @Sendable (_ worktreeURL: URL, _ path: String, _ cached: Bool) async throws -> String
+  /// Per-file added/removed counts via `git diff HEAD --numstat`.
+  /// Returns `nil` for binary files or unparseable output.
+  var numstatForFile:
+    @Sendable (_ worktreeURL: URL, _ path: String) async -> (added: Int, removed: Int)?
 }
 
 extension GitClientDependency: DependencyKey {
@@ -88,6 +100,13 @@ extension GitClientDependency: DependencyKey {
     fetchRemote: { remote, repoRoot in try await GitClient().fetchRemote(remote, for: repoRoot) },
     remoteInfo: { repositoryRoot in
       await GitClient().remoteInfo(for: repositoryRoot)
+    },
+    statusPorcelain: { try await GitClient().statusPorcelain(at: $0) },
+    diffForFile: { worktreeURL, path, cached in
+      try await GitClient().diffForFile(at: worktreeURL, path: path, cached: cached)
+    },
+    numstatForFile: { worktreeURL, path in
+      await GitClient().numstatForFile(at: worktreeURL, path: path)
     }
   )
   static let testValue = liveValue

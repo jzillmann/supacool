@@ -21,6 +21,9 @@ enum GitOperation: String {
   case remoteInfo = "remote_info"
   case remoteList = "remote_list"
   case fetchOrigin = "fetch_origin"
+  case statusPorcelain = "status_porcelain"
+  case diffFile = "diff_file"
+  case numstatFile = "numstat_file"
 }
 
 enum GitClientError: LocalizedError {
@@ -442,6 +445,59 @@ struct GitClient {
       return String(ref)
     }
     return "HEAD"
+  }
+
+  /// Returns the raw bytes of `git status --porcelain=v1 -z` for the
+   /// worktree. `-z` avoids path-escaping edge cases so the caller can
+   /// split on `\0`. Supacool-only — used by the quick-diff sheet.
+  nonisolated func statusPorcelain(at worktreeURL: URL) async throws -> String {
+    let path = worktreeURL.path(percentEncoded: false)
+    return try await runGit(
+      operation: .statusPorcelain,
+      arguments: ["-C", path, "status", "--porcelain=v1", "-z"]
+    )
+  }
+
+  /// Full diff for a single path. `cached == true` → staged diff
+  /// (`git diff --cached`); otherwise working-tree vs. HEAD.
+  nonisolated func diffForFile(
+    at worktreeURL: URL,
+    path: String,
+    cached: Bool
+  ) async throws -> String {
+    let repoPath = worktreeURL.path(percentEncoded: false)
+    var args = ["-C", repoPath, "diff"]
+    if cached { args.append("--cached") }
+    args += ["--", path]
+    return try await runGit(operation: .diffFile, arguments: args)
+  }
+
+  /// Per-file added/removed line counts via `git diff HEAD --numstat`.
+  /// Returns `nil` when numstat can't be parsed (binary file, no
+  /// matching entry).
+  nonisolated func numstatForFile(
+    at worktreeURL: URL,
+    path: String
+  ) async -> (added: Int, removed: Int)? {
+    let repoPath = worktreeURL.path(percentEncoded: false)
+    do {
+      let output = try await runGit(
+        operation: .numstatFile,
+        arguments: ["-C", repoPath, "diff", "HEAD", "--numstat", "--", path]
+      )
+      // numstat: "<added>\t<removed>\t<path>"
+      // Binary files emit "-\t-\t<path>" — skipped.
+      for line in output.split(separator: "\n") {
+        let parts = line.split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+        guard parts.count >= 2 else { continue }
+        if let added = Int(parts[0]), let removed = Int(parts[1]) {
+          return (added, removed)
+        }
+      }
+      return nil
+    } catch {
+      return nil
+    }
   }
 
   nonisolated func lineChanges(at worktreeURL: URL) async -> (added: Int, removed: Int)? {
