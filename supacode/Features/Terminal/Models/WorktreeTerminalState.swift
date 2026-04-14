@@ -168,8 +168,29 @@ final class WorktreeTerminalState {
       resolvedInput = setupInput
     case (nil, let commandInput?):
       resolvedInput = commandInput
-    case (let setupInput?, let commandInput?):
-      resolvedInput = setupInput + commandInput
+    case (_?, _?):
+      // Supacool fix: previously this was `setupInput + commandInput`
+      // — two lines written to the pty as typed input. The shell
+      // would dispatch line 1 (setup) and, while that subprocess
+      // held stdin open (e.g. `go run ...`), the bytes of line 2
+      // (the agent command) would be fed to THAT subprocess's
+      // stdin instead of being queued for the shell — silently
+      // dropping the agent launch.
+      //
+      // Chain both in a single compound command so the shell sees
+      // exactly one dispatchable line: `bash -c '<setup>' && <cmd>`.
+      // bash runs setup in a subshell; on success the outer shell
+      // continues to the agent command. Setup scripts are
+      // idempotent by convention, so re-running one under bash
+      // rather than the tab's default zsh is safe.
+      if let script = setupScript,
+        let initialInput,
+        let combined = composeSetupAndCommand(setupScript: script, command: initialInput)
+      {
+        resolvedInput = combined
+      } else {
+        resolvedInput = (setupInput ?? "") + (commandInput ?? "")
+      }
     }
     let shouldConsumeSetupScript = pendingSetupScript && setupScript != nil
     if shouldConsumeSetupScript {
@@ -1508,6 +1529,35 @@ nonisolated func makeCommandInput(
   let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return nil }
   return trimmed + "\n"
+}
+
+/// Produce a single pty-input line that runs the repo's setup script and
+/// the caller's command atomically. Returns `nil` when both are empty.
+///
+/// Shape: `bash -c '<escaped setup>' && <command>\n`. The setup script
+/// runs in a subshell (bash); on success the outer shell continues with
+/// the command. See the call site in `WorktreeTerminalState.createTab`
+/// for the race-condition this avoids.
+nonisolated func composeSetupAndCommand(
+  setupScript: String,
+  command: String
+) -> String? {
+  let trimmedSetup = setupScript.trimmingCharacters(in: .whitespacesAndNewlines)
+  let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+  switch (trimmedSetup.isEmpty, trimmedCommand.isEmpty) {
+  case (true, true): return nil
+  case (true, false): return trimmedCommand + "\n"
+  case (false, true): return "bash -c \(singleQuoteShell(trimmedSetup))\n"
+  case (false, false):
+    return "bash -c \(singleQuoteShell(trimmedSetup)) && \(trimmedCommand)\n"
+  }
+}
+
+/// POSIX single-quote escape: wrap in `'...'`, replace any embedded
+/// `'` with the `'\''` escape. Safe for any UTF-8 content, including
+/// newlines (preserved inside single quotes).
+private nonisolated func singleQuoteShell(_ s: String) -> String {
+  "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
 nonisolated struct BlockingScriptLaunch {
