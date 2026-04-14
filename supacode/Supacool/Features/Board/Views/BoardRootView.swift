@@ -150,6 +150,12 @@ struct BoardRootView: View {
     if !terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) {
       return session.lastKnownBusy ? .interrupted : .detached
     }
+    // Awaiting-input wins over busy: the agent may technically still hold
+    // the busy flag while it's blocked on a permission prompt, but from
+    // the user's perspective the card needs attention, not patience.
+    if terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID) {
+      return .awaitingInput
+    }
     if terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID) {
       return .inProgress
     }

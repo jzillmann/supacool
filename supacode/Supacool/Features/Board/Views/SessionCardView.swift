@@ -17,6 +17,7 @@ struct SessionCardView: View {
   enum Status: Equatable {
     case inProgress
     case waitingOnMe
+    case awaitingInput  // agent paused on a permission prompt / question
     case detached
     case interrupted  // was busy when the app went away; agent's turn lost
     case fresh  // just created, agent hasn't started busy-looping yet
@@ -25,6 +26,7 @@ struct SessionCardView: View {
       switch self {
       case .inProgress: "Working"
       case .waitingOnMe: "Waiting"
+      case .awaitingInput: "Wants Input"
       case .detached: "Idle"
       case .interrupted: "Interrupted"
       case .fresh: "Starting"
@@ -35,6 +37,7 @@ struct SessionCardView: View {
       switch self {
       case .inProgress: .green
       case .waitingOnMe: .orange
+      case .awaitingInput: .orange
       case .detached: .secondary
       case .interrupted: .yellow
       case .fresh: .blue
@@ -45,6 +48,7 @@ struct SessionCardView: View {
       switch self {
       case .inProgress: "circle.fill"
       case .waitingOnMe: "exclamationmark.circle.fill"
+      case .awaitingInput: "hand.raised.fill"
       case .detached: "moon.zzz.fill"
       case .interrupted: "exclamationmark.triangle.fill"
       case .fresh: "sparkles"

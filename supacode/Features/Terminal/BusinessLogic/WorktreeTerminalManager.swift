@@ -10,6 +10,12 @@ final class WorktreeTerminalManager {
   private let runtime: GhosttyRuntime
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
+  /// Supacool-only. Tab IDs whose agent has emitted a `Notification` hook
+  /// event since its last busy transition — i.e. the agent paused to ask
+  /// the user something (permission prompt, clarification, etc.). Cleared
+  /// on any busy-flag change for the tab. Observed by the Matrix Board
+  /// classifier to flip cards to an "Awaiting Input" status.
+  private var awaitingInputTabs: Set<UUID> = []
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
@@ -39,6 +45,9 @@ final class WorktreeTerminalManager {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
         return
       }
+      // Any busy transition (resumed or finished) supersedes a prior
+      // "awaiting input" signal for this tab.
+      self?.awaitingInputTabs.remove(tabID)
       state.setAgentBusy(
         surfaceID: surfaceID,
         tabID: TerminalTabID(rawValue: tabID),
@@ -55,6 +64,14 @@ final class WorktreeTerminalManager {
       let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
+      // Claude Code fires a `Notification` hook event when the agent
+      // pauses on user input (permission prompt, question). `Stop` events
+      // also flow through here but carry the final assistant message —
+      // they're not "awaiting input" signals. Only the former flips the
+      // card.
+      if notification.event == "Notification" {
+        self?.awaitingInputTabs.insert(tabID)
+      }
     }
   }
 
@@ -84,6 +101,14 @@ final class WorktreeTerminalManager {
   /// @Observable tracking so callers re-render when state changes.
   func isAgentBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
     states[worktreeID]?.isTabBusy(tabID) ?? false
+  }
+
+  /// Whether the agent in this tab is paused on user input (permission
+  /// prompt, clarification). Set by a `Notification` hook event and cleared
+  /// on the next busy-flag change for the tab. Requires the Notification
+  /// hook to be installed (Settings → Coding Agents → Notifications).
+  func isAwaitingInput(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
+    awaitingInputTabs.contains(tabID.rawValue)
   }
 
   /// Whether the session's tab still exists in any terminal state — false

@@ -178,7 +178,7 @@ struct BoardView: View {
 
   private func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
     switch status {
-    case .waitingOnMe, .detached, .interrupted: true
+    case .waitingOnMe, .awaitingInput, .detached, .interrupted: true
     case .inProgress, .fresh: false
     }
   }
