@@ -56,6 +56,13 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// `codex resume <id>`) across app relaunches.
   var agentNativeSessionID: String?
 
+  /// User explicitly parked this session: its PTY was destroyed to free
+  /// resources, but the metadata (prompt, captured resume id) is
+  /// preserved so the user can resume later. Differs from `.detached`
+  /// only in *intent* — parked sessions live in their own bottom bucket
+  /// and stay out of keyboard-nav cycling until resumed.
+  var parked: Bool
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -67,7 +74,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastActivityAt: Date = Date(),
     hasCompletedAtLeastOnce: Bool = false,
     lastKnownBusy: Bool = false,
-    agentNativeSessionID: String? = nil
+    agentNativeSessionID: String? = nil,
+    parked: Bool = false
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -80,6 +88,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
     self.lastKnownBusy = lastKnownBusy
     self.agentNativeSessionID = agentNativeSessionID
+    self.parked = parked
   }
 
   // Forward-compatible Codable — convention documented in
@@ -96,7 +105,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy
-    case agentNativeSessionID
+    case agentNativeSessionID, parked
   }
 
   init(from decoder: Decoder) throws {
@@ -114,6 +123,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
     lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
+    parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

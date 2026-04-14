@@ -98,8 +98,10 @@ struct BoardView: View {
     if visible.isEmpty {
       emptyState
     } else {
-      let waiting = visible.filter { isWaitingStatus(classify($0)) }
-      let inProgress = visible.filter { !isWaitingStatus(classify($0)) }
+      let live = visible.filter { classify($0) != .parked }
+      let waiting = live.filter { isWaitingStatus(classify($0)) }
+      let inProgress = live.filter { !isWaitingStatus(classify($0)) }
+      let parked = visible.filter { classify($0) == .parked }
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           // "Waiting on Me" always renders — when empty it shows a subtle
@@ -125,6 +127,18 @@ struct BoardView: View {
             dimmed: true,
             emptyMessage: nil
           )
+          if !parked.isEmpty {
+            Divider()
+              .padding(.vertical, 4)
+            section(
+              title: "Parked",
+              systemImage: "parkingsign",
+              color: .secondary,
+              sessions: parked,
+              dimmed: true,
+              emptyMessage: nil
+            )
+          }
         }
         .padding(20)
       }
@@ -249,6 +263,46 @@ struct BoardView: View {
                   )
                 }
                 : nil,
+              onPark: (sessionStatus != .parked)
+                ? {
+                  store.send(
+                    .parkSession(
+                      id: session.id,
+                      repositories: Array(repositories)
+                    )
+                  )
+                }
+                : nil,
+              // Unpark reuses whichever resume path is available — Resume
+              // (captured id) if we have one, otherwise Resume via Picker,
+              // otherwise Rerun. The resume/rerun reducers already clear
+              // `parked = false` on success.
+              onUnpark: (sessionStatus == .parked)
+                ? {
+                  if session.agent != nil && session.agentNativeSessionID != nil {
+                    store.send(
+                      .resumeDetachedSession(
+                        id: session.id,
+                        repositories: Array(repositories)
+                      )
+                    )
+                  } else if session.agent != nil {
+                    store.send(
+                      .resumeDetachedSessionWithPicker(
+                        id: session.id,
+                        repositories: Array(repositories)
+                      )
+                    )
+                  } else {
+                    store.send(
+                      .rerunDetachedSession(
+                        id: session.id,
+                        repositories: Array(repositories)
+                      )
+                    )
+                  }
+                }
+                : nil,
               onBusyStateChange: { newBusy in
                 store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
               },
@@ -277,7 +331,7 @@ enum BoardNavOrder {
   static func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
     switch status {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted: true
-    case .inProgress, .fresh: false
+    case .inProgress, .fresh, .parked: false
     }
   }
 
@@ -285,8 +339,12 @@ enum BoardNavOrder {
     visibleSessions: [AgentSession],
     classify: (AgentSession) -> SessionCardView.Status
   ) -> [AgentSession.ID] {
-    let waiting = visibleSessions.filter { isWaitingStatus(classify($0)) }
-    let inProgress = visibleSessions.filter { !isWaitingStatus(classify($0)) }
+    // Parked sessions are explicitly excluded from the keyboard-nav cycle
+    // and the switcher's wrap-around — they live in the bottom bucket
+    // and only come back into rotation after an unpark.
+    let live = visibleSessions.filter { classify($0) != .parked }
+    let waiting = live.filter { isWaitingStatus(classify($0)) }
+    let inProgress = live.filter { !isWaitingStatus(classify($0)) }
     return waiting.map(\.id) + inProgress.map(\.id)
   }
 }
@@ -308,6 +366,8 @@ private struct SessionCardContainer: View {
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
+  let onPark: (() -> Void)?
+  let onUnpark: (() -> Void)?
   let onBusyStateChange: (Bool) -> Void
   let onBusyToIdleTransition: () -> Void
 
@@ -323,7 +383,9 @@ private struct SessionCardContainer: View {
       onRename: onRename,
       onRerun: onRerun,
       onResume: onResume,
-      onResumePicker: onResumePicker
+      onResumePicker: onResumePicker,
+      onPark: onPark,
+      onUnpark: onUnpark
     )
     .opacity(dimmed && !isHovered && !isHighlighted ? 0.55 : 1.0)
     .overlay(

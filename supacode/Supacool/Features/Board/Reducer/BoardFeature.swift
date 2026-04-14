@@ -40,6 +40,11 @@ struct BoardFeature {
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
     case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
+    /// Park: destroy the PTY to free resources, flag the session as
+    /// parked so the board sorts it into the bottom bucket. Metadata
+    /// (prompt, captured resume id) is preserved so the user can unpark
+    /// via the existing Resume / Rerun paths.
+    case parkSession(id: AgentSession.ID, repositories: [Repository])
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -120,6 +125,34 @@ struct BoardFeature {
         state.focusedSessionID = id
         return .none
 
+      case .parkSession(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].parked = true
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastActivityAt = Date()
+        }
+        // Drop focus if we're parking the focused session.
+        if state.focusedSessionID == id {
+          state.focusedSessionID = nil
+        }
+        // Destroy the PTY so the session stops consuming resources.
+        // We build the worktree value the same way the resume paths do,
+        // pinning .id to session.worktreeID so the terminal manager's
+        // state lookup hits the right key.
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .none
+        }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        return .run { _ in
+          await terminalClient.send(
+            .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
+          )
+        }
+
       case .toggleRepository(let repositoryID):
         state.$filters.withLock { filters in
           if filters.selectedRepositoryIDs.contains(repositoryID) {
@@ -167,6 +200,7 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].lastKnownBusy = false
           sessions[index].lastActivityAt = Date()
+          sessions[index].parked = false
         }
         state.focusedSessionID = id
         let command = agent.resumeCommand(sessionID: sessionID) + "\r"
@@ -196,6 +230,7 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].lastKnownBusy = false
           sessions[index].lastActivityAt = Date()
+          sessions[index].parked = false
         }
         state.focusedSessionID = id
         let command = agent.resumePickerCommand + "\r"

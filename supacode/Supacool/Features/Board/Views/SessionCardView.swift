@@ -14,6 +14,8 @@ struct SessionCardView: View {
   var onRerun: (() -> Void)? = nil
   var onResume: (() -> Void)? = nil
   var onResumePicker: (() -> Void)? = nil
+  var onPark: (() -> Void)? = nil
+  var onUnpark: (() -> Void)? = nil
 
   enum Status: Equatable {
     case inProgress
@@ -22,6 +24,7 @@ struct SessionCardView: View {
     case detached
     case interrupted  // was busy when the app went away; agent's turn lost
     case fresh  // just created, agent hasn't started busy-looping yet
+    case parked  // user explicitly parked; PTY freed, metadata preserved
 
     var label: String {
       switch self {
@@ -31,6 +34,7 @@ struct SessionCardView: View {
       case .detached: "Idle"
       case .interrupted: "Interrupted"
       case .fresh: "Starting"
+      case .parked: "Parked"
       }
     }
 
@@ -42,6 +46,7 @@ struct SessionCardView: View {
       case .detached: .secondary
       case .interrupted: .yellow
       case .fresh: .blue
+      case .parked: .secondary
       }
     }
 
@@ -53,6 +58,7 @@ struct SessionCardView: View {
       case .detached: "moon.zzz.fill"
       case .interrupted: "exclamationmark.triangle.fill"
       case .fresh: "sparkles"
+      case .parked: "parkingsign"
       }
     }
   }
@@ -117,7 +123,15 @@ struct SessionCardView: View {
       if let onRerun {
         Button("Rerun with Same Prompt", systemImage: "arrow.clockwise", action: onRerun)
       }
-      if onResume != nil || onResumePicker != nil || onRerun != nil {
+      if let onPark {
+        Button("Park", systemImage: "parkingsign", action: onPark)
+      }
+      if let onUnpark {
+        Button("Unpark", systemImage: "play.circle", action: onUnpark)
+      }
+      if onResume != nil || onResumePicker != nil || onRerun != nil
+        || onPark != nil || onUnpark != nil
+      {
         Divider()
       }
       Button("Remove", role: .destructive, action: onRemove)

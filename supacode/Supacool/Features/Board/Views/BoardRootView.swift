@@ -240,6 +240,11 @@ struct BoardRootView: View {
   ///   starting up.
   /// - Not busy, past grace or has completed at least once → .waitingOnMe.
   private func classify(_ session: AgentSession) -> SessionCardView.Status {
+    // User-parked wins over everything else: we've deliberately freed the
+    // PTY, so tab-existence checks below would flag it as .detached.
+    if session.parked {
+      return .parked
+    }
     let tabID = TerminalTabID(rawValue: session.id)
     if !terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) {
       return session.lastKnownBusy ? .interrupted : .detached
