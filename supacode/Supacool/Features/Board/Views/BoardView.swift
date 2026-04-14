@@ -273,10 +273,15 @@ struct BoardView: View {
                   )
                 }
                 : nil,
-              // Unpark reuses whichever resume path is available — Resume
-              // (captured id) if we have one, otherwise Resume via Picker,
-              // otherwise Rerun. The resume/rerun reducers already clear
-              // `parked = false` on success.
+              // Unpark routing:
+              //   • Captured session id → one-click resume, same as
+              //     detached cards with the same state.
+              //   • No captured id (shell session, or agent whose id we
+              //     never learned) → focus the card. The full-screen
+              //     detached UI takes over with explicit Rerun / Resume
+              //     via Picker / Remove buttons, matching the behavior
+              //     of a non-parked detached card. This gives the user
+              //     a choice rather than picking for them.
               onUnpark: (sessionStatus == .parked)
                 ? {
                   if session.agent != nil && session.agentNativeSessionID != nil {
@@ -286,20 +291,8 @@ struct BoardView: View {
                         repositories: Array(repositories)
                       )
                     )
-                  } else if session.agent != nil {
-                    store.send(
-                      .resumeDetachedSessionWithPicker(
-                        id: session.id,
-                        repositories: Array(repositories)
-                      )
-                    )
                   } else {
-                    store.send(
-                      .rerunDetachedSession(
-                        id: session.id,
-                        repositories: Array(repositories)
-                      )
-                    )
+                    store.send(.focusSession(id: session.id))
                   }
                 }
                 : nil,

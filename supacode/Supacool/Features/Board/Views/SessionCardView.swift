@@ -76,6 +76,9 @@ struct SessionCardView: View {
           Text(AgentType.displayName(for: session.agent))
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
+          if session.agent != nil {
+            sessionIDIndicator
+          }
           Spacer()
           infoButton
           statusChip
@@ -169,6 +172,23 @@ struct SessionCardView: View {
         worktreeLabel: nil
       )
     }
+  }
+
+  /// Small bookmark glyph signalling whether the agent's native session id
+  /// has been captured yet. Filled+green when captured (one-click resume
+  /// is available); outlined+tertiary when not (resume will need the
+  /// agent's own picker). Only meaningful for agent sessions.
+  @ViewBuilder
+  private var sessionIDIndicator: some View {
+    let captured = session.agentNativeSessionID != nil
+    Image(systemName: captured ? "bookmark.fill" : "bookmark")
+      .font(.caption2)
+      .foregroundStyle(captured ? Color.green : Color.secondary.opacity(0.6))
+      .help(
+        captured
+          ? "Session id captured — resume is one click"
+          : "No session id captured yet — resume will open the agent's picker"
+      )
   }
 
   /// Shown on hover for parked cards — a big centered play symbol over a
