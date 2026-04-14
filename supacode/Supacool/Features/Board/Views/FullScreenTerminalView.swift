@@ -220,34 +220,36 @@ struct FullScreenTerminalView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  /// Look up the session's Worktree object. If the worktree isn't in the
-  /// repository's currently-visible list (e.g. created via the New Terminal
-  /// sheet's worktree mode and filtered out of the sidebar per Phase 3c's
-  /// "don't open all worktrees by default"), synthesize a minimal one from
-  /// the session metadata. The terminal manager only keys state by id so
-  /// this works as long as the id matches.
+  /// Resolve the Worktree value that backs this session — used to drive
+  /// `SingleSessionTerminalView` / `manager.state(for:)`.
+  ///
+  /// CRITICAL: the returned `.id` is always `session.worktreeID` verbatim,
+  /// never a `repository.worktrees` record's id. `WorktreeTerminalManager`
+  /// keys its `states` dictionary by `worktree.id`, and tabs were originally
+  /// registered under `session.worktreeID`. If we returned a supacode-
+  /// discovered record whose id was normalized differently (trailing slash,
+  /// etc.), `state(for:)` would lazily create a fresh empty state under the
+  /// mismatched key — the view would render "Terminal no longer running"
+  /// even though the real tab exists under the session's own key.
+  ///
+  /// Returns nil when the terminal manager has no tab for this session —
+  /// the detached/resume UI takes over in that case.
   private func resolveWorktree() -> Worktree? {
-    if let repo = repositories[id: session.repositoryID],
-      let existing = repo.worktrees.first(where: { $0.id == session.worktreeID })
-    {
-      return existing
-    }
-    // Synthesize: the worktree's id is its working directory path.
-    let url = URL(fileURLWithPath: session.worktreeID).standardizedFileURL
-    let repoRoot =
-      repositories[id: session.repositoryID]?.rootURL.standardizedFileURL ?? url
-    // Only synthesize when the terminal manager knows about this tab —
-    // otherwise it's genuinely detached.
     let tabID = TerminalTabID(rawValue: session.id)
     guard terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) else {
       return nil
     }
+    let url = URL(fileURLWithPath: session.worktreeID).standardizedFileURL
+    let repo = repositories[id: session.repositoryID]
+    let discovered = repo?.worktrees.first(where: { $0.id == session.worktreeID })
     return Worktree(
       id: session.worktreeID,
-      name: url.lastPathComponent,
-      detail: "",
-      workingDirectory: url,
-      repositoryRootURL: repoRoot
+      name: discovered?.name ?? url.lastPathComponent,
+      detail: discovered?.detail ?? "",
+      workingDirectory: discovered?.workingDirectory ?? url,
+      repositoryRootURL: repo?.rootURL.standardizedFileURL ?? url,
+      createdAt: discovered?.createdAt,
+      branch: discovered?.branch
     )
   }
 }
