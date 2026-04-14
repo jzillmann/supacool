@@ -520,6 +520,20 @@ final class WorktreeTerminalState {
     return tree
   }
 
+  /// Split the focused surface in `tabId` by `direction`. The new surface
+  /// inherits the working directory and environment from the source (i.e.
+  /// it's a plain shell in the same worktree) — ghostty adds no extra
+  /// initial input. Returns `false` if the tab has no focused surface or
+  /// the split can't be inserted.
+  @discardableResult
+  func splitFocusedSurface(
+    in tabId: TerminalTabID,
+    direction: GhosttySplitAction.NewDirection
+  ) -> Bool {
+    guard let focusedId = focusedSurfaceIdByTab[tabId] else { return false }
+    return performSplitAction(.newSplit(direction: direction), for: focusedId)
+  }
+
   func performSplitAction(
     _ action: GhosttySplitAction,
     for surfaceId: UUID,

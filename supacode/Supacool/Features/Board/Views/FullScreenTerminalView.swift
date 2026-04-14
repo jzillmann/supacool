@@ -97,6 +97,7 @@ struct FullScreenTerminalView: View {
 
       repoChip
       gitGuiButton
+      splitButton
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -213,6 +214,29 @@ struct FullScreenTerminalView: View {
     } message: {
       Text("Name of the macOS app to launch (as it appears in /Applications). Used with `open -a`.")
     }
+  }
+
+  /// Opens a plain-shell split beside the agent surface in this session's
+  /// tab. Splitting is delegated to `WorktreeTerminalState` which inherits
+  /// the source surface's cwd/env and injects no input — exactly the
+  /// "just a shell in the same worktree" behavior the board wants. Only
+  /// enabled when the session's tab is live; detached sessions have no
+  /// focused surface to split from.
+  @ViewBuilder
+  private var splitButton: some View {
+    let worktree = resolveWorktree()
+    Button {
+      guard let worktree else { return }
+      let state = terminalManager.state(for: worktree) { false }
+      state.splitFocusedSurface(in: TerminalTabID(rawValue: session.id), direction: .right)
+    } label: {
+      Image(systemName: "rectangle.split.2x1")
+        .font(.system(size: 13, weight: .medium))
+    }
+    .buttonStyle(.plain)
+    .foregroundStyle(.secondary)
+    .disabled(worktree == nil)
+    .help("Open a plain shell split in this session")
   }
 
   /// Built-in presets for the right-click menu. Manually curated — these
