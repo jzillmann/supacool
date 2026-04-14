@@ -118,10 +118,6 @@ struct FullScreenTerminalView: View {
       Divider().frame(height: 18)
 
       repoChip
-      gitGuiButton
-      diffDialogButton
-      splitButton
-      infoButton
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -131,6 +127,10 @@ struct FullScreenTerminalView: View {
           Button("Rename…", systemImage: "pencil", action: onRename)
         }
         .help("Double-click to rename")
+      gitGuiButton
+      diffDialogButton
+      splitButton
+      infoButton
       Spacer()
       agentChip
     }
@@ -204,10 +204,9 @@ struct FullScreenTerminalView: View {
     } label: {
       Image(systemName: "plus.forwardslash.minus")
         .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
     }
-    .buttonStyle(.bordered)
-    .controlSize(.small)
-    .tint(.secondary)
+    .buttonStyle(.plain)
     .help("Open in \(gitGuiApp) (right-click to change)")
     .contextMenu {
       Section("Open diff in") {
@@ -254,10 +253,9 @@ struct FullScreenTerminalView: View {
     } label: {
       Image(systemName: "text.magnifyingglass")
         .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
     }
-    .buttonStyle(.bordered)
-    .controlSize(.small)
-    .tint(.secondary)
+    .buttonStyle(.plain)
     .help("Quick diff (⌘⇧D)")
     .sheet(isPresented: $isQuickDiffPresented) {
       QuickDiffSheet(
@@ -276,9 +274,9 @@ struct FullScreenTerminalView: View {
     } label: {
       Image(systemName: "info.circle")
         .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
     }
     .buttonStyle(.plain)
-    .foregroundStyle(.secondary)
     .help("Show session details")
     .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
       SessionInfoPopover(
@@ -307,10 +305,9 @@ struct FullScreenTerminalView: View {
     } label: {
       Image(systemName: managedStillLive ? "rectangle" : "rectangle.split.2x1")
         .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
     }
-    .buttonStyle(.bordered)
-    .controlSize(.small)
-    .tint(.secondary)
+    .buttonStyle(.plain)
     .disabled(worktree == nil)
     .help(managedStillLive ? "Close the shell split" : "Open a plain shell split in this session")
     .onChange(of: session.id) { _, _ in managedSplitSurfaceID = nil }
@@ -508,5 +505,27 @@ struct FullScreenTerminalView: View {
       createdAt: discovered?.createdAt,
       branch: discovered?.branch
     )
+  }
+}
+
+/// Shared visual for the full-screen header's icon-button cluster
+/// (git-GUI, quick-diff, split, info). Uniform padding + a subtle
+/// rounded background that lights up on hover, so the whole row reads
+/// as one affordance group.
+private struct HeaderIconStyle: ViewModifier {
+  @State private var isHovered = false
+
+  func body(content: Content) -> some View {
+    content
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 4)
+      .background(
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(Color.primary.opacity(isHovered ? 0.12 : 0))
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+      .onHover { isHovered = $0 }
+      .animation(.easeOut(duration: 0.12), value: isHovered)
   }
 }
