@@ -21,6 +21,18 @@ struct BoardRootView: View {
   @State private var renamingSessionID: AgentSession.ID?
   @State private var renameDraft: String = ""
 
+  /// Keyboard-nav highlight lives here (not on `BoardView`) because
+  /// `BoardView` is torn down and re-created every time the user enters
+  /// and exits a full-screen session — @State on BoardView would reset
+  /// to the first card on re-entry. Keeping it on BoardRootView preserves
+  /// "come back to the card you just left."
+  @State private var highlightedSessionID: AgentSession.ID?
+
+  /// When true, the ⌘-Tab-style session switcher overlay is visible over
+  /// the full-screen terminal. Opened by `⌘←/→/↑/↓`, committed on ⌘
+  /// release (see `SessionSwitcherOverlay`).
+  @State private var isSessionSwitcherPresented: Bool = false
+
   var body: some View {
     Group {
       if let focusedID = store.focusedSessionID,
@@ -63,8 +75,21 @@ struct BoardRootView: View {
             }
             : nil,
           onRemove: { store.send(.removeSession(id: session.id)) },
-          onRename: { beginRename(session) }
+          onRename: { beginRename(session) },
+          onSwitcherMove: { direction in openSwitcher(direction: direction) }
         )
+        .overlay {
+          if isSessionSwitcherPresented {
+            SessionSwitcherOverlay(
+              sessions: switcherSessions,
+              repositories: repositories,
+              classify: { classify($0) },
+              highlightedSessionID: $highlightedSessionID,
+              onCommit: { commitSwitcher() },
+              onCancel: { isSessionSwitcherPresented = false }
+            )
+          }
+        }
       } else {
         boardContents
       }
@@ -80,6 +105,12 @@ struct BoardRootView: View {
       .hidden()
       .disabled(repositories.isEmpty)
     )
+    // Mirror the focused session into the keyboard-nav highlight so that
+    // entering a card (tap, Enter, ⌘.) updates the cursor, and the user
+    // returns to that same card when they come back to the board.
+    .onChange(of: store.focusedSessionID) { _, newValue in
+      if let newValue { highlightedSessionID = newValue }
+    }
     // Sheet lives at the root so it's reachable whether you're looking at
     // the board or at a full-screen terminal.
     .sheet(
@@ -112,6 +143,37 @@ struct BoardRootView: View {
     renamingSessionID = session.id
   }
 
+  // MARK: - Session switcher
+
+  /// Flat, repo-filtered session list the switcher cycles through.
+  /// Uses `BoardNavOrder` to stay in sync with the board's arrow-key
+  /// cursor.
+  private var switcherSessions: [AgentSession] {
+    let visible = store.visibleSessions
+    let orderedIDs = BoardNavOrder.order(visibleSessions: visible, classify: classify)
+    return orderedIDs.compactMap { id in visible.first(where: { $0.id == id }) }
+  }
+
+  /// Opens the switcher and pre-moves the cursor by ±1 so the first
+  /// `⌘←/→/↑/↓` press already shows the user where they're heading.
+  private func openSwitcher(direction: Int) {
+    let sessions = switcherSessions
+    guard !sessions.isEmpty else { return }
+    let ids = sessions.map(\.id)
+    let currentIndex = highlightedSessionID.flatMap { ids.firstIndex(of: $0) }
+      ?? (store.focusedSessionID.flatMap { ids.firstIndex(of: $0) } ?? 0)
+    let next = (currentIndex + direction + ids.count) % ids.count
+    highlightedSessionID = ids[next]
+    isSessionSwitcherPresented = true
+  }
+
+  private func commitSwitcher() {
+    isSessionSwitcherPresented = false
+    if let id = highlightedSessionID, id != store.focusedSessionID {
+      store.send(.focusSession(id: id))
+    }
+  }
+
   private var boardContents: some View {
     BoardView(
       store: store,
@@ -119,7 +181,8 @@ struct BoardRootView: View {
       terminalManager: terminalManager,
       classify: { classify($0) },
       onAddRepository: onAddRepository,
-      onRenameSession: { session in beginRename(session) }
+      onRenameSession: { session in beginRename(session) },
+      highlightedSessionID: $highlightedSessionID
     )
     // The window title is still "Supacool" (visible in the menu bar
     // and Window menu) but we hide it from the toolbar chrome — the

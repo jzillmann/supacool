@@ -14,10 +14,11 @@ struct BoardView: View {
   let onRenameSession: (AgentSession) -> Void
 
   /// Keyboard-nav cursor. Tracks the currently highlighted card; arrow
-  /// keys move it, Return focuses the card (same path as a tap). Falls
-  /// back to the first visible card on appear or if the prior highlight
-  /// disappears (session removed, filter changed).
-  @State private var highlightedSessionID: AgentSession.ID?
+  /// keys move it, Return focuses the card (same path as a tap). Bound
+  /// from BoardRootView so the selection survives the
+  /// board → full-screen → board round-trip (BoardView itself is torn
+  /// down and re-created during that cycle).
+  @Binding var highlightedSessionID: AgentSession.ID?
   /// Must be true for `.onKeyPress` to receive anything. `.focusable()`
   /// alone makes the view focus-eligible but doesn't *grant* focus —
   /// without this FocusState binding, arrow keys just beep.
@@ -67,10 +68,7 @@ struct BoardView: View {
   /// Flat visit order for arrow keys: waiting cards first, then
   /// in-progress. Recomputed on every read — cheap; the grid is small.
   private var currentNavOrder: [AgentSession.ID] {
-    let visible = store.visibleSessions
-    let waiting = visible.filter { isWaitingStatus(classify($0)) }
-    let inProgress = visible.filter { !isWaitingStatus(classify($0)) }
-    return waiting.map(\.id) + inProgress.map(\.id)
+    BoardNavOrder.order(visibleSessions: store.visibleSessions, classify: classify)
   }
 
   private func moveHighlight(by delta: Int) {
@@ -267,10 +265,29 @@ struct BoardView: View {
   }
 
   private func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
+    BoardNavOrder.isWaitingStatus(status)
+  }
+}
+
+/// Shared nav-order helpers used by both the board's arrow-key nav and the
+/// full-screen `⌘`-arrow session switcher so the two stay in muscle-memory
+/// sync. Cursor order is waiting-on-me first, then in-progress — matches
+/// the on-screen section layout.
+enum BoardNavOrder {
+  static func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
     switch status {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted: true
     case .inProgress, .fresh: false
     }
+  }
+
+  static func order(
+    visibleSessions: [AgentSession],
+    classify: (AgentSession) -> SessionCardView.Status
+  ) -> [AgentSession.ID] {
+    let waiting = visibleSessions.filter { isWaitingStatus(classify($0)) }
+    let inProgress = visibleSessions.filter { !isWaitingStatus(classify($0)) }
+    return waiting.map(\.id) + inProgress.map(\.id)
   }
 }
 

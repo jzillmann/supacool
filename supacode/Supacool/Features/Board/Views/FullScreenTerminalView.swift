@@ -27,6 +27,11 @@ struct FullScreenTerminalView: View {
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
 
+  /// `⌘←/↑` → `-1`, `⌘→/↓` → `+1`. Signals the parent to open (or
+  /// advance) the ⌘-Tab-style session switcher overlay. The overlay
+  /// itself handles subsequent arrow keys once presented.
+  let onSwitcherMove: (Int) -> Void
+
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
@@ -55,6 +60,25 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut("b", modifiers: .command)
         .hidden()
     )
+    // ⌘-Tab-style session switcher. ⌘← / ⌘↑ cycle backward, ⌘→ / ⌘↓
+    // forward. The overlay (owned by BoardRootView) takes focus once
+    // open, so repeated arrow presses while ⌘ stays held go to the
+    // overlay — these bindings only need to fire for the first press.
+    .background(switcherShortcuts)
+  }
+
+  private var switcherShortcuts: some View {
+    Group {
+      Button("Prev Session") { onSwitcherMove(-1) }
+        .keyboardShortcut(.leftArrow, modifiers: .command)
+      Button("Prev Session (up)") { onSwitcherMove(-1) }
+        .keyboardShortcut(.upArrow, modifiers: .command)
+      Button("Next Session") { onSwitcherMove(+1) }
+        .keyboardShortcut(.rightArrow, modifiers: .command)
+      Button("Next Session (down)") { onSwitcherMove(+1) }
+        .keyboardShortcut(.downArrow, modifiers: .command)
+    }
+    .hidden()
   }
 
   private var header: some View {
