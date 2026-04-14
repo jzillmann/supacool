@@ -2,6 +2,8 @@ import ComposableArchitecture
 import Foundation
 import IdentifiedCollections
 
+private nonisolated let newTerminalLogger = SupaLogger("Supacool.NewTerminal")
+
 /// Where the new terminal session's working directory comes from.
 nonisolated enum WorktreeMode: String, CaseIterable, Equatable, Sendable, Identifiable {
   /// Run at the repo root (directory mode). No new worktree created.
@@ -139,6 +141,10 @@ struct NewTerminalFeature {
         let branchName = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
         let existingWorktreeID = state.existingWorktreeID
         let agent = state.agent
+        // Mirror supacode's sidebar flow: obey the global "Fetch origin
+        // before creating worktree" toggle so both paths behave the same.
+        @Shared(.settingsFile) var settingsFile
+        let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
         // The UI toggle is an @AppStorage-backed mirror of this key; read it
         // fresh here so the reducer stays free of view-owned state.
         let bypassPermissions =
@@ -153,6 +159,26 @@ struct NewTerminalFeature {
             switch worktreeMode {
             case .newBranch:
               let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
+              // Pre-worktree fetch so the new branch is based on the
+              // *actually* latest upstream, not the local cache. Upstream
+              // supacode's sidebar flow (RepositoriesFeature) does this
+              // via remoteNames + matchingRemote + fetchRemote; mirror it.
+              // Failures are logged but don't block session creation —
+              // an offline / auth-broken fetch shouldn't lose the user
+              // their prompt.
+              if fetchOriginBeforeCreation {
+                let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
+                if let matchedRemote = baseRef.supacoolMatchingRemote(from: remotes) {
+                  do {
+                    try await gitClient.fetchRemote(matchedRemote, repository.rootURL)
+                  } catch {
+                    newTerminalLogger.warning(
+                      "Pre-worktree fetch \(matchedRemote) failed for "
+                        + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+                    )
+                  }
+                }
+              }
               let baseDirectory = SupacodePaths.worktreeBaseDirectory(
                 for: repository.rootURL,
                 globalDefaultPath: nil,
@@ -276,5 +302,16 @@ nonisolated enum NewTerminalError: LocalizedError {
     switch self {
     case .worktreeMissing: "Picked worktree is no longer available."
     }
+  }
+}
+
+extension String {
+  /// Returns the remote name if this ref starts with `<remote>/`, matched
+  /// against known remotes. Longest-match wins to handle ambiguous
+  /// prefixes (e.g. `origin` vs `origin-mirror`). Named distinctly from
+  /// upstream supacode's `matchingRemote` to avoid collisions on future
+  /// upstream syncs.
+  fileprivate nonisolated func supacoolMatchingRemote(from remotes: [String]) -> String? {
+    remotes.sorted { $0.count > $1.count }.first { hasPrefix("\($0)/") }
   }
 }

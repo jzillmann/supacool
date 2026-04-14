@@ -169,6 +169,127 @@ struct NewTerminalFeatureTests {
     #expect(quoted == "'don'\\''t '\\''break'\\'''")
   }
 
+  // MARK: - Pre-worktree origin fetch
+
+  /// Regression: creating a session in `.newBranch` mode must fetch the
+  /// matching remote before `createWorktree`, so the new branch is based
+  /// on the *actually* latest upstream instead of the local cache. Gated
+  /// by `GlobalSettings.fetchOriginBeforeWorktreeCreation` (default on).
+  @Test(.dependencies) func newBranchFetchesOriginWhenEnabled() async {
+    @Shared(.settingsFile) var settingsFile
+    $settingsFile.withLock { $0.global.fetchOriginBeforeWorktreeCreation = true }
+
+    var state = Self.makeState()
+    state.prompt = "Do the thing"
+    state.worktreeMode = .newBranch
+    state.branchName = "feat/x"
+
+    let events = LockIsolated<[String]>([])
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.gitClient.automaticWorktreeBaseRef = { _ in "origin/main" }
+      $0.gitClient.remoteNames = { _ in ["origin"] }
+      $0.gitClient.fetchRemote = { remote, _ in
+        events.withValue { $0.append("fetch:\(remote)") }
+      }
+      $0.gitClient.createWorktree = { name, repoRoot, _, _, _, baseRef in
+        events.withValue { $0.append("createWorktree:\(name):\(baseRef)") }
+        return Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(events.value == ["fetch:origin", "createWorktree:feat/x:origin/main"])
+  }
+
+  @Test(.dependencies) func newBranchSkipsFetchWhenDisabled() async {
+    @Shared(.settingsFile) var settingsFile
+    $settingsFile.withLock { $0.global.fetchOriginBeforeWorktreeCreation = false }
+
+    var state = Self.makeState()
+    state.prompt = "Do the thing"
+    state.worktreeMode = .newBranch
+    state.branchName = "feat/x"
+
+    let fetchCalls = LockIsolated<Int>(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.gitClient.automaticWorktreeBaseRef = { _ in "origin/main" }
+      $0.gitClient.remoteNames = { _ in ["origin"] }
+      $0.gitClient.fetchRemote = { _, _ in
+        fetchCalls.withValue { $0 += 1 }
+      }
+      $0.gitClient.createWorktree = { name, repoRoot, _, _, _, _ in
+        Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(fetchCalls.value == 0)
+  }
+
+  /// If the network is down or auth is broken, the fetch must fail silently
+  /// and the worktree must still be created — losing the user's prompt to
+  /// a transient network blip would be a nasty regression.
+  @Test(.dependencies) func newBranchFetchFailureDoesNotBlockCreation() async {
+    @Shared(.settingsFile) var settingsFile
+    $settingsFile.withLock { $0.global.fetchOriginBeforeWorktreeCreation = true }
+
+    var state = Self.makeState()
+    state.prompt = "Do the thing"
+    state.worktreeMode = .newBranch
+    state.branchName = "feat/x"
+
+    struct FetchFailure: Error {}
+    let createWorktreeRan = LockIsolated<Bool>(false)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.gitClient.automaticWorktreeBaseRef = { _ in "origin/main" }
+      $0.gitClient.remoteNames = { _ in ["origin"] }
+      $0.gitClient.fetchRemote = { _, _ in throw FetchFailure() }
+      $0.gitClient.createWorktree = { name, repoRoot, _, _, _, _ in
+        createWorktreeRan.withValue { $0 = true }
+        return Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(createWorktreeRan.value == true)
+  }
+
   // MARK: - Rerun initializer
 
   @Test func rerunInitializerPrefillsFromPreviousSession() {
