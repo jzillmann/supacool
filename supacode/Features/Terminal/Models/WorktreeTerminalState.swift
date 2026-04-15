@@ -358,6 +358,29 @@ final class WorktreeTerminalState {
     surface.sendText(text)
   }
 
+  /// Reads the visible screen contents of the focused surface in the given tab.
+  /// Returns nil when the tab or focused surface is not found.
+  func readScreenContents(tabID: TerminalTabID) -> String? {
+    guard let surfaceID = focusedSurfaceIdByTab[tabID],
+      let surface = surfaces[surfaceID]
+    else { return nil }
+    return surface.bridge.readScreenContents()
+  }
+
+  /// Sends raw text to the focused surface of the given tab without requiring
+  /// focus — used by the Auto-Observer to inject responses without stealing
+  /// keyboard focus from whatever the user is currently doing.
+  func sendText(to tabID: TerminalTabID, text: String) {
+    guard let surfaceID = focusedSurfaceIdByTab[tabID],
+      let surface = surfaces[surfaceID]
+    else {
+      terminalStateLogger.warning("sendText(to:): no focused surface for tab \(tabID.rawValue)")
+      return
+    }
+    terminalStateLogger.info("sendText(to:): sending \(text.count) chars to tab \(tabID.rawValue)")
+    surface.bridge.sendText(text)
+  }
+
   func syncFocus(windowIsKey: Bool, windowIsVisible: Bool) {
     lastWindowIsKey = windowIsKey
     lastWindowIsVisible = windowIsVisible

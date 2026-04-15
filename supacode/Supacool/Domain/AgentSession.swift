@@ -69,6 +69,16 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// and stay out of keyboard-nav cycling until resumed.
   var parked: Bool
 
+  /// When true, the Auto-Observer monitors this session: on each idle
+  /// transition it reads the terminal screen, decides if there's an
+  /// obvious response, and types it automatically.
+  var autoObserver: Bool
+
+  /// Free-form instructions for the Auto-Observer: acceptance criteria,
+  /// things to allow or deny, conditions to stop on, etc. Empty string
+  /// means "use default heuristics only."
+  var autoObserverPrompt: String
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -82,7 +92,9 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastKnownBusy: Bool = false,
     lastBusyTransitionAt: Date? = nil,
     agentNativeSessionID: String? = nil,
-    parked: Bool = false
+    parked: Bool = false,
+    autoObserver: Bool = false,
+    autoObserverPrompt: String = ""
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -97,6 +109,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastBusyTransitionAt = lastBusyTransitionAt
     self.agentNativeSessionID = agentNativeSessionID
     self.parked = parked
+    self.autoObserver = autoObserver
+    self.autoObserverPrompt = autoObserverPrompt
   }
 
   // Forward-compatible Codable — convention documented in
@@ -114,6 +128,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
     case agentNativeSessionID, parked
+    case autoObserver, autoObserverPrompt
   }
 
   init(from decoder: Decoder) throws {
@@ -133,6 +148,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastBusyTransitionAt = try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
+    autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
+    autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

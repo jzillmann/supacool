@@ -199,6 +199,9 @@ struct SupacodeApp: App {
         },
         surfaceExists: { worktreeID, tabID, surfaceID in
           terminalManager.surfaceExists(worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID)
+        },
+        readScreenContents: { worktreeID, tabID in
+          terminalManager.readScreenContents(worktreeID: worktreeID, tabID: tabID)
         }
       )
       values.worktreeInfoWatcher = WorktreeInfoWatcherClient(

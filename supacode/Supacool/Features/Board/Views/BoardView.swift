@@ -307,7 +307,19 @@ struct BoardView: View {
                 if !session.hasCompletedAtLeastOnce {
                   store.send(.markSessionCompletedOnce(id: session.id))
                 }
-              }
+                if session.autoObserver {
+                  store.send(.autoObserverTriggered(id: session.id))
+                }
+              },
+              onAutoObserverToggle: {
+                store.send(.toggleAutoObserver(id: session.id))
+              },
+              onAutoObserverPromptChanged: { prompt in
+                store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
+              },
+              onAwaitingInputEntered: session.autoObserver
+                ? { store.send(.autoObserverTriggered(id: session.id)) }
+                : nil
             )
             .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -375,6 +387,9 @@ private struct SessionCardContainer: View {
   let onUnpark: (() -> Void)?
   let onBusyStateChange: (Bool) -> Void
   let onBusyToIdleTransition: () -> Void
+  let onAutoObserverToggle: () -> Void
+  let onAutoObserverPromptChanged: (String) -> Void
+  let onAwaitingInputEntered: (() -> Void)?
 
   @State private var isHovered: Bool = false
 
@@ -390,7 +405,9 @@ private struct SessionCardContainer: View {
       onResume: onResume,
       onResumePicker: onResumePicker,
       onPark: onPark,
-      onUnpark: onUnpark
+      onUnpark: onUnpark,
+      onAutoObserverToggle: onAutoObserverToggle,
+      onAutoObserverPromptChanged: onAutoObserverPromptChanged
     )
     .opacity(dimmed && !isHovered && !isHighlighted ? 0.55 : 1.0)
     .overlay(
@@ -416,6 +433,12 @@ private struct SessionCardContainer: View {
       onBusyStateChange(newValue)
       if oldValue && !newValue {
         onBusyToIdleTransition()
+      }
+    }
+    .onChange(of: status) { oldValue, newValue in
+      // Fire auto-observer when the session enters awaiting-input (permission prompt).
+      if oldValue != .awaitingInput && newValue == .awaitingInput {
+        onAwaitingInputEntered?()
       }
     }
     .onAppear {

@@ -213,6 +213,8 @@ final class WorktreeTerminalManager {
       if !terminal.closeSurface(id: surfaceID) {
         terminalLogger.warning("destroySurface: surface \(surfaceID) not found in worktree \(worktree.id).")
       }
+    case .sendText(let worktreeID, let tabID, let text):
+      states[worktreeID]?.sendText(to: tabID, text: text)
     default:
       return false
     }
@@ -234,7 +236,7 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .ensureInitialTab, .stopRunScript, .runBlockingScript,
       .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .selectTab, .focusSurface,
       .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
-      .setSelectedWorktreeID, .refreshTabBarVisibility:
+      .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
     return true
@@ -248,7 +250,7 @@ final class WorktreeTerminalManager {
       .closeFocusedTab, .closeFocusedSurface, .startSearch, .searchSelection, .navigateSearchNext,
       .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface, .splitSurface, .destroyTab,
       .destroySurface, .prune, .setNotificationsEnabled, .setSelectedWorktreeID,
-      .refreshTabBarVisibility:
+      .refreshTabBarVisibility, .sendText:
       return false
     }
     return true
@@ -275,7 +277,7 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .ensureInitialTab, .stopRunScript, .runBlockingScript,
       .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .startSearch, .searchSelection,
       .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface,
-      .splitSurface, .destroyTab, .destroySurface:
+      .splitSurface, .destroyTab, .destroySurface, .sendText:
       assertionFailure("Unhandled terminal command reached management handler: \(command)")
     }
   }
@@ -415,6 +417,10 @@ final class WorktreeTerminalManager {
 
   func surfaceExists(worktreeID: Worktree.ID, tabID: TerminalTabID, surfaceID: UUID) -> Bool {
     states[worktreeID]?.hasSurface(surfaceID, in: tabID) ?? false
+  }
+
+  func readScreenContents(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
+    states[worktreeID]?.readScreenContents(tabID: tabID)
   }
 
   func stateIfExists(for worktreeID: Worktree.ID) -> WorktreeTerminalState? {

@@ -28,6 +28,10 @@ struct BoardFeature {
 
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
+
+    /// Sessions whose Auto-Observer is currently reading/deciding.
+    /// Guards against re-entrant triggers on the same session.
+    var autoObserverInFlight: Set<AgentSession.ID> = []
   }
 
   enum Action: BindableAction, Equatable {
@@ -62,9 +66,18 @@ struct BoardFeature {
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
+
+    // MARK: Auto-Observer
+    case toggleAutoObserver(id: AgentSession.ID)
+    case setAutoObserverPrompt(id: AgentSession.ID, prompt: String)
+    /// Fired by the view when a session transitions to idle or awaiting-input
+    /// and has `autoObserver == true`. Starts a read → decide → respond effect.
+    case autoObserverTriggered(id: AgentSession.ID)
+    case _autoObserverDecided(id: AgentSession.ID, response: String?)
   }
 
   @Dependency(TerminalClient.self) var terminalClient
+  @Dependency(AutoObserverClient.self) var autoObserverClient
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -269,6 +282,55 @@ struct BoardFeature {
           rerunFrom: previous
         )
         return .none
+
+      case .toggleAutoObserver(let id):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].autoObserver.toggle()
+        }
+        return .none
+
+      case .setAutoObserverPrompt(let id, let prompt):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].autoObserverPrompt = prompt
+        }
+        return .none
+
+      case .autoObserverTriggered(let id):
+        guard
+          let session = state.sessions.first(where: { $0.id == id }),
+          session.autoObserver,
+          !state.autoObserverInFlight.contains(id)
+        else { return .none }
+        state.autoObserverInFlight.insert(id)
+        let worktreeID = session.worktreeID
+        let tabID = TerminalTabID(rawValue: id)
+        let userInstructions = session.autoObserverPrompt
+        return .run { [autoObserverClient] send in
+          let screen = await terminalClient.readScreenContents(worktreeID, tabID)
+          guard let screen, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            await send(._autoObserverDecided(id: id, response: nil))
+            return
+          }
+          let response = await autoObserverClient.decide(screen, userInstructions)
+          await send(._autoObserverDecided(id: id, response: response))
+        }
+
+      case ._autoObserverDecided(let id, let response):
+        state.autoObserverInFlight.remove(id)
+        guard
+          let response,
+          let session = state.sessions.first(where: { $0.id == id }),
+          session.autoObserver
+        else { return .none }
+        let worktreeID = session.worktreeID
+        let tabID = TerminalTabID(rawValue: id)
+        // Append newline so the response is submitted like pressing Enter.
+        let text = response.hasSuffix("\n") ? response : response + "\n"
+        return .run { _ in
+          await terminalClient.send(.sendText(worktreeID: worktreeID, tabID: tabID, text: text))
+        }
 
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
         state.newTerminalSheet = nil

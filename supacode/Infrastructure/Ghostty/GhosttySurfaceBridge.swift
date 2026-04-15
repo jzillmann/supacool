@@ -52,6 +52,31 @@ final class GhosttySurfaceBridge {
     sendText(finalCommand)
   }
 
+  /// Reads the entire visible screen as plain text using the GhosttyKit C API.
+  /// Returns an empty string when the surface is unavailable or the read fails.
+  func readScreenContents() -> String {
+    guard let surface else { return "" }
+    var text = ghostty_text_s()
+    let selection = ghostty_selection_s(
+      top_left: ghostty_point_s(
+        tag: GHOSTTY_POINT_SCREEN,
+        coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+        x: 0,
+        y: 0
+      ),
+      bottom_right: ghostty_point_s(
+        tag: GHOSTTY_POINT_SCREEN,
+        coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+        x: 0,
+        y: 0
+      ),
+      rectangle: false
+    )
+    guard ghostty_surface_read_text(surface, selection, &text) else { return "" }
+    defer { ghostty_surface_free_text(surface, &text) }
+    return String(cString: text.text)
+  }
+
   func closeSurface(processAlive: Bool) {
     onCloseRequest?(processAlive)
   }

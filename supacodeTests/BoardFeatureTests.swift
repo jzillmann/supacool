@@ -209,6 +209,117 @@ struct BoardFeatureTests {
     #expect(name == "c-nightly-regression please")
   }
 
+  // MARK: - Auto-Observer
+
+  @Test(.dependencies) func toggleAutoObserverFlipsFlag() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.toggleAutoObserver(id: session.id)) {
+      $0.$sessions.withLock { $0[0].autoObserver = true }
+    }
+    await store.send(.toggleAutoObserver(id: session.id)) {
+      $0.$sessions.withLock { $0[0].autoObserver = false }
+    }
+  }
+
+  @Test(.dependencies) func setAutoObserverPromptPersists() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.setAutoObserverPrompt(id: session.id, prompt: "Allow all file edits")) {
+      $0.$sessions.withLock { $0[0].autoObserverPrompt = "Allow all file edits" }
+    }
+  }
+
+  @Test(.dependencies) func autoObserverTriggeredSkipsWhenDisabled() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    // Session has autoObserver = false (default) → action is a no-op
+    await store.send(.autoObserverTriggered(id: session.id))
+  }
+
+  @Test(.dependencies) func autoObserverTriggeredReadsScreenAndDecides() async throws {
+    let sessionID = UUID()
+    let session = Self.sampleSession(id: sessionID)
+    var modifiedSession = session
+    modifiedSession.autoObserver = true
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [modifiedSession] }
+
+    let tabID = TerminalTabID(rawValue: sessionID)
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
+      $0.terminalClient.send = { _ in }
+      $0.autoObserverClient.decide = { _, _ in "y" }
+    }
+
+    await store.send(.autoObserverTriggered(id: sessionID)) {
+      $0.autoObserverInFlight.insert(sessionID)
+    }
+    await store.receive(._autoObserverDecided(id: sessionID, response: "y")) {
+      $0.autoObserverInFlight.remove(sessionID)
+    }
+  }
+
+  @Test(.dependencies) func autoObserverSkipsWhenDecisionIsNil() async throws {
+    let sessionID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.autoObserver = true
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.readScreenContents = { _, _ in "Some ambiguous output" }
+      $0.autoObserverClient.decide = { _, _ in nil }
+    }
+
+    await store.send(.autoObserverTriggered(id: sessionID)) {
+      $0.autoObserverInFlight.insert(sessionID)
+    }
+    await store.receive(._autoObserverDecided(id: sessionID, response: nil)) {
+      $0.autoObserverInFlight.remove(sessionID)
+    }
+    // No .sendText should be triggered when decision is nil — the test store
+    // would fail exhaustiveness if send was called unexpectedly.
+  }
+
+  @Test(.dependencies) func autoObserverGuardsAgainstReentrance() async {
+    let sessionID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.autoObserver = true
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.autoObserverInFlight.insert(sessionID)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    // Already in-flight → second trigger is a no-op.
+    await store.send(.autoObserverTriggered(id: sessionID))
+  }
+
   // MARK: - Helpers
 
   private static func sampleSession(

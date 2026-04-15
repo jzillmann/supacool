@@ -6,6 +6,9 @@ struct TerminalClient {
   var events: @MainActor @Sendable () -> AsyncStream<Event>
   var tabExists: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> Bool
   var surfaceExists: @MainActor @Sendable (Worktree.ID, TerminalTabID, UUID) -> Bool
+  /// Reads the visible screen of the focused surface in the given tab.
+  /// Returns nil when the worktree/tab/surface is not found.
+  var readScreenContents: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> String?
 
   enum Command: Equatable {
     case createTab(Worktree, runSetupScriptIfNew: Bool, id: UUID? = nil)
@@ -32,6 +35,9 @@ struct TerminalClient {
     case setNotificationsEnabled(Bool)
     case setSelectedWorktreeID(Worktree.ID?)
     case refreshTabBarVisibility
+    /// Auto-Observer: inject text into the focused surface of a tab without
+    /// requiring the tab to be selected or focused in the UI.
+    case sendText(worktreeID: Worktree.ID, tabID: TerminalTabID, text: String)
   }
 
   enum Event: Equatable {
@@ -53,14 +59,16 @@ extension TerminalClient: DependencyKey {
     send: { _ in fatalError("TerminalClient.send not configured") },
     events: { fatalError("TerminalClient.events not configured") },
     tabExists: { _, _ in fatalError("TerminalClient.tabExists not configured") },
-    surfaceExists: { _, _, _ in fatalError("TerminalClient.surfaceExists not configured") }
+    surfaceExists: { _, _, _ in fatalError("TerminalClient.surfaceExists not configured") },
+    readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") }
   )
 
   static let testValue = TerminalClient(
     send: { _ in },
     events: { AsyncStream { $0.finish() } },
     tabExists: unimplemented("TerminalClient.tabExists", placeholder: true),
-    surfaceExists: unimplemented("TerminalClient.surfaceExists", placeholder: true)
+    surfaceExists: unimplemented("TerminalClient.surfaceExists", placeholder: true),
+    readScreenContents: { _, _ in nil }
   )
 }
 
