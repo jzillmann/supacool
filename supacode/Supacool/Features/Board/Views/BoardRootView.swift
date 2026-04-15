@@ -40,6 +40,22 @@ struct BoardRootView: View {
   /// doesn't bounce out.
   @AppStorage("supacool.autoZoomBackOnPrompt") private var autoZoomBackOnPrompt: Bool = true
 
+  /// Pending auto-navigate triggered by an idle→busy transition. `destination`
+  /// nil = back to board; otherwise the session to focus next. The view
+  /// shows a countdown banner and commits the nav when the task completes;
+  /// Esc, a fast agent reply, or any manual focus change cancels it.
+  @State private var pendingExit: PendingExit?
+  @State private var pendingExitTask: Task<Void, Never>?
+
+  /// Grace period after prompt submission before the auto-zoom-back fires.
+  /// 3s feels long enough to watch the agent start without being in the way.
+  private let pendingExitDelay: Duration = .seconds(3)
+
+  private struct PendingExit: Equatable {
+    let destination: AgentSession.ID?
+    let startedAt: Date
+  }
+
   var body: some View {
     Group {
       if let focusedID = store.focusedSessionID,
@@ -97,6 +113,28 @@ struct BoardRootView: View {
             )
           }
         }
+        .overlay(alignment: .bottom) {
+          if let pending = pendingExit {
+            PendingExitBanner(
+              destination: destinationLabel(pending.destination),
+              startedAt: pending.startedAt,
+              duration: pendingExitDelay,
+              onCancel: { cancelPendingExit() },
+            )
+            .padding(.bottom, 24)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+          }
+        }
+        .animation(.easeOut(duration: 0.18), value: pendingExit)
+        .background(
+          // Esc cancels a pending auto-exit, nothing otherwise. Disabled
+          // when no pending exit is up so terminal Esc keystrokes pass
+          // through to the ghostty surface untouched.
+          Button("Stay") { cancelPendingExit() }
+            .keyboardShortcut(.escape, modifiers: [])
+            .disabled(pendingExit == nil)
+            .hidden()
+        )
       } else {
         boardContents
       }
@@ -115,21 +153,30 @@ struct BoardRootView: View {
     // Mirror the focused session into the keyboard-nav highlight so that
     // entering a card (tap, Enter, ⌘.) updates the cursor, and the user
     // returns to that same card when they come back to the board.
-    .onChange(of: store.focusedSessionID) { _, newValue in
+    .onChange(of: store.focusedSessionID) { oldValue, newValue in
       if let newValue { highlightedSessionID = newValue }
+      // Any manual focus change invalidates a queued auto-exit —
+      // otherwise the countdown would commit on top of the user's own
+      // navigation (⌘B, ⌘-arrow, card tap, etc.).
+      if oldValue != newValue { cancelPendingExit() }
     }
-    // Auto-zoom back to the board when the focused session's agent
-    // transitions idle → busy — that's the signal the user just
-    // submitted a prompt. Gated on hasCompletedAtLeastOnce so we don't
-    // bounce out of a session's initial auto-launch.
+    // Auto-zoom-back scheduling. idle → busy means the user just
+    // submitted a prompt; queue a timed hand-off instead of jumping
+    // immediately so they can watch the agent start and optionally
+    // cancel with Esc. busy → idle during the countdown means the
+    // agent finished before we left — bail and stay.
     .onChange(of: focusedSessionBusyState) { oldValue, newValue in
       guard autoZoomBackOnPrompt else { return }
+      if oldValue == true, newValue == false {
+        cancelPendingExit()
+        return
+      }
       guard oldValue == false, newValue == true else { return }
       guard let focusedID = store.focusedSessionID,
         let session = store.sessions.first(where: { $0.id == focusedID }),
         session.hasCompletedAtLeastOnce
       else { return }
-      store.send(.focusSession(id: nil))
+      schedulePendingExit(for: focusedID)
     }
     // Sheet lives at the root so it's reachable whether you're looking at
     // the board or at a full-screen terminal.
@@ -161,6 +208,50 @@ struct BoardRootView: View {
   private func beginRename(_ session: AgentSession) {
     renameDraft = session.displayName
     renamingSessionID = session.id
+  }
+
+  // MARK: - Pending auto-exit
+
+  private func schedulePendingExit(for focusedID: AgentSession.ID) {
+    cancelPendingExit() // collapse any older countdown
+    let destination = nextPendingDestination(excluding: focusedID)
+    pendingExit = PendingExit(destination: destination, startedAt: Date())
+    pendingExitTask = Task {
+      try? await Task.sleep(for: pendingExitDelay)
+      guard !Task.isCancelled else { return }
+      await MainActor.run { commitPendingExit() }
+    }
+  }
+
+  private func cancelPendingExit() {
+    pendingExitTask?.cancel()
+    pendingExitTask = nil
+    pendingExit = nil
+  }
+
+  private func commitPendingExit() {
+    guard let pending = pendingExit else { return }
+    pendingExit = nil
+    pendingExitTask = nil
+    store.send(.focusSession(id: pending.destination))
+  }
+
+  /// Prefer `awaitingInput` (agent blocked on a permission prompt) over
+  /// `waitingOnMe` (just idle). `nil` → fall back to the board.
+  private func nextPendingDestination(
+    excluding focusedID: AgentSession.ID
+  ) -> AgentSession.ID? {
+    let visible = store.visibleSessions.filter { $0.id != focusedID }
+    if let s = visible.first(where: { classify($0) == .awaitingInput }) { return s.id }
+    if let s = visible.first(where: { classify($0) == .waitingOnMe }) { return s.id }
+    return nil
+  }
+
+  private func destinationLabel(_ id: AgentSession.ID?) -> String {
+    guard let id, let session = store.sessions.first(where: { $0.id == id }) else {
+      return "Returning to board"
+    }
+    return "Going to \(session.displayName)"
   }
 
   // MARK: - Session switcher
