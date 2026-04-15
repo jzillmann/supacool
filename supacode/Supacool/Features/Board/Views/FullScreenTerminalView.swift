@@ -82,6 +82,13 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut("d", modifiers: [.command, .shift])
         .hidden()
     )
+    .background(
+      // ⌘E toggles the shell split beside the agent surface (mirrors
+      // the header's split button).
+      Button("Toggle Shell Split") { toggleShellSplit() }
+        .keyboardShortcut("e", modifiers: .command)
+        .hidden()
+    )
     // ⌘-Tab-style session switcher. ⌘← / ⌘↑ cycle backward, ⌘→ / ⌘↓
     // forward. The overlay (owned by BoardRootView) takes focus once
     // open, so repeated arrow presses while ⌘ stays held go to the
@@ -284,15 +291,7 @@ struct FullScreenTerminalView: View {
     let worktree = resolveWorktree()
     let managedStillLive = managedSplitStillLive(worktree: worktree)
     Button {
-      guard let worktree else { return }
-      let state = terminalManager.state(for: worktree) { false }
-      let tabID = TerminalTabID(rawValue: session.id)
-      if let id = managedSplitSurfaceID, managedStillLive {
-        state.closeSurface(id: id)
-        managedSplitSurfaceID = nil
-      } else {
-        managedSplitSurfaceID = state.splitFocusedSurface(in: tabID, direction: .right)
-      }
+      toggleShellSplit()
     } label: {
       Image(systemName: managedStillLive ? "rectangle" : "rectangle.split.2x1")
         .font(.system(size: 13, weight: .medium))
@@ -300,9 +299,24 @@ struct FullScreenTerminalView: View {
     }
     .buttonStyle(.plain)
     .disabled(worktree == nil)
-    .help(managedStillLive ? "Close the shell split" : "Open a plain shell split in this session")
+    .help(managedStillLive ? "Close the shell split (⌘E)" : "Open a plain shell split in this session (⌘E)")
     .onChange(of: session.id) { _, _ in managedSplitSurfaceID = nil }
     .task(id: session.id) { reconcileManagedSplit() }
+  }
+
+  /// Toggle the shell split beside the agent surface. If the split we
+  /// created is still live, close it; otherwise open a fresh one to the
+  /// right. Mirrored by ⌘E.
+  private func toggleShellSplit() {
+    guard let worktree = resolveWorktree() else { return }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: session.id)
+    if let id = managedSplitSurfaceID, managedSplitStillLive(worktree: worktree) {
+      state.closeSurface(id: id)
+      managedSplitSurfaceID = nil
+    } else {
+      managedSplitSurfaceID = state.splitFocusedSurface(in: tabID, direction: .right)
+    }
   }
 
   /// Whether our tracked split surface is still in the tab's leaf set.
