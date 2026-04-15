@@ -53,6 +53,8 @@ struct NewTerminalFeature {
     var existingWorktreeID: String?
     var validationMessage: String?
     var isCreating: Bool = false
+    /// True while the background inference client is generating a branch name.
+    var isSuggestingBranchName: Bool = false
 
     init(availableRepositories: IdentifiedArrayOf<Repository>) {
       self.availableRepositories = availableRepositories
@@ -101,6 +103,9 @@ struct NewTerminalFeature {
     case binding(BindingAction<State>)
     case cancelButtonTapped
     case createButtonTapped
+    case suggestBranchNameTapped
+    case branchNameSuggested(String)
+    case branchNameSuggestionFailed
     case setValidationMessage(String?)
     case setCreating(Bool)
     case sessionReady(AgentSession)
@@ -116,6 +121,11 @@ struct NewTerminalFeature {
 
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(TerminalClient.self) var terminalClient
+  @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
+
+  private nonisolated enum CancelID: Hashable, Sendable {
+    case branchNameSuggestion
+  }
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -127,6 +137,39 @@ struct NewTerminalFeature {
 
       case .cancelButtonTapped:
         return .send(.delegate(.cancel))
+
+      case .suggestBranchNameTapped:
+        guard !state.isSuggestingBranchName else { return .none }
+        let prompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { return .none }
+        state.isSuggestingBranchName = true
+        let inferencePrompt =
+          "Generate a concise git branch name for this task:\n\n\(prompt)\n\n"
+          + "Requirements:\n"
+          + "- Use kebab-case (lowercase, hyphens between words)\n"
+          + "- Maximum 40 characters\n"
+          + "- No spaces or special characters\n"
+          + "Reply with ONLY the branch name, nothing else."
+        return .run { [backgroundInferenceClient] send in
+          do {
+            let raw = try await backgroundInferenceClient.infer(inferencePrompt)
+            let name = sanitizeBranchName(raw)
+            await send(.branchNameSuggested(name.isEmpty ? raw : name))
+          } catch {
+            newTerminalLogger.warning("Branch name suggestion failed: \(error)")
+            await send(.branchNameSuggestionFailed)
+          }
+        }
+        .cancellable(id: CancelID.branchNameSuggestion, cancelInFlight: true)
+
+      case .branchNameSuggested(let name):
+        state.isSuggestingBranchName = false
+        state.branchName = name
+        return .none
+
+      case .branchNameSuggestionFailed:
+        state.isSuggestingBranchName = false
+        return .none
 
       case .createButtonTapped:
         let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)

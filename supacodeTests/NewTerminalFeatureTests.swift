@@ -313,6 +313,82 @@ struct NewTerminalFeatureTests {
     #expect(state.branchName.isEmpty)
   }
 
+  // MARK: - Branch name suggestion
+
+  @Test(.dependencies) func suggestBranchNamePopulatesBranchName() async {
+    var state = Self.makeState()
+    state.prompt = "Add SSH connection pooling"
+    state.worktreeMode = .newBranch
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.backgroundInferenceClient.infer = { _ in "add-ssh-connection-pooling" }
+    }
+
+    await store.send(.suggestBranchNameTapped) {
+      $0.isSuggestingBranchName = true
+    }
+    await store.receive(.branchNameSuggested("add-ssh-connection-pooling")) {
+      $0.isSuggestingBranchName = false
+      $0.branchName = "add-ssh-connection-pooling"
+    }
+  }
+
+  @Test(.dependencies) func suggestBranchNameResetsOnFailure() async {
+    var state = Self.makeState()
+    state.prompt = "Refactor auth module"
+    state.worktreeMode = .newBranch
+
+    struct InferenceError: Error {}
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.backgroundInferenceClient.infer = { _ in throw InferenceError() }
+    }
+
+    await store.send(.suggestBranchNameTapped) {
+      $0.isSuggestingBranchName = true
+    }
+    await store.receive(.branchNameSuggestionFailed) {
+      $0.isSuggestingBranchName = false
+    }
+    // branchName remains unchanged
+    #expect(store.state.branchName.isEmpty)
+  }
+
+  @Test(.dependencies) func suggestBranchNameSanitizesOutput() async {
+    var state = Self.makeState()
+    state.prompt = "Fix Mario's bug with special chars!"
+    state.worktreeMode = .newBranch
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      // Model returns messy output
+      $0.backgroundInferenceClient.infer = { _ in "  Fix Mario's Bug!!  \nextra line" }
+    }
+
+    await store.send(.suggestBranchNameTapped) {
+      $0.isSuggestingBranchName = true
+    }
+    await store.receive(\.branchNameSuggested) {
+      $0.isSuggestingBranchName = false
+      // Sanitized: lowercase, hyphens, no special chars
+      $0.branchName = "fix-marios-bug"
+    }
+  }
+
+  @Test func sanitizeBranchNameBasic() {
+    #expect(sanitizeBranchName("add-ssh-pooling") == "add-ssh-pooling")
+    #expect(sanitizeBranchName("  Fix Mario's Bug  ") == "fix-marios-bug")
+    #expect(sanitizeBranchName("REFACTOR Auth Module") == "refactor-auth-module")
+    #expect(sanitizeBranchName("feat/add_new_endpoint") == "feat/add-new-endpoint")
+    // Truncation
+    let long = "this-is-a-very-long-branch-name-that-exceeds-the-forty-character-limit"
+    #expect(sanitizeBranchName(long).count <= 40)
+  }
+
   // MARK: - Helpers
 
   private static func makeState(

@@ -9,6 +9,7 @@ struct CodingAgentsSettingsView: View {
       Section(
         footer: Text("Hooks are optional and designed to extend Supacode without affecting core functionality.")
       ) {}
+      AIAssistSettingsSection()
       Section {
         AgentInstallRow(
           installAction: { store.send(.agentHookInstallTapped(.claudeProgress)) },
@@ -55,6 +56,49 @@ struct CodingAgentsSettingsView: View {
     .padding(.leading, -8)
     .padding(.trailing, -6)
     .navigationTitle("Coding Agents")
+  }
+}
+
+// MARK: - AI Assist
+
+private struct AIAssistSettingsSection: View {
+  @AppStorage("supacool.inference.mode") private var mode: String = "claudeCLI"
+  @AppStorage("supacool.inference.cliModel") private var cliModel: String = ""
+  @AppStorage("supacool.inference.apiModel") private var apiModel: String = "claude-sonnet-4-6"
+  @AppStorage("supacool.inference.apiKey") private var apiKey: String = ""
+
+  var body: some View {
+    Section {
+      Picker("Mode", selection: $mode) {
+        Text("Claude CLI (Max subscription)").tag("claudeCLI")
+        Text("Anthropic API").tag("anthropicAPI")
+      }
+      .pickerStyle(.menu)
+
+      if mode == "claudeCLI" {
+        LabeledContent("Model") {
+          TextField("Default", text: $cliModel)
+            .frame(maxWidth: 200)
+        }
+      } else {
+        LabeledContent("API Key") {
+          SecureField("sk-ant-…", text: $apiKey)
+            .frame(maxWidth: 200)
+        }
+        LabeledContent("Model") {
+          TextField("claude-sonnet-4-6", text: $apiModel)
+            .frame(maxWidth: 200)
+        }
+      }
+    } header: {
+      Label("AI Assist", systemImage: "wand.and.stars")
+    } footer: {
+      if mode == "claudeCLI" {
+        Text("Uses your Claude Max subscription via the `claude` CLI. No API credits needed.")
+      } else {
+        Text("Uses the Anthropic API directly. Charged to your API account.")
+      }
+    }
   }
 }
 

@@ -33,8 +33,28 @@ struct NewTerminalSheet: View {
         case .none:
           EmptyView()
         case .newBranch:
-          TextField("Branch name", text: $store.branchName)
-            .onSubmit { store.send(.createButtonTapped) }
+          HStack(spacing: 6) {
+            TextField("Branch name", text: $store.branchName)
+              .onSubmit { store.send(.createButtonTapped) }
+            if store.isSuggestingBranchName {
+              ProgressView()
+                .controlSize(.small)
+                .frame(width: 16, height: 16)
+            } else {
+              Button {
+                store.send(.suggestBranchNameTapped)
+              } label: {
+                Image(systemName: "wand.and.stars")
+              }
+              .buttonStyle(.plain)
+              .foregroundStyle(
+                store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                  ? .tertiary : .secondary
+              )
+              .disabled(store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+              .help("Generate branch name from prompt")
+            }
+          }
         case .existing:
           existingWorktreePicker
         }
