@@ -69,17 +69,16 @@ struct NewTerminalSheet: View {
       agentShortcuts
     }
     .task(id: skillDiscoveryKey) {
-      guard store.agent == .claude else {
+      guard let skillAutocompleteAgent else {
         skillCatalog = []
         skillQuery = nil
         selectedSkillID = nil
         return
       }
-      skillCatalog = await SkillCatalog.discover(projectRoot: selectedProjectRoot)
+      skillCatalog = await SkillCatalog.discover(for: skillAutocompleteAgent, projectRoot: selectedProjectRoot)
       reconcileSkillSelection()
     }
-    .onChange(of: store.agent) { _, newAgent in
-      guard newAgent != .claude else { return }
+    .onChange(of: store.agent) { _, _ in
       skillQuery = nil
       selectedSkillID = nil
     }
@@ -94,8 +93,9 @@ struct NewTerminalSheet: View {
         : "Describe what the agent should do (optional)…",
       autoFocus: true,
       editorHandle: promptEditorHandle,
-      onSkillQuery: store.agent == .claude ? { handleSkillQuery($0) } : nil,
-      onSkillCommand: store.agent == .claude ? { handleSkillCommand($0) } : nil
+      skillAutocomplete: skillAutocompleteConfig,
+      onSkillQuery: skillAutocompleteAgent != nil ? { handleSkillQuery($0) } : nil,
+      onSkillCommand: skillAutocompleteAgent != nil ? { handleSkillCommand($0) } : nil
     )
     .frame(minHeight: 100, maxHeight: 220)
     .background(
@@ -108,8 +108,9 @@ struct NewTerminalSheet: View {
     )
     .overlay(alignment: .topLeading) {
       GeometryReader { geometry in
-        if store.agent == .claude, let skillQuery {
+        if let skillAutocompleteAgent, let skillQuery {
           SkillAutocompletePopover(
+            agent: skillAutocompleteAgent,
             queryText: skillQuery.queryText,
             skills: skillCatalog,
             selectedSkillID: selectedSkillID,
@@ -252,6 +253,26 @@ struct NewTerminalSheet: View {
     return store.availableRepositories[id: repoID]?.rootURL.standardizedFileURL
   }
 
+  private var skillAutocompleteAgent: AgentType? {
+    switch store.agent {
+    case .claude?, .codex?:
+      return store.agent
+    case .none:
+      return nil
+    }
+  }
+
+  private var skillAutocompleteConfig: SkillAutocompleteConfig? {
+    switch skillAutocompleteAgent {
+    case .claude?:
+      return SkillAutocompleteConfig(triggerCharacter: "/")
+    case .codex?:
+      return SkillAutocompleteConfig(triggerCharacter: "$")
+    case .none:
+      return nil
+    }
+  }
+
   private var skillDiscoveryKey: String {
     let repoKey = selectedProjectRoot?.path(percentEncoded: false) ?? "<none>"
     let agentKey = store.agent?.rawValue ?? "shell"
@@ -259,10 +280,11 @@ struct NewTerminalSheet: View {
   }
 
   private var matchingSkills: [Skill] {
-    guard let skillQuery else { return [] }
+    guard let skillAutocompleteAgent, let skillQuery else { return [] }
     return SkillAutocompletePopover.orderedMatchingSkills(
       in: skillCatalog,
-      queryText: skillQuery.queryText
+      queryText: skillQuery.queryText,
+      for: skillAutocompleteAgent
     )
   }
 
@@ -327,7 +349,15 @@ struct NewTerminalSheet: View {
   }
 
   private func commitSkill(_ skill: Skill) {
-    let replacement = skill.isUserInvocable ? "/\(skill.name)" : skill.name
+    let replacement: String
+    switch skillAutocompleteAgent {
+    case .claude?:
+      replacement = skill.isUserInvocable ? "/\(skill.name)" : skill.name
+    case .codex?:
+      replacement = "$\(skill.name)"
+    case .none:
+      replacement = skill.name
+    }
     promptEditorHandle.commitSkill(replacement)
     skillQuery = nil
     selectedSkillID = nil

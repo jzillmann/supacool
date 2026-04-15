@@ -1,28 +1,41 @@
 import SwiftUI
 
 struct SkillAutocompletePopover: View {
+  let agent: AgentType
   let queryText: String
   let skills: [Skill]
   let selectedSkillID: Skill.ID?
   let onSelect: (Skill) -> Void
 
   var body: some View {
-    let userInvocable = Self.matchingSkills(in: skills, queryText: queryText, userInvocable: true)
-    let agentOnly = Self.matchingSkills(in: skills, queryText: queryText, userInvocable: false)
-
     VStack(alignment: .leading, spacing: 10) {
-      if userInvocable.isEmpty, agentOnly.isEmpty {
+      if matchingSkills.isEmpty {
         Text("No matching skills")
           .font(.callout)
           .foregroundStyle(.secondary)
           .padding(.horizontal, 12)
           .padding(.vertical, 10)
       } else {
-        if !userInvocable.isEmpty {
-          section(title: "Slash Commands", skills: userInvocable)
-        }
-        if !agentOnly.isEmpty {
-          section(title: "Agent Skills", skills: agentOnly)
+        switch agent {
+        case .claude:
+          let userInvocable = Self.matchingSkills(
+            in: skills,
+            queryText: queryText,
+            userInvocable: true
+          )
+          let agentOnly = Self.matchingSkills(
+            in: skills,
+            queryText: queryText,
+            userInvocable: false
+          )
+          if !userInvocable.isEmpty {
+            section(title: "Slash Commands", skills: userInvocable)
+          }
+          if !agentOnly.isEmpty {
+            section(title: "Agent Skills", skills: agentOnly)
+          }
+        case .codex:
+          section(title: "Mention Skills", skills: matchingSkills)
         }
       }
     }
@@ -37,9 +50,29 @@ struct SkillAutocompletePopover: View {
     .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
   }
 
-  static func orderedMatchingSkills(in skills: [Skill], queryText: String) -> [Skill] {
-    matchingSkills(in: skills, queryText: queryText, userInvocable: true)
-      + matchingSkills(in: skills, queryText: queryText, userInvocable: false)
+  static func orderedMatchingSkills(in skills: [Skill], queryText: String, for agent: AgentType) -> [Skill] {
+    switch agent {
+    case .claude:
+      return matchingSkills(in: skills, queryText: queryText, userInvocable: true)
+        + matchingSkills(in: skills, queryText: queryText, userInvocable: false)
+    case .codex:
+      return matchingSkills(in: skills, queryText: queryText)
+    }
+  }
+
+  private var matchingSkills: [Skill] {
+    Self.orderedMatchingSkills(in: skills, queryText: queryText, for: agent)
+  }
+
+  private static func matchingSkills(
+    in skills: [Skill],
+    queryText: String
+  ) -> [Skill] {
+    let loweredQuery = queryText.lowercased()
+    return skills.filter { skill in
+      guard !loweredQuery.isEmpty else { return true }
+      return skill.name.lowercased().hasPrefix(loweredQuery)
+    }
   }
 
   private static func matchingSkills(
@@ -47,12 +80,8 @@ struct SkillAutocompletePopover: View {
     queryText: String,
     userInvocable: Bool
   ) -> [Skill] {
-    let loweredQuery = queryText.lowercased()
-    return skills.filter { skill in
-      guard skill.isUserInvocable == userInvocable else { return false }
-      guard !loweredQuery.isEmpty else { return true }
-      return skill.name.lowercased().hasPrefix(loweredQuery)
-    }
+    matchingSkills(in: skills, queryText: queryText)
+      .filter { $0.isUserInvocable == userInvocable }
   }
 
   @ViewBuilder
@@ -96,7 +125,12 @@ struct SkillAutocompletePopover: View {
   }
 
   private func displayName(for skill: Skill) -> String {
-    skill.isUserInvocable ? "/\(skill.name)" : skill.name
+    switch agent {
+    case .claude:
+      return skill.isUserInvocable ? "/\(skill.name)" : skill.name
+    case .codex:
+      return "$\(skill.name)"
+    }
   }
 
   private func firstDescriptionLine(for skill: Skill) -> String {

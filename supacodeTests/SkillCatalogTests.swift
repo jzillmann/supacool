@@ -81,6 +81,65 @@ struct SkillCatalogTests {
     #expect(skills.isEmpty)
   }
 
+  @Test func discoverCodexKeepsDuplicateNamesAndLoadsHiddenSystemRoots() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let projectSkillsRoot = root.appending(path: "project-skills", directoryHint: .isDirectory)
+    let userAgentsSkillsRoot = root.appending(path: "user-agents", directoryHint: .isDirectory)
+    let userCodexSkillsRoot = root.appending(path: "user-codex", directoryHint: .isDirectory)
+    let adminSkillsRoot = root.appending(path: "admin-skills", directoryHint: .isDirectory)
+    let builtinSkillsRoot = root.appending(path: "builtin-skills", directoryHint: .isDirectory)
+
+    try writeSkill(
+      named: "repo-helper",
+      description: "Repo-scoped Codex helper.",
+      to: projectSkillsRoot
+    )
+    try writeSkill(
+      named: "shared-skill",
+      description: "User skill from ~/.agents/skills.",
+      to: userAgentsSkillsRoot
+    )
+    try writeSkill(
+      named: "shared-skill",
+      description: "Bundled skill from ~/.codex/skills/.system.",
+      to: userCodexSkillsRoot.appending(path: ".system", directoryHint: .isDirectory)
+    )
+    try writeSkill(
+      named: "admin-helper",
+      description: "Admin helper from /etc/codex/skills.",
+      to: adminSkillsRoot
+    )
+    try writeSkill(
+      named: "builtin-helper",
+      description: "Built-in skill from vendor imports.",
+      to: builtinSkillsRoot.appending(path: ".curated", directoryHint: .isDirectory)
+    )
+
+    let skills = await SkillCatalog.discoverCodex(
+      projectSkillsRoot: projectSkillsRoot,
+      userAgentsSkillsRoot: userAgentsSkillsRoot,
+      userCodexSkillsRoot: userCodexSkillsRoot,
+      userCodexSystemSkillsRoot: userCodexSkillsRoot.appending(path: ".system", directoryHint: .isDirectory),
+      adminSkillsRoot: adminSkillsRoot,
+      builtinSkillsRoot: builtinSkillsRoot
+    )
+
+    #expect(skills.map(\.name) == ["admin-helper", "builtin-helper", "repo-helper", "shared-skill", "shared-skill"])
+    #expect(skills.allSatisfy(\.isUserInvocable))
+
+    let sharedSkills = skills.filter { $0.name == "shared-skill" }
+    #expect(sharedSkills.count == 2)
+    #expect(Set(sharedSkills.map(\.id)).count == 2)
+    #expect(sharedSkills.contains(where: { $0.source == .user }))
+    #expect(sharedSkills.contains(where: { $0.source == .builtin }))
+
+    let builtinHelper = try #require(skills.first(where: { $0.name == "builtin-helper" }))
+    #expect(builtinHelper.source == .builtin)
+  }
+
   private func writeSkill(named name: String, description: String, to root: URL) throws {
     let directory = root.appending(path: name, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(

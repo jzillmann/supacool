@@ -1,13 +1,19 @@
 import AppKit
 import SwiftUI
 
+struct SkillAutocompleteConfig: Equatable, Sendable {
+  let triggerCharacter: Character
+}
+
 struct SkillQuery: Equatable {
   let queryText: String
+  let triggerCharacter: Character
   let triggerRange: NSRange
   let caretRect: CGRect
 
   static func == (lhs: SkillQuery, rhs: SkillQuery) -> Bool {
     lhs.queryText == rhs.queryText
+      && lhs.triggerCharacter == rhs.triggerCharacter
       && NSEqualRanges(lhs.triggerRange, rhs.triggerRange)
       && lhs.caretRect == rhs.caretRect
   }
@@ -42,6 +48,7 @@ struct PromptTextEditor: NSViewRepresentable {
   var placeholder: String = ""
   var autoFocus: Bool = true
   var editorHandle: PromptTextEditorHandle? = nil
+  var skillAutocomplete: SkillAutocompleteConfig? = nil
   var onSkillQuery: ((SkillQuery?) -> Void)? = nil
   var onSkillCommand: ((SkillAutocompleteCommand) -> Void)? = nil
 
@@ -78,6 +85,7 @@ struct PromptTextEditor: NSViewRepresentable {
     textView.textContainer?.lineFragmentPadding = 0
     textView.textContainer?.widthTracksTextView = true
     textView.string = text
+    textView.skillAutocomplete = skillAutocomplete
     textView.onSkillQueryChange = context.coordinator.handleSkillQuery
     textView.onSkillCommand = context.coordinator.handleSkillCommand
     context.coordinator.bind(textView, handle: editorHandle)
@@ -104,6 +112,7 @@ struct PromptTextEditor: NSViewRepresentable {
     context.coordinator.onSkillQuery = onSkillQuery
     context.coordinator.onSkillCommand = onSkillCommand
     context.coordinator.bind(textView, handle: editorHandle)
+    textView.skillAutocomplete = skillAutocomplete
     textView.onSkillQueryChange = context.coordinator.handleSkillQuery
     textView.onSkillCommand = context.coordinator.handleSkillCommand
     if textView.string != text {
@@ -112,7 +121,7 @@ struct PromptTextEditor: NSViewRepresentable {
     if textView.placeholder != placeholder {
       textView.placeholder = placeholder
     }
-    if onSkillQuery == nil {
+    if skillAutocomplete == nil || onSkillQuery == nil {
       textView.cancelActiveSkillQuery()
     } else {
       textView.reconcileSkillQuery()
@@ -155,11 +164,22 @@ struct PromptTextEditor: NSViewRepresentable {
 /// same glyph origin as real text — no ZStack alignment fudging needed.
 final class PlaceholderTextView: NSTextView {
   private struct ActiveSkillState {
-    let slashLocation: Int
+    let triggerLocation: Int
+    let triggerCharacter: Character
   }
 
   var placeholder: String = "" {
     didSet { needsDisplay = true }
+  }
+  var skillAutocomplete: SkillAutocompleteConfig? {
+    didSet {
+      guard skillAutocomplete != oldValue else { return }
+      if skillAutocomplete == nil {
+        cancelActiveSkillQuery()
+      } else {
+        reconcileSkillQuery()
+      }
+    }
   }
   var onSkillQueryChange: ((SkillQuery?) -> Void)?
   var onSkillCommand: ((SkillAutocompleteCommand) -> Void)?
@@ -189,15 +209,18 @@ final class PlaceholderTextView: NSTextView {
   override func insertText(_ insertString: Any, replacementRange: NSRange) {
     let insertedText = Self.plainString(from: insertString)
     let resolvedRange = resolvedReplacementRange(replacementRange)
-    let shouldStartSkillQuery = shouldStartSkillQuery(
+    let triggerCharacter = skillTriggerCharacter(
       insertedText: insertedText,
       replacementRange: resolvedRange
     )
 
     super.insertText(insertString, replacementRange: replacementRange)
 
-    if shouldStartSkillQuery {
-      activeSkillState = ActiveSkillState(slashLocation: resolvedRange.location)
+    if let triggerCharacter {
+      activeSkillState = ActiveSkillState(
+        triggerLocation: resolvedRange.location,
+        triggerCharacter: triggerCharacter
+      )
     }
     if activeSkillState != nil {
       reconcileSkillQuery()
@@ -249,30 +272,35 @@ final class PlaceholderTextView: NSTextView {
       return
     }
     guard let activeSkillState else { return }
+    guard skillAutocomplete?.triggerCharacter == activeSkillState.triggerCharacter else {
+      cancelActiveSkillQuery()
+      return
+    }
 
     let selection = selectedRange()
     guard selection.length == 0 else {
       cancelActiveSkillQuery()
       return
     }
-    guard selection.location > activeSkillState.slashLocation else {
+    guard selection.location > activeSkillState.triggerLocation else {
       cancelActiveSkillQuery()
       return
     }
 
     let content = string as NSString
-    guard activeSkillState.slashLocation < content.length else {
+    guard activeSkillState.triggerLocation < content.length else {
       cancelActiveSkillQuery()
       return
     }
-    guard content.substring(with: NSRange(location: activeSkillState.slashLocation, length: 1)) == "/" else {
+    let triggerString = String(activeSkillState.triggerCharacter)
+    guard content.substring(with: NSRange(location: activeSkillState.triggerLocation, length: 1)) == triggerString else {
       cancelActiveSkillQuery()
       return
     }
 
     let queryRange = NSRange(
-      location: activeSkillState.slashLocation + 1,
-      length: selection.location - activeSkillState.slashLocation - 1
+      location: activeSkillState.triggerLocation + 1,
+      length: selection.location - activeSkillState.triggerLocation - 1
     )
     guard queryRange.location <= content.length, NSMaxRange(queryRange) <= content.length else {
       cancelActiveSkillQuery()
@@ -286,12 +314,13 @@ final class PlaceholderTextView: NSTextView {
     }
 
     let triggerRange = NSRange(
-      location: activeSkillState.slashLocation,
-      length: selection.location - activeSkillState.slashLocation
+      location: activeSkillState.triggerLocation,
+      length: selection.location - activeSkillState.triggerLocation
     )
     onSkillQueryChange?(
       SkillQuery(
         queryText: queryText,
+        triggerCharacter: activeSkillState.triggerCharacter,
         triggerRange: triggerRange,
         caretRect: caretRect(at: selection.location)
       )
@@ -307,18 +336,18 @@ final class PlaceholderTextView: NSTextView {
     guard let activeSkillState else { return }
     let selection = selectedRange()
     guard selection.length == 0 else { return }
-    guard selection.location >= activeSkillState.slashLocation else { return }
+    guard selection.location >= activeSkillState.triggerLocation else { return }
 
     let triggerRange = NSRange(
-      location: activeSkillState.slashLocation,
-      length: selection.location - activeSkillState.slashLocation
+      location: activeSkillState.triggerLocation,
+      length: selection.location - activeSkillState.triggerLocation
     )
     guard shouldChangeText(in: triggerRange, replacementString: replacement) else { return }
 
     textStorage?.replaceCharacters(in: triggerRange, with: replacement)
     didChangeText()
 
-    let cursorLocation = activeSkillState.slashLocation + (replacement as NSString).length
+    let cursorLocation = activeSkillState.triggerLocation + (replacement as NSString).length
     setSelectedRange(NSRange(location: cursorLocation, length: 0))
     window?.makeFirstResponder(self)
     cancelActiveSkillQuery()
@@ -344,25 +373,29 @@ final class PlaceholderTextView: NSTextView {
   }
 
   private func dispatchSkillCommand(_ command: SkillAutocompleteCommand) -> Bool {
-    guard activeSkillState != nil, onSkillQueryChange != nil else { return false }
+    guard activeSkillState != nil, skillAutocomplete != nil, onSkillQueryChange != nil else { return false }
     onSkillCommand?(command)
     return true
   }
 
-  private func shouldStartSkillQuery(insertedText: String?, replacementRange: NSRange) -> Bool {
-    guard onSkillQueryChange != nil else { return false }
-    guard activeSkillState == nil else { return false }
-    guard insertedText == "/" else { return false }
-    guard replacementRange.length == 0 else { return false }
+  private func skillTriggerCharacter(insertedText: String?, replacementRange: NSRange) -> Character? {
+    guard let skillAutocomplete else { return nil }
+    guard onSkillQueryChange != nil else { return nil }
+    guard activeSkillState == nil else { return nil }
+    guard insertedText == String(skillAutocomplete.triggerCharacter) else { return nil }
+    guard replacementRange.length == 0 else { return nil }
 
     let insertionLocation = replacementRange.location
-    guard insertionLocation != NSNotFound else { return false }
-    guard insertionLocation > 0 else { return true }
+    guard insertionLocation != NSNotFound else { return nil }
+    guard insertionLocation > 0 else { return skillAutocomplete.triggerCharacter }
 
     let content = string as NSString
-    guard insertionLocation - 1 < content.length else { return false }
+    guard insertionLocation - 1 < content.length else { return nil }
     let previousCharacter = content.substring(with: NSRange(location: insertionLocation - 1, length: 1))
-    return previousCharacter.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
+    guard previousCharacter.unicodeScalars.allSatisfy({ CharacterSet.whitespacesAndNewlines.contains($0) }) else {
+      return nil
+    }
+    return skillAutocomplete.triggerCharacter
   }
 
   private func resolvedReplacementRange(_ replacementRange: NSRange) -> NSRange {

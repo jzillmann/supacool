@@ -4,18 +4,32 @@ struct Skill: Identifiable, Hashable, Sendable {
   let name: String
   let description: String
   let source: Source
+  let definitionPath: String
   let isUserInvocable: Bool
 
-  var id: String { "\(source.rawValue)/\(name)" }
+  var id: String { definitionPath }
 
   nonisolated enum Source: String, Sendable {
     case user
     case project
+    case admin
+    case builtin
   }
 }
 
 enum SkillCatalog {
-  static func discover(projectRoot: URL?) async -> [Skill] {
+  static func discover(for agent: AgentType?, projectRoot: URL?) async -> [Skill] {
+    switch agent {
+    case .claude?:
+      return await discoverClaude(projectRoot: projectRoot)
+    case .codex?:
+      return await discoverCodex(projectRoot: projectRoot)
+    case .none:
+      return []
+    }
+  }
+
+  static func discoverClaude(projectRoot: URL?) async -> [Skill] {
     let userSkillsRoot = FileManager.default.homeDirectoryForCurrentUser
       .appending(path: ".claude/skills", directoryHint: .isDirectory)
     let projectSkillsRoot = projectRoot?.appending(path: ".claude/skills", directoryHint: .isDirectory)
@@ -30,8 +44,8 @@ enum SkillCatalog {
     userSkillsRoot: URL?,
     projectSkillsRoot: URL?
   ) async -> [Skill] {
-    async let userSkills = loadSkills(in: userSkillsRoot, source: .user)
-    async let projectSkills = loadSkills(in: projectSkillsRoot, source: .project)
+    async let userSkills = loadSkills(in: userSkillsRoot, source: .user, isUserInvocable: nil)
+    async let projectSkills = loadSkills(in: projectSkillsRoot, source: .project, isUserInvocable: nil)
 
     var mergedByName: [String: Skill] = [:]
     for skill in await userSkills {
@@ -46,9 +60,90 @@ enum SkillCatalog {
     }
   }
 
+  static func discoverCodex(projectRoot: URL?) async -> [Skill] {
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let userAgentsRoot = home.appending(path: ".agents/skills", directoryHint: .isDirectory)
+    let userCodexRoot = home.appending(path: ".codex/skills", directoryHint: .isDirectory)
+    let userCodexSystemRoot = userCodexRoot.appending(path: ".system", directoryHint: .isDirectory)
+    let builtinRoot = home.appending(path: ".codex/vendor_imports/skills/skills", directoryHint: .isDirectory)
+    let adminRoot = URL(fileURLWithPath: "/etc/codex/skills", isDirectory: true)
+    let projectSkillsRoot = projectRoot?.appending(path: ".agents/skills", directoryHint: .isDirectory)
+
+    return await discoverCodex(
+      projectSkillsRoot: projectSkillsRoot,
+      userAgentsSkillsRoot: userAgentsRoot,
+      userCodexSkillsRoot: userCodexRoot,
+      userCodexSystemSkillsRoot: userCodexSystemRoot,
+      adminSkillsRoot: adminRoot,
+      builtinSkillsRoot: builtinRoot
+    )
+  }
+
+  static func discoverCodex(
+    projectSkillsRoot: URL?,
+    userAgentsSkillsRoot: URL?,
+    userCodexSkillsRoot: URL?,
+    userCodexSystemSkillsRoot: URL?,
+    adminSkillsRoot: URL?,
+    builtinSkillsRoot: URL?
+  ) async -> [Skill] {
+    async let projectSkills = loadSkills(
+      in: projectSkillsRoot,
+      source: .project,
+      isUserInvocable: true
+    )
+    async let userSkills = loadSkills(
+      in: userAgentsSkillsRoot,
+      source: .user,
+      isUserInvocable: true
+    )
+    async let userCodexSkills = loadSkills(
+      in: userCodexSkillsRoot,
+      source: .user,
+      isUserInvocable: true
+    )
+    async let adminSkills = loadSkills(
+      in: adminSkillsRoot,
+      source: .admin,
+      isUserInvocable: true
+    )
+    async let builtinSkills = loadSkillsRecursively(
+      in: builtinSkillsRoot,
+      source: .builtin,
+      isUserInvocable: true,
+      skipsHiddenFiles: false
+    )
+    async let userCodexSystemSkills = loadSkillsRecursively(
+      in: userCodexSystemSkillsRoot,
+      source: .builtin,
+      isUserInvocable: true,
+      skipsHiddenFiles: false
+    )
+
+    return (await projectSkills
+      + userSkills
+      + userCodexSkills
+      + adminSkills
+      + userCodexSystemSkills
+      + builtinSkills
+    )
+    .sorted { lhs, rhs in
+      let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+      if nameOrder != .orderedSame {
+        return nameOrder == .orderedAscending
+      }
+      let sourceOrder = sourceSortOrder(lhs.source) - sourceSortOrder(rhs.source)
+      if sourceOrder != 0 {
+        return sourceOrder < 0
+      }
+      return lhs.definitionPath.localizedCaseInsensitiveCompare(rhs.definitionPath) == .orderedAscending
+    }
+  }
+
   private static func loadSkills(
     in root: URL?,
-    source: Skill.Source
+    source: Skill.Source,
+    isUserInvocable: Bool?
   ) -> [Skill] {
     let fileManager = FileManager.default
     guard let root else { return [] }
@@ -64,14 +159,39 @@ enum SkillCatalog {
       guard isDirectory(entry, fileManager: fileManager) else { return nil }
       return loadSkill(
         at: entry.appending(path: "SKILL.md", directoryHint: .notDirectory),
-        source: source
+        source: source,
+        isUserInvocable: isUserInvocable
       )
+    }
+  }
+
+  private static func loadSkillsRecursively(
+    in root: URL?,
+    source: Skill.Source,
+    isUserInvocable: Bool?,
+    skipsHiddenFiles: Bool = true
+  ) -> [Skill] {
+    let fileManager = FileManager.default
+    guard let root else { return [] }
+    guard let enumerator = fileManager.enumerator(
+      at: root,
+      includingPropertiesForKeys: [.isRegularFileKey],
+      options: skipsHiddenFiles ? [.skipsHiddenFiles] : []
+    ) else {
+      return []
+    }
+
+    return enumerator.compactMap { entry in
+      guard let fileURL = entry as? URL else { return nil }
+      guard fileURL.lastPathComponent == "SKILL.md" else { return nil }
+      return loadSkill(at: fileURL, source: source, isUserInvocable: isUserInvocable)
     }
   }
 
   private static func loadSkill(
     at url: URL,
-    source: Skill.Source
+    source: Skill.Source,
+    isUserInvocable: Bool?
   ) -> Skill? {
     let fileManager = FileManager.default
     guard fileManager.fileExists(atPath: url.path) else { return nil }
@@ -91,7 +211,8 @@ enum SkillCatalog {
       name: name,
       description: description,
       source: source,
-      isUserInvocable: isUserInvocable(description: description)
+      definitionPath: url.path(percentEncoded: false),
+      isUserInvocable: isUserInvocable ?? self.isUserInvocable(description: description)
     )
   }
 
@@ -140,5 +261,14 @@ enum SkillCatalog {
   private static func isUserInvocable(description: String) -> Bool {
     let pattern = "(?i)(use this skill when|use when asked to|use when|this skill should be used when|use this skill|triggers on)"
     return description.range(of: pattern, options: .regularExpression) != nil
+  }
+
+  private static func sourceSortOrder(_ source: Skill.Source) -> Int {
+    switch source {
+    case .project: 0
+    case .user: 1
+    case .admin: 2
+    case .builtin: 3
+    }
   }
 }
