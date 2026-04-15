@@ -46,6 +46,10 @@ struct BoardRootView: View {
   /// Esc, a fast agent reply, or any manual focus change cancels it.
   @State private var pendingExit: PendingExit?
   @State private var pendingExitTask: Task<Void, Never>?
+  /// Arms auto-zoom-back only after the focused session has been observed
+  /// idle in-place. This prevents "open an already-busy terminal" from
+  /// looking like a fresh prompt submission.
+  @State private var autoZoomBackArmedSessionID: AgentSession.ID?
 
   /// Grace period after prompt submission before the auto-zoom-back fires.
   /// 3s feels long enough to watch the agent start without being in the way.
@@ -158,7 +162,10 @@ struct BoardRootView: View {
       // Any manual focus change invalidates a queued auto-exit —
       // otherwise the countdown would commit on top of the user's own
       // navigation (⌘B, ⌘-arrow, card tap, etc.).
-      if oldValue != newValue { cancelPendingExit() }
+      if oldValue != newValue {
+        cancelPendingExit()
+        armAutoZoomBack(for: newValue)
+      }
     }
     // Auto-zoom-back scheduling. idle → busy means the user just
     // submitted a prompt; queue a timed hand-off instead of jumping
@@ -167,15 +174,22 @@ struct BoardRootView: View {
     // agent finished before we left — bail and stay.
     .onChange(of: focusedSessionBusyState) { oldValue, newValue in
       guard autoZoomBackOnPrompt else { return }
+      guard let focusedID = store.focusedSessionID,
+        let session = store.sessions.first(where: { $0.id == focusedID })
+      else {
+        autoZoomBackArmedSessionID = nil
+        return
+      }
       if oldValue == true, newValue == false {
         cancelPendingExit()
+        autoZoomBackArmedSessionID = focusedID
         return
       }
       guard oldValue == false, newValue == true else { return }
-      guard let focusedID = store.focusedSessionID,
-        let session = store.sessions.first(where: { $0.id == focusedID }),
+      guard autoZoomBackArmedSessionID == focusedID,
         session.hasCompletedAtLeastOnce
       else { return }
+      autoZoomBackArmedSessionID = nil
       schedulePendingExit(for: focusedID)
     }
     // Sheet lives at the root so it's reachable whether you're looking at
@@ -208,6 +222,20 @@ struct BoardRootView: View {
   private func beginRename(_ session: AgentSession) {
     renameDraft = session.displayName
     renamingSessionID = session.id
+  }
+
+  private func armAutoZoomBack(for focusedID: AgentSession.ID?) {
+    guard let focusedID,
+      let session = store.sessions.first(where: { $0.id == focusedID })
+    else {
+      autoZoomBackArmedSessionID = nil
+      return
+    }
+    let isBusy = terminalManager.isAgentBusy(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: session.id)
+    )
+    autoZoomBackArmedSessionID = isBusy ? nil : focusedID
   }
 
   // MARK: - Pending auto-exit
