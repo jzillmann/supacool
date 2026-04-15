@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 struct SkillCatalogTests {
   @Test func discoverMergesProjectSkillsOverUserSkills() async throws {
@@ -128,7 +128,7 @@ struct SkillCatalogTests {
     )
 
     #expect(skills.map(\.name) == ["admin-helper", "builtin-helper", "repo-helper", "shared-skill", "shared-skill"])
-    #expect(skills.allSatisfy(\.isUserInvocable))
+    #expect(skills.allSatisfy { $0.isUserInvocable })
 
     let sharedSkills = skills.filter { $0.name == "shared-skill" }
     #expect(sharedSkills.count == 2)

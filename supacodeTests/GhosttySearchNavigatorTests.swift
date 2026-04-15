@@ -1,6 +1,6 @@
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 struct GhosttySearchNavigatorTests {
   @Test func nextWrapsFromLastToFirst() {

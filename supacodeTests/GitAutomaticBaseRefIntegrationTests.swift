@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 struct GitAutomaticBaseRefIntegrationTests {
   @Test func fallsBackToLocalHeadForBareRepo() async throws {

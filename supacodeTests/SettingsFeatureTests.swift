@@ -6,7 +6,7 @@ import Foundation
 import Sharing
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 @MainActor
 struct SettingsFeatureTests {

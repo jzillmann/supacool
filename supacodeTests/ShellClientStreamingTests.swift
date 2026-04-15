@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 nonisolated final class LoginStreamCallRecorder: @unchecked Sendable {
   struct Snapshot {

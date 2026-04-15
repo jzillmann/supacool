@@ -2,7 +2,7 @@ import ConcurrencyExtras
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 struct CodexSettingsInstallerTests {
   private let fileManager = FileManager.default

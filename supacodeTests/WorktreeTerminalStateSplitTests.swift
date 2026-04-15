@@ -3,7 +3,7 @@ import DependenciesTestSupport
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 /// Exercises `WorktreeTerminalState.splitFocusedSurface`, the helper Supacool's
 /// `FullScreenTerminalView` uses to open a bare-shell split alongside an

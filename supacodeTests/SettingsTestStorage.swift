@@ -1,6 +1,6 @@
 import Foundation
 
-@testable import supacode
+@testable import Supacool
 
 nonisolated final class SettingsTestStorage: @unchecked Sendable {
   private let lock = NSLock()

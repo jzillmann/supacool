@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 nonisolated final class GitWorktreeDiscoveryRecorder: @unchecked Sendable {
   struct Invocation: Equatable {

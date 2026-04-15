@@ -1,7 +1,7 @@
 import SwiftUI
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 @MainActor
 struct TerminalRenderingPolicyTests {

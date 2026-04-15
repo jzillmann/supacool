@@ -2,7 +2,7 @@ import Foundation
 import IdentifiedCollections
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 @MainActor
 struct ToolbarNotificationGroupingTests {

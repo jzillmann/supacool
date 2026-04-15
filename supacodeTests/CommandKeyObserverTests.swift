@@ -1,7 +1,7 @@
 import AppKit
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 struct CommandKeyObserverTests {
   @Test func shouldShowShortcutsForCommandOrControl() {

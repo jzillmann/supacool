@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 /// Unit tests for the `Notification`-event filter that decides whether a hook
 /// payload represents an agent actually blocking on user input. Regression

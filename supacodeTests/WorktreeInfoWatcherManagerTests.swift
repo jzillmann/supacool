@@ -2,7 +2,7 @@ import Clocks
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 @MainActor
 struct WorktreeInfoWatcherManagerTests {

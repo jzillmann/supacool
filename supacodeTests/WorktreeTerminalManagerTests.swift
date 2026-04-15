@@ -2,7 +2,7 @@ import Dependencies
 import Foundation
 import Testing
 
-@testable import supacode
+@testable import Supacool
 
 @MainActor
 struct WorktreeTerminalManagerTests {
@@ -144,7 +144,7 @@ struct WorktreeTerminalManagerTests {
         encodedID,
         tabId.rawValue,
         surface.id,
-        AgentHookNotification(agent: "codex", event: "Stop", title: "Done", body: "All complete")
+        AgentHookNotification(agent: "codex", event: "Stop", title: "Done", body: "All complete", sessionID: nil)
       )
 
       #expect(
