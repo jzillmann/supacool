@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -46,6 +47,7 @@ struct BoardRootView: View {
   /// Esc, a fast agent reply, or any manual focus change cancels it.
   @State private var pendingExit: PendingExit?
   @State private var pendingExitTask: Task<Void, Never>?
+  @State private var pendingExitEscapeMonitor: Any?
   /// Arms auto-zoom-back only after the focused session has been observed
   /// idle in-place. This prevents "open an already-busy terminal" from
   /// looking like a fresh prompt submission.
@@ -61,90 +63,17 @@ struct BoardRootView: View {
   }
 
   var body: some View {
-    Group {
-      if let focusedID = store.focusedSessionID,
-        let session = store.sessions.first(where: { $0.id == focusedID })
-      {
-        FullScreenTerminalView(
-          session: session,
-          repositories: repositories,
-          terminalManager: terminalManager,
-          onBackToBoard: { store.send(.focusSession(id: nil)) },
-          onNewTerminal: {
-            store.send(.openNewTerminalSheet(repositories: Array(repositories)))
-          },
-          onRerun: {
-            store.send(
-              .rerunDetachedSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          },
-          onResume: (session.agent != nil && session.agentNativeSessionID != nil)
-            ? {
-              store.send(
-                .resumeDetachedSession(
-                  id: session.id,
-                  repositories: Array(repositories)
-                )
-              )
-            }
-            : nil,
-          onResumePicker: (session.agent != nil && session.agentNativeSessionID == nil)
-            ? {
-              store.send(
-                .resumeDetachedSessionWithPicker(
-                  id: session.id,
-                  repositories: Array(repositories)
-                )
-              )
-            }
-            : nil,
-          onRemove: { store.send(.removeSession(id: session.id)) },
-          onRename: { beginRename(session) },
-          onSwitcherMove: { direction in openSwitcher(direction: direction) }
-        )
-        .overlay {
-          if isSessionSwitcherPresented {
-            SessionSwitcherOverlay(
-              sessions: switcherSessions,
-              repositories: repositories,
-              classify: { classify($0) },
-              highlightedSessionID: $highlightedSessionID,
-              onCommit: { commitSwitcher() },
-              onCancel: { isSessionSwitcherPresented = false }
-            )
-          }
-        }
-        .overlay(alignment: .bottom) {
-          if let pending = pendingExit {
-            PendingExitBanner(
-              destination: destinationLabel(pending.destination),
-              startedAt: pending.startedAt,
-              duration: pendingExitDelay,
-              onCancel: { cancelPendingExit() },
-            )
-            .padding(.bottom, 24)
-            .transition(.move(edge: .bottom).combined(with: .opacity))
-          }
-        }
-        .animation(.easeOut(duration: 0.18), value: pendingExit)
-        .background(
-          // Esc cancels a pending auto-exit, nothing otherwise. Disabled
-          // when no pending exit is up so terminal Esc keystrokes pass
-          // through to the ghostty surface untouched.
-          Button("Stay") { cancelPendingExit() }
-            .keyboardShortcut(.escape, modifiers: [])
-            .disabled(pendingExit == nil)
-            .hidden()
-        )
-      } else {
-        boardContents
-      }
-    }
+    currentContent
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
+    .onChange(of: pendingExit != nil) { _, isActive in
+      if isActive {
+        installPendingExitEscapeMonitor()
+      } else {
+        removePendingExitEscapeMonitor()
+      }
+    }
+    .onDisappear { removePendingExitEscapeMonitor() }
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
@@ -219,6 +148,81 @@ struct BoardRootView: View {
     }
   }
 
+  @ViewBuilder
+  private var currentContent: some View {
+    if let focusedID = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == focusedID })
+    {
+      FullScreenTerminalView(
+        session: session,
+        repositories: repositories,
+        terminalManager: terminalManager,
+        onBackToBoard: { store.send(.focusSession(id: nil)) },
+        onNewTerminal: {
+          store.send(.openNewTerminalSheet(repositories: Array(repositories)))
+        },
+        onRerun: {
+          store.send(
+            .rerunDetachedSession(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        },
+        onResume: (session.agent != nil && session.agentNativeSessionID != nil)
+          ? {
+            store.send(
+              .resumeDetachedSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onResumePicker: (session.agent != nil && session.agentNativeSessionID == nil)
+          ? {
+            store.send(
+              .resumeDetachedSessionWithPicker(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onRemove: { store.send(.removeSession(id: session.id)) },
+        onRename: { beginRename(session) },
+        onSwitcherMove: { direction in openSwitcher(direction: direction) }
+      )
+      .overlay {
+        if isSessionSwitcherPresented {
+          SessionSwitcherOverlay(
+            sessions: switcherSessions,
+            repositories: repositories,
+            classify: { classify($0) },
+            highlightedSessionID: $highlightedSessionID,
+            onCommit: { commitSwitcher() },
+            onCancel: { isSessionSwitcherPresented = false }
+          )
+        }
+      }
+      .overlay(alignment: .bottom) {
+        if let pending = pendingExit {
+          PendingExitBanner(
+            destination: destinationLabel(pending.destination),
+            startedAt: pending.startedAt,
+            duration: pendingExitDelay,
+            onCancel: { cancelPendingExit() },
+          )
+          .padding(.bottom, 24)
+          .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+      }
+      .animation(.easeOut(duration: 0.18), value: pendingExit)
+    } else {
+      boardContents
+    }
+  }
+
   private func beginRename(_ session: AgentSession) {
     renameDraft = session.displayName
     renamingSessionID = session.id
@@ -262,6 +266,25 @@ struct BoardRootView: View {
     pendingExit = nil
     pendingExitTask = nil
     store.send(.focusSession(id: pending.destination))
+  }
+
+  private func installPendingExitEscapeMonitor() {
+    guard pendingExitEscapeMonitor == nil else { return }
+    pendingExitEscapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+      guard pendingExit != nil else { return event }
+      let plainModifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+      guard event.keyCode == 53, plainModifiers.isEmpty else {
+        return event
+      }
+      cancelPendingExit()
+      return nil
+    }
+  }
+
+  private func removePendingExitEscapeMonitor() {
+    guard let pendingExitEscapeMonitor else { return }
+    NSEvent.removeMonitor(pendingExitEscapeMonitor)
+    self.pendingExitEscapeMonitor = nil
   }
 
   /// Prefer `awaitingInput` (agent blocked on a permission prompt) over
