@@ -2,8 +2,9 @@ import ComposableArchitecture
 import SwiftUI
 
 /// The sheet for creating a new terminal session. User enters a prompt,
-/// picks a repo + agent, optionally enables worktree mode with a branch
-/// name, and hits Create.
+/// picks a repo + agent, and chooses a workspace (repo root, existing
+/// worktree, existing local/remote branch, or a brand-new branch) from a
+/// unified searchable combo box.
 struct NewTerminalSheet: View {
   @Bindable var store: StoreOf<NewTerminalFeature>
   @AppStorage("supacool.bypassPermissions") private var bypassPermissions: Bool = true
@@ -28,35 +29,16 @@ struct NewTerminalSheet: View {
           bypassPermissionsToggle
         }
         repoPicker
-        worktreeModePicker
-        switch store.worktreeMode {
-        case .none:
-          EmptyView()
-        case .newBranch:
-          HStack(spacing: 6) {
-            TextField("Branch name", text: $store.branchName)
-              .onSubmit { store.send(.createButtonTapped) }
-            if store.isSuggestingBranchName {
-              ProgressView()
-                .controlSize(.small)
-                .frame(width: 16, height: 16)
-            } else {
-              Button {
-                store.send(.suggestBranchNameTapped)
-              } label: {
-                Image(systemName: "wand.and.stars")
-              }
-              .buttonStyle(.plain)
-              .foregroundStyle(
-                store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                  ? .tertiary : .secondary
-              )
-              .disabled(store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-              .help("Generate branch name from prompt")
-            }
+        workspaceField
+        ForEach(workspaceSuggestions, id: \.id) { suggestion in
+          WorkspaceSuggestionRow(
+            suggestion: suggestion,
+            isSelected: suggestion.selection == store.selectedWorkspace
+          )
+          .contentShape(Rectangle())
+          .onTapGesture {
+            store.send(.workspaceSelected(suggestion.selection))
           }
-        case .existing:
-          existingWorktreePicker
         }
       } footer: {
         if let message = store.validationMessage, !message.isEmpty {
@@ -70,7 +52,7 @@ struct NewTerminalSheet: View {
       HStack {
         if store.isCreating {
           ProgressView().controlSize(.small)
-          Text(store.worktreeMode == .newBranch ? "Creating worktree…" : "Starting terminal…")
+          Text(creatingStatusText)
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -88,6 +70,7 @@ struct NewTerminalSheet: View {
     .background {
       agentShortcuts
     }
+    .task { store.send(.task) }
     .task(id: skillDiscoveryKey) {
       guard let skillAutocompleteAgent else {
         skillCatalog = []
@@ -102,7 +85,7 @@ struct NewTerminalSheet: View {
       skillQuery = nil
       selectedSkillID = nil
     }
-    .frame(minWidth: 460, minHeight: 420)
+    .frame(minWidth: 460, minHeight: 460)
   }
 
   private var promptEditor: some View {
@@ -165,6 +148,15 @@ struct NewTerminalSheet: View {
     return "Start a raw terminal session. The prompt (if any) runs as a shell command."
   }
 
+  private var creatingStatusText: String {
+    switch store.selectedWorkspace {
+    case .newBranch, .existingBranch:
+      return "Creating worktree…"
+    case .existingWorktree, .repoRoot:
+      return "Starting terminal…"
+    }
+  }
+
   private var repoPicker: some View {
     Picker(selection: $store.selectedRepositoryID) {
       if store.availableRepositories.isEmpty {
@@ -188,71 +180,160 @@ struct NewTerminalSheet: View {
     }
   }
 
-  private var worktreeModePicker: some View {
-    Picker(selection: $store.worktreeMode) {
-      ForEach(WorktreeMode.allCases) { mode in
-        Text(mode.label).tag(mode)
-      }
-    } label: {
-      Text("Worktree")
-      Text(worktreeModeFooter)
-    }
-    .pickerStyle(.segmented)
-    .onChange(of: store.worktreeMode) { _, newMode in
-      // Default to the first non-root worktree on mode-switch so the
-      // picker isn't empty on first paint.
-      if newMode == .existing, store.existingWorktreeID == nil {
-        store.existingWorktreeID = firstExistingWorktreeID
-      }
-    }
-    .onChange(of: store.selectedRepositoryID) { _, _ in
-      // Repo changed — drop any stale existing-worktree pick.
-      store.existingWorktreeID = firstExistingWorktreeID
-    }
-  }
+  // MARK: - Workspace picker
 
-  private var existingWorktreePicker: some View {
-    Picker(selection: $store.existingWorktreeID) {
-      if availableExistingWorktrees.isEmpty {
-        Text("No worktrees registered").tag(Optional<String>.none)
-      } else {
-        ForEach(availableExistingWorktrees, id: \.id) { worktree in
-          Text(worktreeDisplayName(worktree)).tag(Optional(worktree.id))
+  private var workspaceField: some View {
+    LabeledContent {
+      HStack(spacing: 6) {
+        TextField(
+          "Repo root, branch, or new name…",
+          text: $store.workspaceQuery
+        )
+        .textFieldStyle(.plain)
+        if store.isSuggestingBranchName {
+          ProgressView().controlSize(.small).frame(width: 16, height: 16)
+        } else {
+          Button {
+            store.send(.suggestBranchNameTapped)
+          } label: {
+            Image(systemName: "wand.and.stars")
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(
+            store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+              ? .tertiary : .secondary
+          )
+          .disabled(store.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          .help("Generate branch name from prompt")
         }
       }
     } label: {
-      Text("Worktree")
-      Text("Run inside an already-registered worktree of this repo.")
-    }
-    .disabled(availableExistingWorktrees.isEmpty)
-  }
-
-  private var worktreeModeFooter: String {
-    switch store.worktreeMode {
-    case .none: "Run at the repo root."
-    case .newBranch: "Create a fresh worktree branched from HEAD."
-    case .existing: "Attach to an already-registered worktree."
+      Text("Workspace")
+      Text(workspaceFieldFooter)
     }
   }
 
-  /// Non-root worktrees of the selected repo, available for the Existing
-  /// picker. We exclude the root directory-mode entry because that's
-  /// already covered by `.none`.
-  private var availableExistingWorktrees: [Worktree] {
-    guard let repoID = store.selectedRepositoryID,
-      let repo = store.availableRepositories[id: repoID]
-    else { return [] }
-    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
-    return repo.worktrees.filter { $0.id != rootPath && $0.isWorktree }
+  private var workspaceFieldFooter: String {
+    switch store.selectedWorkspace {
+    case .repoRoot: return "Run at the repo root (no worktree)."
+    case .existingWorktree: return "Attach to an existing worktree."
+    case .existingBranch: return "Check out an existing branch in a new worktree."
+    case .newBranch: return "Create a new branch from HEAD."
+    }
   }
 
-  private var firstExistingWorktreeID: String? {
-    availableExistingWorktrees.first?.id
+  /// Filtered list of workspace options shown below the search field.
+  /// Caps at 8 rows total to keep the sheet compact.
+  private var workspaceSuggestions: [WorkspaceSuggestion] {
+    let query = store.workspaceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    let lowerQuery = query.lowercased()
+
+    func matches(_ candidate: String) -> Bool {
+      if query.isEmpty { return true }
+      return candidate.lowercased().contains(lowerQuery)
+    }
+
+    var results: [WorkspaceSuggestion] = []
+
+    // 1) Repo root — always shown when query is empty; also when query matches "root" etc.
+    if query.isEmpty || matches("repo root") || matches("root") {
+      results.append(
+        WorkspaceSuggestion(
+          id: "repoRoot",
+          selection: .repoRoot,
+          systemImage: "folder",
+          title: "Repo root",
+          subtitle: "Run at the repository root",
+          kindLabel: "Directory"
+        )
+      )
+    }
+
+    // 2) Registered worktrees (excluding the repo root entry).
+    let worktrees: [Worktree] = {
+      guard let repoID = store.selectedRepositoryID,
+        let repo = store.availableRepositories[id: repoID]
+      else { return [] }
+      let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+      return repo.worktrees.filter { $0.id != rootPath && $0.isWorktree }
+    }()
+
+    for wt in worktrees {
+      let label = wt.branch ?? wt.name
+      if matches(label) || matches(wt.name) {
+        results.append(
+          WorkspaceSuggestion(
+            id: "wt:\(wt.id)",
+            selection: .existingWorktree(id: wt.id),
+            systemImage: "arrow.triangle.branch",
+            title: label,
+            subtitle: wt.detail.isEmpty ? "Worktree" : wt.detail,
+            kindLabel: "Worktree"
+          )
+        )
+      }
+    }
+
+    // 3) Local branches that aren't already backing a worktree.
+    let branchesOnWorktrees = Set(worktrees.compactMap { $0.branch })
+    for branch in store.availableLocalBranches {
+      guard !branchesOnWorktrees.contains(branch) else { continue }
+      if matches(branch) {
+        results.append(
+          WorkspaceSuggestion(
+            id: "local:\(branch)",
+            selection: .existingBranch(name: branch),
+            systemImage: "point.3.connected.trianglepath.dotted",
+            title: branch,
+            subtitle: "Local branch — creates a worktree",
+            kindLabel: "Local branch"
+          )
+        )
+      }
+    }
+
+    // 4) Remote branches whose local name isn't already a local branch.
+    let localSet = Set(store.availableLocalBranches)
+    for remoteRef in store.availableRemoteBranches {
+      let localName = NewTerminalFeature.stripRemotePrefix(remoteRef)
+      guard !localSet.contains(localName) else { continue }
+      guard !branchesOnWorktrees.contains(localName) else { continue }
+      if matches(remoteRef) || matches(localName) {
+        results.append(
+          WorkspaceSuggestion(
+            id: "remote:\(remoteRef)",
+            selection: .existingBranch(name: localName),
+            systemImage: "cloud",
+            title: localName,
+            subtitle: remoteRef,
+            kindLabel: "Remote"
+          )
+        )
+      }
+    }
+
+    // 5) "+ Create new" row when query doesn't exactly match any existing option.
+    if !query.isEmpty {
+      let isExactMatch = results.contains { $0.title == query }
+      let hasSpace = query.contains(where: \.isWhitespace)
+      if !isExactMatch && !hasSpace {
+        results.append(
+          WorkspaceSuggestion(
+            id: "new:\(query)",
+            selection: .newBranch(name: query),
+            systemImage: "plus.circle",
+            title: "Create new branch \"\(query)\"",
+            subtitle: "New branch from HEAD",
+            kindLabel: "New"
+          )
+        )
+      }
+    }
+
+    return Array(results.prefix(8))
   }
 
-  private func worktreeDisplayName(_ worktree: Worktree) -> String {
-    worktree.branch ?? worktree.name
-  }
+  // MARK: - Agent shortcuts & skill plumbing (unchanged)
 
   private var agentShortcuts: some View {
     Group {
@@ -392,5 +473,50 @@ struct NewTerminalSheet: View {
   private func popupY(for query: SkillQuery, availableHeight: CGFloat) -> CGFloat {
     let preferredY = query.caretRect.maxY + 8
     return min(max(preferredY, 0), max(availableHeight - 8, 0))
+  }
+}
+
+// MARK: - Workspace suggestion row
+
+/// One row in the workspace picker list. Clicking sends
+/// `.workspaceSelected` with the backing `WorkspaceSelection`.
+private struct WorkspaceSuggestion: Equatable, Identifiable {
+  let id: String
+  let selection: WorkspaceSelection
+  let systemImage: String
+  let title: String
+  let subtitle: String
+  let kindLabel: String
+}
+
+private struct WorkspaceSuggestionRow: View {
+  let suggestion: WorkspaceSuggestion
+  let isSelected: Bool
+
+  var body: some View {
+    HStack(spacing: 10) {
+      Image(systemName: suggestion.systemImage)
+        .frame(width: 18)
+        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(suggestion.title)
+          .font(.callout)
+          .lineLimit(1)
+        Text(suggestion.subtitle)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      Spacer()
+      Text(suggestion.kindLabel)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+      if isSelected {
+        Image(systemName: "checkmark")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(Color.accentColor)
+      }
+    }
+    .padding(.vertical, 2)
   }
 }

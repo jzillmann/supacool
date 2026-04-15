@@ -6,6 +6,7 @@ struct GitClientDependency: Sendable {
   var worktrees: @Sendable (URL) async throws -> [Worktree]
   var pruneWorktrees: @Sendable (URL) async throws -> Void
   var localBranchNames: @Sendable (URL) async throws -> Set<String>
+  var remoteBranchRefs: @Sendable (URL) async throws -> [String]
   var isValidBranchName: @Sendable (String, URL) async -> Bool
   var branchRefs: @Sendable (URL) async throws -> [String]
   var defaultRemoteBranchRef: @Sendable (URL) async throws -> String?
@@ -22,6 +23,12 @@ struct GitClientDependency: Sendable {
       _ baseRef: String
     ) async throws
       -> Worktree
+  var createWorktreeForExistingBranch:
+    @Sendable (
+      _ branchName: String,
+      _ repoRoot: URL,
+      _ baseDirectory: URL
+    ) async throws -> Worktree
   var createWorktreeStream:
     @Sendable (
       _ name: String,
@@ -67,6 +74,7 @@ extension GitClientDependency: DependencyKey {
     worktrees: { try await GitClient().worktrees(for: $0) },
     pruneWorktrees: { try await GitClient().pruneWorktrees(for: $0) },
     localBranchNames: { try await GitClient().localBranchNames(for: $0) },
+    remoteBranchRefs: { try await GitClient().remoteBranchRefs(for: $0) },
     isValidBranchName: { branchName, repoRoot in
       await GitClient().isValidBranchName(branchName, for: repoRoot)
     },
@@ -82,6 +90,13 @@ extension GitClientDependency: DependencyKey {
         baseDirectory: baseDirectory,
         copyFiles: (ignored: copyIgnored, untracked: copyUntracked),
         baseRef: baseRef
+      )
+    },
+    createWorktreeForExistingBranch: { branchName, repoRoot, baseDirectory in
+      try await GitClient().createWorktreeForExistingBranch(
+        branchName: branchName,
+        repoRoot: repoRoot,
+        baseDirectory: baseDirectory
       )
     },
     createWorktreeStream: { name, repoRoot, baseDirectory, copyIgnored, copyUntracked, baseRef in

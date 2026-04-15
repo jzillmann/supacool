@@ -36,10 +36,10 @@ struct NewTerminalFeatureTests {
     }
   }
 
-  @Test(.dependencies) func worktreeModeRequiresBranchName() async {
+  @Test(.dependencies) func newBranchRequiresName() async {
     var state = Self.makeState()
     state.prompt = "Explore the codebase"
-    state.worktreeMode = .newBranch
+    state.selectedWorkspace = .newBranch(name: "")
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -51,11 +51,10 @@ struct NewTerminalFeatureTests {
     }
   }
 
-  @Test(.dependencies) func worktreeModeRejectsBranchWithWhitespace() async {
+  @Test(.dependencies) func newBranchRejectsWhitespace() async {
     var state = Self.makeState()
     state.prompt = "Explore"
-    state.worktreeMode = .newBranch
-    state.branchName = "feat with spaces"
+    state.selectedWorkspace = .newBranch(name: "feat with spaces")
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -181,8 +180,7 @@ struct NewTerminalFeatureTests {
 
     var state = Self.makeState()
     state.prompt = "Do the thing"
-    state.worktreeMode = .newBranch
-    state.branchName = "feat/x"
+    state.selectedWorkspace = .newBranch(name: "feat/x")
 
     let events = LockIsolated<[String]>([])
     let store = TestStore(initialState: state) {
@@ -219,8 +217,7 @@ struct NewTerminalFeatureTests {
 
     var state = Self.makeState()
     state.prompt = "Do the thing"
-    state.worktreeMode = .newBranch
-    state.branchName = "feat/x"
+    state.selectedWorkspace = .newBranch(name: "feat/x")
 
     let fetchCalls = LockIsolated<Int>(0)
     let store = TestStore(initialState: state) {
@@ -259,8 +256,7 @@ struct NewTerminalFeatureTests {
 
     var state = Self.makeState()
     state.prompt = "Do the thing"
-    state.worktreeMode = .newBranch
-    state.branchName = "feat/x"
+    state.selectedWorkspace = .newBranch(name: "feat/x")
 
     struct FetchFailure: Error {}
     let createWorktreeRan = LockIsolated<Bool>(false)
@@ -309,16 +305,15 @@ struct NewTerminalFeatureTests {
     #expect(state.prompt == "Write tests for auth")
     #expect(state.agent == .codex)
     #expect(state.selectedRepositoryID == "/tmp/repo")
-    #expect(state.worktreeMode == .none)
-    #expect(state.branchName.isEmpty)
+    #expect(state.selectedWorkspace == .repoRoot)
+    #expect(state.workspaceQuery.isEmpty)
   }
 
   // MARK: - Branch name suggestion
 
-  @Test(.dependencies) func suggestBranchNamePopulatesBranchName() async {
+  @Test(.dependencies) func suggestBranchNamePopulatesWorkspaceQuery() async {
     var state = Self.makeState()
     state.prompt = "Add SSH connection pooling"
-    state.worktreeMode = .newBranch
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -331,14 +326,14 @@ struct NewTerminalFeatureTests {
     }
     await store.receive(.branchNameSuggested("add-ssh-connection-pooling")) {
       $0.isSuggestingBranchName = false
-      $0.branchName = "add-ssh-connection-pooling"
+      $0.workspaceQuery = "add-ssh-connection-pooling"
+      $0.selectedWorkspace = .newBranch(name: "add-ssh-connection-pooling")
     }
   }
 
   @Test(.dependencies) func suggestBranchNameResetsOnFailure() async {
     var state = Self.makeState()
     state.prompt = "Refactor auth module"
-    state.worktreeMode = .newBranch
 
     struct InferenceError: Error {}
     let store = TestStore(initialState: state) {
@@ -353,14 +348,13 @@ struct NewTerminalFeatureTests {
     await store.receive(.branchNameSuggestionFailed) {
       $0.isSuggestingBranchName = false
     }
-    // branchName remains unchanged
-    #expect(store.state.branchName.isEmpty)
+    #expect(store.state.workspaceQuery.isEmpty)
+    #expect(store.state.selectedWorkspace == .repoRoot)
   }
 
   @Test(.dependencies) func suggestBranchNameSanitizesOutput() async {
     var state = Self.makeState()
     state.prompt = "Fix Mario's bug with special chars!"
-    state.worktreeMode = .newBranch
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -374,9 +368,51 @@ struct NewTerminalFeatureTests {
     }
     await store.receive(\.branchNameSuggested) {
       $0.isSuggestingBranchName = false
-      // Sanitized: lowercase, hyphens, no special chars
-      $0.branchName = "fix-marios-bug"
+      $0.workspaceQuery = "fix-marios-bug"
+      $0.selectedWorkspace = .newBranch(name: "fix-marios-bug")
     }
+  }
+
+  // MARK: - Workspace selection inference
+
+  @Test func inferSelectionEmptyIsRepoRoot() {
+    let state = Self.makeState()
+    #expect(NewTerminalFeature.inferSelection(from: "", state: state) == .repoRoot)
+  }
+
+  @Test func inferSelectionMatchesLocalBranch() {
+    var state = Self.makeState()
+    state.availableLocalBranches = ["main", "feat-x"]
+    #expect(
+      NewTerminalFeature.inferSelection(from: "feat-x", state: state)
+        == .existingBranch(name: "feat-x")
+    )
+  }
+
+  @Test func inferSelectionMatchesRemoteBranchShortName() {
+    var state = Self.makeState()
+    state.availableRemoteBranches = ["origin/pr-123", "origin/main"]
+    #expect(
+      NewTerminalFeature.inferSelection(from: "pr-123", state: state)
+        == .existingBranch(name: "pr-123")
+    )
+  }
+
+  @Test func inferSelectionMatchesRemoteBranchFullRef() {
+    var state = Self.makeState()
+    state.availableRemoteBranches = ["origin/pr-123"]
+    #expect(
+      NewTerminalFeature.inferSelection(from: "origin/pr-123", state: state)
+        == .existingBranch(name: "pr-123")
+    )
+  }
+
+  @Test func inferSelectionFallsBackToNewBranch() {
+    let state = Self.makeState()
+    #expect(
+      NewTerminalFeature.inferSelection(from: "brand-new", state: state)
+        == .newBranch(name: "brand-new")
+    )
   }
 
   @Test func sanitizeBranchNameBasic() {

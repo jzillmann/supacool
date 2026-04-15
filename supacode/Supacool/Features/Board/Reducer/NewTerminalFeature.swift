@@ -4,34 +4,29 @@ import IdentifiedCollections
 
 private nonisolated let newTerminalLogger = SupaLogger("Supacool.NewTerminal")
 
-/// Where the new terminal session's working directory comes from.
-nonisolated enum WorktreeMode: String, CaseIterable, Equatable, Sendable, Identifiable {
-  /// Run at the repo root (directory mode). No new worktree created.
-  case none
-  /// Create a new git worktree branched from HEAD for this session.
-  case newBranch
-  /// Attach the session to an existing worktree already registered in
-  /// the repo.
-  case existing
-
-  var id: String { rawValue }
-
-  var label: String {
-    switch self {
-    case .none: "None"
-    case .newBranch: "New"
-    case .existing: "Existing"
-    }
-  }
+/// Where the new terminal session will run. Replaces the old trio of
+/// (worktreeMode, branchName, existingWorktreeID) with a single enum that
+/// unifies directory mode, existing worktrees, existing local/remote
+/// branches, and brand-new branches under one workspace picker.
+nonisolated enum WorkspaceSelection: Equatable, Hashable, Sendable {
+  /// Run at the repo root (no worktree).
+  case repoRoot
+  /// Attach to an already-registered worktree.
+  case existingWorktree(id: String)
+  /// Check out an existing local branch in a new worktree. For branches
+  /// that only exist on a remote, git's `worktree add` DWIM automatically
+  /// creates a local tracking branch.
+  case existingBranch(name: String)
+  /// Create a new branch from HEAD in a new worktree.
+  case newBranch(name: String)
 }
 
-/// Sheet reducer for "+ New Terminal". Collects prompt, repo, agent, and an
-/// optional worktree toggle. On submit:
-///  1. Resolves the backing workspace (repo root for directory mode, or
-///     creates a git worktree for worktree mode).
-///  2. Asks TerminalClient to spawn a new tab running `claude "<prompt>"`
-///     or `codex "<prompt>"` in that workspace.
-///  3. Constructs the `AgentSession` and hands it back to the parent via
+/// Sheet reducer for "+ New Terminal". Collects prompt, repo, agent, and
+/// a unified workspace choice (repo root / worktree / branch / new branch).
+/// On submit:
+///  1. Resolves the backing workspace (existing worktree, or creates one).
+///  2. Asks TerminalClient to spawn a tab running the agent.
+///  3. Constructs the `AgentSession` and hands it back via
 ///     `delegate(.created(session))`.
 @Reducer
 struct NewTerminalFeature {
@@ -42,15 +37,23 @@ struct NewTerminalFeature {
     var prompt: String = ""
     /// `nil` = raw shell session (no agent CLI invoked).
     var agent: AgentType? = .claude
-    /// Where the agent's terminal should run: repo root (None), a freshly
-    /// created git worktree (New), or an already-existing worktree picked
-    /// from the repo (Existing).
-    var worktreeMode: WorktreeMode = .none
-    /// Only consulted when `worktreeMode == .newBranch`.
-    var branchName: String = ""
-    /// Only consulted when `worktreeMode == .existing`. Defaults to the
-    /// first non-root worktree when the repo picker changes.
-    var existingWorktreeID: String?
+
+    // MARK: - Workspace picker
+
+    /// The resolved workspace to run the session in. Kept in sync with
+    /// `workspaceQuery` on every keystroke via `inferSelection`.
+    var selectedWorkspace: WorkspaceSelection = .repoRoot
+    /// The free-text query the user types into the workspace field.
+    /// Empty = repo root (directory mode).
+    var workspaceQuery: String = ""
+    /// Loaded lazily on `.task`. Local branch names (e.g. `["main", "feat-x"]`).
+    var availableLocalBranches: [String] = []
+    /// Loaded lazily on `.task`. Remote tracking refs (e.g. `["origin/main", "origin/feat-x"]`).
+    var availableRemoteBranches: [String] = []
+    var isLoadingBranches: Bool = false
+
+    // MARK: - Misc
+
     var validationMessage: String?
     var isCreating: Bool = false
     /// True while the background inference client is generating a branch name.
@@ -75,32 +78,35 @@ struct NewTerminalFeature {
       prompt = previous.initialPrompt
       agent = previous.agent
 
-      // Restore the worktree mode so rerun lands in the same workspace context.
+      // Restore the workspace so rerun lands in the same context.
       //
-      // worktreeID == repositoryID → session ran at the repo root → mode .none.
-      // Otherwise a dedicated worktree was used. If it still exists in the repo
-      // use .existing so the user reruns in the exact same directory; if it's
-      // gone (cleaned up) pre-fill .newBranch with the same branch name so the
-      // user can recreate it with one tap.
+      // worktreeID == repositoryID → session ran at the repo root.
+      // Otherwise a dedicated worktree was used. If it still exists, rerun
+      // there; if it's gone (cleaned up) pre-fill a .newBranch with the
+      // same branch name so the user can recreate it with one tap.
       let worktreeID = previous.worktreeID
       let repoRootID = previous.repositoryID
       if worktreeID != repoRootID,
         let repo = availableRepositories.first(where: { $0.id == resolvedRepoID })
       {
-        if repo.worktrees.contains(where: { $0.id == worktreeID }) {
-          worktreeMode = .existing
-          existingWorktreeID = worktreeID
+        if let wt = repo.worktrees.first(where: { $0.id == worktreeID }) {
+          selectedWorkspace = .existingWorktree(id: worktreeID)
+          workspaceQuery = wt.branch ?? wt.name
         } else {
-          worktreeMode = .newBranch
-          branchName = URL(fileURLWithPath: worktreeID).lastPathComponent
+          let derived = URL(fileURLWithPath: worktreeID).lastPathComponent
+          selectedWorkspace = .newBranch(name: derived)
+          workspaceQuery = derived
         }
       }
-      // else: worktreeID == repositoryID → worktreeMode stays .none
+      // else: repo root — selectedWorkspace stays .repoRoot
     }
   }
 
   enum Action: BindableAction, Equatable {
     case binding(BindingAction<State>)
+    case task
+    case branchesLoaded(local: [String], remote: [String])
+    case workspaceSelected(WorkspaceSelection)
     case cancelButtonTapped
     case createButtonTapped
     case suggestBranchNameTapped
@@ -125,13 +131,70 @@ struct NewTerminalFeature {
 
   private nonisolated enum CancelID: Hashable, Sendable {
     case branchNameSuggestion
+    case loadBranches
   }
 
   var body: some Reducer<State, Action> {
     BindingReducer()
     Reduce { state, action in
       switch action {
+      case .binding(\.workspaceQuery):
+        // Typing in the workspace field re-infers the selection from the
+        // current query + known worktrees/branches. Exact matches win;
+        // otherwise we treat the query as a new branch name.
+        state.selectedWorkspace = Self.inferSelection(
+          from: state.workspaceQuery,
+          state: state
+        )
+        state.validationMessage = nil
+        return .none
+
+      case .binding(\.selectedRepositoryID):
+        // Reload the branch list whenever the repo changes.
+        state.validationMessage = nil
+        state.selectedWorkspace = .repoRoot
+        state.workspaceQuery = ""
+        state.availableLocalBranches = []
+        state.availableRemoteBranches = []
+        return .send(.task)
+
       case .binding:
+        state.validationMessage = nil
+        return .none
+
+      case .task:
+        guard let repoID = state.selectedRepositoryID,
+          let repo = state.availableRepositories[id: repoID]
+        else { return .none }
+        state.isLoadingBranches = true
+        let repoRoot = repo.rootURL
+        return .run { [gitClient] send in
+          async let localTask = (try? await gitClient.localBranchNames(repoRoot)) ?? []
+          async let remoteTask = (try? await gitClient.remoteBranchRefs(repoRoot)) ?? []
+          let localSet = await localTask
+          let remoteList = await remoteTask
+          let sortedLocal =
+            localSet
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+          await send(.branchesLoaded(local: sortedLocal, remote: remoteList))
+        }
+        .cancellable(id: CancelID.loadBranches, cancelInFlight: true)
+
+      case .branchesLoaded(let local, let remote):
+        state.availableLocalBranches = local
+        state.availableRemoteBranches = remote
+        state.isLoadingBranches = false
+        // Re-run inference now that we have fresh data — query may have
+        // matched only after branches loaded.
+        state.selectedWorkspace = Self.inferSelection(
+          from: state.workspaceQuery,
+          state: state
+        )
+        return .none
+
+      case .workspaceSelected(let selection):
+        state.selectedWorkspace = selection
+        state.workspaceQuery = Self.canonicalQuery(for: selection, state: state)
         state.validationMessage = nil
         return .none
 
@@ -164,7 +227,8 @@ struct NewTerminalFeature {
 
       case .branchNameSuggested(let name):
         state.isSuggestingBranchName = false
-        state.branchName = name
+        state.workspaceQuery = name
+        state.selectedWorkspace = Self.inferSelection(from: name, state: state)
         return .none
 
       case .branchNameSuggestionFailed:
@@ -179,24 +243,34 @@ struct NewTerminalFeature {
           state.validationMessage = "Pick a repository."
           return .none
         }
-        switch state.worktreeMode {
-        case .none:
+
+        let selection = state.selectedWorkspace
+        switch selection {
+        case .repoRoot:
           break
-        case .newBranch:
-          let trimmedBranch = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !trimmedBranch.isEmpty else {
-            state.validationMessage = "Branch name required."
+        case .existingWorktree(let id):
+          guard repository.worktrees.contains(where: { $0.id == id }) else {
+            state.validationMessage = "Picked worktree no longer exists."
             return .none
           }
-          guard !trimmedBranch.contains(where: \.isWhitespace) else {
+        case .existingBranch(let name):
+          let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !trimmed.isEmpty else {
+            state.validationMessage = "Pick a branch."
+            return .none
+          }
+          guard !trimmed.contains(where: \.isWhitespace) else {
             state.validationMessage = "Branch names can't contain spaces."
             return .none
           }
-        case .existing:
-          guard let worktreeID = state.existingWorktreeID,
-            repository.worktrees.contains(where: { $0.id == worktreeID })
-          else {
-            state.validationMessage = "Pick an existing worktree."
+        case .newBranch(let name):
+          let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !trimmed.isEmpty else {
+            state.validationMessage = "Branch name required."
+            return .none
+          }
+          guard !trimmed.contains(where: \.isWhitespace) else {
+            state.validationMessage = "Branch names can't contain spaces."
             return .none
           }
         }
@@ -207,16 +281,11 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         state.isCreating = true
 
-        let worktreeMode = state.worktreeMode
-        let branchName = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let existingWorktreeID = state.existingWorktreeID
         let agent = state.agent
         // Mirror supacode's sidebar flow: obey the global "Fetch origin
         // before creating worktree" toggle so both paths behave the same.
         @Shared(.settingsFile) var settingsFile
         let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
-        // The UI toggle is an @AppStorage-backed mirror of this key; read it
-        // fresh here so the reducer stays free of view-owned state.
         let bypassPermissions =
           UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
         let sessionID = UUID()
@@ -226,16 +295,14 @@ struct NewTerminalFeature {
         return .run { send in
           do {
             let worktree: Worktree
-            switch worktreeMode {
-            case .newBranch:
+            switch selection {
+            case .newBranch(let rawName):
+              let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
               let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
               // Pre-worktree fetch so the new branch is based on the
-              // *actually* latest upstream, not the local cache. Upstream
-              // supacode's sidebar flow (RepositoriesFeature) does this
-              // via remoteNames + matchingRemote + fetchRemote; mirror it.
-              // Failures are logged but don't block session creation —
-              // an offline / auth-broken fetch shouldn't lose the user
-              // their prompt.
+              // *actually* latest upstream, not the local cache. Failures
+              // log but don't block — an offline/auth-broken fetch
+              // shouldn't lose the user their prompt.
               if fetchOriginBeforeCreation {
                 let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
                 if let matchedRemote = baseRef.supacoolMatchingRemote(from: remotes) {
@@ -262,21 +329,49 @@ struct NewTerminalFeature {
                 false,
                 baseRef
               )
-            case .existing:
+
+            case .existingBranch(let rawName):
+              let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+              // Fetch the matching remote first so DWIM can find freshly
+              // pushed branches (e.g. a new PR). Same fetch semantics as
+              // .newBranch above.
+              if fetchOriginBeforeCreation {
+                let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
+                if let firstRemote = remotes.first {
+                  do {
+                    try await gitClient.fetchRemote(firstRemote, repository.rootURL)
+                  } catch {
+                    newTerminalLogger.warning(
+                      "Pre-worktree fetch \(firstRemote) failed for "
+                        + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+                    )
+                  }
+                }
+              }
+              let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+                for: repository.rootURL,
+                globalDefaultPath: nil,
+                repositoryOverridePath: nil
+              )
+              worktree = try await gitClient.createWorktreeForExistingBranch(
+                branchName,
+                repository.rootURL,
+                baseDirectory
+              )
+
+            case .existingWorktree(let id):
               // Pinned by the sheet's picker. If the record vanished
               // between picker-time and submit we bail. `Identifiable`
-              // on Worktree is @MainActor-isolated, so do the lookup
-              // there.
+              // on Worktree is @MainActor-isolated, so do the lookup there.
               let picked: Worktree? = await MainActor.run {
-                guard let id = existingWorktreeID else { return nil }
-                return repository.worktrees.first { $0.id == id }
+                repository.worktrees.first { $0.id == id }
               }
               guard let picked else { throw NewTerminalError.worktreeMissing }
               worktree = picked
-            case .none:
-              // Directory mode: resolve the repo-root worktree (guaranteed to
-              // exist after Phase 3c), or synthesize one if discovery hasn't
-              // caught up yet.
+
+            case .repoRoot:
+              // Directory mode: resolve the repo-root worktree, or
+              // synthesize one if discovery hasn't caught up yet.
               let rootURL = repository.rootURL.standardizedFileURL
               worktree = await MainActor.run {
                 let existing = repository.worktrees.first { wt in
@@ -294,11 +389,7 @@ struct NewTerminalFeature {
             }
 
             // Spawn the tab, using sessionID as the tab ID so the
-            // AgentSession can reference it later. Three cases:
-            //   • Agent + prompt → `<agent> "<prompt>"\r`
-            //   • Agent, no prompt → `<agent>\r`
-            //   • No agent + prompt → type prompt as a shell command + \r
-            //   • No agent, no prompt → empty tab, user interacts freely
+            // AgentSession can reference it later.
             let input: String
             switch (agent, trimmedPrompt.isEmpty) {
             case (let agent?, false):
@@ -315,11 +406,7 @@ struct NewTerminalFeature {
                 worktree,
                 input: input,
                 // Run the repo's setup script (Settings → Repository Settings →
-                // Setup Script) before the agent command. `createTab` writes
-                // `setupInput + commandInput` to the pty in order, so the
-                // setup runs first and the agent launches into the prepared
-                // worktree (env files, deps, etc.). Resume paths keep this
-                // `false` — their worktree is already initialized.
+                // Setup Script) before the agent command.
                 runSetupScriptIfNew: true,
                 id: sessionID
               )
@@ -359,6 +446,64 @@ struct NewTerminalFeature {
         return .none
       }
     }
+  }
+
+  // MARK: - Selection inference
+
+  /// Given a free-text query, figure out what workspace the user means.
+  /// Exact matches (worktree > local branch > remote branch) win;
+  /// otherwise it's a new-branch candidate. Empty query = repo root.
+  static func inferSelection(from rawQuery: String, state: State) -> WorkspaceSelection {
+    let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmed.isEmpty { return .repoRoot }
+
+    // 1) Existing worktree (match against branch or name).
+    if let repoID = state.selectedRepositoryID,
+      let repo = state.availableRepositories[id: repoID]
+    {
+      if let wt = repo.worktrees.first(where: { ($0.branch ?? $0.name) == trimmed && $0.isWorktree }) {
+        return .existingWorktree(id: wt.id)
+      }
+    }
+    // 2) Existing local branch.
+    if state.availableLocalBranches.contains(trimmed) {
+      return .existingBranch(name: trimmed)
+    }
+    // 3) Full remote ref match (e.g. typed "origin/feat-x").
+    if state.availableRemoteBranches.contains(trimmed) {
+      return .existingBranch(name: stripRemotePrefix(trimmed))
+    }
+    // 4) Short name matches a remote branch's local-part (e.g. "feat-x" → "origin/feat-x").
+    if state.availableRemoteBranches.contains(where: { stripRemotePrefix($0) == trimmed }) {
+      return .existingBranch(name: trimmed)
+    }
+    // 5) Fallback: new branch.
+    return .newBranch(name: trimmed)
+  }
+
+  /// Canonical text to display in the query field for a given selection.
+  static func canonicalQuery(for selection: WorkspaceSelection, state: State) -> String {
+    switch selection {
+    case .repoRoot:
+      return ""
+    case .existingWorktree(let id):
+      if let repoID = state.selectedRepositoryID,
+        let repo = state.availableRepositories[id: repoID],
+        let wt = repo.worktrees.first(where: { $0.id == id })
+      {
+        return wt.branch ?? wt.name
+      }
+      return URL(fileURLWithPath: id).lastPathComponent
+    case .existingBranch(let name), .newBranch(let name):
+      return name
+    }
+  }
+
+  static func stripRemotePrefix(_ ref: String) -> String {
+    if let slashIdx = ref.firstIndex(of: "/") {
+      return String(ref[ref.index(after: slashIdx)...])
+    }
+    return ref
   }
 }
 

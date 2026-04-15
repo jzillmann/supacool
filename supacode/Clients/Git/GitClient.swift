@@ -129,6 +129,69 @@ struct GitClient {
     )
   }
 
+  /// Returns remote-tracking branch refs like `["origin/main", "origin/feat-x"]`
+  /// (drops `origin/HEAD`). Used by Supacool's workspace picker so the user
+  /// can check out a PR branch that exists only on remote.
+  nonisolated func remoteBranchRefs(for repoRoot: URL) async throws -> [String] {
+    let path = repoRoot.path(percentEncoded: false)
+    let output = try await runGit(
+      operation: .branchRefs,
+      arguments: [
+        "-C",
+        path,
+        "for-each-ref",
+        "--format=%(refname:short)",
+        "refs/remotes",
+      ]
+    )
+    return
+      output
+      .split(whereSeparator: \.isNewline)
+      .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+      .filter { !$0.isEmpty && !$0.hasSuffix("/HEAD") }
+      .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+  }
+
+  /// Creates a new worktree that checks out an existing branch. Uses raw
+  /// `git worktree add <path> <branch>` which does the DWIM: if `branchName`
+  /// is a local branch, check it out; otherwise if it matches a remote
+  /// tracking branch, create a local tracking branch and check it out.
+  /// Contrast with `createWorktreeStream` which creates a NEW branch via
+  /// the bundled `wt sw` script.
+  nonisolated func createWorktreeForExistingBranch(
+    branchName: String,
+    repoRoot: URL,
+    baseDirectory: URL
+  ) async throws -> Worktree {
+    let repoPath = repoRoot.path(percentEncoded: false)
+    let worktreeURL =
+      baseDirectory
+      .appending(path: branchName, directoryHint: .isDirectory)
+      .standardizedFileURL
+    let worktreePath = worktreeURL.path(percentEncoded: false)
+    _ = try await runGit(
+      operation: .worktreeCreate,
+      arguments: [
+        "-C",
+        repoPath,
+        "worktree",
+        "add",
+        worktreePath,
+        branchName,
+      ]
+    )
+    let repositoryRootURL = repoRoot.standardizedFileURL
+    return Worktree(
+      id: worktreePath,
+      name: branchName,
+      detail: Self.relativePath(from: repositoryRootURL, to: worktreeURL),
+      workingDirectory: worktreeURL,
+      repositoryRootURL: repositoryRootURL,
+      createdAt: Date(),
+      branch: branchName
+    )
+  }
+
   nonisolated func localBranchNames(for repoRoot: URL) async throws -> Set<String> {
     let path = repoRoot.path(percentEncoded: false)
     let output = try await runGit(
