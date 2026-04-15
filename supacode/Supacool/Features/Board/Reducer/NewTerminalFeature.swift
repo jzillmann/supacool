@@ -67,10 +67,33 @@ struct NewTerminalFeature {
       rerunFrom previous: AgentSession
     ) {
       self.availableRepositories = availableRepositories
-      selectedRepositoryID = availableRepositories[id: previous.repositoryID]?.id
+      let resolvedRepoID = availableRepositories[id: previous.repositoryID]?.id
         ?? availableRepositories.first?.id
+      selectedRepositoryID = resolvedRepoID
       prompt = previous.initialPrompt
       agent = previous.agent
+
+      // Restore the worktree mode so rerun lands in the same workspace context.
+      //
+      // worktreeID == repositoryID → session ran at the repo root → mode .none.
+      // Otherwise a dedicated worktree was used. If it still exists in the repo
+      // use .existing so the user reruns in the exact same directory; if it's
+      // gone (cleaned up) pre-fill .newBranch with the same branch name so the
+      // user can recreate it with one tap.
+      let worktreeID = previous.worktreeID
+      let repoRootID = previous.repositoryID
+      if worktreeID != repoRootID,
+        let repo = availableRepositories.first(where: { $0.id == resolvedRepoID })
+      {
+        if repo.worktrees.contains(where: { $0.id == worktreeID }) {
+          worktreeMode = .existing
+          existingWorktreeID = worktreeID
+        } else {
+          worktreeMode = .newBranch
+          branchName = URL(fileURLWithPath: worktreeID).lastPathComponent
+        }
+      }
+      // else: worktreeID == repositoryID → worktreeMode stays .none
     }
   }
 
