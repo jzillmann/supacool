@@ -133,7 +133,8 @@ struct SessionCardView: View {
       SessionInfoPopover(
         session: session,
         repositoryName: repositoryName,
-        worktreeLabel: nil
+        worktreeLabel: nil,
+        onRerun: onRerun
       )
     }
   }

@@ -280,7 +280,8 @@ struct FullScreenTerminalView: View {
       SessionInfoPopover(
         session: session,
         repositoryName: repositories[id: session.repositoryID]?.name,
-        worktreeLabel: worktreeLabel
+        worktreeLabel: worktreeLabel,
+        onRerun: resolveWorktree() == nil ? onRerun : nil
       )
     }
   }

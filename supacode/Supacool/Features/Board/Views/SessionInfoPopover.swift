@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Read-only summary of a session's initial config. Reached via the small
@@ -7,6 +8,10 @@ struct SessionInfoPopover: View {
   let session: AgentSession
   let repositoryName: String?
   let worktreeLabel: String?
+  var onRerun: (() -> Void)? = nil
+
+  @Environment(\.dismiss) private var dismiss
+  @State private var didCopyPrompt: Bool = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -32,9 +37,34 @@ struct SessionInfoPopover: View {
 
   private var promptBlock: some View {
     VStack(alignment: .leading, spacing: 4) {
-      Label("Initial prompt", systemImage: "quote.opening")
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
+      HStack(alignment: .center, spacing: 8) {
+        Label("Initial prompt", systemImage: "quote.opening")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Spacer()
+        if !session.initialPrompt.isEmpty {
+          Button {
+            copyPrompt()
+          } label: {
+            Image(systemName: didCopyPrompt ? "checkmark" : "doc.on.doc")
+          }
+          .buttonStyle(.plain)
+          .controlSize(.small)
+          .help(didCopyPrompt ? "Prompt copied" : "Copy prompt")
+        }
+        if let onRerun {
+          Button {
+            onRerun()
+            dismiss()
+          } label: {
+            Label("Rerun", systemImage: "arrow.clockwise")
+              .labelStyle(.iconOnly)
+          }
+          .buttonStyle(.plain)
+          .controlSize(.small)
+          .help("Rerun with the same prompt")
+        }
+      }
       if session.initialPrompt.isEmpty {
         Text("(no prompt — raw terminal)")
           .font(.callout)
@@ -85,6 +115,16 @@ struct SessionInfoPopover: View {
         .textSelection(.enabled)
         .lineLimit(2)
       Spacer()
+    }
+  }
+
+  private func copyPrompt() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(session.initialPrompt, forType: .string)
+    didCopyPrompt = true
+    Task {
+      try? await Task.sleep(for: .seconds(1.2))
+      await MainActor.run { didCopyPrompt = false }
     }
   }
 
