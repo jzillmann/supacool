@@ -41,6 +41,9 @@ final class WorktreeTerminalManager {
   private func configureSocketServer(_ server: AgentHookSocketServer) {
     server.onBusy = { [weak self] worktreeID, tabID, surfaceID, active in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
+      terminalLogger.debug(
+        "Hook busy: worktree=\(decoded) tab=\(tabID) surface=\(surfaceID) active=\(active)"
+      )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
         return
@@ -56,6 +59,10 @@ final class WorktreeTerminalManager {
     }
     server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
+      terminalLogger.debug(
+        "Hook notification: worktree=\(decoded) tab=\(tabID) agent=\(notification.agent) "
+          + "event=\(notification.event) body=\(notification.body ?? "<nil>")"
+      )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
         return
@@ -64,15 +71,32 @@ final class WorktreeTerminalManager {
       let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
-      // Claude Code fires a `Notification` hook event when the agent
-      // pauses on user input (permission prompt, question). `Stop` events
-      // also flow through here but carry the final assistant message —
-      // they're not "awaiting input" signals. Only the former flips the
-      // card.
-      if notification.event == "Notification" {
+      if Self.isAwaitingInputSignal(notification) {
         self?.awaitingInputTabs.insert(tabID)
       }
     }
+  }
+
+  /// Decide whether a `Notification` hook event represents the agent actually
+  /// blocking on user input (permission prompt, idle reminder) versus an
+  /// informational ping that doesn't pause work.
+  ///
+  /// Claude Code fires `Notification` hooks for both. The blocking ones use a
+  /// short, stable set of message prefixes; everything else (custom user
+  /// notifications, status pings) keeps the card in its current state.
+  /// Codex doesn't yet emit a clean signal here — preserve the legacy
+  /// "any Notification event" behavior for it until we audit its payloads.
+  nonisolated static func isAwaitingInputSignal(_ notification: AgentHookNotification) -> Bool {
+    guard notification.event == "Notification" else { return false }
+    if notification.agent.lowercased().contains("claude") {
+      let body = notification.body ?? ""
+      let blockingPrefixes = [
+        "Claude needs your permission",
+        "Claude is waiting for your input",
+      ]
+      return blockingPrefixes.contains(where: { body.hasPrefix($0) })
+    }
+    return true
   }
 
   /// Persists the agent-native session identifier from a hook payload onto
