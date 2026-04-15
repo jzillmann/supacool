@@ -386,6 +386,7 @@ private struct SessionCardContainer: View {
       // visibly distinct from the per-status border colors on the card.
       RoundedRectangle(cornerRadius: 10, style: .continuous)
         .strokeBorder(Color.accentColor, lineWidth: isHighlighted ? 2 : 0)
+        .allowsHitTesting(false)
     )
     .animation(.easeOut(duration: 0.12), value: isHovered)
     .animation(.easeOut(duration: 0.08), value: isHighlighted)

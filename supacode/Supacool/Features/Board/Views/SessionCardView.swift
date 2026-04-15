@@ -67,60 +67,62 @@ struct SessionCardView: View {
   }
 
   var body: some View {
-    Button(action: onTap) {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(spacing: 6) {
-          Image(systemName: agentIcon)
-            .font(.caption)
-            .foregroundStyle(agentColor)
-          Text(AgentType.displayName(for: session.agent))
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-          if session.agent != nil {
-            sessionIDIndicator
-          }
-          Spacer()
-          infoButton
-          statusChip
+    VStack(alignment: .leading, spacing: 10) {
+      HStack(spacing: 6) {
+        Image(systemName: agentIcon)
+          .font(.caption)
+          .foregroundStyle(agentColor)
+        Text(AgentType.displayName(for: session.agent))
+          .font(.caption.weight(.medium))
+          .foregroundStyle(.secondary)
+        if session.agent != nil {
+          sessionIDIndicator
         }
-
-        Text(session.displayName)
-          .font(.headline)
-          .lineLimit(2, reservesSpace: true)
-          .foregroundStyle(.primary)
-
-        Spacer(minLength: 0)
-
-        HStack(spacing: 6) {
-          if let repositoryName {
-            Label(repositoryName, systemImage: "folder.fill")
-              .labelStyle(.titleAndIcon)
-              .font(.caption2)
-              .foregroundStyle(.secondary)
-              .lineLimit(1)
-          }
-          Spacer()
-          Text(relativeTimestamp)
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .monospacedDigit()
-        }
+        Spacer()
+        infoButton
+        statusChip
       }
-      .padding(14)
-      .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
-      .background(cardBackground)
-      .overlay(
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .strokeBorder(status.color.opacity(0.25), lineWidth: 1)
-      )
-      .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-      .overlay {
-        if status == .parked, isHovered, let onUnpark {
-          parkedHoverOverlay(onUnpark: onUnpark)
+
+      Text(session.displayName)
+        .font(.headline)
+        .lineLimit(2, reservesSpace: true)
+        .foregroundStyle(.primary)
+
+      Spacer(minLength: 0)
+
+      HStack(spacing: 6) {
+        if let repositoryName {
+          Label(repositoryName, systemImage: "folder.fill")
+            .labelStyle(.titleAndIcon)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
         }
+        Spacer()
+        Text(relativeTimestamp)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .monospacedDigit()
       }
     }
-    .buttonStyle(.plain)
+    .padding(14)
+    .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
+    .background(cardBackground)
+    .overlay {
+      cardShape
+        .strokeBorder(status.color.opacity(0.25), lineWidth: 1)
+        .allowsHitTesting(false)
+    }
+    .clipShape(cardShape)
+    .contentShape(cardShape)
+    // The card hosts its own info/unpark buttons, so a giant outer Button
+    // makes macOS click routing flaky. Keep the card tap as a gesture instead.
+    .onTapGesture(perform: onTap)
+    .overlay {
+      if status == .parked, isHovered, let onUnpark {
+        parkedHoverOverlay(onUnpark: onUnpark)
+      }
+    }
     .onHover { isHovered = $0 }
     .contextMenu {
       if let onRename {
@@ -224,6 +226,10 @@ struct SessionCardView: View {
     .background(status.color.opacity(0.12))
     .clipShape(Capsule())
     .fixedSize()
+  }
+
+  private var cardShape: some InsettableShape {
+    RoundedRectangle(cornerRadius: 10, style: .continuous)
   }
 
   private var cardBackground: some ShapeStyle {
