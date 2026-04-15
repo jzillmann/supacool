@@ -7,6 +7,10 @@ import SwiftUI
 struct NewTerminalSheet: View {
   @Bindable var store: StoreOf<NewTerminalFeature>
   @AppStorage("supacool.bypassPermissions") private var bypassPermissions: Bool = true
+  @State private var skillCatalog: [Skill] = []
+  @State private var skillQuery: SkillQuery?
+  @State private var selectedSkillID: Skill.ID?
+  @State private var promptEditorHandle = PromptTextEditorHandle()
 
   var body: some View {
     Form {
@@ -64,6 +68,21 @@ struct NewTerminalSheet: View {
     .background {
       agentShortcuts
     }
+    .task(id: skillDiscoveryKey) {
+      guard store.agent == .claude else {
+        skillCatalog = []
+        skillQuery = nil
+        selectedSkillID = nil
+        return
+      }
+      skillCatalog = await SkillCatalog.discover(projectRoot: selectedProjectRoot)
+      reconcileSkillSelection()
+    }
+    .onChange(of: store.agent) { _, newAgent in
+      guard newAgent != .claude else { return }
+      skillQuery = nil
+      selectedSkillID = nil
+    }
     .frame(minWidth: 460, minHeight: 420)
   }
 
@@ -73,7 +92,10 @@ struct NewTerminalSheet: View {
       placeholder: store.agent == nil
         ? "Optional shell command to run…"
         : "Describe what the agent should do (optional)…",
-      autoFocus: true
+      autoFocus: true,
+      editorHandle: promptEditorHandle,
+      onSkillQuery: store.agent == .claude ? { handleSkillQuery($0) } : nil,
+      onSkillCommand: store.agent == .claude ? { handleSkillCommand($0) } : nil
     )
     .frame(minHeight: 100, maxHeight: 220)
     .background(
@@ -84,6 +106,22 @@ struct NewTerminalSheet: View {
       RoundedRectangle(cornerRadius: 6, style: .continuous)
         .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
     )
+    .overlay(alignment: .topLeading) {
+      GeometryReader { geometry in
+        if store.agent == .claude, let skillQuery {
+          SkillAutocompletePopover(
+            queryText: skillQuery.queryText,
+            skills: skillCatalog,
+            selectedSkillID: selectedSkillID,
+            onSelect: { commitSkill($0) }
+          )
+          .offset(
+            x: popupX(for: skillQuery, availableWidth: geometry.size.width),
+            y: popupY(for: skillQuery, availableHeight: geometry.size.height)
+          )
+        }
+      }
+    }
   }
 
   private var agentPicker: some View {
@@ -207,5 +245,102 @@ struct NewTerminalSheet: View {
         .keyboardShortcut("2", modifiers: .command)
         .hidden()
     }
+  }
+
+  private var selectedProjectRoot: URL? {
+    guard let repoID = store.selectedRepositoryID else { return nil }
+    return store.availableRepositories[id: repoID]?.rootURL.standardizedFileURL
+  }
+
+  private var skillDiscoveryKey: String {
+    let repoKey = selectedProjectRoot?.path(percentEncoded: false) ?? "<none>"
+    let agentKey = store.agent?.rawValue ?? "shell"
+    return "\(agentKey)::\(repoKey)"
+  }
+
+  private var matchingSkills: [Skill] {
+    guard let skillQuery else { return [] }
+    return SkillAutocompletePopover.orderedMatchingSkills(
+      in: skillCatalog,
+      queryText: skillQuery.queryText
+    )
+  }
+
+  private func handleSkillQuery(_ query: SkillQuery?) {
+    skillQuery = query
+    reconcileSkillSelection()
+  }
+
+  private func handleSkillCommand(_ command: SkillAutocompleteCommand) {
+    guard skillQuery != nil else { return }
+    switch command {
+    case .moveSelection(let delta):
+      moveSkillSelection(by: delta)
+    case .commitSelection:
+      commitSelectedSkill()
+    case .dismiss:
+      skillQuery = nil
+      selectedSkillID = nil
+    }
+  }
+
+  private func reconcileSkillSelection() {
+    let skills = matchingSkills
+    guard !skills.isEmpty else {
+      selectedSkillID = nil
+      return
+    }
+    if let selectedSkillID, skills.contains(where: { $0.id == selectedSkillID }) {
+      return
+    }
+    selectedSkillID = skills.first?.id
+  }
+
+  private func moveSkillSelection(by delta: Int) {
+    let skills = matchingSkills
+    guard !skills.isEmpty else { return }
+
+    let currentIndex = selectedSkillID.flatMap { id in
+      skills.firstIndex(where: { $0.id == id })
+    } ?? -1
+    let nextIndex: Int
+    if currentIndex < 0 {
+      nextIndex = delta < 0 ? skills.count - 1 : 0
+    } else {
+      nextIndex = (currentIndex + delta + skills.count) % skills.count
+    }
+    selectedSkillID = skills[nextIndex].id
+  }
+
+  private func commitSelectedSkill() {
+    let skills = matchingSkills
+    guard !skills.isEmpty else { return }
+    if let selectedSkillID,
+      let selected = skills.first(where: { $0.id == selectedSkillID })
+    {
+      commitSkill(selected)
+      return
+    }
+    if let first = skills.first {
+      commitSkill(first)
+    }
+  }
+
+  private func commitSkill(_ skill: Skill) {
+    let replacement = skill.isUserInvocable ? "/\(skill.name)" : skill.name
+    promptEditorHandle.commitSkill(replacement)
+    skillQuery = nil
+    selectedSkillID = nil
+  }
+
+  private func popupX(for query: SkillQuery, availableWidth: CGFloat) -> CGFloat {
+    let preferredWidth: CGFloat = 360
+    let maxX = max(availableWidth - preferredWidth - 8, 0)
+    return min(max(query.caretRect.minX, 0), maxX)
+  }
+
+  private func popupY(for query: SkillQuery, availableHeight: CGFloat) -> CGFloat {
+    let preferredY = query.caretRect.maxY + 8
+    return min(max(preferredY, 0), max(availableHeight - 8, 0))
   }
 }
