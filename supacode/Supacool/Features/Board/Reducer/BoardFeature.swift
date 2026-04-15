@@ -117,6 +117,7 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           guard sessions[index].lastKnownBusy != busy else { return }
           sessions[index].lastKnownBusy = busy
+          sessions[index].lastBusyTransitionAt = Date()
           sessions[index].lastActivityAt = Date()
         }
         return .none
@@ -133,6 +134,7 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
           sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = Date()
         }
         // Drop focus if we're parking the focused session.
@@ -199,6 +201,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }
@@ -231,6 +234,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }

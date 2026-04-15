@@ -85,6 +85,31 @@ struct BoardFeatureTests {
     await store.send(.markSessionCompletedOnce(id: session.id))
   }
 
+  @Test(.dependencies) func updateSessionBusyStatePersistsTransitionTimestamp() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].lastKnownBusy = true
+        #expect(sessions[0].lastBusyTransitionAt != nil)
+      }
+    }
+
+    await store.send(.updateSessionBusyState(id: session.id, busy: false)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].lastKnownBusy = false
+        #expect(sessions[0].lastBusyTransitionAt != nil)
+      }
+    }
+  }
+
   // MARK: - Focus
 
   @Test(.dependencies) func focusAndUnfocusSession() async {

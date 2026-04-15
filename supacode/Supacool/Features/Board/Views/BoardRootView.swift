@@ -416,32 +416,14 @@ struct BoardRootView: View {
     )
   }
 
-  private func classify(_ session: AgentSession) -> SessionCardView.Status {
-    // User-parked wins over everything else: we've deliberately freed the
-    // PTY, so tab-existence checks below would flag it as .detached.
-    if session.parked {
-      return .parked
-    }
+  private func classify(_ session: AgentSession) -> BoardSessionStatus {
     let tabID = TerminalTabID(rawValue: session.id)
-    if !terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) {
-      return session.lastKnownBusy ? .interrupted : .detached
-    }
-    // Awaiting-input wins over busy: the agent may technically still hold
-    // the busy flag while it's blocked on a permission prompt, but from
-    // the user's perspective the card needs attention, not patience.
-    if terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID) {
-      return .awaitingInput
-    }
-    if terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID) {
-      return .inProgress
-    }
-    let graceSeconds: TimeInterval = 3
-    if !session.hasCompletedAtLeastOnce,
-      Date().timeIntervalSince(session.createdAt) < graceSeconds
-    {
-      return .fresh
-    }
-    return .waitingOnMe
+    return BoardSessionStatus.classify(
+      session: session,
+      tabExists: terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID),
+      awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
+      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID)
+    )
   }
 
   #if DEBUG

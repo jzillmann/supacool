@@ -50,6 +50,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// app died" (`.interrupted` — its turn was lost).
   var lastKnownBusy: Bool
 
+  /// Timestamp of the most recent busy-state flip. Used by the board
+  /// classifier to keep cards in the working bucket for a brief moment
+  /// after a busy → idle transition so transient hook gaps don't cause
+  /// visible flicker.
+  var lastBusyTransitionAt: Date?
+
   /// Agent-native session identifier captured from the hook payload:
   /// Claude Code's `session_id`, or the Codex equivalent. Absent until the
   /// first hook event arrives. Used to auto-resume (`claude --resume <id>` /
@@ -74,6 +80,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastActivityAt: Date = Date(),
     hasCompletedAtLeastOnce: Bool = false,
     lastKnownBusy: Bool = false,
+    lastBusyTransitionAt: Date? = nil,
     agentNativeSessionID: String? = nil,
     parked: Bool = false
   ) {
@@ -87,6 +94,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastActivityAt = lastActivityAt
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
     self.lastKnownBusy = lastKnownBusy
+    self.lastBusyTransitionAt = lastBusyTransitionAt
     self.agentNativeSessionID = agentNativeSessionID
     self.parked = parked
   }
@@ -104,7 +112,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   // synthesized init — it will break backward compat silently.
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
-    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy
+    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
     case agentNativeSessionID, parked
   }
 
@@ -122,6 +130,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     hasCompletedAtLeastOnce =
       try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
     lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
+    lastBusyTransitionAt = try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
   }

@@ -7,7 +7,7 @@ import SwiftUI
 struct SessionCardView: View {
   let session: AgentSession
   let repositoryName: String?
-  let status: Status
+  let status: BoardSessionStatus
   let onTap: () -> Void
   let onRemove: () -> Void
   var onRename: (() -> Void)? = nil
@@ -19,52 +19,6 @@ struct SessionCardView: View {
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
-
-  enum Status: Equatable {
-    case inProgress
-    case waitingOnMe
-    case awaitingInput  // agent paused on a permission prompt / question
-    case detached
-    case interrupted  // was busy when the app went away; agent's turn lost
-    case fresh  // just created, agent hasn't started busy-looping yet
-    case parked  // user explicitly parked; PTY freed, metadata preserved
-
-    var label: String {
-      switch self {
-      case .inProgress: "Working"
-      case .waitingOnMe: "Waiting"
-      case .awaitingInput: "Wants Input"
-      case .detached: "Idle"
-      case .interrupted: "Interrupted"
-      case .fresh: "Starting"
-      case .parked: "Parked"
-      }
-    }
-
-    var color: Color {
-      switch self {
-      case .inProgress: .green
-      case .waitingOnMe: .orange
-      case .awaitingInput: .orange
-      case .detached: .secondary
-      case .interrupted: .yellow
-      case .fresh: .blue
-      case .parked: .secondary
-      }
-    }
-
-    var systemImage: String {
-      switch self {
-      case .inProgress: "circle.fill"
-      case .waitingOnMe: "exclamationmark.circle.fill"
-      case .awaitingInput: "hand.raised.fill"
-      case .detached: "moon.zzz.fill"
-      case .interrupted: "exclamationmark.triangle.fill"
-      case .fresh: "sparkles"
-      case .parked: "parkingsign"
-      }
-    }
-  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -123,6 +77,7 @@ struct SessionCardView: View {
         parkedHoverOverlay(onUnpark: onUnpark)
       }
     }
+    .animation(.spring(response: 0.28, dampingFraction: 0.86), value: status)
     .onHover { isHovered = $0 }
     .contextMenu {
       if let onRename {

@@ -9,7 +9,7 @@ struct BoardView: View {
   @Bindable var store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
   let terminalManager: WorktreeTerminalManager
-  let classify: (AgentSession) -> SessionCardView.Status
+  let classify: (AgentSession) -> BoardSessionStatus
   let onAddRepository: () -> Void
   let onRenameSession: (AgentSession) -> Void
 
@@ -23,6 +23,9 @@ struct BoardView: View {
   /// alone makes the view focus-eligible but doesn't *grant* focus —
   /// without this FocusState binding, arrow keys just beep.
   @FocusState private var hasKeyboardFocus: Bool
+  @Namespace private var cardTransitionNamespace
+
+  private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
 
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
@@ -142,6 +145,7 @@ struct BoardView: View {
         }
         .padding(20)
       }
+      .animation(boardReorderAnimation, value: boardLayoutSignature(visible: visible))
     }
   }
 
@@ -305,14 +309,22 @@ struct BoardView: View {
                 }
               }
             )
+            .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
+            .transition(.opacity.combined(with: .scale(scale: 0.98)))
           }
         }
       }
     }
   }
 
-  private func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
+  private func isWaitingStatus(_ status: BoardSessionStatus) -> Bool {
     BoardNavOrder.isWaitingStatus(status)
+  }
+
+  private func boardLayoutSignature(visible: [AgentSession]) -> [String] {
+    visible.map { session in
+      "\(session.id.uuidString):\(classify(session).label)"
+    }
   }
 }
 
@@ -321,7 +333,7 @@ struct BoardView: View {
 /// sync. Cursor order is waiting-on-me first, then in-progress — matches
 /// the on-screen section layout.
 enum BoardNavOrder {
-  static func isWaitingStatus(_ status: SessionCardView.Status) -> Bool {
+  static func isWaitingStatus(_ status: BoardSessionStatus) -> Bool {
     switch status {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted: true
     case .inProgress, .fresh, .parked: false
@@ -330,7 +342,7 @@ enum BoardNavOrder {
 
   static func order(
     visibleSessions: [AgentSession],
-    classify: (AgentSession) -> SessionCardView.Status
+    classify: (AgentSession) -> BoardSessionStatus
   ) -> [AgentSession.ID] {
     // Parked sessions are explicitly excluded from the keyboard-nav cycle
     // and the switcher's wrap-around — they live in the bottom bucket
@@ -349,7 +361,7 @@ enum BoardNavOrder {
 private struct SessionCardContainer: View {
   let session: AgentSession
   let repositoryName: String?
-  let status: SessionCardView.Status
+  let status: BoardSessionStatus
   let dimmed: Bool
   let isHighlighted: Bool
   let isBusyNow: Bool

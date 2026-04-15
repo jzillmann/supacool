@@ -13,7 +13,7 @@ import SwiftUI
 struct SessionSwitcherOverlay: View {
   let sessions: [AgentSession]
   let repositories: IdentifiedArrayOf<Repository>
-  let classify: (AgentSession) -> SessionCardView.Status
+  let classify: (AgentSession) -> BoardSessionStatus
   @Binding var highlightedSessionID: AgentSession.ID?
   let onCommit: () -> Void
   let onCancel: () -> Void
