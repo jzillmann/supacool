@@ -134,6 +134,10 @@ struct NewTerminalFeature {
             return .none
           }
         }
+        if state.agent != nil && trimmedPrompt.isEmpty {
+          state.validationMessage = "Prompt required."
+          return .none
+        }
         state.validationMessage = nil
         state.isCreating = true
 

@@ -39,7 +39,9 @@ extension RepositoriesFeature.State {
 
       let worktreeGroups: [ToolbarNotificationWorktreeGroup] =
         orderedWorktrees(in: repository).compactMap { worktree -> ToolbarNotificationWorktreeGroup? in
-          guard let state = terminalManager.stateIfExists(for: worktree.id), !state.notifications.isEmpty else {
+          guard !isWorktreeArchived(worktree.id),
+            let state = terminalManager.stateIfExists(for: worktree.id), !state.notifications.isEmpty
+          else {
             return nil
           }
           return ToolbarNotificationWorktreeGroup(

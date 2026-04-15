@@ -15,9 +15,10 @@ struct BoardFeatureTests {
     }
     let session = Self.sampleSession()
 
+    // createSession intentionally does NOT focus the new card — the user
+    // stays on the board and sees it appear in "In Progress."
     await store.send(.createSession(session)) {
       $0.$sessions.withLock { $0 = [session] }
-      $0.focusedSessionID = session.id
     }
   }
 

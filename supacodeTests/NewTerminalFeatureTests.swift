@@ -95,7 +95,7 @@ struct NewTerminalFeatureTests {
     await store.receive(\.delegate.created) { _ in }
 
     // The tab was spawned with the expected shell command (trimmed prompt).
-    #expect(spawnedInput == "claude 'Summarize the README'\r")
+    #expect(spawnedInput == "claude --dangerously-skip-permissions 'Summarize the README'\r")
     #expect(spawnedID.value != nil)
   }
 
@@ -152,7 +152,7 @@ struct NewTerminalFeatureTests {
     await store.receive(\.sessionReady)
     await store.receive(\.delegate.created)
 
-    #expect(spawnedInput.value == "codex 'List the tests'\r")
+    #expect(spawnedInput.value == "codex --dangerously-bypass-approvals-and-sandbox 'List the tests'\r")
   }
 
   // MARK: - Shell-quoting safety

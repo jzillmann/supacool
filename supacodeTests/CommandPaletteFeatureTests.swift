@@ -38,6 +38,8 @@ struct CommandPaletteFeatureTests {
     let repository = makeRepository(rootPath: rootPath, name: "Repo", worktrees: [keep, deleting])
     var state = RepositoriesFeature.State(repositories: [repository])
     state.deletingWorktreeIDs = [deleting.id]
+    // Pin `keep` so it appears regardless of sidebarViewMode default (.pinned).
+    state.pinnedWorktreeIDs = [keep.id]
     state.pendingWorktrees = [
       PendingWorktree(
         id: "\(rootPath)/wt-pending",
@@ -244,9 +246,10 @@ struct CommandPaletteFeatureTests {
       repoRoot: rootPath
     )
     let repository = makeRepository(rootPath: rootPath, name: "Repo", worktrees: [worktree])
-    let items = CommandPaletteFeature.commandPaletteItems(
-      from: RepositoriesFeature.State(repositories: [repository])
-    )
+    var state = RepositoriesFeature.State(repositories: [repository])
+    // Pin the worktree so it appears regardless of sidebarViewMode default (.pinned).
+    state.pinnedWorktreeIDs = [worktree.id]
+    let items = CommandPaletteFeature.commandPaletteItems(from: state)
     let selectItem = items.first {
       if case .worktreeSelect(let id) = $0.kind {
         return id == worktree.id
@@ -285,8 +288,9 @@ struct CommandPaletteFeatureTests {
         unpinned,
       ])
     var state = RepositoriesFeature.State(repositories: [repository])
-    state.pinnedWorktreeIDs = [pinned.id]
-    state.worktreeOrderByRepository = [repository.id: [unpinned.id]]
+    // Both worktrees are pinned so they appear regardless of sidebarViewMode.
+    // Order in pinnedWorktreeIDs drives the display order after the main row.
+    state.pinnedWorktreeIDs = [pinned.id, unpinned.id]
 
     let items = CommandPaletteFeature.commandPaletteItems(from: state)
     let selectIDs = items.compactMap { item in

@@ -2989,6 +2989,7 @@ struct RepositoriesFeatureTests {
       $0.pendingSetupScriptWorktreeIDs.insert(newWorktree.id)
       $0.pendingTerminalFocusWorktreeIDs.insert(newWorktree.id)
       $0.pendingWorktrees = []
+      $0.pinnedWorktreeIDs = [newWorktree.id]
       $0.selection = .worktree(newWorktree.id)
       $0.sidebarSelectedWorktreeIDs = [newWorktree.id]
       $0.repositories = [updatedRepository]

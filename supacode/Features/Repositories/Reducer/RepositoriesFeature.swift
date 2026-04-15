@@ -3445,11 +3445,11 @@ extension RepositoriesFeature.State {
     removingRepositoryIDs.contains(repository.id)
   }
 
-  func worktreeRowSections(in repository: Repository) -> WorktreeRowSections {
+  func worktreeRowSections(in repository: Repository, ignoreSidebarFilter: Bool = false) -> WorktreeRowSections {
     let mainWorktree = repository.worktrees.first(where: { isMainWorktree($0) })
     let pinnedWorktrees = orderedPinnedWorktrees(in: repository)
     let unpinnedWorktrees =
-      sidebarViewMode == .pinned
+      (!ignoreSidebarFilter && sidebarViewMode == .pinned)
       ? []
       : orderedUnpinnedWorktrees(in: repository)
     let pendingEntries = pendingWorktrees.filter { $0.repositoryID == repository.id }
@@ -3516,8 +3516,8 @@ extension RepositoriesFeature.State {
     )
   }
 
-  func worktreeRows(in repository: Repository) -> [WorktreeRowModel] {
-    let sections = worktreeRowSections(in: repository)
+  func worktreeRows(in repository: Repository, ignoreSidebarFilter: Bool = false) -> [WorktreeRowModel] {
+    let sections = worktreeRowSections(in: repository, ignoreSidebarFilter: ignoreSidebarFilter)
     return sections.allRows
   }
 
@@ -3530,7 +3530,7 @@ extension RepositoriesFeature.State {
     return orderedRepositoryIDs()
       .filter { includingRepositoryIDs.contains($0) }
       .compactMap { repositoriesByID[$0] }
-      .flatMap { worktreeRows(in: $0) }
+      .flatMap { worktreeRows(in: $0, ignoreSidebarFilter: true) }
   }
 }
 
