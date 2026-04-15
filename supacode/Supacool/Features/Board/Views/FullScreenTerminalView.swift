@@ -127,10 +127,9 @@ struct FullScreenTerminalView: View {
           Button("Rename…", systemImage: "pencil", action: onRename)
         }
         .help("Double-click to rename")
-      gitGuiButton
-      diffDialogButton
-      splitButton
       infoButton
+      openDiffButton
+      splitButton
       Spacer()
       agentChip
     }
@@ -191,28 +190,34 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Opens the configured git GUI (Fork by default) on the session's
-  /// working directory. We let the GUI decide whether there's anything
-  /// interesting to show — Fork/Tower handle a clean tree fine — rather
-  /// than shelling out to `git status` on every render.
-  /// Right-click picks a preset or opens a "Set Custom…" alert.
+  /// Combined diff button: left-click opens the in-house QuickDiffSheet;
+  /// right-click lets the user pick between the built-in view and any
+  /// external git GUI (Fork, Tower, etc.). The currently selected
+  /// external app is remembered in `gitGuiApp` and shown with a checkmark.
   @ViewBuilder
-  private var gitGuiButton: some View {
+  private var openDiffButton: some View {
     let url = URL(fileURLWithPath: session.worktreeID)
     Button {
-      openInGitGui(url: url)
+      isQuickDiffPresented = true
     } label: {
-      Image(systemName: "plus.forwardslash.minus")
+      Image(systemName: "text.magnifyingglass")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
     }
     .buttonStyle(.plain)
-    .help("Open in \(gitGuiApp) (right-click to change)")
+    .help("Open diff (⌘⇧D · right-click for external apps)")
     .contextMenu {
       Section("Open diff in") {
+        Button {
+          isQuickDiffPresented = true
+        } label: {
+          Label("Built-in Quick Diff (⌘⇧D)", systemImage: "text.magnifyingglass")
+        }
+        Divider()
         ForEach(Self.gitGuiPresets, id: \.self) { preset in
           Button {
             gitGuiApp = preset
+            openInGitGui(url: url)
           } label: {
             if preset == gitGuiApp {
               Label(preset, systemImage: "checkmark")
@@ -222,11 +227,17 @@ struct FullScreenTerminalView: View {
           }
         }
         Divider()
-        Button("Set Custom…") {
+        Button("Set Custom App…") {
           gitGuiAppDraft = gitGuiApp
           isEditingGitGuiApp = true
         }
       }
+    }
+    .sheet(isPresented: $isQuickDiffPresented) {
+      QuickDiffSheet(
+        worktreeURL: URL(fileURLWithPath: session.worktreeID),
+        onDismiss: { isQuickDiffPresented = false }
+      )
     }
     .alert("Git GUI app", isPresented: $isEditingGitGuiApp) {
       TextField("App name", text: $gitGuiAppDraft)
@@ -244,26 +255,6 @@ struct FullScreenTerminalView: View {
   /// session's tab. First click splits; second click closes the split
   /// we created (does NOT open a third). If the user closed our split
   /// via Ghostty's own ⌘D, `managedSplitSurfaceID` is reconciled to nil
-  /// In-house "what did I change?" button. Opens `QuickDiffSheet` on
-  /// the session's working directory — shows changed files + diff
-  /// against HEAD without leaving Supacool.
-  private var diffDialogButton: some View {
-    Button {
-      isQuickDiffPresented = true
-    } label: {
-      Image(systemName: "text.magnifyingglass")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
-    }
-    .buttonStyle(.plain)
-    .help("Quick diff (⌘⇧D)")
-    .sheet(isPresented: $isQuickDiffPresented) {
-      QuickDiffSheet(
-        worktreeURL: URL(fileURLWithPath: session.worktreeID),
-        onDismiss: { isQuickDiffPresented = false }
-      )
-    }
-  }
 
   /// Small ⓘ button in the header that surfaces the session's initial
   /// config (prompt, agent, repo, worktree, captured resume id). Shares
