@@ -34,9 +34,7 @@ struct SessionCardView: View {
         Image(systemName: agentIcon)
           .font(.caption)
           .foregroundStyle(agentColor)
-        Text(AgentType.displayName(for: session.agent))
-          .font(.caption.weight(.medium))
-          .foregroundStyle(.secondary)
+          .help(AgentType.displayName(for: session.agent))
         if session.agent != nil {
           sessionIDIndicator
         }
