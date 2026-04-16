@@ -20,7 +20,7 @@ struct SessionReferenceScannerClient: Sendable {
 extension SessionReferenceScannerClient: DependencyKey {
   static let liveValue = Self(
     scan: { cwdPath, agentNativeSessionID in
-      await SessionReferenceScannerLive.scan(
+      SessionReferenceScannerLive.scan(
         cwdPath: cwdPath,
         agentNativeSessionID: agentNativeSessionID
       )
