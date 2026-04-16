@@ -8,7 +8,7 @@ struct SessionInfoPopover: View {
   let session: AgentSession
   let repositoryName: String?
   let worktreeLabel: String?
-  var onRerun: (() -> Void)? = nil
+  var onRerun: (() -> Void)?
 
   @Environment(\.dismiss) private var dismiss
   @State private var didCopyPrompt: Bool = false

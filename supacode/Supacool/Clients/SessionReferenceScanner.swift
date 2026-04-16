@@ -66,7 +66,7 @@ nonisolated enum SessionReferenceScannerLive {
       .appending(path: "\(agentNativeSessionID).jsonl", directoryHint: .notDirectory)
   }
 
-  static func scan(cwdPath: String, agentNativeSessionID: String) async -> [SessionReference] {
+  static func scan(cwdPath: String, agentNativeSessionID: String) -> [SessionReference] {
     guard !agentNativeSessionID.isEmpty else { return [] }
     let url = jsonlURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
     guard let data = try? Data(contentsOf: url) else {

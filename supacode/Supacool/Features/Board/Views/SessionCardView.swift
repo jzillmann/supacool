@@ -10,18 +10,18 @@ struct SessionCardView: View {
   let status: BoardSessionStatus
   let onTap: () -> Void
   let onRemove: () -> Void
-  var onRename: (() -> Void)? = nil
-  var onRerun: (() -> Void)? = nil
-  var onResume: (() -> Void)? = nil
-  var onResumePicker: (() -> Void)? = nil
-  var onPark: (() -> Void)? = nil
-  var onUnpark: (() -> Void)? = nil
-  var onAutoObserverToggle: (() -> Void)? = nil
-  var onAutoObserverPromptChanged: ((String) -> Void)? = nil
+  var onRename: (() -> Void)?
+  var onRerun: (() -> Void)?
+  var onResume: (() -> Void)?
+  var onResumePicker: (() -> Void)?
+  var onPark: (() -> Void)?
+  var onUnpark: (() -> Void)?
+  var onAutoObserverToggle: (() -> Void)?
+  var onAutoObserverPromptChanged: ((String) -> Void)?
   /// Fires once on first appearance so the board reducer can run the
   /// reference scanner (Linear ticket ids, GitHub PR URLs in the
   /// session's transcript).
-  var onAppear: (() -> Void)? = nil
+  var onAppear: (() -> Void)?
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false

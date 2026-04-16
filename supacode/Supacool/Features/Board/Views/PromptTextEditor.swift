@@ -47,10 +47,10 @@ struct PromptTextEditor: NSViewRepresentable {
   @Binding var text: String
   var placeholder: String = ""
   var autoFocus: Bool = true
-  var editorHandle: PromptTextEditorHandle? = nil
-  var skillAutocomplete: SkillAutocompleteConfig? = nil
-  var onSkillQuery: ((SkillQuery?) -> Void)? = nil
-  var onSkillCommand: ((SkillAutocompleteCommand) -> Void)? = nil
+  var editorHandle: PromptTextEditorHandle?
+  var skillAutocomplete: SkillAutocompleteConfig?
+  var onSkillQuery: ((SkillQuery?) -> Void)?
+  var onSkillCommand: ((SkillAutocompleteCommand) -> Void)?
 
   /// The NSTextView's text container inset. Exposed so callers that need
   /// to align other chrome to the first glyph can use the same numbers.

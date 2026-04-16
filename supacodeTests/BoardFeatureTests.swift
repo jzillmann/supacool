@@ -234,7 +234,7 @@ struct BoardFeatureTests {
 
   // MARK: - Visibility query
 
-  @Test(.dependencies) func visibleSessionsFiltersByRepo() async {
+  @Test(.dependencies) func visibleSessionsFiltersByRepo() {
     let sessionA = Self.sampleSession(repositoryID: "/tmp/a")
     let sessionB = Self.sampleSession(repositoryID: "/tmp/b")
     var state = BoardFeature.State()
@@ -246,7 +246,7 @@ struct BoardFeatureTests {
     #expect(!state.filters.includes(repositoryID: "/tmp/b"))
   }
 
-  @Test(.dependencies) func visibleSessionsShowsAllWhenFilterEmpty() async {
+  @Test(.dependencies) func visibleSessionsShowsAllWhenFilterEmpty() {
     let sessionA = Self.sampleSession(repositoryID: "/tmp/a")
     let sessionB = Self.sampleSession(repositoryID: "/tmp/b")
     var state = BoardFeature.State()
