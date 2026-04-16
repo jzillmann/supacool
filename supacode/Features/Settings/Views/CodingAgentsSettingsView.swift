@@ -10,6 +10,7 @@ struct CodingAgentsSettingsView: View {
         footer: Text("Hooks are optional and designed to extend Supacode without affecting core functionality.")
       ) {}
       AIAssistSettingsSection()
+      ReferencesSettingsSection()
       Section {
         AgentInstallRow(
           installAction: { store.send(.agentHookInstallTapped(.claudeProgress)) },
@@ -98,6 +99,41 @@ private struct AIAssistSettingsSection: View {
       } else {
         Text("Uses the Anthropic API directly. Charged to your API account.")
       }
+    }
+  }
+}
+
+// MARK: - References
+
+/// Supacool scans session transcripts for Linear tickets and GitHub PR
+/// URLs and surfaces them as clickable chips on board cards. This section
+/// configures the link destinations and optional prefix filter.
+private struct ReferencesSettingsSection: View {
+  @AppStorage("supacool.references.linearOrg") private var linearOrg: String = ""
+  @AppStorage("supacool.references.ticketPrefixes") private var ticketPrefixes: String = ""
+
+  var body: some View {
+    Section {
+      LabeledContent {
+        TextField("your-org", text: $linearOrg)
+          .textFieldStyle(.roundedBorder)
+          .frame(maxWidth: 240)
+      } label: {
+        Text("Linear org slug")
+        Text("Used to build ticket URLs like `linear.app/<slug>/issue/<id>`. Leave empty if you don't use Linear — chips still render but aren't clickable.")
+      }
+      LabeledContent {
+        TextField("CEN, FOO", text: $ticketPrefixes)
+          .textFieldStyle(.roundedBorder)
+          .frame(maxWidth: 240)
+      } label: {
+        Text("Ticket prefix allowlist")
+        Text("Comma-separated list of team keys (e.g. `CEN`). Empty = any uppercase prefix matches, which can pick up noise like `HTTP-200`.")
+      }
+    } header: {
+      Label("References", systemImage: "link")
+    } footer: {
+      Text("Parsed from Claude Code session transcripts. Codex sessions fall back to scanning just the initial prompt.")
     }
   }
 }

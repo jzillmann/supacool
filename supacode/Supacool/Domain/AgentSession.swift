@@ -85,6 +85,16 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// means "use default heuristics only."
   var autoObserverPrompt: String
 
+  /// External work-item references parsed from the session's conversation
+  /// (Linear tickets, GitHub PRs). Populated lazily by the scanner on
+  /// card appearance and refreshed on hook activity.
+  var references: [SessionReference]
+
+  /// When the references list was last computed. Used to decide whether
+  /// a re-scan is needed: if `lastActivityAt > referencesScannedAt` the
+  /// next card-appearance triggers a refresh.
+  var referencesScannedAt: Date?
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -101,7 +111,9 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
     autoObserver: Bool = false,
-    autoObserverPrompt: String = ""
+    autoObserverPrompt: String = "",
+    references: [SessionReference] = [],
+    referencesScannedAt: Date? = nil
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -119,6 +131,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.parked = parked
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
+    self.references = references
+    self.referencesScannedAt = referencesScannedAt
   }
 
   // Forward-compatible Codable — convention documented in
@@ -138,6 +152,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case removeBackingWorktreeOnDelete
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
+    case references, referencesScannedAt
   }
 
   init(from decoder: Decoder) throws {
@@ -161,6 +176,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
+    references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
+    referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

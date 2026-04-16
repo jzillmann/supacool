@@ -18,6 +18,10 @@ struct SessionCardView: View {
   var onUnpark: (() -> Void)? = nil
   var onAutoObserverToggle: (() -> Void)? = nil
   var onAutoObserverPromptChanged: ((String) -> Void)? = nil
+  /// Fires once on first appearance so the board reducer can run the
+  /// reference scanner (Linear ticket ids, GitHub PR URLs in the
+  /// session's transcript).
+  var onAppear: (() -> Void)? = nil
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
@@ -48,6 +52,10 @@ struct SessionCardView: View {
         .font(.headline)
         .lineLimit(2, reservesSpace: true)
         .foregroundStyle(.primary)
+
+      if !session.references.isEmpty {
+        referenceChips
+      }
 
       Spacer(minLength: 0)
 
@@ -86,6 +94,9 @@ struct SessionCardView: View {
     }
     .animation(.spring(response: 0.28, dampingFraction: 0.86), value: status)
     .onHover { isHovered = $0 }
+    .task(id: session.id) {
+      onAppear?()
+    }
     .contextMenu {
       if let onRename {
         Button("Rename…", systemImage: "pencil", action: onRename)
@@ -242,6 +253,37 @@ struct SessionCardView: View {
     .fixedSize()
   }
 
+  /// Inline chips for ticket ids / PR numbers parsed from the session's
+  /// conversation. Shows up to 3; rest collapse to "+N" which opens the
+  /// full list via the info popover.
+  @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
+
+  @ViewBuilder
+  private var referenceChips: some View {
+    let visible = session.references.prefix(3)
+    let overflow = max(0, session.references.count - visible.count)
+    HStack(spacing: 4) {
+      ForEach(Array(visible), id: \.dedupeKey) { ref in
+        ReferenceChip(reference: ref, linearOrgSlug: linearOrgSlug)
+      }
+      if overflow > 0 {
+        Button {
+          isInfoPopoverShown = true
+        } label: {
+          Text("+\(overflow)")
+            .font(.caption2.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Color.secondary.opacity(0.12))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Show all references")
+      }
+    }
+  }
+
   private var cardShape: some InsettableShape {
     RoundedRectangle(cornerRadius: 10, style: .continuous)
   }
@@ -273,13 +315,81 @@ struct SessionCardView: View {
   }
 }
 
+/// A single reference chip: ticket id or PR number. Click opens in browser.
+struct ReferenceChip: View {
+  let reference: SessionReference
+  let linearOrgSlug: String
+
+  var body: some View {
+    Button {
+      if let url = reference.url(linearOrgSlug: linearOrgSlug) {
+        NSWorkspace.shared.open(url)
+      }
+    } label: {
+      HStack(spacing: 3) {
+        if case .pullRequest(_, _, _, let state) = reference, let state {
+          Image(systemName: state.systemImage)
+            .font(.caption2)
+            .foregroundStyle(prStateColor(state))
+        }
+        Text(reference.chipLabel)
+          .font(.caption2.weight(.medium))
+          .lineLimit(1)
+      }
+      .foregroundStyle(.primary.opacity(0.85))
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(chipBackground)
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .help(tooltip)
+  }
+
+  private var chipBackground: some ShapeStyle {
+    switch reference {
+    case .ticket:
+      return AnyShapeStyle(Color.blue.opacity(0.15))
+    case .pullRequest(_, _, _, let state):
+      guard let state else { return AnyShapeStyle(Color.secondary.opacity(0.12)) }
+      return AnyShapeStyle(prStateColor(state).opacity(0.15))
+    }
+  }
+
+  private func prStateColor(_ state: PRState) -> Color {
+    switch state {
+    case .open: return .green
+    case .merged: return .purple
+    case .closed: return .red
+    case .draft: return .gray
+    }
+  }
+
+  private var tooltip: String {
+    switch reference {
+    case .ticket(let id):
+      if linearOrgSlug.trimmingCharacters(in: .whitespaces).isEmpty {
+        return "\(id) — configure Linear org in Settings → Coding Agents to enable the link"
+      }
+      return "Open \(id) in Linear"
+    case .pullRequest(let owner, let repo, let number, let state):
+      let stateLabel = state?.rawValue ?? "loading…"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)) on GitHub"
+    }
+  }
+}
+
 #Preview {
   let session = AgentSession(
     repositoryID: "/tmp/repo",
     worktreeID: "/tmp/repo",
     agent: .claude,
     initialPrompt: "Refactor the auth module to use async/await",
-    displayName: "Refactor auth module"
+    displayName: "Refactor auth module",
+    references: [
+      .ticket(id: "CEN-1234"),
+      .pullRequest(owner: "foo", repo: "bar", number: 42, state: .open),
+    ]
   )
   return VStack {
     SessionCardView(

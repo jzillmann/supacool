@@ -74,6 +74,19 @@ struct BoardFeature {
     /// and has `autoObserver == true`. Starts a read → decide → respond effect.
     case autoObserverTriggered(id: AgentSession.ID)
     case _autoObserverDecided(id: AgentSession.ID, response: String?)
+
+    // MARK: References (ticket ids, PR URLs)
+    /// Fired from `SessionCardView.task` on first appearance. Triggers a
+    /// scan of the Claude Code JSONL if the session's references are
+    /// stale (never scanned, or `lastActivityAt > referencesScannedAt`).
+    case cardAppeared(id: AgentSession.ID)
+    case _referencesScanned(id: AgentSession.ID, refs: [SessionReference])
+    /// Fetches fresh `PRState` for a pull-request reference via `gh pr view`
+    /// and patches the in-place reference. Called after `_referencesScanned`
+    /// for each unique PR, throttled by the cache window.
+    case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
+    case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, state: PRState)
+
     case delegate(Delegate)
   }
 
@@ -88,6 +101,14 @@ struct BoardFeature {
 
   @Dependency(TerminalClient.self) var terminalClient
   @Dependency(AutoObserverClient.self) var autoObserverClient
+  @Dependency(SessionReferenceScannerClient.self) var scannerClient
+  @Dependency(GithubCLIClient.self) var githubCLI
+
+  /// How long a PR state lookup stays fresh. Refreshing more often than
+  /// this rate-limits unnecessary `gh pr view` calls when the user is
+  /// bouncing between cards. 60 s is a reasonable compromise between
+  /// "current enough" and "don't spam the API".
+  private static let prStateCacheWindow: TimeInterval = 60
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -366,6 +387,97 @@ struct BoardFeature {
         state.newTerminalSheet = nil
         return .none
 
+      case .cardAppeared(let id):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        // Re-scan when the references cache is missing OR the session has
+        // had activity since the last scan. This keeps PR state fresh after
+        // the agent writes something new without spamming scans on every
+        // board render.
+        let needsScan = session.referencesScannedAt == nil
+          || session.lastActivityAt > (session.referencesScannedAt ?? .distantPast)
+        // Also kick off PR status refresh for any PRs in the current cache,
+        // throttled by the cache window.
+        let cacheWindow = Self.prStateCacheWindow
+        let shouldRefreshPRs =
+          session.referencesScannedAt.map { Date().timeIntervalSince($0) > cacheWindow } ?? true
+        let worktreeID = session.worktreeID
+        let agentID = session.agentNativeSessionID
+        let initialPrompt = session.initialPrompt
+        let prRefs = shouldRefreshPRs
+          ? session.references.filter {
+              if case .pullRequest = $0 { return true } else { return false }
+            }
+          : []
+
+        var effects: [Effect<Action>] = []
+        if needsScan {
+          effects.append(
+            .run { [scannerClient] send in
+              var refs: [SessionReference] = []
+              if let agentID, !agentID.isEmpty {
+                refs = await scannerClient.scan(worktreeID, agentID)
+              }
+              // Always also scan the initialPrompt — covers Codex sessions
+              // with no JSONL, and catches tickets the user typed before
+              // any Claude hook fired.
+              let promptRefs = scannerClient.scanText(initialPrompt)
+              let merged = Self.mergeReferences(refs, with: promptRefs)
+              await send(._referencesScanned(id: id, refs: merged))
+            }
+          )
+        }
+        for ref in prRefs {
+          effects.append(.send(._refreshPRStatus(id: id, ref: ref)))
+        }
+        return .merge(effects)
+
+      case ._referencesScanned(let id, let refs):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].references = Self.mergeReferences(
+            refs,
+            with: sessions[index].references,
+            preferNewStates: true
+          )
+          sessions[index].referencesScannedAt = Date()
+        }
+        // Kick off PR status fetches for any PR refs we just discovered.
+        guard let updated = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        let prRefs = updated.references.filter {
+          if case .pullRequest(_, _, _, let s) = $0 { return s == nil } else { return false }
+        }
+        return .merge(prRefs.map { .send(._refreshPRStatus(id: id, ref: $0)) })
+
+      case ._refreshPRStatus(let id, let ref):
+        guard case .pullRequest(let owner, let repo, let number, _) = ref else {
+          return .none
+        }
+        return .run { [githubCLI] send in
+          do {
+            let newState = try await githubCLI.viewPullRequest(owner, repo, number)
+            await send(._prStatusUpdated(id: id, ref: ref, state: newState))
+          } catch {
+            boardLogger.warning(
+              "Failed to fetch PR state for \(owner)/\(repo)#\(number): \(error)"
+            )
+          }
+        }
+
+      case ._prStatusUpdated(let id, let ref, let newState):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].references = sessions[index].references.map { existing in
+            existing.dedupeKey == ref.dedupeKey
+              ? Self.updatingPRState(of: existing, to: newState)
+              : existing
+          }
+        }
+        return .none
+
       case .delegate:
         return .none
 
@@ -387,6 +499,43 @@ struct BoardFeature {
   /// user last chose, without threading the flag through state.
   fileprivate static func readBypassPermissions() -> Bool {
     UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+  }
+
+  /// Merge two reference lists, deduping by `dedupeKey`. When
+  /// `preferNewStates` is true, PR state from the new list wins; otherwise
+  /// the first occurrence wins. Used to combine JSONL + prompt scans.
+  nonisolated fileprivate static func mergeReferences(
+    _ primary: [SessionReference],
+    with secondary: [SessionReference],
+    preferNewStates: Bool = false
+  ) -> [SessionReference] {
+    var merged: [SessionReference] = []
+    var seen = Set<String>()
+    for ref in primary + secondary {
+      let key = ref.dedupeKey
+      if seen.insert(key).inserted {
+        merged.append(ref)
+      } else if preferNewStates,
+        case .pullRequest(_, _, _, let newState) = ref,
+        newState != nil,
+        let idx = merged.firstIndex(where: { $0.dedupeKey == key }),
+        case .pullRequest(let o, let r, let n, _) = merged[idx]
+      {
+        merged[idx] = .pullRequest(owner: o, repo: r, number: n, state: newState)
+      }
+    }
+    return merged
+  }
+
+  /// Returns a copy of `ref` with its PR state replaced. No-op for ticket refs.
+  nonisolated fileprivate static func updatingPRState(
+    of ref: SessionReference,
+    to newState: PRState
+  ) -> SessionReference {
+    if case .pullRequest(let owner, let repo, let number, _) = ref {
+      return .pullRequest(owner: owner, repo: repo, number: number, state: newState)
+    }
+    return ref
   }
 
   fileprivate static func resumeWorktree(

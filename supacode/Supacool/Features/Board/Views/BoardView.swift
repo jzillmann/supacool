@@ -319,7 +319,8 @@ struct BoardView: View {
               },
               onAwaitingInputEntered: session.autoObserver
                 ? { store.send(.autoObserverTriggered(id: session.id)) }
-                : nil
+                : nil,
+              onAppear: { store.send(.cardAppeared(id: session.id)) }
             )
             .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
@@ -390,6 +391,7 @@ private struct SessionCardContainer: View {
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
   let onAwaitingInputEntered: (() -> Void)?
+  let onAppear: (() -> Void)?
 
   @State private var isHovered: Bool = false
 
@@ -407,7 +409,8 @@ private struct SessionCardContainer: View {
       onPark: onPark,
       onUnpark: onUnpark,
       onAutoObserverToggle: onAutoObserverToggle,
-      onAutoObserverPromptChanged: onAutoObserverPromptChanged
+      onAutoObserverPromptChanged: onAutoObserverPromptChanged,
+      onAppear: onAppear
     )
     .opacity(dimmed && !isHovered && !isHighlighted ? 0.55 : 1.0)
     .overlay(
