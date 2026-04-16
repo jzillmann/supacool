@@ -56,6 +56,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// visible flicker.
   var lastBusyTransitionAt: Date?
 
+  /// Whether this session owns a dedicated backing worktree that Supacool
+  /// created for it and should delete when the session itself is removed.
+  /// False for repo-root sessions and sessions attached to a pre-existing
+  /// worktree.
+  var removeBackingWorktreeOnDelete: Bool
+
   /// Agent-native session identifier captured from the hook payload:
   /// Claude Code's `session_id`, or the Codex equivalent. Absent until the
   /// first hook event arrives. Used to auto-resume (`claude --resume <id>` /
@@ -91,6 +97,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     hasCompletedAtLeastOnce: Bool = false,
     lastKnownBusy: Bool = false,
     lastBusyTransitionAt: Date? = nil,
+    removeBackingWorktreeOnDelete: Bool = false,
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
     autoObserver: Bool = false,
@@ -107,6 +114,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
     self.lastKnownBusy = lastKnownBusy
     self.lastBusyTransitionAt = lastBusyTransitionAt
+    self.removeBackingWorktreeOnDelete = removeBackingWorktreeOnDelete
     self.agentNativeSessionID = agentNativeSessionID
     self.parked = parked
     self.autoObserver = autoObserver
@@ -127,6 +135,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
+    case removeBackingWorktreeOnDelete
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
   }
@@ -146,6 +155,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
     lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
     lastBusyTransitionAt = try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
+    removeBackingWorktreeOnDelete =
+      try c.decodeIfPresent(Bool.self, forKey: .removeBackingWorktreeOnDelete) ?? false
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false

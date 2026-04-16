@@ -58,6 +58,9 @@ struct NewTerminalFeature {
     var isCreating: Bool = false
     /// True while the background inference client is generating a branch name.
     var isSuggestingBranchName: Bool = false
+    /// If rerun came from a session-owned worktree, preserve ownership only
+    /// when the user keeps targeting that same worktree.
+    var rerunOwnedWorktreeID: String?
 
     init(availableRepositories: IdentifiedArrayOf<Repository>) {
       self.availableRepositories = availableRepositories
@@ -89,6 +92,7 @@ struct NewTerminalFeature {
       if worktreeID != repoRootID,
         let repo = availableRepositories.first(where: { $0.id == resolvedRepoID })
       {
+        rerunOwnedWorktreeID = previous.removeBackingWorktreeOnDelete ? worktreeID : nil
         if let wt = repo.worktrees.first(where: { $0.id == worktreeID }) {
           selectedWorkspace = .existingWorktree(id: worktreeID)
           workspaceQuery = wt.branch ?? wt.name
@@ -289,6 +293,12 @@ struct NewTerminalFeature {
         let bypassPermissions =
           UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
         let sessionID = UUID()
+        let repositoryID = repository.id
+        let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
+        let removeBackingWorktreeOnDelete = Self.shouldRemoveBackingWorktreeOnDelete(
+          selection: selection,
+          rerunOwnedWorktreeID: rerunOwnedWorktreeID
+        )
         let gitClient = self.gitClient
         let terminalClient = self.terminalClient
 
@@ -414,10 +424,11 @@ struct NewTerminalFeature {
 
             let session = AgentSession(
               id: sessionID,
-              repositoryID: repository.id,
+              repositoryID: repositoryID,
               worktreeID: worktree.id,
               agent: agent,
-              initialPrompt: trimmedPrompt
+              initialPrompt: trimmedPrompt,
+              removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
             )
             await send(.sessionReady(session))
           } catch {
@@ -504,6 +515,20 @@ struct NewTerminalFeature {
       return String(ref[ref.index(after: slashIdx)...])
     }
     return ref
+  }
+
+  static func shouldRemoveBackingWorktreeOnDelete(
+    selection: WorkspaceSelection,
+    rerunOwnedWorktreeID: String?
+  ) -> Bool {
+    switch selection {
+    case .repoRoot:
+      return false
+    case .existingWorktree(let id):
+      return rerunOwnedWorktreeID == id
+    case .existingBranch, .newBranch:
+      return true
+    }
   }
 }
 

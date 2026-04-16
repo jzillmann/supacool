@@ -74,6 +74,16 @@ struct BoardFeature {
     /// and has `autoObserver == true`. Starts a read → decide → respond effect.
     case autoObserverTriggered(id: AgentSession.ID)
     case _autoObserverDecided(id: AgentSession.ID, response: String?)
+    case delegate(Delegate)
+  }
+
+  enum Delegate: Equatable {
+    case sessionRemoved(
+      sessionID: AgentSession.ID,
+      repositoryID: Repository.ID,
+      worktreeID: Worktree.ID,
+      deleteBackingWorktree: Bool
+    )
   }
 
   @Dependency(TerminalClient.self) var terminalClient
@@ -103,11 +113,27 @@ struct BoardFeature {
         return .none
 
       case .removeSession(let id):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        let deleteBackingWorktree =
+          session.removeBackingWorktreeOnDelete
+          && session.worktreeID != session.repositoryID
+          && !state.sessions.contains(where: { $0.id != id && $0.worktreeID == session.worktreeID })
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
         }
-        return .none
+        return .send(
+          .delegate(
+            .sessionRemoved(
+              sessionID: session.id,
+              repositoryID: session.repositoryID,
+              worktreeID: session.worktreeID,
+              deleteBackingWorktree: deleteBackingWorktree
+            )
+          )
+        )
 
       case .markSessionActivity(let id):
         state.$sessions.withLock { sessions in
@@ -338,6 +364,9 @@ struct BoardFeature {
 
       case .newTerminalSheet(.presented(.delegate(.cancel))):
         state.newTerminalSheet = nil
+        return .none
+
+      case .delegate:
         return .none
 
       case .newTerminalSheet:

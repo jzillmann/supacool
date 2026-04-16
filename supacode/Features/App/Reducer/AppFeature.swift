@@ -244,6 +244,21 @@ struct AppFeature {
           await terminalClient.send(.selectTab(worktree, tabID: tabId))
         }
 
+      case .board(.delegate(.sessionRemoved(let sessionID, let repositoryID, let worktreeID, let deleteBackingWorktree))):
+        let worktree = resolveBoardSessionWorktree(
+          repositoryID: repositoryID,
+          worktreeID: worktreeID,
+          state: state.repositories
+        )
+        return .run { send in
+          if let worktree {
+            await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: sessionID)))
+          }
+          if deleteBackingWorktree {
+            await send(.repositories(.deleteWorktreeConfirmed(worktreeID, repositoryID)))
+          }
+        }
+
       case .settings(.setSelection(let selection)):
         let resolvedSelection = selection ?? .general
         switch resolvedSelection {
@@ -807,6 +822,27 @@ struct AppFeature {
     .ifLet(\.$deeplinkInputConfirmation, action: \.deeplinkInputConfirmation) {
       DeeplinkInputConfirmationFeature()
     }
+  }
+
+  private func resolveBoardSessionWorktree(
+    repositoryID: Repository.ID,
+    worktreeID: Worktree.ID,
+    state: RepositoriesFeature.State
+  ) -> Worktree? {
+    if let worktree = state.worktree(for: worktreeID) {
+      return worktree
+    }
+    guard repositoryID == worktreeID, let repository = state.repositories[id: repositoryID] else {
+      return nil
+    }
+    let rootURL = repository.rootURL.standardizedFileURL
+    return Worktree(
+      id: rootURL.path(percentEncoded: false),
+      name: repository.name,
+      detail: "",
+      workingDirectory: rootURL,
+      repositoryRootURL: rootURL
+    )
   }
 
   // MARK: - Deeplink handling.

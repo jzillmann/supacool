@@ -65,6 +65,80 @@ struct BoardFeatureTests {
       $0.$sessions.withLock { $0 = [] }
       $0.focusedSessionID = nil
     }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: session.repositoryID,
+          worktreeID: session.worktreeID,
+          deleteBackingWorktree: false
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func removeSessionDelegatesOwnedWorktreeDeletion() async {
+    let session = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      removeBackingWorktreeOnDelete: true
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeSession(id: session.id)) {
+      $0.$sessions.withLock { $0 = [] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/wt-1",
+          deleteBackingWorktree: true
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func removeSessionKeepsSharedOwnedWorktree() async {
+    let worktreeID = "/tmp/repo/wt-1"
+    let removed = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      removeBackingWorktreeOnDelete: true
+    )
+    let sibling = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      removeBackingWorktreeOnDelete: true
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [removed, sibling] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeSession(id: removed.id)) {
+      $0.$sessions.withLock { sessions in
+        sessions = [sibling]
+      }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: removed.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: worktreeID,
+          deleteBackingWorktree: false
+        )
+      )
+    )
   }
 
   @Test(.dependencies) func markCompletedOnceSetsFlag() async {
@@ -325,15 +399,18 @@ struct BoardFeatureTests {
   private static func sampleSession(
     id: UUID = UUID(),
     repositoryID: String = "/tmp/repo",
-    displayName: String? = nil
+    worktreeID: String? = nil,
+    displayName: String? = nil,
+    removeBackingWorktreeOnDelete: Bool = false
   ) -> AgentSession {
     AgentSession(
       id: id,
       repositoryID: repositoryID,
-      worktreeID: repositoryID,
+      worktreeID: worktreeID ?? repositoryID,
       agent: .claude,
       initialPrompt: "Fix the failing tests",
-      displayName: displayName
+      displayName: displayName,
+      removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
     )
   }
 }
