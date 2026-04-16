@@ -132,7 +132,14 @@ struct NewTerminalSheet: View {
           )
         }
       }
+      // The popover often hangs below the prompt editor's bounds; without
+      // an elevated zIndex the sibling Section below (Agent / Repository)
+      // paints right over it because Form renders sections in order.
+      .zIndex(100)
     }
+    // Ensure the whole prompt row (editor + its overlays) stays above
+    // later sections in the Form's render order.
+    .zIndex(1)
   }
 
   private var agentPicker: some View {
