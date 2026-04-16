@@ -228,7 +228,7 @@ struct NewTerminalSheet: View {
         )
         .labelsHidden()
         .textFieldStyle(.roundedBorder)
-        .frame(minWidth: 200)
+        .frame(maxWidth: .infinity)
         if store.isSuggestingBranchName {
           ProgressView().controlSize(.small).frame(width: 16, height: 16)
         } else {
