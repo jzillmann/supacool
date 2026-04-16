@@ -218,10 +218,15 @@ struct NewTerminalSheet: View {
   private var workspaceField: some View {
     LabeledContent {
       HStack(spacing: 6) {
+        // Use prompt: for the inline placeholder — passing it as the
+        // title argument causes Form to render it as a leading label
+        // next to the field, producing a broken-looking split layout.
         TextField(
-          "Branch or new name…",
-          text: $store.workspaceQuery
+          "Workspace branch",
+          text: $store.workspaceQuery,
+          prompt: Text("Branch or new name…")
         )
+        .labelsHidden()
         .textFieldStyle(.roundedBorder)
         .frame(minWidth: 200)
         if store.isSuggestingBranchName {
