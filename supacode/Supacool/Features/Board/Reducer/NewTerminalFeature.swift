@@ -181,6 +181,13 @@ struct NewTerminalFeature {
     Reduce { state, action in
       switch action {
       case .binding(\.workspaceQuery):
+        // Git refuses branch names containing whitespace. Replace any
+        // typed (or pasted) whitespace with hyphens inline so the user
+        // never has to see the "can't contain spaces" error — what they
+        // see in the field is what will actually be used.
+        if state.workspaceQuery.contains(where: \.isWhitespace) {
+          state.workspaceQuery = state.workspaceQuery.replacing(/\s+/, with: "-")
+        }
         // Typing in the workspace field re-infers the selection from the
         // current query + known worktrees/branches. Exact matches win;
         // otherwise we treat the query as a new branch name.
