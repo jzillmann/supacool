@@ -425,6 +425,142 @@ struct NewTerminalFeatureTests {
     #expect(sanitizeBranchName(long).count <= 40)
   }
 
+  // MARK: - PR URL flow
+
+  /// Happy path: pasting a PR URL triggers a gh lookup, matches it against
+  /// a configured repo, and pre-configures the workspace field to the PR's
+  /// head branch. The user only has to press Create.
+  @Test(.dependencies) func prURLResolvesAndPinsWorkspace() async {
+    let state = Self.makeState()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.supacoolGithubPR.fetchMetadata = { owner, _, _ in
+        SupacoolPRMetadata(
+          title: "Fix the widget",
+          headRefName: "feat/fix-widget",
+          baseRefName: "main",
+          headRepositoryOwner: owner,
+          state: "OPEN",
+          isDraft: false
+        )
+      }
+      $0.gitClient.remoteInfo = { _ in
+        GithubRemoteInfo(host: "github.com", owner: "acme", repo: "widgets")
+      }
+      $0.gitClient.localBranchNames = { _ in [] }
+      $0.gitClient.remoteBranchRefs = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    let pastedPrompt = "Look at this PR: https://github.com/acme/widgets/pull/42 and fix it"
+    await store.send(\.binding.prompt, pastedPrompt)
+    await store.receive(\.pullRequestLookupResolved)
+
+    // State reflects the PR context: workspace pinned to the PR branch,
+    // repo matched to `acme/widgets`, and the banner is live.
+    #expect(store.state.workspaceQuery == "feat/fix-widget")
+    #expect(store.state.selectedWorkspace == .existingBranch(name: "feat/fix-widget"))
+    if case .resolved(let context) = store.state.pullRequestLookup {
+      #expect(context.parsed.number == 42)
+      #expect(context.parsed.owner == "acme")
+      #expect(context.parsed.repo == "widgets")
+      #expect(context.metadata.title == "Fix the widget")
+    } else {
+      Issue.record("Expected .resolved state, got \(store.state.pullRequestLookup)")
+    }
+  }
+
+  /// When no configured repo matches the PR's owner/repo, surface a
+  /// clear reason in the banner instead of silently applying a mismatched
+  /// workspace. Repo + workspace fields stay unlocked so the user can
+  /// pick manually.
+  @Test(.dependencies) func prURLWithNoMatchingRepoFailsGracefully() async {
+    let state = Self.makeState()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.supacoolGithubPR.fetchMetadata = { owner, _, _ in
+        SupacoolPRMetadata(
+          title: "Upstream fix",
+          headRefName: "bugfix",
+          baseRefName: "main",
+          headRepositoryOwner: owner,
+          state: "OPEN",
+          isDraft: false
+        )
+      }
+      $0.gitClient.remoteInfo = { _ in
+        // Configured repo is a *different* GitHub project — no match.
+        GithubRemoteInfo(host: "github.com", owner: "elsewhere", repo: "other")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "https://github.com/acme/widgets/pull/7")
+    await store.receive(\.pullRequestLookupNotMatched)
+
+    if case .failed(_, let message) = store.state.pullRequestLookup {
+      #expect(message.contains("acme/widgets"))
+    } else {
+      Issue.record("Expected .failed state, got \(store.state.pullRequestLookup)")
+    }
+    // Workspace wasn't auto-changed since the PR couldn't be applied.
+    #expect(store.state.workspaceQuery == "")
+    #expect(store.state.selectedWorkspace == .repoRoot)
+  }
+
+  /// Removing the URL from the prompt clears the PR context so subsequent
+  /// submits use whatever the user typed into the workspace field
+  /// manually. Doesn't reset workspaceQuery — the user may have edited it.
+  @Test(.dependencies) func prURLRemovalResetsLookupToIdle() async {
+    let state = Self.makeState()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.supacoolGithubPR.fetchMetadata = { owner, _, _ in
+        SupacoolPRMetadata(
+          title: "T",
+          headRefName: "br",
+          baseRefName: "main",
+          headRepositoryOwner: owner,
+          state: "OPEN",
+          isDraft: false
+        )
+      }
+      $0.gitClient.remoteInfo = { _ in
+        GithubRemoteInfo(host: "github.com", owner: "acme", repo: "widgets")
+      }
+      $0.gitClient.localBranchNames = { _ in [] }
+      $0.gitClient.remoteBranchRefs = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "https://github.com/acme/widgets/pull/1")
+    await store.receive(\.pullRequestLookupResolved)
+    #expect(store.state.pullRequestLookup != .idle)
+
+    // Clear the URL — binding handler should reset PR state.
+    await store.send(\.binding.prompt, "")
+    #expect(store.state.pullRequestLookup == .idle)
+  }
+
+  // MARK: - PR URL parsing
+
+  @Test func parsedPRURLFindsFirstMatchInText() {
+    let text = "First try https://github.com/foo/bar/pull/12 then ignore later"
+    let parsed = ParsedPullRequestURL.firstMatch(in: text)
+    #expect(parsed?.owner == "foo")
+    #expect(parsed?.repo == "bar")
+    #expect(parsed?.number == 12)
+  }
+
+  @Test func parsedPRURLRejectsNonPRGithubLinks() {
+    #expect(ParsedPullRequestURL.firstMatch(in: "https://github.com/foo/bar/issues/3") == nil)
+    #expect(ParsedPullRequestURL.firstMatch(in: "no url here") == nil)
+    #expect(ParsedPullRequestURL.firstMatch(in: "") == nil)
+  }
+
   // MARK: - Helpers
 
   private static func makeState(

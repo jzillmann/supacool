@@ -17,6 +17,9 @@ struct NewTerminalSheet: View {
     Form {
       Section {
         promptEditor
+        if shouldShowPullRequestBanner {
+          PullRequestBannerView(state: store.pullRequestLookup)
+        }
       } header: {
         Text("New Terminal")
         Text(headerSubtitle)
@@ -29,15 +32,19 @@ struct NewTerminalSheet: View {
           bypassPermissionsToggle
         }
         repoPicker
+          .disabled(isWorkspaceLockedByPR)
         workspaceField
-        ForEach(workspaceSuggestions, id: \.id) { suggestion in
-          WorkspaceSuggestionRow(
-            suggestion: suggestion,
-            isSelected: suggestion.selection == store.selectedWorkspace
-          )
-          .contentShape(Rectangle())
-          .onTapGesture {
-            store.send(.workspaceSelected(suggestion.selection))
+          .disabled(isWorkspaceLockedByPR)
+        if !isWorkspaceLockedByPR {
+          ForEach(workspaceSuggestions, id: \.id) { suggestion in
+            WorkspaceSuggestionRow(
+              suggestion: suggestion,
+              isSelected: suggestion.selection == store.selectedWorkspace
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+              store.send(.workspaceSelected(suggestion.selection))
+            }
           }
         }
       } footer: {
@@ -146,6 +153,25 @@ struct NewTerminalSheet: View {
       return "Start an interactive \(agent.displayName) session with this prompt."
     }
     return "Start a raw terminal session. The prompt (if any) runs as a shell command."
+  }
+
+  /// Hide the banner entirely when no PR is being tracked; otherwise the
+  /// prompt section stays uncluttered during normal use.
+  private var shouldShowPullRequestBanner: Bool {
+    switch store.pullRequestLookup {
+    case .idle: return false
+    case .fetching, .resolved, .failed: return true
+    }
+  }
+
+  /// Lock repo + workspace fields when a PR has resolved — the PR context
+  /// has already pinned them. `.failed` stays unlocked so the user can
+  /// fall back to manual selection.
+  private var isWorkspaceLockedByPR: Bool {
+    switch store.pullRequestLookup {
+    case .resolved: return true
+    case .idle, .fetching, .failed: return false
+    }
   }
 
   private var creatingStatusText: String {
@@ -518,5 +544,94 @@ private struct WorkspaceSuggestionRow: View {
       }
     }
     .padding(.vertical, 2)
+  }
+}
+
+// MARK: - Pull request banner
+
+/// Status chip shown below the prompt when a GitHub PR URL has been
+/// detected in the prompt. Three states: fetching (spinner), resolved
+/// (PR details + branch preview), failed (warning text). Inert — all
+/// interaction happens elsewhere.
+private struct PullRequestBannerView: View {
+  let state: PullRequestLookupState
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: iconName)
+        .font(.callout)
+        .foregroundStyle(iconColor)
+        .frame(width: 18)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(headline)
+          .font(.callout)
+          .lineLimit(2)
+        if let detail {
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+      Spacer(minLength: 8)
+      if case .fetching = state {
+        ProgressView().controlSize(.small)
+      }
+    }
+    .padding(.vertical, 6)
+    .padding(.horizontal, 10)
+    .background(
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(backgroundTint)
+    )
+  }
+
+  private var iconName: String {
+    switch state {
+    case .idle: return "link"
+    case .fetching: return "link"
+    case .resolved: return "checkmark.circle.fill"
+    case .failed: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private var iconColor: Color {
+    switch state {
+    case .resolved: return .accentColor
+    case .failed: return .orange
+    case .idle, .fetching: return .secondary
+    }
+  }
+
+  private var backgroundTint: Color {
+    switch state {
+    case .failed: return Color.orange.opacity(0.08)
+    case .resolved: return Color.accentColor.opacity(0.08)
+    case .idle, .fetching: return Color.secondary.opacity(0.06)
+    }
+  }
+
+  private var headline: String {
+    switch state {
+    case .idle: return ""
+    case .fetching(let parsed):
+      return "Fetching PR #\(parsed.number) from \(parsed.owner)/\(parsed.repo)…"
+    case .resolved(let context):
+      return "PR #\(context.parsed.number): \(context.metadata.title)"
+    case .failed:
+      return "Couldn't use this PR URL"
+    }
+  }
+
+  private var detail: String? {
+    switch state {
+    case .idle, .fetching: return nil
+    case .resolved(let context):
+      return
+        "\(context.metadata.baseRefName) ← \(context.metadata.headRefName) · "
+        + "a worktree will be checked out from this branch."
+    case .failed(_, let message):
+      return message
+    }
   }
 }

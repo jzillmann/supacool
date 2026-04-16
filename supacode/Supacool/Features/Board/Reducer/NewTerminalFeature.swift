@@ -21,6 +21,32 @@ nonisolated enum WorkspaceSelection: Equatable, Hashable, Sendable {
   case newBranch(name: String)
 }
 
+/// Tracks the "paste a PR URL to pre-configure the sheet" flow. Set from
+/// the prompt field's binding when a GitHub PR URL is detected; resolved
+/// asynchronously via `gh pr view`; drives auto-selection of the repo +
+/// workspace so the user doesn't need to pick them manually.
+nonisolated enum PullRequestLookupState: Equatable, Sendable {
+  case idle
+  /// gh lookup in flight.
+  case fetching(ParsedPullRequestURL)
+  /// Successful lookup and a matching local repo was found.
+  case resolved(PullRequestContext)
+  /// Lookup failed, no configured repo matches, or the PR was from a fork.
+  /// Sheet falls back to manual entry; message shown inline.
+  case failed(url: String, message: String)
+}
+
+nonisolated struct PullRequestContext: Equatable, Sendable {
+  let parsed: ParsedPullRequestURL
+  let metadata: SupacoolPRMetadata
+  let matchedRepositoryID: Repository.ID
+  /// True if the PR's head repo differs from its base repo (i.e. fork PR).
+  /// v1 still pre-fills the branch name, but git fetch on origin won't find
+  /// it — we surface a warning in the banner so the user knows to check out
+  /// the fork branch manually if needed.
+  let isFork: Bool
+}
+
 /// Sheet reducer for "+ New Terminal". Collects prompt, repo, agent, and
 /// a unified workspace choice (repo root / worktree / branch / new branch).
 /// On submit:
@@ -61,6 +87,13 @@ struct NewTerminalFeature {
     /// If rerun came from a session-owned worktree, preserve ownership only
     /// when the user keeps targeting that same worktree.
     var rerunOwnedWorktreeID: String?
+
+    // MARK: - PR URL flow
+
+    /// State of the "paste a PR URL into the prompt to pre-configure the
+    /// sheet" flow. Driven entirely off the prompt field — no separate
+    /// input. Resets to `.idle` when the URL is removed from the prompt.
+    var pullRequestLookup: PullRequestLookupState = .idle
 
     init(availableRepositories: IdentifiedArrayOf<Repository>) {
       self.availableRepositories = availableRepositories
@@ -120,6 +153,9 @@ struct NewTerminalFeature {
     case setCreating(Bool)
     case sessionReady(AgentSession)
     case creationFailed(message: String)
+    case pullRequestLookupResolved(PullRequestContext)
+    case pullRequestLookupNotMatched(parsed: ParsedPullRequestURL, reason: String)
+    case pullRequestLookupFailed(parsed: ParsedPullRequestURL, message: String)
     case delegate(Delegate)
 
     @CasePathable
@@ -132,10 +168,12 @@ struct NewTerminalFeature {
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(TerminalClient.self) var terminalClient
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
+  @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
 
   private nonisolated enum CancelID: Hashable, Sendable {
     case branchNameSuggestion
     case loadBranches
+    case pullRequestLookup
   }
 
   var body: some Reducer<State, Action> {
@@ -161,6 +199,9 @@ struct NewTerminalFeature {
         state.availableLocalBranches = []
         state.availableRemoteBranches = []
         return .send(.task)
+
+      case .binding(\.prompt):
+        return handlePromptChange(state: &state)
 
       case .binding:
         state.validationMessage = nil
@@ -188,8 +229,13 @@ struct NewTerminalFeature {
         state.availableLocalBranches = local
         state.availableRemoteBranches = remote
         state.isLoadingBranches = false
-        // Re-run inference now that we have fresh data — query may have
-        // matched only after branches loaded.
+        // When a PR is resolved, the workspace was pinned to the PR's
+        // head branch — never reinfer over that. Otherwise, re-run
+        // inference since the query may have matched only after branches
+        // loaded.
+        if case .resolved = state.pullRequestLookup {
+          return .none
+        }
         state.selectedWorkspace = Self.inferSelection(
           from: state.workspaceQuery,
           state: state
@@ -453,9 +499,178 @@ struct NewTerminalFeature {
         state.validationMessage = message
         return .none
 
+      case .pullRequestLookupResolved(let context):
+        return applyPullRequestResolution(state: &state, context: context)
+
+      case .pullRequestLookupNotMatched(let parsed, let reason):
+        // Only transition if the URL is still the one the sheet thinks
+        // it's tracking — protects against stale effects racing past a
+        // user who already cleared the URL.
+        guard Self.shouldAcceptLookupOutcome(for: parsed, state: state) else {
+          return .none
+        }
+        state.pullRequestLookup = .failed(url: parsed.url, message: reason)
+        state.validationMessage = nil
+        return .none
+
+      case .pullRequestLookupFailed(let parsed, let message):
+        guard Self.shouldAcceptLookupOutcome(for: parsed, state: state) else {
+          return .none
+        }
+        state.pullRequestLookup = .failed(url: parsed.url, message: message)
+        state.validationMessage = nil
+        return .none
+
       case .delegate:
         return .none
       }
+    }
+  }
+
+  // MARK: - PR URL handling
+
+  /// Kick off (or cancel) a gh-backed PR lookup based on the current
+  /// prompt content. Returns the effect that performs the lookup —
+  /// mutating the sheet state inline on transitions keeps the side-effect
+  /// flow readable.
+  private func handlePromptChange(
+    state: inout State
+  ) -> Effect<Action> {
+    state.validationMessage = nil
+    let parsed = ParsedPullRequestURL.firstMatch(in: state.prompt)
+
+    switch (parsed, state.pullRequestLookup) {
+    case (nil, .idle):
+      return .none
+    case (nil, _):
+      // URL was removed — reset PR state but leave the workspace/repo
+      // the user's already configured. They may still want to submit.
+      state.pullRequestLookup = .idle
+      return .cancel(id: CancelID.pullRequestLookup)
+    case (let parsed?, .fetching(let pending)) where pending == parsed:
+      return .none
+    case (let parsed?, .resolved(let context)) where context.parsed == parsed:
+      return .none
+    case (let parsed?, .failed(let url, _)) where url == parsed.url:
+      // Same URL already failed once — don't thrash the API.
+      return .none
+    case (let parsed?, _):
+      return startPullRequestLookup(state: &state, parsed: parsed)
+    }
+  }
+
+  private func startPullRequestLookup(
+    state: inout State,
+    parsed: ParsedPullRequestURL
+  ) -> Effect<Action> {
+    state.pullRequestLookup = .fetching(parsed)
+    // Extract (id, rootURL) pairs synchronously while we're still on the
+    // main actor. Repository's Identifiable conformance is main-actor
+    // isolated; touching .id inside a nonisolated Task is a Swift 6 error.
+    let repoCoordinates: [(String, URL)] = state.availableRepositories.map {
+      ($0.id, $0.rootURL)
+    }
+    return .run { [gitClient, supacoolGithubPR] send in
+      // Race the gh call and the repo-matching lookup in parallel — the
+      // gh call is the slow one, repo matching is just a few git plumbing
+      // invocations. This keeps time-to-banner tight.
+      async let metadataTask = supacoolGithubPR.fetchMetadata(
+        parsed.owner,
+        parsed.repo,
+        parsed.number
+      )
+      async let repoMatchTask = findMatchingRepositoryID(
+        candidates: repoCoordinates,
+        owner: parsed.owner,
+        repo: parsed.repo,
+        gitClient: gitClient
+      )
+
+      do {
+        let metadata = try await metadataTask
+        let matchedID = await repoMatchTask
+
+        if metadata.headRepositoryOwner != parsed.owner {
+          await send(
+            .pullRequestLookupNotMatched(
+              parsed: parsed,
+              reason:
+                "Fork PRs aren't auto-checked-out yet. "
+                + "Run `gh pr checkout \(parsed.number)` in a normal terminal instead."
+            )
+          )
+          return
+        }
+        guard let matchedID else {
+          await send(
+            .pullRequestLookupNotMatched(
+              parsed: parsed,
+              reason:
+                "No configured repo matches \(parsed.owner)/\(parsed.repo). "
+                + "Add it in Settings → Repositories first."
+            )
+          )
+          return
+        }
+
+        let context = PullRequestContext(
+          parsed: parsed,
+          metadata: metadata,
+          matchedRepositoryID: matchedID,
+          isFork: false
+        )
+        await send(.pullRequestLookupResolved(context))
+      } catch {
+        newTerminalLogger.warning(
+          "PR lookup failed for \(parsed.url): \(error.localizedDescription)"
+        )
+        await send(
+          .pullRequestLookupFailed(
+            parsed: parsed,
+            message:
+              "Couldn't fetch PR details. Is `gh` installed and authenticated?"
+          )
+        )
+      }
+    }
+    .cancellable(id: CancelID.pullRequestLookup, cancelInFlight: true)
+  }
+
+  /// Apply a resolved PR context to the sheet: pin the repo, pre-fill the
+  /// workspace field with the PR's head branch, and queue a branch
+  /// reload if the repo actually changed.
+  private func applyPullRequestResolution(
+    state: inout State,
+    context: PullRequestContext
+  ) -> Effect<Action> {
+    guard Self.shouldAcceptLookupOutcome(for: context.parsed, state: state) else {
+      return .none
+    }
+
+    state.pullRequestLookup = .resolved(context)
+    state.validationMessage = nil
+
+    let repoChanged = state.selectedRepositoryID != context.matchedRepositoryID
+    if repoChanged {
+      state.selectedRepositoryID = context.matchedRepositoryID
+      state.availableLocalBranches = []
+      state.availableRemoteBranches = []
+    }
+    state.workspaceQuery = context.metadata.headRefName
+    state.selectedWorkspace = .existingBranch(name: context.metadata.headRefName)
+
+    return repoChanged ? .send(.task) : .none
+  }
+
+  /// Guard: reject lookup outcomes for a URL that's no longer the one
+  /// the sheet is tracking (the user edited or removed it mid-flight).
+  static func shouldAcceptLookupOutcome(
+    for parsed: ParsedPullRequestURL,
+    state: State
+  ) -> Bool {
+    switch state.pullRequestLookup {
+    case .fetching(let pending): return pending == parsed
+    case .idle, .resolved, .failed: return false
     }
   }
 
@@ -553,5 +768,38 @@ extension String {
   /// upstream syncs.
   fileprivate nonisolated func supacoolMatchingRemote(from remotes: [String]) -> String? {
     remotes.sorted { $0.count > $1.count }.first { hasPrefix("\($0)/") }
+  }
+}
+
+/// Find the first configured repository whose GitHub remote matches the
+/// given owner/repo pair. Runs the `remoteInfo` probes in parallel so the
+/// PR banner appears quickly even when the user has many repos
+/// configured. Case-insensitive match — GitHub coerces casing anyway.
+///
+/// Takes plain tuples instead of `IdentifiedArrayOf<Repository>` because
+/// Repository's Identifiable conformance is `@MainActor`-isolated and we
+/// run inside a nonisolated Task here.
+nonisolated func findMatchingRepositoryID(
+  candidates: [(String, URL)],
+  owner: String,
+  repo: String,
+  gitClient: GitClientDependency
+) async -> String? {
+  await withTaskGroup(of: (String, GithubRemoteInfo?).self) { group in
+    for (id, rootURL) in candidates {
+      group.addTask {
+        (id, await gitClient.remoteInfo(rootURL))
+      }
+    }
+    for await (id, info) in group {
+      guard let info else { continue }
+      if info.owner.caseInsensitiveCompare(owner) == .orderedSame
+        && info.repo.caseInsensitiveCompare(repo) == .orderedSame
+      {
+        group.cancelAll()
+        return id
+      }
+    }
+    return nil
   }
 }
