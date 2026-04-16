@@ -212,10 +212,11 @@ struct NewTerminalSheet: View {
     LabeledContent {
       HStack(spacing: 6) {
         TextField(
-          "Repo root, branch, or new name…",
+          "Branch or new name…",
           text: $store.workspaceQuery
         )
-        .textFieldStyle(.plain)
+        .textFieldStyle(.roundedBorder)
+        .frame(minWidth: 200)
         if store.isSuggestingBranchName {
           ProgressView().controlSize(.small).frame(width: 16, height: 16)
         } else {
@@ -250,19 +251,24 @@ struct NewTerminalSheet: View {
 
   /// Filtered list of workspace options shown below the search field.
   /// Caps at 8 rows total to keep the sheet compact.
+  ///
+  /// Empty query = show "Repo root" + existing worktrees only. Dumping
+  /// every local and remote branch by default buries the common case
+  /// (pick a registered worktree, create something new) under dozens of
+  /// rows; the user opts into the branch list by typing a character.
   private var workspaceSuggestions: [WorkspaceSuggestion] {
     let query = store.workspaceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
     let lowerQuery = query.lowercased()
+    let isEmptyQuery = query.isEmpty
 
     func matches(_ candidate: String) -> Bool {
-      if query.isEmpty { return true }
-      return candidate.lowercased().contains(lowerQuery)
+      candidate.lowercased().contains(lowerQuery)
     }
 
     var results: [WorkspaceSuggestion] = []
 
     // 1) Repo root — always shown when query is empty; also when query matches "root" etc.
-    if query.isEmpty || matches("repo root") || matches("root") {
+    if isEmptyQuery || matches("repo root") || matches("root") {
       results.append(
         WorkspaceSuggestion(
           id: "repoRoot",
@@ -275,7 +281,9 @@ struct NewTerminalSheet: View {
       )
     }
 
-    // 2) Registered worktrees (excluding the repo root entry).
+    // 2) Registered worktrees (excluding the repo root entry). Always
+    //    shown — these are few and are the primary "resume where I left
+    //    off" affordance.
     let worktrees: [Worktree] = {
       guard let repoID = store.selectedRepositoryID,
         let repo = store.availableRepositories[id: repoID]
@@ -286,7 +294,7 @@ struct NewTerminalSheet: View {
 
     for wt in worktrees {
       let label = wt.branch ?? wt.name
-      if matches(label) || matches(wt.name) {
+      if isEmptyQuery || matches(label) || matches(wt.name) {
         results.append(
           WorkspaceSuggestion(
             id: "wt:\(wt.id)",
@@ -300,46 +308,48 @@ struct NewTerminalSheet: View {
       }
     }
 
-    // 3) Local branches that aren't already backing a worktree.
-    let branchesOnWorktrees = Set(worktrees.compactMap { $0.branch })
-    for branch in store.availableLocalBranches {
-      guard !branchesOnWorktrees.contains(branch) else { continue }
-      if matches(branch) {
-        results.append(
-          WorkspaceSuggestion(
-            id: "local:\(branch)",
-            selection: .existingBranch(name: branch),
-            systemImage: "point.3.connected.trianglepath.dotted",
-            title: branch,
-            subtitle: "Local branch — creates a worktree",
-            kindLabel: "Local branch"
+    // Branches (local + remote) only show up once the user starts typing.
+    if !isEmptyQuery {
+      // 3) Local branches that aren't already backing a worktree.
+      let branchesOnWorktrees = Set(worktrees.compactMap { $0.branch })
+      for branch in store.availableLocalBranches {
+        guard !branchesOnWorktrees.contains(branch) else { continue }
+        if matches(branch) {
+          results.append(
+            WorkspaceSuggestion(
+              id: "local:\(branch)",
+              selection: .existingBranch(name: branch),
+              systemImage: "point.3.connected.trianglepath.dotted",
+              title: branch,
+              subtitle: "Local branch — creates a worktree",
+              kindLabel: "Local branch"
+            )
           )
-        )
+        }
       }
-    }
 
-    // 4) Remote branches whose local name isn't already a local branch.
-    let localSet = Set(store.availableLocalBranches)
-    for remoteRef in store.availableRemoteBranches {
-      let localName = NewTerminalFeature.stripRemotePrefix(remoteRef)
-      guard !localSet.contains(localName) else { continue }
-      guard !branchesOnWorktrees.contains(localName) else { continue }
-      if matches(remoteRef) || matches(localName) {
-        results.append(
-          WorkspaceSuggestion(
-            id: "remote:\(remoteRef)",
-            selection: .existingBranch(name: localName),
-            systemImage: "cloud",
-            title: localName,
-            subtitle: remoteRef,
-            kindLabel: "Remote"
+      // 4) Remote branches whose local name isn't already a local branch.
+      let localSet = Set(store.availableLocalBranches)
+      for remoteRef in store.availableRemoteBranches {
+        let localName = NewTerminalFeature.stripRemotePrefix(remoteRef)
+        guard !localSet.contains(localName) else { continue }
+        guard !branchesOnWorktrees.contains(localName) else { continue }
+        if matches(remoteRef) || matches(localName) {
+          results.append(
+            WorkspaceSuggestion(
+              id: "remote:\(remoteRef)",
+              selection: .existingBranch(name: localName),
+              systemImage: "cloud",
+              title: localName,
+              subtitle: remoteRef,
+              kindLabel: "Remote"
+            )
           )
-        )
+        }
       }
-    }
 
-    // 5) "+ Create new" row when query doesn't exactly match any existing option.
-    if !query.isEmpty {
+      // 5) "+ Create new" row when the query doesn't exactly match any
+      //    existing option and is a valid branch name.
       let isExactMatch = results.contains { $0.title == query }
       let hasSpace = query.contains(where: \.isWhitespace)
       if !isExactMatch && !hasSpace {
