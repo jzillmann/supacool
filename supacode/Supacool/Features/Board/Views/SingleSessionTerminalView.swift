@@ -46,6 +46,22 @@ struct SingleSessionTerminalView: View {
       state.focusSelectedTab()
       let activity = resolvedWindowActivity
       state.syncFocus(windowIsKey: activity.isKeyWindow, windowIsVisible: activity.isVisible)
+      // BoardView claims first-responder via `.focusable()` while it's
+      // on screen. When the user enters a session, the synchronous
+      // focusSelectedTab above schedules a moveFocus Task — but
+      // SwiftUI is still tearing down the BoardView's responder in
+      // parallel, and its hidden focus area can keep stealing
+      // first-responder back. The visible symptom: typing does
+      // nothing until the user switches tabs and back, at which
+      // point the buffered keystrokes appear because Ghostty already
+      // thought it was focused (focusDidChange(true) ran from
+      // applySurfaceActivity), but AppKit was routing keys
+      // elsewhere. Re-assert on the next runloop tick to win the
+      // race after the BoardView's responder has resigned.
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(50))
+        state.focusSelectedTab()
+      }
     }
   }
 
