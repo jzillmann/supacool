@@ -1063,6 +1063,12 @@ final class WorktreeTerminalState {
       worktree.id, allowedCharacters: percentEncodingSet, label: "SUPACODE_WORKTREE_ID")
     env["SUPACODE_TAB_ID"] = tabId.rawValue.uuidString
     env["SUPACODE_SURFACE_ID"] = surfaceID.uuidString
+    // Plain (non-percent-encoded) filesystem paths. Setup scripts and
+    // user tooling need the raw paths to `cd` into, not the encoded
+    // socket identifiers above. Supacool addition — existing
+    // `*_ID` vars are kept unchanged for downstream deeplink handlers.
+    env["SUPACODE_REPO_ROOT"] = repoPath
+    env["SUPACODE_WORKTREE_ROOT"] = worktree.workingDirectory.path(percentEncoded: false)
     if let socketPath {
       env["SUPACODE_SOCKET_PATH"] = socketPath
     }
