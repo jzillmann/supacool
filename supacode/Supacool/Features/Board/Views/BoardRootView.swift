@@ -191,7 +191,11 @@ struct BoardRootView: View {
           : nil,
         onRemove: { store.send(.removeSession(id: session.id)) },
         onRename: { beginRename(session) },
-        onSwitcherMove: { direction in openSwitcher(direction: direction) }
+        onSwitcherMove: { direction in openSwitcher(direction: direction) },
+        onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
+        onAutoObserverPromptChanged: { prompt in
+          store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
+        }
       )
       .overlay {
         if isSessionSwitcherPresented {

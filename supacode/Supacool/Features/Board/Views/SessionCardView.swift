@@ -26,7 +26,6 @@ struct SessionCardView: View {
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
   @State private var isAutoObserverPopoverShown: Bool = false
-  @State private var autoObserverPromptDraft: String = ""
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -152,7 +151,6 @@ struct SessionCardView: View {
   /// Glows in accent color when the observer is active.
   private var autoObserverButton: some View {
     Button {
-      autoObserverPromptDraft = session.autoObserverPrompt
       isAutoObserverPopoverShown.toggle()
     } label: {
       Image(systemName: "sparkles")
@@ -162,41 +160,12 @@ struct SessionCardView: View {
     .buttonStyle(.plain)
     .help("Auto-observer: auto-answer obvious prompts (click to configure)")
     .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .top) {
-      autoObserverPopover
-    }
-  }
-
-  private var autoObserverPopover: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      Toggle(
-        "Auto-observer",
-        isOn: Binding(
-          get: { session.autoObserver },
-          set: { _ in onAutoObserverToggle?() }
-        )
+      AutoObserverPopover(
+        session: session,
+        onToggle: { onAutoObserverToggle?() },
+        onPromptChanged: { onAutoObserverPromptChanged?($0) }
       )
-      .toggleStyle(.switch)
-
-      VStack(alignment: .leading, spacing: 4) {
-        Text("Instructions (optional)")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        TextEditor(text: $autoObserverPromptDraft)
-          .font(.caption.monospaced())
-          .frame(width: 260, height: 80)
-          .scrollContentBackground(.hidden)
-          .background(Color(nsColor: .controlBackgroundColor))
-          .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-          .overlay(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-              .strokeBorder(.separator, lineWidth: 0.5)
-          )
-          .onChange(of: autoObserverPromptDraft) { _, newValue in
-            onAutoObserverPromptChanged?(newValue)
-          }
-      }
     }
-    .padding(14)
   }
 
   /// Small bookmark glyph signalling whether the agent's native session id

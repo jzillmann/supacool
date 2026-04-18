@@ -32,6 +32,11 @@ struct FullScreenTerminalView: View {
   /// itself handles subsequent arrow keys once presented.
   let onSwitcherMove: (Int) -> Void
 
+  /// Mirrors the board card's auto-observer affordance so the user can
+  /// flip the observer on/off without going back to the board.
+  let onAutoObserverToggle: () -> Void
+  let onAutoObserverPromptChanged: (String) -> Void
+
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
@@ -41,6 +46,7 @@ struct FullScreenTerminalView: View {
   @State private var isEditingGitGuiApp: Bool = false
   @State private var gitGuiAppDraft: String = ""
   @State private var isInfoPopoverShown: Bool = false
+  @State private var isAutoObserverPopoverShown: Bool = false
   @State private var isQuickDiffPresented: Bool = false
 
   /// Surface id of the split we created via the header button — `nil`
@@ -135,6 +141,7 @@ struct FullScreenTerminalView: View {
         }
         .help("Double-click to rename")
       infoButton
+      autoObserverButton
       openDiffButton
       splitButton
       Spacer()
@@ -282,6 +289,28 @@ struct FullScreenTerminalView: View {
         repositoryName: repositories[id: session.repositoryID]?.name,
         worktreeLabel: worktreeLabel,
         onRerun: resolveWorktree() == nil ? onRerun : nil
+      )
+    }
+  }
+
+  /// Mirrors the board card's sparkle button so the user can toggle the
+  /// auto-observer (and edit its instructions) without leaving the
+  /// terminal. Glows in accent color when the observer is active.
+  private var autoObserverButton: some View {
+    Button {
+      isAutoObserverPopoverShown.toggle()
+    } label: {
+      Image(systemName: "sparkles")
+        .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconTintStyle(tint: session.autoObserver ? .accentColor : .secondary))
+    }
+    .buttonStyle(.plain)
+    .help("Auto-observer: auto-answer obvious prompts (click to configure)")
+    .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .bottom) {
+      AutoObserverPopover(
+        session: session,
+        onToggle: onAutoObserverToggle,
+        onPromptChanged: onAutoObserverPromptChanged
       )
     }
   }
@@ -524,6 +553,29 @@ private struct HeaderIconStyle: ViewModifier {
   func body(content: Content) -> some View {
     content
       .foregroundStyle(.secondary)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 4)
+      .background(
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
+          .fill(Color.primary.opacity(isHovered ? 0.12 : 0))
+      )
+      .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+      .onHover { isHovered = $0 }
+      .animation(.easeOut(duration: 0.12), value: isHovered)
+  }
+}
+
+/// Variant of `HeaderIconStyle` that lets the caller pick the foreground
+/// tint — used by the auto-observer button so it can switch between the
+/// inactive secondary tone and the accent-color "active" tone without
+/// losing the shared hover background.
+private struct HeaderIconTintStyle: ViewModifier {
+  let tint: Color
+  @State private var isHovered = false
+
+  func body(content: Content) -> some View {
+    content
+      .foregroundStyle(tint)
       .padding(.horizontal, 6)
       .padding(.vertical, 4)
       .background(
