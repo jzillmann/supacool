@@ -23,7 +23,7 @@ Supacool is a fork of [supacode](https://github.com/supabitapp/supacode) — but
 - **Full-screen terminal per session** with inline diff-tool, split-shell (⌘E to toggle), and session-info affordances
 - **Auto-resume** — sessions survive app restarts and upgrades; no more losing a running agent to a relaunch
 - **Park / unpark** — free the PTY but keep the session metadata, and bring it back with one click when you're ready
-- **⌘-arrow session switcher** — ⌘-Tab-style overlay that cycles through sessions, grouped by Waiting and Working
+- **⌘⌥-arrow session switcher** — ⌘-Tab-style overlay that cycles through sessions, grouped by Waiting and Working (⌥ added to the combo so it doesn't shadow the terminal's own line-navigation shortcuts)
 - **New session from a pasted PR URL** — paste a GitHub PR URL into the New Terminal prompt and Supacool matches the repo, forces worktree mode, and pre-fills the PR's head branch; press Create and you're in
 - **Unified workspace picker** — one search combo box covering repo root, existing worktrees, local + remote branches, and new-branch creation
 - **AI-assisted branch names** — a wand button in the workspace picker generates a kebab-case branch name from the session prompt

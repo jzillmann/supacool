@@ -30,8 +30,9 @@ struct BoardRootView: View {
   @State private var highlightedSessionID: AgentSession.ID?
 
   /// When true, the ⌘-Tab-style session switcher overlay is visible over
-  /// the full-screen terminal. Opened by `⌘←/→/↑/↓`, committed on ⌘
-  /// release (see `SessionSwitcherOverlay`).
+  /// the full-screen terminal. Opened by `⌘⌥←/→/↑/↓` (plain ⌘+arrow is
+  /// reserved for the terminal surface's own line-navigation), committed
+  /// on ⌥ release (see `SessionSwitcherOverlay`).
   @State private var isSessionSwitcherPresented: Bool = false
 
   /// Auto-zoom back to the board the moment a submitted prompt kicks the
@@ -321,7 +322,7 @@ struct BoardRootView: View {
   }
 
   /// Opens the switcher and pre-moves the cursor by ±1 so the first
-  /// `⌘←/→/↑/↓` press already shows the user where they're heading.
+  /// `⌘⌥←/→/↑/↓` press already shows the user where they're heading.
   private func openSwitcher(direction: Int) {
     let sessions = switcherSessions
     guard !sessions.isEmpty else { return }

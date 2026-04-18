@@ -162,14 +162,17 @@ struct SessionSwitcherOverlay: View {
     highlightedSessionID = ids[next]
   }
 
-  // MARK: - ⌘-release detection
+  // MARK: - ⌘⌥-release detection
 
   /// Watches `flagsChanged` events locally while the overlay is on screen
-  /// and commits the moment `⌘` is released. Scoped to the overlay's
+  /// and commits the moment the user releases `⌥` (the option half of
+  /// the ⌘⌥+arrow combo). Option is the cleaner "done switching"
+  /// signal because ⌘ stays held for many adjacent shortcuts and users
+  /// often keep it pressed between actions. Scoped to the overlay's
   /// lifecycle so there's no lingering monitor once we're dismissed.
   private func installFlagsMonitor() {
     flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
-      if !event.modifierFlags.contains(.command) {
+      if !event.modifierFlags.contains(.option) {
         onCommit()
       }
       return event

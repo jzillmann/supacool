@@ -95,23 +95,26 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut("e", modifiers: .command)
         .hidden()
     )
-    // ⌘-Tab-style session switcher. ⌘← / ⌘↑ cycle backward, ⌘→ / ⌘↓
-    // forward. The overlay (owned by BoardRootView) takes focus once
-    // open, so repeated arrow presses while ⌘ stays held go to the
-    // overlay — these bindings only need to fire for the first press.
+    // ⌘-Tab-style session switcher. ⌘⌥← / ⌘⌥↑ cycle backward, ⌘⌥→ /
+    // ⌘⌥↓ forward — picking ⌘⌥+arrow over plain ⌘+arrow keeps the
+    // native "jump to start/end of line" shortcuts inside the terminal
+    // surface usable. The overlay (owned by BoardRootView) takes focus
+    // once open, so repeated arrow presses while the modifier combo
+    // stays held go to the overlay — these bindings only need to fire
+    // for the first press.
     .background(switcherShortcuts)
   }
 
   private var switcherShortcuts: some View {
     Group {
       Button("Prev Session") { onSwitcherMove(-1) }
-        .keyboardShortcut(.leftArrow, modifiers: .command)
+        .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
       Button("Prev Session (up)") { onSwitcherMove(-1) }
-        .keyboardShortcut(.upArrow, modifiers: .command)
+        .keyboardShortcut(.upArrow, modifiers: [.command, .option])
       Button("Next Session") { onSwitcherMove(+1) }
-        .keyboardShortcut(.rightArrow, modifiers: .command)
+        .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
       Button("Next Session (down)") { onSwitcherMove(+1) }
-        .keyboardShortcut(.downArrow, modifiers: .command)
+        .keyboardShortcut(.downArrow, modifiers: [.command, .option])
     }
     .hidden()
   }

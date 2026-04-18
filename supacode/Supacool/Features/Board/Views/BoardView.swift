@@ -342,7 +342,7 @@ struct BoardView: View {
 }
 
 /// Shared nav-order helpers used by both the board's arrow-key nav and the
-/// full-screen `⌘`-arrow session switcher so the two stay in muscle-memory
+/// full-screen `⌘⌥`-arrow session switcher so the two stay in muscle-memory
 /// sync. Cursor order is waiting-on-me first, then in-progress — matches
 /// the on-screen section layout.
 enum BoardNavOrder {
