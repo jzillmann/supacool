@@ -10,8 +10,15 @@ struct BoardFeatureTests {
   // MARK: - Session CRUD
 
   @Test(.dependencies) func createSessionAddsToListAndFocuses() async {
+    struct NoInference: Error {}
     let store = TestStore(initialState: BoardFeature.State()) {
       BoardFeature()
+    } withDependencies: {
+      // createSession kicks off a background LLM call to refine the
+      // display name; stub it out here so the effect terminates without
+      // dispatching a follow-up action that would fail the exhaustivity
+      // check.
+      $0.backgroundInferenceClient.infer = { _ in throw NoInference() }
     }
     let session = Self.sampleSession()
 
@@ -20,6 +27,43 @@ struct BoardFeatureTests {
     await store.send(.createSession(session)) {
       $0.$sessions.withLock { $0 = [session] }
     }
+  }
+
+  @Test(.dependencies) func createSessionRefinesDisplayNameViaInference() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.backgroundInferenceClient.infer = { _ in "Fix Failing Unit Tests" }
+    }
+    let session = Self.sampleSession()  // prompt: "Fix the failing tests" → derived "Fix the failing tests"
+    let sessionID = session.id
+
+    await store.send(.createSession(session)) {
+      $0.$sessions.withLock { $0 = [session] }
+    }
+    await store.receive(\._autoDisplayNameSuggested) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].displayName = "Fix Failing Unit Tests"
+      }
+    }
+    _ = sessionID
+  }
+
+  @Test(.dependencies) func createSessionKeepsPinnedDisplayNameDespiteInference() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.backgroundInferenceClient.infer = { _ in "LLM Generated Name" }
+    }
+    // Pin a custom displayName up front (simulates the PR-URL flow
+    // setting "PR #42: Fix the widget"). The inference result must NOT
+    // clobber it.
+    let session = Self.sampleSession(displayName: "PR #42: Fix the widget")
+    await store.send(.createSession(session)) {
+      $0.$sessions.withLock { $0 = [session] }
+    }
+    // No _autoDisplayNameSuggested is expected — the effect short-circuits
+    // before calling infer because displayName != deriveDisplayName(prompt).
   }
 
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {

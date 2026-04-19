@@ -32,6 +32,13 @@ struct BoardFeature {
     /// Sessions whose Auto-Observer is currently reading/deciding.
     /// Guards against re-entrant triggers on the same session.
     var autoObserverInFlight: Set<AgentSession.ID> = []
+
+    /// The session a Rerun is replacing — kept around until the new
+    /// session is successfully created so that a failed/cancelled
+    /// rerun doesn't lose the original card. Cleared on successful
+    /// create (the original is removed at that point) or on sheet
+    /// cancel (the original stays put).
+    var pendingRerunSessionID: AgentSession.ID?
   }
 
   enum Action: BindableAction, Equatable {
@@ -87,6 +94,13 @@ struct BoardFeature {
     case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
     case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, state: PRState)
 
+    // MARK: Auto display name
+    /// Fired when the background inference client returns a suggested
+    /// display name for a freshly created session. Applied only if the
+    /// current name is still the deterministic slice (i.e. the user
+    /// hasn't renamed in the meantime).
+    case _autoDisplayNameSuggested(id: AgentSession.ID, suggested: String)
+
     case delegate(Delegate)
   }
 
@@ -103,6 +117,7 @@ struct BoardFeature {
   @Dependency(AutoObserverClient.self) var autoObserverClient
   @Dependency(SessionReferenceScannerClient.self) var scannerClient
   @Dependency(GithubCLIClient.self) var githubCLI
+  @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -122,7 +137,7 @@ struct BoardFeature {
         // Intentionally do NOT focus the new session. Spawning an agent
         // is background work; the user stays on the board and sees the
         // new card appear in "In Progress." They can tap in when ready.
-        return .none
+        return autoDisplayNameEffect(for: session)
 
       case .renameSession(let id, let newName):
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -320,9 +335,12 @@ struct BoardFeature {
         guard let previous = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
-        // Drop the detached card and pop focus so the user lands on the
-        // sheet with the board behind it.
-        state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
+        // Pop focus so the user lands on the sheet with the board
+        // behind it. Crucially, do NOT remove the previous session
+        // here — wait until the new session is created. A failed
+        // create or a cancelled sheet would otherwise lose the
+        // original card and its prompt.
+        state.pendingRerunSessionID = previous.id
         state.focusedSessionID = nil
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories),
@@ -387,10 +405,25 @@ struct BoardFeature {
 
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
         state.newTerminalSheet = nil
+        // The rerun's replacement is ready — drop the original now.
+        if let pendingID = state.pendingRerunSessionID {
+          state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
+          state.pendingRerunSessionID = nil
+        }
         return .send(.createSession(session))
 
       case .newTerminalSheet(.presented(.delegate(.cancel))):
         state.newTerminalSheet = nil
+        // Cancelled / dismissed without creating — keep the original.
+        state.pendingRerunSessionID = nil
+        return .none
+
+      case .newTerminalSheet(.dismiss):
+        // Sheet dismissed by the framework (Esc, click-outside, etc.)
+        // without a delegate action firing — clear any pending rerun
+        // marker so a later non-rerun create doesn't drop the wrong
+        // session.
+        state.pendingRerunSessionID = nil
         return .none
 
       case .cardAppeared(let id):
@@ -484,6 +517,22 @@ struct BoardFeature {
         }
         return .none
 
+      case ._autoDisplayNameSuggested(let id, let suggested):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          // Only apply the LLM suggestion if the name is still the
+          // deterministic slice we started with. If the user renamed
+          // (or NewTerminalFeature pinned a PR title) in the meantime,
+          // leave their choice alone.
+          let derived = AgentSession.deriveDisplayName(
+            from: sessions[index].initialPrompt,
+            fallbackID: sessions[index].id
+          )
+          guard sessions[index].displayName == derived else { return }
+          sessions[index].displayName = suggested
+        }
+        return .none
+
       case .delegate:
         return .none
 
@@ -562,6 +611,77 @@ struct BoardFeature {
       repositoryRootURL: repository.rootURL.standardizedFileURL
     )
   }
+
+  // MARK: - Auto display name
+
+  /// Kick off a background LLM call to turn the session's prompt into a
+  /// short, human title. Returns `.none` for the obvious skip cases:
+  /// empty prompt, short prompt (deterministic slice is already fine),
+  /// or a custom name the sheet pinned (e.g. PR title from the
+  /// pasted-PR-URL flow).
+  private func autoDisplayNameEffect(for session: AgentSession) -> Effect<Action> {
+    let prompt = session.initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !prompt.isEmpty else { return .none }
+
+    // If NewTerminalFeature pinned a custom displayName, don't clobber it.
+    let derived = AgentSession.deriveDisplayName(from: prompt, fallbackID: session.id)
+    guard session.displayName == derived else { return .none }
+
+    // For short prompts the deterministic slice is already the full
+    // text — no point spending an inference call to re-phrase "fix the
+    // login bug" into something else.
+    let wordCount = prompt.split(whereSeparator: \.isWhitespace).count
+    guard wordCount >= 4 else { return .none }
+
+    let inferencePrompt = """
+      Summarize this coding task as a short title: 3 to 6 words, Title Case, no quotes, no trailing period.
+      Reply with ONLY the title — nothing else, no explanation.
+
+      Task:
+      \(prompt)
+      """
+
+    let sessionID = session.id
+    return .run { [backgroundInferenceClient] send in
+      do {
+        let raw = try await backgroundInferenceClient.infer(inferencePrompt)
+        let title = sanitizeSessionTitle(raw)
+        guard !title.isEmpty else { return }
+        await send(._autoDisplayNameSuggested(id: sessionID, suggested: title))
+      } catch {
+        // Quiet fallback — the deterministic name stays. A background
+        // inference failure isn't worth bothering the user about.
+      }
+    }
+    .cancellable(id: AutoDisplayNameCancelID(sessionID: sessionID), cancelInFlight: true)
+  }
+}
+
+// MARK: - Auto display name helpers
+
+private nonisolated struct AutoDisplayNameCancelID: Hashable, Sendable {
+  let sessionID: AgentSession.ID
+}
+
+/// Clean up an LLM response intended to be a short session title.
+/// Strips surrounding quotes/backticks, drops trailing periods, collapses
+/// multi-line output to the first non-empty line, and caps length.
+nonisolated func sanitizeSessionTitle(_ raw: String) -> String {
+  let firstLine =
+    raw.split(whereSeparator: \.isNewline)
+    .map(String.init)
+    .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
+    ?? raw
+  var result = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
+  while let first = result.first, ["\"", "'", "`"].contains(first) {
+    result.removeFirst()
+  }
+  while let last = result.last, ["\"", "'", "`"].contains(last) {
+    result.removeLast()
+  }
+  result = result.trimmingCharacters(in: .whitespaces)
+  while result.hasSuffix(".") { result.removeLast() }
+  return String(result.prefix(60))
 }
 
 // MARK: - Derived queries

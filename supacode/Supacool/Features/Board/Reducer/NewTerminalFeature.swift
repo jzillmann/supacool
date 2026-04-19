@@ -338,6 +338,17 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         state.isCreating = true
 
+        // When the sheet was pre-configured from a pasted PR URL, we
+        // already have a high-quality human title ready. Pass it through
+        // so the card shows "PR #42: Fix the widget" from moment one,
+        // instead of the URL hostname that the prompt slice would yield.
+        let suggestedDisplayName: String? = {
+          if case .resolved(let context) = state.pullRequestLookup {
+            return "PR #\(context.parsed.number): \(context.metadata.title)"
+          }
+          return nil
+        }()
+
         let agent = state.agent
         // Mirror supacode's sidebar flow: obey the global "Fetch origin
         // before creating worktree" toggle so both paths behave the same.
@@ -416,11 +427,24 @@ struct NewTerminalFeature {
                 globalDefaultPath: nil,
                 repositoryOverridePath: nil
               )
-              worktree = try await gitClient.createWorktreeForExistingBranch(
-                branchName,
-                repository.rootURL,
-                baseDirectory
-              )
+              // Common rerun gotcha: the previous session's worktree
+              // directory is still on disk (git's record was dropped, or
+              // supacode's repo cache hasn't refreshed yet) — `worktree
+              // add` then fails with "already exists". If the path looks
+              // like a live git worktree, adopt it instead of failing.
+              if let adopted = Self.adoptExistingWorktreeDirectory(
+                branchName: branchName,
+                baseDirectory: baseDirectory,
+                repoRootURL: repository.rootURL
+              ) {
+                worktree = adopted
+              } else {
+                worktree = try await gitClient.createWorktreeForExistingBranch(
+                  branchName,
+                  repository.rootURL,
+                  baseDirectory
+                )
+              }
 
             case .existingWorktree(let id):
               // Pinned by the sheet's picker. If the record vanished
@@ -481,6 +505,7 @@ struct NewTerminalFeature {
               worktreeID: worktree.id,
               agent: agent,
               initialPrompt: trimmedPrompt,
+              displayName: suggestedDisplayName,
               removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
             )
             await send(.sessionReady(session))
@@ -737,6 +762,41 @@ struct NewTerminalFeature {
       return String(ref[ref.index(after: slashIdx)...])
     }
     return ref
+  }
+
+  /// If the target worktree directory is still on disk and looks like a
+  /// live git worktree (its `.git` marker is present), return a Worktree
+  /// pointing at it so the caller can skip `git worktree add`. Used to
+  /// recover from rerun where the previous session's directory was
+  /// preserved but git's record (or the in-app cache) drifted. Returns
+  /// nil when there's nothing to adopt — let the normal create path
+  /// handle (and surface) the real failure.
+  nonisolated static func adoptExistingWorktreeDirectory(
+    branchName: String,
+    baseDirectory: URL,
+    repoRootURL: URL
+  ) -> Worktree? {
+    let worktreeURL = baseDirectory
+      .appending(path: branchName, directoryHint: .isDirectory)
+      .standardizedFileURL
+    let fileManager = FileManager.default
+    let worktreePath = worktreeURL.path(percentEncoded: false)
+    let gitMarkerPath = worktreeURL.appendingPathComponent(".git").path(percentEncoded: false)
+    guard fileManager.fileExists(atPath: worktreePath),
+      fileManager.fileExists(atPath: gitMarkerPath)
+    else {
+      return nil
+    }
+    let repositoryRootURL = repoRootURL.standardizedFileURL
+    return Worktree(
+      id: worktreePath,
+      name: branchName,
+      detail: "",
+      workingDirectory: worktreeURL,
+      repositoryRootURL: repositoryRootURL,
+      createdAt: nil,
+      branch: branchName
+    )
   }
 
   static func shouldRemoveBackingWorktreeOnDelete(
