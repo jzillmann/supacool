@@ -292,13 +292,54 @@ struct BoardFeatureTests {
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      // Enabling fires an immediate autoObserverTriggered so the
+      // observer can react to whatever's already on screen. With an
+      // empty screen the effect short-circuits to a nil decision.
+      $0.terminalClient.readScreenContents = { _, _ in nil }
     }
 
     await store.send(.toggleAutoObserver(id: session.id)) {
       $0.$sessions.withLock { $0[0].autoObserver = true }
     }
+    await store.receive(.autoObserverTriggered(id: session.id)) {
+      $0.autoObserverInFlight.insert(session.id)
+    }
+    await store.receive(._autoObserverDecided(id: session.id, response: nil)) {
+      $0.autoObserverInFlight.remove(session.id)
+    }
+    // Disabling does not fire a trigger.
     await store.send(.toggleAutoObserver(id: session.id)) {
       $0.$sessions.withLock { $0[0].autoObserver = false }
+    }
+  }
+
+  @Test(.dependencies) func toggleAutoObserverOnRespondsToCurrentScreen() async throws {
+    // Mid-session: agent has paused on a permission prompt, user
+    // toggles the observer ON. We should immediately read the screen
+    // and respond — no need to wait for the next idle/awaiting-input
+    // edge.
+    let sessionID = UUID()
+    let session = Self.sampleSession(id: sessionID)
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
+      $0.terminalClient.send = { _ in }
+      $0.autoObserverClient.decide = { _, _ in "y" }
+    }
+
+    await store.send(.toggleAutoObserver(id: sessionID)) {
+      $0.$sessions.withLock { $0[0].autoObserver = true }
+    }
+    await store.receive(.autoObserverTriggered(id: sessionID)) {
+      $0.autoObserverInFlight.insert(sessionID)
+    }
+    await store.receive(._autoObserverDecided(id: sessionID, response: "y")) {
+      $0.autoObserverInFlight.remove(sessionID)
     }
   }
 

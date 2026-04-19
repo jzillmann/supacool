@@ -331,11 +331,17 @@ struct BoardFeature {
         return .none
 
       case .toggleAutoObserver(let id):
+        var nowEnabled = false
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].autoObserver.toggle()
+          nowEnabled = sessions[index].autoObserver
         }
-        return .none
+        // Fire an immediate trigger when toggling on so the observer can
+        // respond to whatever's already on screen (a permission prompt
+        // or a completed message). Without this, the user has to wait
+        // for the next busy→idle / awaiting-input transition.
+        return nowEnabled ? .send(.autoObserverTriggered(id: id)) : .none
 
       case .setAutoObserverPrompt(let id, let prompt):
         state.$sessions.withLock { sessions in

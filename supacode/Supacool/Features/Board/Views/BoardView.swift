@@ -226,10 +226,6 @@ struct BoardView: View {
               status: sessionStatus,
               dimmed: dimmed,
               isHighlighted: highlightedSessionID == session.id,
-              isBusyNow: terminalManager.isAgentBusy(
-                worktreeID: session.worktreeID,
-                tabID: TerminalTabID(rawValue: session.id)
-              ),
               onTap: { store.send(.focusSession(id: session.id)) },
               onRemove: { store.send(.removeSession(id: session.id)) },
               onRename: { onRenameSession(session) },
@@ -300,26 +296,12 @@ struct BoardView: View {
                   }
                 }
                 : nil,
-              onBusyStateChange: { newBusy in
-                store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
-              },
-              onBusyToIdleTransition: {
-                if !session.hasCompletedAtLeastOnce {
-                  store.send(.markSessionCompletedOnce(id: session.id))
-                }
-                if session.autoObserver {
-                  store.send(.autoObserverTriggered(id: session.id))
-                }
-              },
               onAutoObserverToggle: {
                 store.send(.toggleAutoObserver(id: session.id))
               },
               onAutoObserverPromptChanged: { prompt in
                 store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
               },
-              onAwaitingInputEntered: session.autoObserver
-                ? { store.send(.autoObserverTriggered(id: session.id)) }
-                : nil,
               onAppear: { store.send(.cardAppeared(id: session.id)) }
             )
             .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
@@ -367,17 +349,16 @@ enum BoardNavOrder {
   }
 }
 
-/// Thin wrapper around SessionCardView that watches the underlying agent
-/// busy state per session so we can detect the busy→idle transition and
-/// mark `hasCompletedAtLeastOnce`. Without this, a session never leaves
-/// the "fresh" grace period bucket.
+/// Thin wrapper around SessionCardView that adds the keyboard-highlight
+/// ring and hover affordances. Busy/status edge detection lives at the
+/// BoardRootView level (see `SessionStateWatcher`) so it keeps firing
+/// while the user is inside a full-screen terminal.
 private struct SessionCardContainer: View {
   let session: AgentSession
   let repositoryName: String?
   let status: BoardSessionStatus
   let dimmed: Bool
   let isHighlighted: Bool
-  let isBusyNow: Bool
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRename: () -> Void
@@ -386,11 +367,8 @@ private struct SessionCardContainer: View {
   let onResumePicker: (() -> Void)?
   let onPark: (() -> Void)?
   let onUnpark: (() -> Void)?
-  let onBusyStateChange: (Bool) -> Void
-  let onBusyToIdleTransition: () -> Void
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
-  let onAwaitingInputEntered: (() -> Void)?
   let onAppear: (() -> Void)?
 
   @State private var isHovered: Bool = false
@@ -428,27 +406,6 @@ private struct SessionCardContainer: View {
         NSCursor.pointingHand.push()
       } else {
         NSCursor.pop()
-      }
-    }
-    .onChange(of: isBusyNow) { oldValue, newValue in
-      // Persist the new busy state so relaunches can tell .detached
-      // (was idle) from .interrupted (was working).
-      onBusyStateChange(newValue)
-      if oldValue && !newValue {
-        onBusyToIdleTransition()
-      }
-    }
-    .onChange(of: status) { oldValue, newValue in
-      // Fire auto-observer when the session enters awaiting-input (permission prompt).
-      if oldValue != .awaitingInput && newValue == .awaitingInput {
-        onAwaitingInputEntered?()
-      }
-    }
-    .onAppear {
-      // Reconcile: if our stored busy flag doesn't match reality at mount
-      // time (e.g. freshly loaded), sync it once.
-      if session.lastKnownBusy != isBusyNow {
-        onBusyStateChange(isBusyNow)
       }
     }
   }

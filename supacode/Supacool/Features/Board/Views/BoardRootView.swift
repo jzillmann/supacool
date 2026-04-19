@@ -67,6 +67,10 @@ struct BoardRootView: View {
     currentContent
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
+    // Hidden per-session watchers. Live at the root so busy/awaiting-input
+    // transitions still trigger the auto-observer (and persist
+    // lastKnownBusy) while the user is inside a full-screen terminal.
+    .background(sessionStateWatchers)
     .onChange(of: pendingExit != nil) { _, isActive in
       if isActive {
         installPendingExitEscapeMonitor()
@@ -429,6 +433,31 @@ struct BoardRootView: View {
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID)
     )
+  }
+
+  /// One hidden watcher per session, regardless of which mode (board or
+  /// full-screen) is currently rendered. Forwards busy/status edges to
+  /// the reducer so auto-observer triggers fire even while the cards
+  /// are torn down inside a focused session.
+  @ViewBuilder
+  private var sessionStateWatchers: some View {
+    ForEach(store.sessions) { session in
+      SessionStateWatcher(
+        session: session,
+        terminalManager: terminalManager,
+        classify: { classify($0) },
+        onBusyStateChange: { newBusy in
+          store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
+        },
+        onBusyToIdleTransition: {
+          store.send(.markSessionCompletedOnce(id: session.id))
+          store.send(.autoObserverTriggered(id: session.id))
+        },
+        onAwaitingInputEntered: {
+          store.send(.autoObserverTriggered(id: session.id))
+        }
+      )
+    }
   }
 
   #if DEBUG
