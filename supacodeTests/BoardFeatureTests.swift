@@ -479,6 +479,64 @@ struct BoardFeatureTests {
     await store.send(.autoObserverTriggered(id: sessionID))
   }
 
+  // MARK: - Rerun
+
+  @Test(.dependencies) func rerunDetachedSessionKeepsOriginalUntilCancel() async {
+    // Clicking Rerun should NOT remove the original card from state —
+    // otherwise a failed/cancelled sheet would lose the session and its
+    // prompt. The original stays put until a new session is created
+    // (`.created` delegate) or the sheet is cancelled.
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.focusedSessionID = session.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.rerunDetachedSession(id: session.id, repositories: [])) {
+      $0.focusedSessionID = nil
+      $0.pendingRerunSessionID = session.id
+      // Sessions list is intentionally untouched.
+    }
+    #expect(store.state.sessions.contains(where: { $0.id == session.id }))
+
+    await store.send(.newTerminalSheet(.presented(.delegate(.cancel)))) {
+      $0.newTerminalSheet = nil
+      $0.pendingRerunSessionID = nil
+    }
+    // Original session survives a cancelled rerun.
+    #expect(store.state.sessions.contains(where: { $0.id == session.id }))
+  }
+
+  @Test(.dependencies) func rerunDetachedSessionDropsOriginalOnCreate() async {
+    let original = Self.sampleSession(displayName: "Original")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [original] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      // createSession kicks off background inference; stub it out.
+      struct NoInference: Error {}
+      $0.backgroundInferenceClient.infer = { _ in throw NoInference() }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.rerunDetachedSession(id: original.id, repositories: [])) {
+      $0.pendingRerunSessionID = original.id
+    }
+    let replacement = Self.sampleSession(displayName: "Replacement")
+    await store.send(.newTerminalSheet(.presented(.delegate(.created(replacement)))))
+    await store.receive(.createSession(replacement))
+    // Original is gone, replacement is in.
+    #expect(!store.state.sessions.contains(where: { $0.id == original.id }))
+    #expect(store.state.sessions.contains(where: { $0.id == replacement.id }))
+    #expect(store.state.pendingRerunSessionID == nil)
+  }
+
   // MARK: - Helpers
 
   private static func sampleSession(
