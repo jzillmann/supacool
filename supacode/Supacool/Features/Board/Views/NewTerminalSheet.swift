@@ -25,6 +25,13 @@ struct NewTerminalSheet: View {
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
+  /// Restored into `workspaceQuery` when the user re-enables "New
+  /// worktree" after toggling it off — keeps a typed branch name from
+  /// disappearing on a flip-flop.
+  @State private var lastBranchQuery: String = ""
+  /// Persists the disclosure state of the Advanced section so it stays
+  /// open across re-renders within a single sheet presentation.
+  @State private var isAdvancedExpanded: Bool = false
 
   var body: some View {
     Form {
@@ -41,14 +48,12 @@ struct NewTerminalSheet: View {
 
       Section {
         agentPicker
-        if store.agent != nil {
-          bypassPermissionsToggle
-        }
-        repoPicker
+        repositoryRow
           .disabled(isWorkspaceLockedByPR)
-        workspaceField
+        worktreeToggle
           .disabled(isWorkspaceLockedByPR)
-        if !isWorkspaceLockedByPR {
+        if isUsingWorktree, !isWorkspaceLockedByPR {
+          workspaceField
           ForEach(workspaceSuggestions, id: \.id) { suggestion in
             WorkspaceSuggestionRow(
               suggestion: suggestion,
@@ -58,6 +63,15 @@ struct NewTerminalSheet: View {
             .onTapGesture {
               store.send(.workspaceSelected(suggestion.selection))
             }
+            // The suggestion list is part of the Workspace row, not its
+            // own section — drop the auto-rendered divider above so the
+            // field + matches read as one unit.
+            .listRowSeparator(.hidden, edges: .top)
+          }
+        }
+        if store.agent != nil {
+          DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
+            bypassPermissionsToggle
           }
         }
       } footer: {
@@ -212,20 +226,64 @@ struct NewTerminalSheet: View {
     }
   }
 
-  private var repoPicker: some View {
-    Picker(selection: $store.selectedRepositoryID) {
-      if store.availableRepositories.isEmpty {
-        Text("No repositories registered").tag(Optional<Repository.ID>.none)
-      } else {
+  /// Repository selector. With a single registered repo the picker
+  /// would just show one immutable choice — collapse it to a static
+  /// label to cut a visual row from the sheet. Multi-repo users still
+  /// see the full picker.
+  @ViewBuilder
+  private var repositoryRow: some View {
+    if store.availableRepositories.count <= 1 {
+      LabeledContent {
+        Text(store.availableRepositories.first?.name ?? "No repositories registered")
+          .foregroundStyle(.secondary)
+      } label: {
+        Text("Repository")
+      }
+    } else {
+      Picker(selection: $store.selectedRepositoryID) {
         ForEach(store.availableRepositories) { repo in
           Text(repo.name).tag(Optional(repo.id))
         }
+      } label: {
+        Text("Repository")
+        Text("Terminal runs inside this repo's working directory.")
       }
-    } label: {
-      Text("Repository")
-      Text("Terminal runs inside this repo's working directory.")
     }
-    .disabled(store.availableRepositories.count <= 1)
+  }
+
+  /// Yes/no gate for the worktree workflow. OFF runs the agent at the
+  /// repo root; ON reveals the branch field below where the user picks
+  /// (or creates) a branch to check out into a fresh worktree.
+  private var worktreeToggle: some View {
+    Toggle(isOn: useWorktreeBinding) {
+      Text("New worktree")
+      Text("Off = run at repo root. On = check out a branch in a worktree.")
+    }
+  }
+
+  /// True when the current selection isn't `.repoRoot` — i.e. the user
+  /// wants a worktree.
+  private var isUsingWorktree: Bool {
+    if case .repoRoot = store.selectedWorkspace { return false }
+    return true
+  }
+
+  /// Toggle binding: flipping ON restores the user's last typed branch
+  /// query (if any) so the field doesn't surprise them with empty
+  /// state; flipping OFF stashes the current query for next time and
+  /// resets the selection to `.repoRoot`.
+  private var useWorktreeBinding: Binding<Bool> {
+    Binding(
+      get: { isUsingWorktree },
+      set: { newValue in
+        if newValue {
+          store.send(.workspaceSelected(.newBranch(name: lastBranchQuery)))
+        } else {
+          lastBranchQuery = store.workspaceQuery
+          store.send(.workspaceSelected(.repoRoot))
+        }
+      }
+    )
   }
 
   private var bypassPermissionsToggle: some View {
@@ -276,7 +334,7 @@ struct NewTerminalSheet: View {
 
   private var workspaceFieldFooter: String {
     switch store.selectedWorkspace {
-    case .repoRoot: return "Run at the repo root (no worktree)."
+    case .repoRoot: return ""  // unreachable when the field is rendered
     case .existingWorktree: return "Attach to an existing worktree."
     case .existingBranch: return "Check out an existing branch in a new worktree."
     case .newBranch: return "Create a new branch from HEAD."
@@ -301,19 +359,10 @@ struct NewTerminalSheet: View {
 
     var results: [WorkspaceSuggestion] = []
 
-    // 1) Repo root — always shown when query is empty; also when query matches "root" etc.
-    if isEmptyQuery || matches("repo root") || matches("root") {
-      results.append(
-        WorkspaceSuggestion(
-          id: "repoRoot",
-          selection: .repoRoot,
-          systemImage: "folder",
-          title: "Repo root",
-          subtitle: "Run at the repository root",
-          kindLabel: "Directory"
-        )
-      )
-    }
+    // The "Repo root" entry used to live here as the default suggestion.
+    // It moved out of this list when the worktree yes/no toggle landed —
+    // the toggle handles "no worktree" directly, so showing it again
+    // here would duplicate the affordance.
 
     // 2) Registered worktrees (excluding the repo root entry). Always
     //    shown — these are few and are the primary "resume where I left
