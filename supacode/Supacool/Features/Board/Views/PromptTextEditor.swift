@@ -57,6 +57,11 @@ struct PromptTextEditor: NSViewRepresentable {
   /// so the user can see at a glance which slash commands will
   /// actually fire.
   var skillValidator: ((String) -> Bool)?
+  /// Fired when the user presses Escape with no active skill
+  /// autocomplete. Lets the parent sheet dismiss itself even though
+  /// NSTextView would otherwise swallow `cancelOperation` inside the
+  /// responder chain.
+  var onCancelRequested: (() -> Void)?
 
   /// The NSTextView's text container inset. Exposed so callers that need
   /// to align other chrome to the first glyph can use the same numbers.
@@ -95,6 +100,7 @@ struct PromptTextEditor: NSViewRepresentable {
     textView.skillValidator = skillValidator
     textView.onSkillQueryChange = context.coordinator.handleSkillQuery
     textView.onSkillCommand = context.coordinator.handleSkillCommand
+    textView.onCancelRequested = onCancelRequested
     textView.applySkillHighlights()
     context.coordinator.bind(textView, handle: editorHandle)
 
@@ -202,6 +208,11 @@ final class PlaceholderTextView: NSTextView {
   var skillValidator: ((String) -> Bool)?
   var onSkillQueryChange: ((SkillQuery?) -> Void)?
   var onSkillCommand: ((SkillAutocompleteCommand) -> Void)?
+  /// Invoked by `cancelOperation` when there's no active skill query to
+  /// dismiss — lets the host sheet treat Esc as "dismiss me" since
+  /// NSTextView otherwise swallows the event before SwiftUI's
+  /// `.cancelAction` shortcut can see it.
+  var onCancelRequested: (() -> Void)?
 
   private var activeSkillState: ActiveSkillState?
 
@@ -281,8 +292,29 @@ final class PlaceholderTextView: NSTextView {
     super.insertTab(sender)
   }
 
+  override func keyDown(with event: NSEvent) {
+    // Ctrl-Space — re-open the skill autocomplete at the caret if a
+    // trigger char (`/` for Claude, `$` for Codex) is sitting at the
+    // start of the current token. Useful when the popover got
+    // dismissed (Esc, click-away) but the typed `/foo` is still
+    // there and the user wants to keep browsing.
+    if Self.isControlSpace(event), tryReopenSkillQueryAtCaret() {
+      return
+    }
+    super.keyDown(with: event)
+  }
+
   override func cancelOperation(_ sender: Any?) {
     guard !dispatchSkillCommand(.dismiss) else { return }
+    // No active autocomplete — let the host (e.g. the New Terminal
+    // sheet) treat Esc as "dismiss me". NSTextView's default
+    // cancelOperation doesn't propagate up to SwiftUI's
+    // `.cancelAction` keyboard shortcut, so without this the sheet
+    // would feel "stuck" while the prompt editor has focus.
+    if let onCancelRequested {
+      onCancelRequested()
+      return
+    }
     super.cancelOperation(sender)
   }
 
@@ -353,33 +385,60 @@ final class PlaceholderTextView: NSTextView {
   }
 
   /// Repaint accent-color highlights over every `<trigger><name>` token
-  /// in the prompt that resolves to a known skill. Idempotent — clears
-  /// existing color first, then reapplies. Called on text change, on
+  /// in the prompt that resolves to a known skill. Idempotent — resets
+  /// foreground to the dynamic label color first (so non-matched text
+  /// renders correctly in both light and dark mode — `removeAttribute`
+  /// would leave the renderer falling back to raw black), then paints
+  /// matched tokens in accent. Called on text change, on
   /// validator/config changes, and after programmatic insertions.
   func applySkillHighlights() {
     guard let textStorage else { return }
     let fullRange = NSRange(location: 0, length: textStorage.length)
     textStorage.beginEditing()
     defer { textStorage.endEditing() }
-    textStorage.removeAttribute(.foregroundColor, range: fullRange)
+    guard textStorage.length > 0 else { return }
+    textStorage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
     guard let trigger = skillAutocomplete?.triggerCharacter,
-      let validator = skillValidator,
-      textStorage.length > 0
+      let validator = skillValidator
     else { return }
 
-    let content = textStorage.string as NSString
+    for range in Self.skillHighlightRanges(in: textStorage.string, trigger: trigger, isValid: validator) {
+      textStorage.addAttribute(
+        .foregroundColor,
+        value: NSColor.controlAccentColor,
+        range: range
+      )
+    }
+  }
+
+  /// Pure helper: scan `text` and return every `<trigger><name>` range
+  /// that sits at the start of a token AND resolves to a known skill
+  /// (per `isValid`). Extracted so it can be unit-tested without
+  /// instantiating an NSTextView.
+  static func skillHighlightRanges(
+    in text: String,
+    trigger: Character,
+    isValid: (String) -> Bool
+  ) -> [NSRange] {
+    let content = text as NSString
+    guard content.length > 0 else { return [] }
     let triggerString = String(trigger)
+    var ranges: [NSRange] = []
     var cursor = 0
     while cursor < content.length {
       let searchRange = NSRange(location: cursor, length: content.length - cursor)
       let triggerRange = content.range(of: triggerString, options: [], range: searchRange)
-      guard triggerRange.location != NSNotFound else { return }
+      guard triggerRange.location != NSNotFound else { return ranges }
 
-      let isAtTokenStart: Bool = {
-        guard triggerRange.location > 0 else { return true }
+      let isAtTokenStart: Bool
+      if triggerRange.location == 0 {
+        isAtTokenStart = true
+      } else {
         let prev = content.substring(with: NSRange(location: triggerRange.location - 1, length: 1))
-        return prev.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
-      }()
+        isAtTokenStart = prev.unicodeScalars.allSatisfy {
+          CharacterSet.whitespacesAndNewlines.contains($0)
+        }
+      }
 
       guard isAtTokenStart else {
         cursor = triggerRange.location + 1
@@ -389,7 +448,7 @@ final class PlaceholderTextView: NSTextView {
       var nameEnd = triggerRange.location + 1
       while nameEnd < content.length {
         let next = content.substring(with: NSRange(location: nameEnd, length: 1))
-        guard Self.isSkillNameCharacter(next) else { break }
+        guard isSkillNameCharacter(next) else { break }
         nameEnd += 1
       }
       let nameLength = nameEnd - triggerRange.location - 1
@@ -397,20 +456,81 @@ final class PlaceholderTextView: NSTextView {
         let name = content.substring(
           with: NSRange(location: triggerRange.location + 1, length: nameLength)
         )
-        if validator(name) {
-          let highlightRange = NSRange(
-            location: triggerRange.location,
-            length: nameLength + 1
-          )
-          textStorage.addAttribute(
-            .foregroundColor,
-            value: NSColor.controlAccentColor,
-            range: highlightRange
-          )
+        if isValid(name) {
+          ranges.append(NSRange(location: triggerRange.location, length: nameLength + 1))
         }
       }
       cursor = max(nameEnd, triggerRange.location + 1)
     }
+    return ranges
+  }
+
+  private static func isControlSpace(_ event: NSEvent) -> Bool {
+    let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    return mods == .control && event.charactersIgnoringModifiers == " "
+  }
+
+  /// Walk backward from the caret through valid skill-name characters
+  /// (alphanumerics, `-`, `_`, `:`). If we land on the configured
+  /// trigger character AND it sits at the start of a token (preceded
+  /// by whitespace or beginning-of-string), reopen the autocomplete
+  /// there. Returns true when handled.
+  private func tryReopenSkillQueryAtCaret() -> Bool {
+    guard let skillAutocomplete, onSkillQueryChange != nil else { return false }
+    if activeSkillState != nil { return true }
+    let trigger = skillAutocomplete.triggerCharacter
+    let selection = selectedRange()
+    guard selection.length == 0 else { return false }
+    let cursor = selection.location
+    guard cursor <= (string as NSString).length else { return false }
+    guard let triggerLocation = Self.skillReopenTriggerLocation(
+      in: string,
+      cursor: cursor,
+      trigger: trigger
+    ) else { return false }
+    activeSkillState = ActiveSkillState(
+      triggerLocation: triggerLocation,
+      triggerCharacter: trigger
+    )
+    reconcileSkillQuery()
+    return true
+  }
+
+  /// Pure helper: locate the trigger character that anchors the token
+  /// the caret is currently inside, if any. Returns its location
+  /// (NSString units) when found AND the trigger sits at the start of
+  /// a token; nil otherwise. Extracted to keep the reopen logic
+  /// unit-testable without an NSTextView.
+  static func skillReopenTriggerLocation(
+    in text: String,
+    cursor: Int,
+    trigger: Character
+  ) -> Int? {
+    let content = text as NSString
+    guard cursor >= 0, cursor <= content.length else { return nil }
+    let triggerString = String(trigger)
+    var index = cursor
+    while index > 0 {
+      let prev = content.substring(with: NSRange(location: index - 1, length: 1))
+      if prev == triggerString {
+        let triggerLocation = index - 1
+        let isAtTokenStart: Bool
+        if triggerLocation == 0 {
+          isAtTokenStart = true
+        } else {
+          let beforeTrigger = content.substring(
+            with: NSRange(location: triggerLocation - 1, length: 1)
+          )
+          isAtTokenStart = beforeTrigger.unicodeScalars.allSatisfy {
+            CharacterSet.whitespacesAndNewlines.contains($0)
+          }
+        }
+        return isAtTokenStart ? triggerLocation : nil
+      }
+      if !isSkillNameCharacter(prev) { return nil }
+      index -= 1
+    }
+    return nil
   }
 
   private static let skillNameAllowedScalars: CharacterSet = {
@@ -419,7 +539,7 @@ final class PlaceholderTextView: NSTextView {
     return set
   }()
 
-  private static func isSkillNameCharacter(_ substring: String) -> Bool {
+  static func isSkillNameCharacter(_ substring: String) -> Bool {
     guard substring.unicodeScalars.count == 1, let scalar = substring.unicodeScalars.first else {
       return false
     }

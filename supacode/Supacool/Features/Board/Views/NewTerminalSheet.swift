@@ -7,16 +7,14 @@ import SwiftUI
 /// unified searchable combo box.
 /// SwiftUI `Form` sections paint their card backgrounds in render order,
 /// so an overlay attached to the prompt editor (Section 1) gets painted
-/// over by the Agent / Repo / Workspace card (Section 2). To escape the
-/// section clip, the autocomplete popover is rendered at the sheet root
-/// and positioned using the prompt editor's frame, captured in a named
-/// coordinate space.
-private let newTerminalSheetCoordinateSpace = "supacool.newTerminalSheet"
-
-private struct PromptEditorFrameKey: PreferenceKey {
-  static let defaultValue: CGRect = .zero
-  static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-    value = nextValue()
+/// over by the Agent / Repo / Workspace card (Section 2). The fix:
+/// publish the prompt editor's bounds via an anchor preference and
+/// render the autocomplete popover from `.overlayPreferenceValue` at
+/// the sheet root, where it can hang freely below the editor.
+private struct PromptEditorAnchorKey: PreferenceKey {
+  static let defaultValue: Anchor<CGRect>? = nil
+  static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+    value = nextValue() ?? value
   }
 }
 
@@ -27,10 +25,6 @@ struct NewTerminalSheet: View {
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
-  /// Prompt editor's frame in the sheet's coordinate space. Used to
-  /// position the autocomplete popover at the sheet root so it floats
-  /// above sibling Form sections.
-  @State private var promptEditorFrame: CGRect = .zero
 
   var body: some View {
     Form {
@@ -96,9 +90,9 @@ struct NewTerminalSheet: View {
     .background {
       agentShortcuts
     }
-    .coordinateSpace(name: newTerminalSheetCoordinateSpace)
-    .overlay(alignment: .topLeading) { skillAutocompleteFloat }
-    .onPreferenceChange(PromptEditorFrameKey.self) { promptEditorFrame = $0 }
+    .overlayPreferenceValue(PromptEditorAnchorKey.self) { anchor in
+      skillAutocompleteFloat(anchor: anchor)
+    }
     .task { store.send(.task) }
     .task(id: skillDiscoveryKey) {
       guard let skillAutocompleteAgent else {
@@ -128,7 +122,8 @@ struct NewTerminalSheet: View {
       skillAutocomplete: skillAutocompleteConfig,
       onSkillQuery: skillAutocompleteAgent != nil ? { handleSkillQuery($0) } : nil,
       onSkillCommand: skillAutocompleteAgent != nil ? { handleSkillCommand($0) } : nil,
-      skillValidator: skillNameValidator
+      skillValidator: skillNameValidator,
+      onCancelRequested: { store.send(.cancelButtonTapped) }
     )
     .frame(minHeight: 100, maxHeight: 220)
     .background(
@@ -139,37 +134,32 @@ struct NewTerminalSheet: View {
       RoundedRectangle(cornerRadius: 6, style: .continuous)
         .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 1)
     )
-    .background(
-      // Report the prompt editor's frame to the sheet root so the
-      // autocomplete popover can be drawn outside this Form Section's
-      // clip (the Agent section's card background otherwise paints
-      // right over the popover body).
-      GeometryReader { proxy in
-        Color.clear.preference(
-          key: PromptEditorFrameKey.self,
-          value: proxy.frame(in: .named(newTerminalSheetCoordinateSpace))
-        )
-      }
-    )
+    // Publish the prompt editor's bounds so the sheet root can draw
+    // the autocomplete popover outside this Form Section's clip.
+    .anchorPreference(key: PromptEditorAnchorKey.self, value: .bounds) { $0 }
   }
 
-  /// Floating skill autocomplete popover, drawn at the sheet root so it
-  /// escapes the Form Section's clip / paint order. Position is computed
-  /// from the captured prompt-editor frame plus the caret rect.
+  /// Floating skill autocomplete popover, drawn from the sheet root via
+  /// `.overlayPreferenceValue`. Resolves the prompt editor's bounds in
+  /// the overlay's local coordinate space using `proxy[anchor]`, then
+  /// offsets the popover to sit just below the caret.
   @ViewBuilder
-  private var skillAutocompleteFloat: some View {
-    if let skillAutocompleteAgent, let skillQuery, promptEditorFrame.width > 0 {
-      SkillAutocompletePopover(
-        agent: skillAutocompleteAgent,
-        queryText: skillQuery.queryText,
-        skills: skillCatalog,
-        selectedSkillID: selectedSkillID,
-        onSelect: { commitSkill($0) }
-      )
-      .offset(
-        x: floatingPopupX(for: skillQuery),
-        y: floatingPopupY(for: skillQuery)
-      )
+  private func skillAutocompleteFloat(anchor: Anchor<CGRect>?) -> some View {
+    if let skillAutocompleteAgent, let skillQuery, let anchor {
+      GeometryReader { proxy in
+        let editorRect = proxy[anchor]
+        SkillAutocompletePopover(
+          agent: skillAutocompleteAgent,
+          queryText: skillQuery.queryText,
+          skills: skillCatalog,
+          selectedSkillID: selectedSkillID,
+          onSelect: { commitSkill($0) }
+        )
+        .offset(
+          x: floatingPopupX(for: skillQuery, editorRect: editorRect),
+          y: floatingPopupY(for: skillQuery, editorRect: editorRect)
+        )
+      }
       .allowsHitTesting(true)
     }
   }
@@ -426,6 +416,14 @@ struct NewTerminalSheet: View {
       Button("") { store.agent = .codex }
         .keyboardShortcut("2", modifiers: .command)
         .hidden()
+      // ⌘-Enter submits even while focus is in the multi-line prompt
+      // editor (where plain Enter inserts a newline). The footer
+      // Create button keeps `.defaultAction` so plain Enter still
+      // submits when focus is elsewhere.
+      Button("") { store.send(.createButtonTapped) }
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(store.isCreating)
+        .hidden()
     }
   }
 
@@ -561,20 +559,19 @@ struct NewTerminalSheet: View {
     selectedSkillID = nil
   }
 
-  /// X offset of the popover in the sheet's coordinate space. Anchored
-  /// to the caret in the prompt editor; clamped so the popover doesn't
-  /// extend past the editor's right edge.
-  private func floatingPopupX(for query: SkillQuery) -> CGFloat {
+  /// X offset of the popover in the overlay's coordinate space. Anchored
+  /// to the caret; clamped so the popover doesn't extend past the
+  /// editor's right edge.
+  private func floatingPopupX(for query: SkillQuery, editorRect: CGRect) -> CGFloat {
     let preferredWidth: CGFloat = 360
-    let absoluteCaret = promptEditorFrame.minX + query.caretRect.minX
-    let maxX = max(promptEditorFrame.maxX - preferredWidth, promptEditorFrame.minX)
-    return min(max(absoluteCaret, promptEditorFrame.minX), maxX)
+    let absoluteCaret = editorRect.minX + query.caretRect.minX
+    let maxX = max(editorRect.maxX - preferredWidth, editorRect.minX)
+    return min(max(absoluteCaret, editorRect.minX), maxX)
   }
 
-  /// Y offset in the sheet's coordinate space — directly below the
-  /// caret line, with an 8pt gap.
-  private func floatingPopupY(for query: SkillQuery) -> CGFloat {
-    promptEditorFrame.minY + query.caretRect.maxY + 8
+  /// Y offset — directly below the caret line, with an 8pt gap.
+  private func floatingPopupY(for query: SkillQuery, editorRect: CGRect) -> CGFloat {
+    editorRect.minY + query.caretRect.maxY + 8
   }
 }
 
