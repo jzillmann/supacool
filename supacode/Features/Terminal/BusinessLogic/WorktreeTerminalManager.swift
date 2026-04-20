@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Observation
 import Sharing
+import SwiftUI
 
 private let terminalLogger = SupaLogger("Terminal")
 private let awaitingInputTTLDefault: Duration = .seconds(8)
@@ -631,6 +632,10 @@ final class WorktreeTerminalManager {
 
   func surfaceBackgroundOpacity() -> Double {
     runtime.backgroundOpacity()
+  }
+
+  func unfocusedSplitOverlay() -> (fill: Color?, opacity: Double) {
+    (runtime.unfocusedSplitFill(), runtime.unfocusedSplitOverlayOpacity())
   }
 
   private func markAwaitingInputSignal(worktreeID: Worktree.ID, tabID: UUID) {

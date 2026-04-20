@@ -21,9 +21,14 @@ struct SingleSessionTerminalView: View {
 
   var body: some View {
     let state = manager.state(for: worktree) { false }
+    let unfocusedSplitOverlay = manager.unfocusedSplitOverlay()
     Group {
       if state.containsTabTree(tabID) {
-        TerminalSplitTreeAXContainer(tree: state.splitTree(for: tabID)) { operation in
+        TerminalSplitTreeAXContainer(
+          tree: state.splitTree(for: tabID),
+          activeSurfaceID: state.activeSurfaceID(for: tabID),
+          unfocusedSplitOverlay: unfocusedSplitOverlay
+        ) { operation in
           state.performSplitOperation(operation, in: tabID)
         }
       } else {
