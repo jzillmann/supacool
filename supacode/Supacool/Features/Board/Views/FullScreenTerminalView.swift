@@ -48,6 +48,7 @@ struct FullScreenTerminalView: View {
   @State private var isInfoPopoverShown: Bool = false
   @State private var isAutoObserverPopoverShown: Bool = false
   @State private var isQuickDiffPresented: Bool = false
+  @State private var isConfirmingRemove: Bool = false
 
   /// Surface id of the split we created via the header button — `nil`
   /// when the button is in "create" mode, non-nil when in "close" mode.
@@ -93,6 +94,14 @@ struct FullScreenTerminalView: View {
       // the header's split button).
       Button("Toggle Shell Split") { toggleShellSplit() }
         .keyboardShortcut("e", modifiers: .command)
+        .hidden()
+    )
+    .background(
+      // ⌘⌫ — macOS "move to trash" convention. Routes through the
+      // same confirmation dialog as the trash button so it can't
+      // wipe a session in a single missed keystroke.
+      Button("Delete Session") { isConfirmingRemove = true }
+        .keyboardShortcut(.delete, modifiers: .command)
         .hidden()
     )
     // ⌘-Tab-style session switcher. ⌘⌥← / ⌘⌥↑ cycle backward, ⌘⌥→ /
@@ -149,6 +158,7 @@ struct FullScreenTerminalView: View {
       splitButton
       Spacer()
       agentChip
+      removeButton
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
@@ -293,6 +303,31 @@ struct FullScreenTerminalView: View {
         worktreeLabel: worktreeLabel,
         onRerun: resolveWorktree() == nil ? onRerun : nil
       )
+    }
+  }
+
+  /// Trash button at the right edge of the header. Trips a
+  /// confirmation dialog before invoking `onRemove`, so a stray click
+  /// (or a held ⌘⌫) can't nuke an active session in one shot.
+  private var removeButton: some View {
+    Button {
+      isConfirmingRemove = true
+    } label: {
+      Image(systemName: "trash")
+        .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
+    }
+    .buttonStyle(.plain)
+    .help("Delete this session (⌘⌫)")
+    .confirmationDialog(
+      "Delete \"\(session.displayName)\"?",
+      isPresented: $isConfirmingRemove,
+      titleVisibility: .visible
+    ) {
+      Button("Delete", role: .destructive, action: onRemove)
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Removes the session card and its terminal. Worktree directories created by Supacool are also deleted.")
     }
   }
 
