@@ -51,6 +51,12 @@ struct PromptTextEditor: NSViewRepresentable {
   var skillAutocomplete: SkillAutocompleteConfig?
   var onSkillQuery: ((SkillQuery?) -> Void)?
   var onSkillCommand: ((SkillAutocompleteCommand) -> Void)?
+  /// Returns true when the given short name (without the trigger
+  /// character) matches a known skill. The text view uses this to
+  /// colorize completed `/<name>` / `$<name>` tokens in the prompt
+  /// so the user can see at a glance which slash commands will
+  /// actually fire.
+  var skillValidator: ((String) -> Bool)?
 
   /// The NSTextView's text container inset. Exposed so callers that need
   /// to align other chrome to the first glyph can use the same numbers.
@@ -86,8 +92,10 @@ struct PromptTextEditor: NSViewRepresentable {
     textView.textContainer?.widthTracksTextView = true
     textView.string = text
     textView.skillAutocomplete = skillAutocomplete
+    textView.skillValidator = skillValidator
     textView.onSkillQueryChange = context.coordinator.handleSkillQuery
     textView.onSkillCommand = context.coordinator.handleSkillCommand
+    textView.applySkillHighlights()
     context.coordinator.bind(textView, handle: editorHandle)
 
     let scrollView = NSScrollView(frame: .zero)
@@ -121,6 +129,11 @@ struct PromptTextEditor: NSViewRepresentable {
     if textView.placeholder != placeholder {
       textView.placeholder = placeholder
     }
+    // Closures aren't equatable; reassign and re-render highlights every
+    // update. Cheap for prompt-sized strings and ensures catalog reloads
+    // (validator changes) repaint immediately.
+    textView.skillValidator = skillValidator
+    textView.applySkillHighlights()
     if skillAutocomplete == nil || onSkillQuery == nil {
       textView.cancelActiveSkillQuery()
     } else {
@@ -179,8 +192,14 @@ final class PlaceholderTextView: NSTextView {
       } else {
         reconcileSkillQuery()
       }
+      applySkillHighlights()
     }
   }
+  /// See `PromptTextEditor.skillValidator`. Set by the SwiftUI side on
+  /// every update; closures aren't equatable so we don't gate on
+  /// inequality. Calling `applySkillHighlights()` re-paints from the
+  /// current value — idempotent.
+  var skillValidator: ((String) -> Bool)?
   var onSkillQueryChange: ((SkillQuery?) -> Void)?
   var onSkillCommand: ((SkillAutocompleteCommand) -> Void)?
 
@@ -203,6 +222,7 @@ final class PlaceholderTextView: NSTextView {
 
   override func didChangeText() {
     super.didChangeText()
+    applySkillHighlights()
     needsDisplay = true
   }
 
@@ -330,6 +350,80 @@ final class PlaceholderTextView: NSTextView {
   func cancelActiveSkillQuery() {
     activeSkillState = nil
     onSkillQueryChange?(nil)
+  }
+
+  /// Repaint accent-color highlights over every `<trigger><name>` token
+  /// in the prompt that resolves to a known skill. Idempotent — clears
+  /// existing color first, then reapplies. Called on text change, on
+  /// validator/config changes, and after programmatic insertions.
+  func applySkillHighlights() {
+    guard let textStorage else { return }
+    let fullRange = NSRange(location: 0, length: textStorage.length)
+    textStorage.beginEditing()
+    defer { textStorage.endEditing() }
+    textStorage.removeAttribute(.foregroundColor, range: fullRange)
+    guard let trigger = skillAutocomplete?.triggerCharacter,
+      let validator = skillValidator,
+      textStorage.length > 0
+    else { return }
+
+    let content = textStorage.string as NSString
+    let triggerString = String(trigger)
+    var cursor = 0
+    while cursor < content.length {
+      let searchRange = NSRange(location: cursor, length: content.length - cursor)
+      let triggerRange = content.range(of: triggerString, options: [], range: searchRange)
+      guard triggerRange.location != NSNotFound else { return }
+
+      let isAtTokenStart: Bool = {
+        guard triggerRange.location > 0 else { return true }
+        let prev = content.substring(with: NSRange(location: triggerRange.location - 1, length: 1))
+        return prev.unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
+      }()
+
+      guard isAtTokenStart else {
+        cursor = triggerRange.location + 1
+        continue
+      }
+
+      var nameEnd = triggerRange.location + 1
+      while nameEnd < content.length {
+        let next = content.substring(with: NSRange(location: nameEnd, length: 1))
+        guard Self.isSkillNameCharacter(next) else { break }
+        nameEnd += 1
+      }
+      let nameLength = nameEnd - triggerRange.location - 1
+      if nameLength > 0 {
+        let name = content.substring(
+          with: NSRange(location: triggerRange.location + 1, length: nameLength)
+        )
+        if validator(name) {
+          let highlightRange = NSRange(
+            location: triggerRange.location,
+            length: nameLength + 1
+          )
+          textStorage.addAttribute(
+            .foregroundColor,
+            value: NSColor.controlAccentColor,
+            range: highlightRange
+          )
+        }
+      }
+      cursor = max(nameEnd, triggerRange.location + 1)
+    }
+  }
+
+  private static let skillNameAllowedScalars: CharacterSet = {
+    var set = CharacterSet.alphanumerics
+    set.insert(charactersIn: "-_:")
+    return set
+  }()
+
+  private static func isSkillNameCharacter(_ substring: String) -> Bool {
+    guard substring.unicodeScalars.count == 1, let scalar = substring.unicodeScalars.first else {
+      return false
+    }
+    return skillNameAllowedScalars.contains(scalar)
   }
 
   func commitActiveSkill(_ replacement: String) {
