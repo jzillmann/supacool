@@ -656,11 +656,16 @@ struct NewTerminalFeature {
         newTerminalLogger.warning(
           "PR lookup failed for \(parsed.url): \(error.localizedDescription)"
         )
+        // Surface the actual failure reason — the original generic
+        // "is gh installed?" message masked plenty of unrelated causes
+        // (JSON parse errors, network issues, auth scope mismatches).
+        // Truncate to keep the banner readable; full text goes to the log.
+        let raw = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        let detail = String(raw.prefix(160))
         await send(
           .pullRequestLookupFailed(
             parsed: parsed,
-            message:
-              "Couldn't fetch PR details. Is `gh` installed and authenticated?"
+            message: "Couldn't fetch PR details: \(detail)"
           )
         )
       }
