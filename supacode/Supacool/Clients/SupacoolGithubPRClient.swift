@@ -39,7 +39,7 @@ extension SupacoolGithubPRClient: DependencyKey {
           arguments: [
             "pr", "view", "\(number)",
             "--repo", "\(owner)/\(repo)",
-            "--json", "title,headRefName,baseRefName,headRepository,state,isDraft",
+            "--json", "title,headRefName,baseRefName,headRepositoryOwner,state,isDraft",
           ]
         )
         return try decodeMetadata(stdout: stdout, fallbackOwner: owner)
@@ -85,17 +85,15 @@ private nonisolated struct PRViewOwner: Decodable {
   let login: String
 }
 
-private nonisolated struct PRViewHeadRepository: Decodable {
-  let owner: PRViewOwner
-}
-
 private nonisolated struct PRViewResponse: Decodable {
   let title: String
   let headRefName: String
   let baseRefName: String
   let state: String
   let isDraft: Bool
-  let headRepository: PRViewHeadRepository?
+  // `gh pr view --json headRepositoryOwner` returns `{id, login}`. We only
+  // need `login`. Optional because deleted-fork PRs can omit it entirely.
+  let headRepositoryOwner: PRViewOwner?
 }
 
 nonisolated func decodeMetadata(stdout: String, fallbackOwner: String) throws -> SupacoolPRMetadata {
@@ -104,7 +102,7 @@ nonisolated func decodeMetadata(stdout: String, fallbackOwner: String) throws ->
     title: decoded.title,
     headRefName: decoded.headRefName,
     baseRefName: decoded.baseRefName,
-    headRepositoryOwner: decoded.headRepository?.owner.login ?? fallbackOwner,
+    headRepositoryOwner: decoded.headRepositoryOwner?.login ?? fallbackOwner,
     state: decoded.state,
     isDraft: decoded.isDraft
   )
