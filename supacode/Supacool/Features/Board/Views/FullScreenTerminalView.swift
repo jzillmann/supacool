@@ -96,14 +96,6 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut("e", modifiers: .command)
         .hidden()
     )
-    .background(
-      // ⌘⌫ — macOS "move to trash" convention. Routes through the
-      // same confirmation dialog as the trash button so it can't
-      // wipe a session in a single missed keystroke.
-      Button("Delete Session") { isConfirmingRemove = true }
-        .keyboardShortcut(.delete, modifiers: .command)
-        .hidden()
-    )
     // ⌘-Tab-style session switcher. ⌘⌥← / ⌘⌥↑ cycle backward, ⌘⌥→ /
     // ⌘⌥↓ forward — picking ⌘⌥+arrow over plain ⌘+arrow keeps the
     // native "jump to start/end of line" shortcuts inside the terminal
@@ -308,7 +300,8 @@ struct FullScreenTerminalView: View {
 
   /// Trash button at the right edge of the header. Trips a
   /// confirmation dialog before invoking `onRemove`, so a stray click
-  /// (or a held ⌘⌫) can't nuke an active session in one shot.
+  /// can't nuke an active session in one shot. No keyboard shortcut —
+  /// the terminal surface owns all common modifier+key combos.
   private var removeButton: some View {
     Button {
       isConfirmingRemove = true
@@ -318,7 +311,7 @@ struct FullScreenTerminalView: View {
         .modifier(HeaderIconStyle())
     }
     .buttonStyle(.plain)
-    .help("Delete this session (⌘⌫)")
+    .help("Delete this session")
     .confirmationDialog(
       "Delete \"\(session.displayName)\"?",
       isPresented: $isConfirmingRemove,
