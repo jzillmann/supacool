@@ -1,3 +1,5 @@
+import Clocks
+import ConcurrencyExtras
 import Dependencies
 import Foundation
 import Testing
@@ -236,6 +238,145 @@ struct WorktreeTerminalManagerTests {
     state.notifications.append(makeNotification(isRead: false))
 
     #expect(manager.hasUnseenNotifications(for: worktree.id) == true)
+  }
+
+  @Test func awaitingInputRequiresStabilizationAndExpires() async {
+    let clock = TestClock()
+    let server = AgentHookSocketServer()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: server,
+      awaitingInputTTL: .seconds(8),
+      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputActivityPollInterval: .seconds(1),
+      clock: clock
+    )
+    let worktree = makeWorktree()
+
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+    guard let state = manager.stateIfExists(for: worktree.id),
+      let tabId = state.tabManager.selectedTabId,
+      let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected blocking script tab and surface")
+      return
+    }
+
+    server.onNotification?(
+      worktree.id,
+      tabId.rawValue,
+      surface.id,
+      AgentHookNotification(
+        agent: "claude",
+        event: "Notification",
+        title: nil,
+        body: "Claude needs your permission to use Bash",
+        sessionID: nil
+      )
+    )
+
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .seconds(8))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+  }
+
+  @Test func awaitingInputClearsWhenTerminalOutputResumes() async {
+    let clock = TestClock()
+    let screenContents = LockIsolated("Claude needs your permission\n1. Allow")
+    let server = AgentHookSocketServer()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: server,
+      awaitingInputTTL: .seconds(8),
+      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputActivityPollInterval: .seconds(1),
+      clock: clock,
+      readScreenContents: { _, _ in screenContents.value }
+    )
+    let worktree = makeWorktree()
+
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+    guard let state = manager.stateIfExists(for: worktree.id),
+      let tabId = state.tabManager.selectedTabId,
+      let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected blocking script tab and surface")
+      return
+    }
+
+    server.onNotification?(
+      worktree.id,
+      tabId.rawValue,
+      surface.id,
+      AgentHookNotification(
+        agent: "claude",
+        event: "Notification",
+        title: nil,
+        body: "Claude needs your permission to use Bash",
+        sessionID: nil
+      )
+    )
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    screenContents.setValue("Streaming output resumed\nEdited BoardRootView.swift")
+
+    await clock.advance(by: .seconds(1))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+  }
+
+  @Test func busyTransitionBeforeDebounceSuppressesAwaitingInputBadge() async {
+    let clock = TestClock()
+    let server = AgentHookSocketServer()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: server,
+      awaitingInputTTL: .seconds(8),
+      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputActivityPollInterval: .seconds(1),
+      clock: clock
+    )
+    let worktree = makeWorktree()
+
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+    guard let state = manager.stateIfExists(for: worktree.id),
+      let tabId = state.tabManager.selectedTabId,
+      let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected blocking script tab and surface")
+      return
+    }
+
+    server.onNotification?(
+      worktree.id,
+      tabId.rawValue,
+      surface.id,
+      AgentHookNotification(
+        agent: "claude",
+        event: "Notification",
+        title: nil,
+        body: "Claude needs your permission to use Bash",
+        sessionID: nil
+      )
+    )
+    server.onBusy?(worktree.id, tabId.rawValue, surface.id, true)
+
+    await clock.advance(by: .seconds(1))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
   }
 
   @Test func markAllNotificationsReadEmitsUpdatedIndicatorCount() async {

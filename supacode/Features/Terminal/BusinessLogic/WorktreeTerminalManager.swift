@@ -3,19 +3,36 @@ import Observation
 import Sharing
 
 private let terminalLogger = SupaLogger("Terminal")
+private let awaitingInputTTLDefault: Duration = .seconds(8)
+private let awaitingInputTransitionDebounceDefault: Duration = .milliseconds(250)
+private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
+private let awaitingInputFingerprintLineCount = 12
 
 @MainActor
 @Observable
 final class WorktreeTerminalManager {
+  private struct AwaitingInputTracker {
+    let worktreeID: Worktree.ID
+    var rawActive = false
+    var presented = false
+    var lastScreenFingerprint: String?
+  }
+
   private let runtime: GhosttyRuntime
+  private let sleep: @Sendable (Duration) async throws -> Void
+  private let awaitingInputTTL: Duration
+  private let awaitingInputTransitionDebounce: Duration
+  private let awaitingInputActivityPollInterval: Duration
+  private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
-  /// Supacool-only. Tab IDs whose agent has emitted a `Notification` hook
-  /// event since its last busy transition — i.e. the agent paused to ask
-  /// the user something (permission prompt, clarification, etc.). Cleared
-  /// on any busy-flag change for the tab. Observed by the Matrix Board
-  /// classifier to flip cards to an "Awaiting Input" status.
-  private var awaitingInputTabs: Set<UUID> = []
+  /// Supacool-only. Per-tab awaiting-input tracking. The hook signal is
+  /// treated as a soft lease: it expires unless reaffirmed, and any resumed
+  /// terminal output clears it after a short stabilization window.
+  private var awaitingInputByTab: [UUID: AwaitingInputTracker] = [:]
+  private var awaitingInputExpiryTasks: [UUID: Task<Void, Never>] = [:]
+  private var awaitingInputDebounceTasks: [UUID: Task<Void, Never>] = [:]
+  private var awaitingInputActivityTasks: [UUID: Task<Void, Never>] = [:]
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
@@ -26,8 +43,23 @@ final class WorktreeTerminalManager {
   var saveLayoutSnapshot: ((Worktree.ID, TerminalLayoutSnapshot?) -> Void)?
   var loadLayoutSnapshot: ((Worktree.ID) -> TerminalLayoutSnapshot?)?
 
-  init(runtime: GhosttyRuntime, socketServer: AgentHookSocketServer? = nil) {
+  init<C: Clock<Duration>>(
+    runtime: GhosttyRuntime,
+    socketServer: AgentHookSocketServer? = nil,
+    awaitingInputTTL: Duration = awaitingInputTTLDefault,
+    awaitingInputTransitionDebounce: Duration = awaitingInputTransitionDebounceDefault,
+    awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
+    clock: C = ContinuousClock(),
+    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
+  ) {
     self.runtime = runtime
+    self.awaitingInputTTL = awaitingInputTTL
+    self.awaitingInputTransitionDebounce = awaitingInputTransitionDebounce
+    self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
+    self.sleep = { duration in
+      try await clock.sleep(for: duration)
+    }
+    self.readScreenContentsOverride = readScreenContents
     let resolvedServer = socketServer ?? AgentHookSocketServer()
     guard resolvedServer.socketPath != nil else {
       self.socketServer = nil
@@ -50,7 +82,7 @@ final class WorktreeTerminalManager {
       }
       // Any busy transition (resumed or finished) supersedes a prior
       // "awaiting input" signal for this tab.
-      self?.awaitingInputTabs.remove(tabID)
+      self?.clearAwaitingInput(tabID: tabID)
       state.setAgentBusy(
         surfaceID: surfaceID,
         tabID: TerminalTabID(rawValue: tabID),
@@ -72,7 +104,7 @@ final class WorktreeTerminalManager {
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
       if Self.isAwaitingInputSignal(notification) {
-        self?.awaitingInputTabs.insert(tabID)
+        self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID)
       }
     }
   }
@@ -128,11 +160,12 @@ final class WorktreeTerminalManager {
   }
 
   /// Whether the agent in this tab is paused on user input (permission
-  /// prompt, clarification). Set by a `Notification` hook event and cleared
-  /// on the next busy-flag change for the tab. Requires the Notification
-  /// hook to be installed (Settings → Coding Agents → Notifications).
+  /// prompt, clarification). Set by a `Notification` hook event, held on a
+  /// short lease, and cleared when terminal activity resumes or the lease
+  /// expires. Requires the Notification hook to be installed
+  /// (Settings → Coding Agents → Notifications).
   func isAwaitingInput(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
-    awaitingInputTabs.contains(tabID.rawValue)
+    awaitingInputByTab[tabID.rawValue]?.presented == true
   }
 
   /// Whether the session's tab still exists in any terminal state — false
@@ -459,6 +492,142 @@ final class WorktreeTerminalManager {
 
   func surfaceBackgroundOpacity() -> Double {
     runtime.backgroundOpacity()
+  }
+
+  private func markAwaitingInputSignal(worktreeID: Worktree.ID, tabID: UUID) {
+    var tracker = awaitingInputByTab[tabID] ?? AwaitingInputTracker(worktreeID: worktreeID)
+    tracker.rawActive = true
+    tracker.lastScreenFingerprint = screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID))
+    awaitingInputByTab[tabID] = tracker
+    scheduleAwaitingInputExpiry(for: tabID)
+    scheduleAwaitingInputActivityPolling(for: tabID)
+    scheduleAwaitingInputPresentationReconciliation(for: tabID, desiredState: true)
+  }
+
+  private func clearAwaitingInput(tabID: UUID) {
+    awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
+    awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
+
+    guard var tracker = awaitingInputByTab[tabID] else { return }
+    tracker.rawActive = false
+    tracker.lastScreenFingerprint = nil
+
+    if tracker.presented {
+      awaitingInputByTab[tabID] = tracker
+      scheduleAwaitingInputPresentationReconciliation(for: tabID, desiredState: false)
+    } else {
+      awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
+      awaitingInputByTab.removeValue(forKey: tabID)
+    }
+  }
+
+  private func scheduleAwaitingInputExpiry(for tabID: UUID) {
+    awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
+    awaitingInputExpiryTasks[tabID] = Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.sleep(self.awaitingInputTTL)
+      } catch {
+        return
+      }
+      await self.expireAwaitingInput(tabID: tabID)
+    }
+  }
+
+  private func expireAwaitingInput(tabID: UUID) {
+    awaitingInputExpiryTasks[tabID] = nil
+    clearAwaitingInput(tabID: tabID)
+  }
+
+  private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
+    guard awaitingInputActivityTasks[tabID] == nil else { return }
+    awaitingInputActivityTasks[tabID] = Task { [weak self] in
+      guard let self else { return }
+      while !Task.isCancelled {
+        do {
+          try await self.sleep(self.awaitingInputActivityPollInterval)
+        } catch {
+          return
+        }
+        await self.sampleAwaitingInputActivity(tabID: tabID)
+      }
+    }
+  }
+
+  private func sampleAwaitingInputActivity(tabID: UUID) {
+    guard var tracker = awaitingInputByTab[tabID] else {
+      awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
+      return
+    }
+    guard tracker.rawActive else {
+      awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
+      return
+    }
+
+    let tab = TerminalTabID(rawValue: tabID)
+    let newFingerprint = screenFingerprint(worktreeID: tracker.worktreeID, tabID: tab)
+
+    if let previousFingerprint = tracker.lastScreenFingerprint,
+      let newFingerprint,
+      previousFingerprint != newFingerprint
+    {
+      tracker.lastScreenFingerprint = newFingerprint
+      awaitingInputByTab[tabID] = tracker
+      clearAwaitingInput(tabID: tabID)
+      return
+    }
+
+    tracker.lastScreenFingerprint = newFingerprint
+    awaitingInputByTab[tabID] = tracker
+  }
+
+  private func scheduleAwaitingInputPresentationReconciliation(
+    for tabID: UUID,
+    desiredState: Bool
+  ) {
+    awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
+    awaitingInputDebounceTasks[tabID] = Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.sleep(self.awaitingInputTransitionDebounce)
+      } catch {
+        return
+      }
+      await self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState)
+    }
+  }
+
+  private func commitAwaitingInputPresentation(for tabID: UUID, desiredState: Bool) {
+    awaitingInputDebounceTasks[tabID] = nil
+    guard var tracker = awaitingInputByTab[tabID] else { return }
+    guard tracker.rawActive == desiredState else { return }
+
+    if tracker.presented == desiredState {
+      if !tracker.rawActive {
+        awaitingInputByTab.removeValue(forKey: tabID)
+      }
+      return
+    }
+
+    tracker.presented = desiredState
+    if tracker.rawActive || tracker.presented {
+      awaitingInputByTab[tabID] = tracker
+    } else {
+      awaitingInputByTab.removeValue(forKey: tabID)
+    }
+  }
+
+  private func screenFingerprint(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
+    let contents = readScreenContentsOverride?(worktreeID, tabID) ?? states[worktreeID]?.readScreenContents(tabID: tabID)
+    let screen = contents?.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let screen, !screen.isEmpty else { return nil }
+
+    let tail = screen
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .suffix(awaitingInputFingerprintLineCount)
+      .joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    return tail.isEmpty ? nil : tail
   }
 
   private func emit(_ event: TerminalClient.Event) {
