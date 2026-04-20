@@ -537,6 +537,157 @@ struct BoardFeatureTests {
     #expect(store.state.pendingRerunSessionID == nil)
   }
 
+  // MARK: - Worktree prune
+
+  @Test(.dependencies) func pruneWorktreesHappyPath() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: ["foo", "bar"], rawOutput: "")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .pruneWorktreesRequested(repositoryID: "/tmp/repo", repositoryName: "repo")
+    )
+    await store.receive(\._pruneWorktreesResult)
+
+    guard let alert = store.state.pruneAlert,
+      case .success(let prunedCount, let orphanSessionIDs) = alert.outcome
+    else {
+      Issue.record("Expected success outcome, got \(String(describing: store.state.pruneAlert))")
+      return
+    }
+    #expect(prunedCount == 2)
+    #expect(orphanSessionIDs.isEmpty)
+    #expect(alert.repositoryName == "repo")
+  }
+
+  @Test(.dependencies) func pruneWorktreesFindsOrphanSessions() async {
+    // A session whose worktreeID path doesn't exist → orphan.
+    let ghost = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/does-not-exist-\(UUID().uuidString)"
+    )
+    // A session running at repo root (worktreeID == repositoryID) must
+    // NOT be flagged as an orphan even if /tmp/repo itself doesn't
+    // exist, per the helper's contract.
+    let rootSession = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [ghost, rootSession] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: ["gone"], rawOutput: "")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .pruneWorktreesRequested(repositoryID: "/tmp/repo", repositoryName: "repo")
+    )
+    await store.receive(\._pruneWorktreesResult)
+
+    guard let alert = store.state.pruneAlert,
+      case .success(let prunedCount, let orphanSessionIDs) = alert.outcome
+    else {
+      Issue.record("Expected success outcome")
+      return
+    }
+    #expect(prunedCount == 1)
+    #expect(orphanSessionIDs == [ghost.id])
+  }
+
+  @Test(.dependencies) func pruneWorktreesConfirmOrphanRemovalDispatchesRemoveSession() async {
+    let orphanA = Self.sampleSession()
+    let orphanB = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [orphanA, orphanB] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.confirmPruneOrphans(sessionIDs: [orphanA.id, orphanB.id]))
+
+    // Both removals should flow through the existing .removeSession path.
+    await store.receive(.removeSession(id: orphanA.id))
+    await store.receive(.removeSession(id: orphanB.id))
+    #expect(store.state.sessions.isEmpty)
+  }
+
+  @Test(.dependencies) func pruneWorktreesNothingToClean() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: [], rawOutput: "")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .pruneWorktreesRequested(repositoryID: "/tmp/repo", repositoryName: "repo")
+    )
+    await store.receive(\._pruneWorktreesResult)
+
+    guard let alert = store.state.pruneAlert,
+      case .success(let prunedCount, let orphanSessionIDs) = alert.outcome
+    else {
+      Issue.record("Expected success outcome")
+      return
+    }
+    #expect(prunedCount == 0)
+    #expect(orphanSessionIDs.isEmpty)
+  }
+
+  @Test(.dependencies) func pruneWorktreesFailureShowsError() async {
+    struct PruneExploded: LocalizedError {
+      var errorDescription: String? { "git exploded" }
+    }
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in throw PruneExploded() }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .pruneWorktreesRequested(repositoryID: "/tmp/repo", repositoryName: "repo")
+    )
+    await store.receive(\._pruneWorktreesResult)
+
+    guard let alert = store.state.pruneAlert,
+      case .failure(let message) = alert.outcome
+    else {
+      Issue.record("Expected failure outcome")
+      return
+    }
+    #expect(message == "git exploded")
+  }
+
+  @Test func parsePrunedRefsExtractsRemovedNames() {
+    let sample = """
+      Removing worktrees/foo: gitdir file points to non-existent location
+      Removing worktrees/bar-baz: some reason
+      unrelated chatter line
+      """
+    #expect(parsePrunedRefs(from: sample) == ["foo", "bar-baz"])
+  }
+
+  @Test func parsePrunedRefsReturnsEmptyOnCleanOutput() {
+    #expect(parsePrunedRefs(from: "") == [])
+    #expect(parsePrunedRefs(from: "nothing pruned") == [])
+  }
+
   // MARK: - Helpers
 
   private static func sampleSession(

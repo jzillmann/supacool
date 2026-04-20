@@ -18,6 +18,10 @@ struct RepoPickerButton: View {
   let onShowAll: () -> Void
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
+  /// Tapping the trailing broom button on a repo row runs
+  /// `git worktree prune` for that repo + reconciles any orphan session
+  /// cards. Wired up in BoardRootView.
+  let onPruneWorktrees: (Repository) -> Void
 
   @State private var isPresented: Bool = false
 
@@ -94,25 +98,45 @@ struct RepoPickerButton: View {
       Divider()
 
       ForEach(repositories) { repo in
-        Button {
-          onToggleRepository(repo.id)
-        } label: {
-          HStack {
-            Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
-              .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
-            Image(systemName: "folder.fill")
-              .font(.caption)
-              .foregroundStyle(.yellow)
-            Text(repo.name)
-              .font(.callout)
-              .lineLimit(1)
-            Spacer()
+        HStack(spacing: 0) {
+          Button {
+            onToggleRepository(repo.id)
+          } label: {
+            HStack {
+              Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
+              Image(systemName: "folder.fill")
+                .font(.caption)
+                .foregroundStyle(.yellow)
+              Text(repo.name)
+                .font(.callout)
+                .lineLimit(1)
+              Spacer()
+            }
+            .padding(.leading, 12)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
           }
-          .padding(.horizontal, 12)
-          .padding(.vertical, 6)
-          .contentShape(Rectangle())
+          .buttonStyle(.plain)
+
+          // Trailing broom — prunes stale worktree refs for this repo
+          // and surfaces any Supacool session cards left orphaned by the
+          // cleanup. Popover dismisses so the alert presented by the
+          // root view has the screen to itself.
+          Button {
+            isPresented = false
+            onPruneWorktrees(repo)
+          } label: {
+            Image(systemName: "sparkles.square.on.square")
+              .font(.callout)
+              .foregroundStyle(.secondary)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 6)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .help("Prune stale worktrees for \(repo.name)")
         }
-        .buttonStyle(.plain)
       }
 
       Divider()

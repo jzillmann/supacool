@@ -39,6 +39,28 @@ struct BoardFeature {
     /// create (the original is removed at that point) or on sheet
     /// cancel (the original stays put).
     var pendingRerunSessionID: AgentSession.ID?
+
+    /// Populated when a user-triggered worktree prune completes (success
+    /// or failure). The root view presents a summary alert off this state
+    /// so the user sees concrete feedback — how many refs were cleaned,
+    /// whether any session cards are now orphaned.
+    var pruneAlert: PruneAlertState?
+  }
+
+  /// One-shot summary shown after a prune attempt. Identifiable so we
+  /// can drive SwiftUI's `.alert(item:)` off it.
+  nonisolated struct PruneAlertState: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let repositoryID: Repository.ID
+    let repositoryName: String
+    /// Result of `git worktree prune --verbose`: either a count of
+    /// pruned refs (success) or an error message surfaced to the user.
+    let outcome: Outcome
+
+    enum Outcome: Equatable, Sendable {
+      case success(prunedCount: Int, orphanSessionIDs: [AgentSession.ID])
+      case failure(message: String)
+    }
   }
 
   enum Action: BindableAction, Equatable {
@@ -101,6 +123,17 @@ struct BoardFeature {
     /// hasn't renamed in the meantime).
     case _autoDisplayNameSuggested(id: AgentSession.ID, suggested: String)
 
+    // MARK: Worktree prune
+    /// User clicked the broom button next to a repo in the picker.
+    /// Kicks off `git worktree prune --verbose` and surfaces a summary.
+    case pruneWorktreesRequested(repositoryID: Repository.ID, repositoryName: String)
+    /// Result from the prune effect — populates the summary alert.
+    case _pruneWorktreesResult(PruneAlertState)
+    /// User hit "Remove orphans" in the summary alert.
+    case confirmPruneOrphans(sessionIDs: [AgentSession.ID])
+    /// Alert was dismissed (OK / Keep / swipe-away).
+    case dismissPruneAlert
+
     case delegate(Delegate)
   }
 
@@ -118,6 +151,7 @@ struct BoardFeature {
   @Dependency(SessionReferenceScannerClient.self) var scannerClient
   @Dependency(GithubCLIClient.self) var githubCLI
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
+  @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -533,6 +567,34 @@ struct BoardFeature {
         }
         return .none
 
+      case .pruneWorktreesRequested(let repositoryID, let repositoryName):
+        return pruneWorktreesEffect(
+          repositoryID: repositoryID,
+          repositoryName: repositoryName,
+          sessions: state.sessions
+        )
+
+      case ._pruneWorktreesResult(let summary):
+        state.pruneAlert = summary
+        return .none
+
+      case .confirmPruneOrphans(let sessionIDs):
+        state.pruneAlert = nil
+        // Chain one .removeSession per orphan id. `.removeSession` is the
+        // existing cleanup path — it handles focus clearing and the
+        // sessionRemoved delegate (which normally triggers worktree
+        // deletion, harmless here since git's prune already removed the
+        // record and the directory's already gone).
+        return .run { send in
+          for id in sessionIDs {
+            await send(.removeSession(id: id))
+          }
+        }
+
+      case .dismissPruneAlert:
+        state.pruneAlert = nil
+        return .none
+
       case .delegate:
         return .none
 
@@ -655,12 +717,81 @@ struct BoardFeature {
     }
     .cancellable(id: AutoDisplayNameCancelID(sessionID: sessionID), cancelInFlight: true)
   }
+
+  // MARK: - Worktree prune
+
+  /// Run `git worktree prune --verbose` for the given repo, compute any
+  /// Supacool sessions whose backing directory has disappeared, and
+  /// surface a summary alert with both. Cancel-in-flight on the same
+  /// repo so rapid re-clicks collapse into one attempt.
+  private func pruneWorktreesEffect(
+    repositoryID: Repository.ID,
+    repositoryName: String,
+    sessions: [AgentSession]
+  ) -> Effect<Action> {
+    let alertID = UUID()
+    return .run { [supacoolWorktreePrune] send in
+      do {
+        let result = try await supacoolWorktreePrune.prune(URL(fileURLWithPath: repositoryID))
+        let orphans = findOrphanSessionIDs(in: sessions, repositoryID: repositoryID)
+        await send(
+          ._pruneWorktreesResult(
+            .init(
+              id: alertID,
+              repositoryID: repositoryID,
+              repositoryName: repositoryName,
+              outcome: .success(
+                prunedCount: result.prunedRefs.count,
+                orphanSessionIDs: orphans
+              )
+            )
+          )
+        )
+      } catch {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        await send(
+          ._pruneWorktreesResult(
+            .init(
+              id: alertID,
+              repositoryID: repositoryID,
+              repositoryName: repositoryName,
+              outcome: .failure(
+                message: message.isEmpty ? "git worktree prune failed." : message
+              )
+            )
+          )
+        )
+      }
+    }
+    .cancellable(id: PruneWorktreesCancelID(repositoryID: repositoryID), cancelInFlight: true)
+  }
 }
 
 // MARK: - Auto display name helpers
 
 private nonisolated struct AutoDisplayNameCancelID: Hashable, Sendable {
   let sessionID: AgentSession.ID
+}
+
+// MARK: - Worktree prune helpers
+
+private nonisolated struct PruneWorktreesCancelID: Hashable, Sendable {
+  let repositoryID: Repository.ID
+}
+
+/// Collect session ids in the given repo whose backing worktree
+/// directory no longer exists on disk. Sessions running at the repo root
+/// (worktreeID == repositoryID) are skipped — the repo itself is the
+/// "worktree" there and can't go stale independently.
+nonisolated func findOrphanSessionIDs(
+  in sessions: [AgentSession],
+  repositoryID: Repository.ID
+) -> [AgentSession.ID] {
+  sessions
+    .filter { $0.repositoryID == repositoryID }
+    .filter { $0.worktreeID != $0.repositoryID }
+    .filter { !FileManager.default.fileExists(atPath: $0.worktreeID) }
+    .map(\.id)
 }
 
 /// Clean up an LLM response intended to be a short session title.

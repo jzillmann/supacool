@@ -151,6 +151,10 @@ struct BoardRootView: View {
         renamingSessionID = nil
       }
     }
+    // Summary after `git worktree prune` runs from the repo picker.
+    // Extracted into a ViewModifier to keep the SwiftUI type-checker
+    // happy — the body's modifier chain is already long.
+    .modifier(PruneAlertModifier(store: store))
   }
 
   @ViewBuilder
@@ -367,7 +371,12 @@ struct BoardRootView: View {
           onToggleRepository: { store.send(.toggleRepository(id: $0)) },
           onShowAll: { store.send(.showAllRepositories) },
           onAddRepository: onAddRepository,
-          onConfigureRepositories: onConfigureRepositories
+          onConfigureRepositories: onConfigureRepositories,
+          onPruneWorktrees: { repo in
+            store.send(
+              .pruneWorktreesRequested(repositoryID: repo.id, repositoryName: repo.name)
+            )
+          }
         )
       }
       // Push the + button to the far right so there's breathing room
@@ -478,4 +487,72 @@ struct BoardRootView: View {
       )
     }
   #endif
+}
+
+// MARK: - Prune alert
+
+/// Lifts the prune-summary alert out of `BoardRootView.body` into its own
+/// ViewModifier. The root view's modifier chain was long enough to push
+/// the Swift type-checker past its "reasonable time" budget; extracting
+/// this branch keeps body compilable without changing behaviour.
+private struct PruneAlertModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+
+  func body(content: Content) -> some View {
+    content.alert(
+      title,
+      isPresented: Binding(
+        get: { store.pruneAlert != nil },
+        set: { if !$0 { store.send(.dismissPruneAlert) } }
+      ),
+      presenting: store.pruneAlert,
+      actions: buttons,
+      message: { alert in Text(message(for: alert)) }
+    )
+  }
+
+  private var title: String {
+    guard let name = store.pruneAlert?.repositoryName else { return "Prune worktrees" }
+    return "Prune \(name)"
+  }
+
+  @ViewBuilder
+  private func buttons(for alert: BoardFeature.PruneAlertState) -> some View {
+    switch alert.outcome {
+    case .success(_, let orphanSessionIDs) where !orphanSessionIDs.isEmpty:
+      Button("Remove orphans", role: .destructive) {
+        store.send(.confirmPruneOrphans(sessionIDs: orphanSessionIDs))
+      }
+      Button("Keep", role: .cancel) { store.send(.dismissPruneAlert) }
+    case .success, .failure:
+      Button("OK", role: .cancel) { store.send(.dismissPruneAlert) }
+    }
+  }
+
+  private func message(for alert: BoardFeature.PruneAlertState) -> String {
+    switch alert.outcome {
+    case .success(let prunedCount, let orphanSessionIDs):
+      return successMessage(prunedCount: prunedCount, orphanCount: orphanSessionIDs.count)
+    case .failure(let message):
+      return message
+    }
+  }
+
+  private func successMessage(prunedCount: Int, orphanCount: Int) -> String {
+    switch (prunedCount, orphanCount) {
+    case (0, 0):
+      return "Nothing to prune."
+    case (let n, 0):
+      return "Pruned \(n) stale worktree \(n == 1 ? "ref" : "refs")."
+    case (0, let m):
+      return
+        "No stale refs, but found \(m) orphan session \(m == 1 ? "card" : "cards") "
+        + "(worktree is gone from disk). Remove them?"
+    case (let n, let m):
+      return
+        "Pruned \(n) stale worktree \(n == 1 ? "ref" : "refs"). "
+        + "Found \(m) orphan session \(m == 1 ? "card" : "cards") "
+        + "(worktree is gone from disk). Remove them?"
+    }
+  }
 }
