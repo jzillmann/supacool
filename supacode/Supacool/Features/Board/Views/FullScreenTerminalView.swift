@@ -23,6 +23,10 @@ struct FullScreenTerminalView: View {
   /// never captured a native session id.
   let onResumePicker: (() -> Void)?
   let onRemove: () -> Void
+  /// Present only for remote sessions whose ssh link has dropped. Clicked
+  /// by the user from the disconnected state to re-spawn ssh and
+  /// `tmux attach`.
+  let onReconnect: (() -> Void)?
   /// Opens the rename alert owned by `BoardRootView`. Triggered from the
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
@@ -49,6 +53,7 @@ struct FullScreenTerminalView: View {
   @State private var isAutoObserverPopoverShown: Bool = false
   @State private var isQuickDiffPresented: Bool = false
   @State private var isConfirmingRemove: Bool = false
+  @State private var isRecentPromptsPopoverShown: Bool = false
 
   /// Surface id of the split we created via the header button — `nil`
   /// when the button is in "create" mode, non-nil when in "close" mode.
@@ -145,6 +150,7 @@ struct FullScreenTerminalView: View {
         }
         .help("Double-click to rename")
       infoButton
+      recentPromptsButton
       autoObserverButton
       openDiffButton
       splitButton
@@ -294,6 +300,34 @@ struct FullScreenTerminalView: View {
         repositoryName: repositories[id: session.repositoryID]?.name,
         worktreeLabel: worktreeLabel,
         onRerun: resolveWorktree() == nil ? onRerun : nil
+      )
+    }
+  }
+
+  /// Header button that pops up a list of reconstructed prompts from the
+  /// session's transcript file. Selecting one fires Ghostty's search
+  /// binding pre-populated with that prompt's first ~40 chars, so the
+  /// user lands on the matching spot in the scrollback.
+  private var recentPromptsButton: some View {
+    Button {
+      isRecentPromptsPopoverShown.toggle()
+    } label: {
+      Image(systemName: "text.line.first.and.arrowtriangle.forward")
+        .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
+    }
+    .buttonStyle(.plain)
+    .help("Jump to a recent prompt")
+    .popover(isPresented: $isRecentPromptsPopoverShown, arrowEdge: .bottom) {
+      RecentPromptsPopover(
+        tabID: TerminalTabID(rawValue: session.id),
+        onJump: { needle in
+          isRecentPromptsPopoverShown = false
+          terminalManager.performBindingAction(
+            worktreeID: session.worktreeID,
+            action: "search:\(needle)"
+          )
+        }
       )
     }
   }
@@ -479,9 +513,48 @@ struct FullScreenTerminalView: View {
       .id(session.id)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .ignoresSafeArea(.container, edges: .bottom)
+    } else if session.isRemote {
+      disconnectedRemoteState
     } else {
       detachedState
     }
+  }
+
+  /// Shown when a remote session's ssh surface has died. Tmux on the far
+  /// side almost always survived, so the primary affordance is Reconnect
+  /// (re-spawn ssh → `tmux new-session -A`), not Rerun.
+  private var disconnectedRemoteState: some View {
+    VStack(spacing: 14) {
+      Image(systemName: "bolt.slash.fill")
+        .font(.system(size: 48))
+        .foregroundStyle(.red)
+      Text("Disconnected from remote")
+        .font(.title3.weight(.medium))
+      Text("""
+        The SSH link dropped. Your tmux session on the remote almost \
+        certainly survived — click Reconnect to re-attach.
+        """)
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .multilineTextAlignment(.center)
+      .frame(maxWidth: 420)
+
+      HStack(spacing: 10) {
+        Button(role: .destructive) {
+          onRemove()
+        } label: {
+          Label("Remove", systemImage: "trash")
+        }
+        Button("Back to Board", action: onBackToBoard)
+        if let onReconnect {
+          Button("Reconnect", systemImage: "arrow.clockwise", action: onReconnect)
+            .keyboardShortcut(.defaultAction)
+            .help("Re-spawn ssh and tmux attach to the existing remote session")
+        }
+      }
+    }
+    .padding(40)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private var detachedState: some View {

@@ -199,6 +199,9 @@ struct BoardRootView: View {
           }
           : nil,
         onRemove: { store.send(.removeSession(id: session.id)) },
+        onReconnect: session.isRemote
+          ? { store.send(.reconnectRemoteSession(id: session.id)) }
+          : nil,
         onRename: { beginRename(session) },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },

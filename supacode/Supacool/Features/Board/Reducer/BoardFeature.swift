@@ -20,6 +20,8 @@ struct BoardFeature {
   struct State: Equatable {
     @Shared(.agentSessions) var sessions: [AgentSession] = []
     @Shared(.boardFilters) var filters: BoardFilters = .empty
+    @Shared(.remoteHosts) var remoteHosts: [RemoteHost] = []
+    @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace] = []
 
     /// When non-nil, the root view shows this session's terminal full-screen
     /// instead of the board. Not persisted — fresh launches always land on
@@ -96,6 +98,13 @@ struct BoardFeature {
     case resumeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
 
+    // MARK: Remote reconnect
+    /// User clicked Reconnect on a `.disconnected` remote session card.
+    /// Re-spawns ssh; `tmux new-session -A` re-attaches the surviving
+    /// remote session.
+    case reconnectRemoteSession(id: AgentSession.ID)
+    case _reconnectFailed(id: AgentSession.ID, message: String)
+
     // MARK: Auto-Observer
     case toggleAutoObserver(id: AgentSession.ID)
     case setAutoObserverPrompt(id: AgentSession.ID, prompt: String)
@@ -152,6 +161,7 @@ struct BoardFeature {
   @Dependency(GithubCLIClient.self) var githubCLI
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
+  @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -363,6 +373,53 @@ struct BoardFeature {
 
       case .resumeFailed(let id, let message):
         boardLogger.warning("Resume failed for session \(id): \(message)")
+        return .none
+
+      case .reconnectRemoteSession(let id):
+        guard
+          let session = state.sessions.first(where: { $0.id == id }),
+          let workspaceID = session.remoteWorkspaceID,
+          let workspace = state.remoteWorkspaces.first(where: { $0.id == workspaceID }),
+          let host = state.remoteHosts.first(where: { $0.id == workspace.hostID }),
+          let tmuxSessionName = session.tmuxSessionName
+        else {
+          return .send(._reconnectFailed(id: id, message: "Remote session metadata is missing."))
+        }
+        guard let localSocketPath = terminalClient.hookSocketPath() else {
+          return .send(._reconnectFailed(id: id, message: "Agent hook socket isn't running."))
+        }
+        // Reset the disconnected flag and stamp activity so the card
+        // flips out of `.disconnected` as soon as the surface comes up.
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].remoteConnectionLost = false
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
+          sessions[index].lastActivityAt = Date()
+        }
+        let invocation = RemoteSpawnInvocation(
+          sshAlias: host.sshAlias,
+          remoteWorkingDirectory: workspace.remoteWorkingDirectory,
+          remoteSocketPath: Self.remoteSocketPath(for: id, host: host),
+          localSocketPath: localSocketPath,
+          tmuxSessionName: tmuxSessionName,
+          worktreeID: session.worktreeID,
+          tabID: id,
+          surfaceID: id,
+          agentCommand: session.agent.map { Self.remoteAgentCommand(for: $0, session: session) }
+        )
+        let sshCommand = remoteSpawnClient.sshInvocation(invocation)
+        let worktree = Self.remoteShimWorktree(for: session)
+        // Ensure the old (dead) tab entry is gone before the new spawn,
+        // so `createRemoteTab` re-registers under the same UUID without
+        // colliding with the stale one.
+        return .run { _ in
+          await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: id)))
+          await terminalClient.send(.createRemoteTab(worktree, command: sshCommand, id: id))
+        }
+
+      case ._reconnectFailed(let id, let message):
+        boardLogger.warning("Remote reconnect failed for session \(id): \(message)")
         return .none
 
       case .rerunDetachedSession(let id, let repositories):
@@ -653,6 +710,45 @@ struct BoardFeature {
       return .pullRequest(owner: owner, repo: repo, number: number, state: newState)
     }
     return ref
+  }
+
+  // MARK: - Remote helpers
+
+  /// Remote-side socket path the reverse-forward binds to. Per-session so
+  /// concurrent remote tabs don't fight over a single path. Lives under
+  /// `/tmp` so cleanup on remote reboot is automatic.
+  fileprivate static func remoteSocketPath(for id: AgentSession.ID, host: RemoteHost) -> String {
+    let short = id.uuidString.lowercased().prefix(12)
+    let dir = host.overrides.effectiveRemoteTmpdir
+    return "\(dir)/supacool-hook-\(short).sock"
+  }
+
+  /// Synthesizes the `Worktree` value the terminal manager keys by for
+  /// remote sessions. `id` must match `session.worktreeID` so the
+  /// existing classifier lookups land on the right key.
+  fileprivate static func remoteShimWorktree(for session: AgentSession) -> Worktree {
+    Worktree(
+      id: session.worktreeID,
+      name: session.displayName,
+      detail: "",
+      workingDirectory: URL(fileURLWithPath: "/"),
+      repositoryRootURL: URL(fileURLWithPath: "/")
+    )
+  }
+
+  /// The command string tmux exec's on the remote for a given agent.
+  /// Uses the agent's existing run/resume helpers so local and remote
+  /// stay in lockstep; falls back to a fresh run for agents without a
+  /// captured session id.
+  fileprivate static func remoteAgentCommand(
+    for agent: AgentType,
+    session: AgentSession
+  ) -> String {
+    let bypass = readBypassPermissions()
+    if let resumeID = session.agentNativeSessionID, !resumeID.isEmpty {
+      return agent.resumeCommand(sessionID: resumeID, bypassPermissions: bypass)
+    }
+    return agent.command(prompt: session.initialPrompt, bypassPermissions: bypass)
   }
 
   fileprivate static func resumeWorktree(

@@ -235,6 +235,15 @@ final class WorktreeTerminalManager {
     states[worktreeID]?.containsTabTree(tabID) ?? false
   }
 
+  /// Fire a Ghostty binding action against the focused surface in the
+  /// given worktree's state. Used by the Supacool "Recent prompts"
+  /// popover to pre-populate the ⌘F search overlay via
+  /// `performBindingAction("search:<needle>")`.
+  @discardableResult
+  func performBindingAction(worktreeID: Worktree.ID, action: String) -> Bool {
+    states[worktreeID]?.performBindingActionOnFocusedSurface(action) ?? false
+  }
+
   func handleCommand(_ command: TerminalClient.Command) {
     if handleTabCommand(command) {
       return
@@ -257,6 +266,11 @@ final class WorktreeTerminalManager {
       Task {
         createTabAsync(in: worktree, runSetupScriptIfNew: runSetupScriptIfNew, initialInput: input, tabID: id)
       }
+    case .createRemoteTab(let worktree, let command, let id):
+      // Supacool: bypass setup-script / default-shell plumbing entirely
+      // — the supplied command is the full ssh invocation.
+      let state = state(for: worktree) { false }
+      _ = state.createTab(tabID: id, command: command)
     case .ensureInitialTab(let worktree, let runSetupScriptIfNew, let focusing):
       let state = state(for: worktree) { runSetupScriptIfNew }
       state.ensureInitialTab(focusing: focusing)
@@ -325,9 +339,9 @@ final class WorktreeTerminalManager {
       state(for: worktree).navigateSearchOnFocusedSurface(.previous)
     case .endSearch(let worktree):
       state(for: worktree).performBindingActionOnFocusedSurface("end_search")
-    case .createTab, .createTabWithInput, .ensureInitialTab, .stopRunScript, .runBlockingScript,
-      .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .selectTab, .focusSurface,
-      .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
+    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
+      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .selectTab,
+      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
       .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
@@ -338,11 +352,11 @@ final class WorktreeTerminalManager {
     switch command {
     case .performBindingAction(let worktree, let action):
       state(for: worktree).performBindingActionOnFocusedSurface(action)
-    case .createTab, .createTabWithInput, .ensureInitialTab, .stopRunScript, .runBlockingScript,
-      .closeFocusedTab, .closeFocusedSurface, .startSearch, .searchSelection, .navigateSearchNext,
-      .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface, .splitSurface, .destroyTab,
-      .destroySurface, .prune, .setNotificationsEnabled, .setSelectedWorktreeID,
-      .refreshTabBarVisibility, .sendText:
+    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
+      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch, .searchSelection,
+      .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface,
+      .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
+      .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
     return true
@@ -366,10 +380,10 @@ final class WorktreeTerminalManager {
       }
       selectedWorktreeID = id
       terminalLogger.info("Selected worktree \(id ?? "nil")")
-    case .createTab, .createTabWithInput, .ensureInitialTab, .stopRunScript, .runBlockingScript,
-      .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .startSearch, .searchSelection,
-      .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface,
-      .splitSurface, .destroyTab, .destroySurface, .sendText:
+    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
+      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
+      .startSearch, .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch,
+      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .sendText:
       assertionFailure("Unhandled terminal command reached management handler: \(command)")
     }
   }

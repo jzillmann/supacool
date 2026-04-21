@@ -150,7 +150,14 @@ final class WorktreeTerminalState {
     setupScript: String? = nil,
     initialInput: String? = nil,
     inheritingFromSurfaceId: UUID? = nil,
-    tabID: UUID? = nil
+    tabID: UUID? = nil,
+    /// Supacool: when non-nil, replaces Ghostty's default shell command
+    /// for this tab. Used by remote SSH sessions to exec `ssh -tt … tmux
+    /// new-session -A …` directly instead of dropping the user into a
+    /// local shell first. Setup scripts + `initialInput` composition is
+    /// bypassed when `command` is set — the caller owns the full
+    /// invocation.
+    command: String? = nil
   ) -> TerminalTabID? {
     let context: ghostty_surface_context_e =
       tabManager.tabs.isEmpty
@@ -196,13 +203,25 @@ final class WorktreeTerminalState {
     if shouldConsumeSetupScript {
       pendingSetupScript = false
     }
+    // Supacool: when a remote `command` is supplied the tab exec's that
+    // verbatim (ssh → tmux). Setup scripts / `initialInput` are meaningless
+    // for ssh tabs — the remote bootstrap owns the environment.
+    let effectiveCommand: String?
+    let effectiveInput: String?
+    if let command {
+      effectiveCommand = command
+      effectiveInput = nil
+    } else {
+      effectiveCommand = nil
+      effectiveInput = resolvedInput
+    }
     let tabId = createTab(
       TabCreation(
         title: title,
         icon: "terminal",
         isTitleLocked: false,
-        command: nil,
-        initialInput: resolvedInput,
+        command: effectiveCommand,
+        initialInput: effectiveInput,
         focusing: focusing,
         inheritingFromSurfaceId: resolvedInheritanceSurfaceId,
         context: context,

@@ -202,7 +202,8 @@ struct SupacodeApp: App {
         },
         readScreenContents: { worktreeID, tabID in
           terminalManager.readScreenContents(worktreeID: worktreeID, tabID: tabID)
-        }
+        },
+        hookSocketPath: { terminalManager.socketServer?.socketPath }
       )
       values.worktreeInfoWatcher = WorktreeInfoWatcherClient(
         send: { command in

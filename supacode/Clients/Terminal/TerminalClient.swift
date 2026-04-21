@@ -10,9 +10,18 @@ struct TerminalClient {
   /// Returns nil when the worktree/tab/surface is not found.
   var readScreenContents: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> String?
 
+  /// Supacool: path to the app's agent-hook Unix socket, or nil if the
+  /// server failed to start. Used by the remote-spawn flow to wire up
+  /// the reverse socket forward (`ssh -R <remote>:<local>`).
+  var hookSocketPath: @MainActor @Sendable () -> String?
+
   enum Command: Equatable {
     case createTab(Worktree, runSetupScriptIfNew: Bool, id: UUID? = nil)
     case createTabWithInput(Worktree, input: String, runSetupScriptIfNew: Bool, id: UUID? = nil)
+    /// Supacool: spawn a tab whose PTY is the given `command` (typically
+    /// an ssh invocation to a remote tmux session). Bypasses setup
+    /// scripts and default-shell selection — the caller owns the exec.
+    case createRemoteTab(Worktree, command: String, id: UUID)
     case ensureInitialTab(Worktree, runSetupScriptIfNew: Bool, focusing: Bool)
     case stopRunScript(Worktree)
     case runBlockingScript(Worktree, kind: BlockingScriptKind, script: String)
@@ -60,7 +69,8 @@ extension TerminalClient: DependencyKey {
     events: { fatalError("TerminalClient.events not configured") },
     tabExists: { _, _ in fatalError("TerminalClient.tabExists not configured") },
     surfaceExists: { _, _, _ in fatalError("TerminalClient.surfaceExists not configured") },
-    readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") }
+    readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") },
+    hookSocketPath: { nil }
   )
 
   static let testValue = TerminalClient(
@@ -68,7 +78,8 @@ extension TerminalClient: DependencyKey {
     events: { AsyncStream { $0.finish() } },
     tabExists: unimplemented("TerminalClient.tabExists", placeholder: true),
     surfaceExists: unimplemented("TerminalClient.surfaceExists", placeholder: true),
-    readScreenContents: { _, _ in nil }
+    readScreenContents: { _, _ in nil },
+    hookSocketPath: { nil }
   )
 }
 
