@@ -55,7 +55,6 @@ AppFeature.State                    (supacode, modified)
 ContentView                         (supacode/App/, modified)
 └── BoardRootView                   (Supacool/Features/Board/Views/)
     ├── [focusedSessionID == nil] → BoardView
-    │   ├── RepoFilterHeaderView (orphaned — now a toolbar popover, see RepoPickerButton)
     │   └── SessionCardContainer (hover, busy-change observer)
     │       └── SessionCardView  (name, chips, status)
     │
@@ -133,7 +132,6 @@ Files supacode wrote, Supacool doesn't reference, but kept on disk for clean ups
 - `supacode/Features/Repositories/Views/WorktreeRowsView.swift`
 - `supacode/Features/Repositories/Views/WorktreeDetailView.swift`
 - `supacode/Features/Repositories/Views/WorktreeDetailTitleView.swift`
-- `supacode/Supacool/Features/Board/Views/RepoFilterHeaderView.swift` (replaced by `RepoPickerButton`)
 
 Don't edit these expecting UI changes. If an upstream merge modifies them, accept the upstream version wholesale.
 

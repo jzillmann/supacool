@@ -5,8 +5,8 @@ import SwiftUI
 /// popover. The popover lists all registered repos as toggleable rows and
 /// offers an "Add Repository…" button at the bottom.
 ///
-/// Replaces the horizontal chip bar (`RepoFilterHeaderView`) that used to
-/// live below the window title. Button label shows the active state:
+/// Replaces the horizontal chip bar that used to live below the window
+/// title. Button label shows the active state:
 /// - No repos registered → "Add Repository"
 /// - 1 repo, included → that repo's name
 /// - Showing all → "All repositories"
