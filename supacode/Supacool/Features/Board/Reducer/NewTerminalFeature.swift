@@ -190,6 +190,11 @@ struct NewTerminalFeature {
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
     /// workspace pickers with the remote working-directory field.
     case destinationChanged(Destination)
+    /// User picked an agent via ⌘0/⌘1/⌘2. Kept as a discrete action so
+    /// the shortcut buttons don't mutate store state directly (banned by
+    /// the `store_state_mutation_in_views` lint rule) and don't pay the
+    /// KeyPath Sendable tax that `.binding(.set(\.agent, _))` would.
+    case agentSelected(AgentType?)
     case delegate(Delegate)
 
     @CasePathable
@@ -342,230 +347,15 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         return .none
 
+      case .agentSelected(let agent):
+        state.agent = agent
+        return .none
+
       case .createButtonTapped:
         if case .remote(let hostID) = state.destination {
           return handleRemoteCreate(state: &state, hostID: hostID)
         }
-        let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let repoID = state.selectedRepositoryID,
-          let repository = state.availableRepositories[id: repoID]
-        else {
-          state.validationMessage = "Pick a repository."
-          return .none
-        }
-
-        let selection = state.selectedWorkspace
-        switch selection {
-        case .repoRoot:
-          break
-        case .existingWorktree(let id):
-          guard repository.worktrees.contains(where: { $0.id == id }) else {
-            state.validationMessage = "Picked worktree no longer exists."
-            return .none
-          }
-        case .existingBranch(let name):
-          let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !trimmed.isEmpty else {
-            state.validationMessage = "Pick a branch."
-            return .none
-          }
-          guard !trimmed.contains(where: \.isWhitespace) else {
-            state.validationMessage = "Branch names can't contain spaces."
-            return .none
-          }
-        case .newBranch(let name):
-          let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-          guard !trimmed.isEmpty else {
-            state.validationMessage = "Branch name required."
-            return .none
-          }
-          guard !trimmed.contains(where: \.isWhitespace) else {
-            state.validationMessage = "Branch names can't contain spaces."
-            return .none
-          }
-        }
-        if state.agent != nil && trimmedPrompt.isEmpty {
-          state.validationMessage = "Prompt required."
-          return .none
-        }
-        state.validationMessage = nil
-        state.isCreating = true
-
-        // When the sheet was pre-configured from a pasted PR URL, we
-        // already have a high-quality human title ready. Pass it through
-        // so the card shows "PR #42: Fix the widget" from moment one,
-        // instead of the URL hostname that the prompt slice would yield.
-        let suggestedDisplayName: String? = {
-          if case .resolved(let context) = state.pullRequestLookup {
-            return "PR #\(context.parsed.number): \(context.metadata.title)"
-          }
-          return nil
-        }()
-
-        let agent = state.agent
-        // Mirror supacode's sidebar flow: obey the global "Fetch origin
-        // before creating worktree" toggle so both paths behave the same.
-        @Shared(.settingsFile) var settingsFile
-        let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
-        let bypassPermissions =
-          UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
-        let sessionID = UUID()
-        let repositoryID = repository.id
-        let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
-        let removeBackingWorktreeOnDelete = Self.shouldRemoveBackingWorktreeOnDelete(
-          selection: selection,
-          rerunOwnedWorktreeID: rerunOwnedWorktreeID
-        )
-        let gitClient = self.gitClient
-        let terminalClient = self.terminalClient
-
-        return .run { send in
-          do {
-            let worktree: Worktree
-            switch selection {
-            case .newBranch(let rawName):
-              let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-              let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
-              // Pre-worktree fetch so the new branch is based on the
-              // *actually* latest upstream, not the local cache. Failures
-              // log but don't block — an offline/auth-broken fetch
-              // shouldn't lose the user their prompt.
-              if fetchOriginBeforeCreation {
-                let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
-                if let matchedRemote = baseRef.supacoolMatchingRemote(from: remotes) {
-                  do {
-                    try await gitClient.fetchRemote(matchedRemote, repository.rootURL)
-                  } catch {
-                    newTerminalLogger.warning(
-                      "Pre-worktree fetch \(matchedRemote) failed for "
-                        + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-                    )
-                  }
-                }
-              }
-              let baseDirectory = SupacodePaths.worktreeBaseDirectory(
-                for: repository.rootURL,
-                globalDefaultPath: nil,
-                repositoryOverridePath: nil
-              )
-              worktree = try await gitClient.createWorktree(
-                branchName,
-                repository.rootURL,
-                baseDirectory,
-                false,
-                false,
-                baseRef
-              )
-
-            case .existingBranch(let rawName):
-              let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-              // Fetch the matching remote first so DWIM can find freshly
-              // pushed branches (e.g. a new PR). Same fetch semantics as
-              // .newBranch above.
-              if fetchOriginBeforeCreation {
-                let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
-                if let firstRemote = remotes.first {
-                  do {
-                    try await gitClient.fetchRemote(firstRemote, repository.rootURL)
-                  } catch {
-                    newTerminalLogger.warning(
-                      "Pre-worktree fetch \(firstRemote) failed for "
-                        + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-                    )
-                  }
-                }
-              }
-              let baseDirectory = SupacodePaths.worktreeBaseDirectory(
-                for: repository.rootURL,
-                globalDefaultPath: nil,
-                repositoryOverridePath: nil
-              )
-              // Common rerun gotcha: the previous session's worktree
-              // directory is still on disk (git's record was dropped, or
-              // supacode's repo cache hasn't refreshed yet) — `worktree
-              // add` then fails with "already exists". If the path looks
-              // like a live git worktree, adopt it instead of failing.
-              if let adopted = Self.adoptExistingWorktreeDirectory(
-                branchName: branchName,
-                baseDirectory: baseDirectory,
-                repoRootURL: repository.rootURL
-              ) {
-                worktree = adopted
-              } else {
-                worktree = try await gitClient.createWorktreeForExistingBranch(
-                  branchName,
-                  repository.rootURL,
-                  baseDirectory
-                )
-              }
-
-            case .existingWorktree(let id):
-              // Pinned by the sheet's picker. If the record vanished
-              // between picker-time and submit we bail. `Identifiable`
-              // on Worktree is @MainActor-isolated, so do the lookup there.
-              let picked: Worktree? = await MainActor.run {
-                repository.worktrees.first { $0.id == id }
-              }
-              guard let picked else { throw NewTerminalError.worktreeMissing }
-              worktree = picked
-
-            case .repoRoot:
-              // Directory mode: resolve the repo-root worktree, or
-              // synthesize one if discovery hasn't caught up yet.
-              let rootURL = repository.rootURL.standardizedFileURL
-              worktree = await MainActor.run {
-                let existing = repository.worktrees.first { wt in
-                  wt.workingDirectory == rootURL
-                }
-                return existing
-                  ?? Worktree(
-                    id: rootURL.path(percentEncoded: false),
-                    name: repository.name,
-                    detail: "",
-                    workingDirectory: rootURL,
-                    repositoryRootURL: rootURL
-                  )
-              }
-            }
-
-            // Spawn the tab, using sessionID as the tab ID so the
-            // AgentSession can reference it later.
-            let input: String
-            switch (agent, trimmedPrompt.isEmpty) {
-            case (let agent?, false):
-              input = agent.command(prompt: trimmedPrompt, bypassPermissions: bypassPermissions) + "\r"
-            case (let agent?, true):
-              input = agent.commandWithoutPrompt(bypassPermissions: bypassPermissions) + "\r"
-            case (nil, false):
-              input = trimmedPrompt + "\r"
-            case (nil, true):
-              input = ""
-            }
-            await terminalClient.send(
-              .createTabWithInput(
-                worktree,
-                input: input,
-                // Run the repo's setup script (Settings → Repository Settings →
-                // Setup Script) before the agent command.
-                runSetupScriptIfNew: true,
-                id: sessionID
-              )
-            )
-
-            let session = AgentSession(
-              id: sessionID,
-              repositoryID: repositoryID,
-              worktreeID: worktree.id,
-              agent: agent,
-              initialPrompt: trimmedPrompt,
-              displayName: suggestedDisplayName,
-              removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
-            )
-            await send(.sessionReady(session))
-          } catch {
-            await send(.creationFailed(message: error.localizedDescription))
-          }
-        }
+        return handleLocalCreate(state: &state)
 
       case .setValidationMessage(let message):
         state.validationMessage = message
@@ -608,6 +398,237 @@ struct NewTerminalFeature {
 
       case .delegate:
         return .none
+      }
+    }
+  }
+
+  // MARK: - Local create
+
+  /// Git-backed spawn path: validates the repo+workspace selection, then
+  /// (in an effect) creates or adopts a `Worktree`, spawns the terminal
+  /// tab, and emits `.sessionReady` with an `AgentSession`.
+  ///
+  /// Sibling of `handleRemoteCreate` — keep their validation rules and
+  /// agent-command composition in sync when touching either.
+  private func handleLocalCreate(state: inout State) -> Effect<Action> {
+    let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let repoID = state.selectedRepositoryID,
+      let repository = state.availableRepositories[id: repoID]
+    else {
+      state.validationMessage = "Pick a repository."
+      return .none
+    }
+
+    let selection = state.selectedWorkspace
+    switch selection {
+    case .repoRoot:
+      break
+    case .existingWorktree(let id):
+      guard repository.worktrees.contains(where: { $0.id == id }) else {
+        state.validationMessage = "Picked worktree no longer exists."
+        return .none
+      }
+    case .existingBranch(let name):
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else {
+        state.validationMessage = "Pick a branch."
+        return .none
+      }
+      guard !trimmed.contains(where: \.isWhitespace) else {
+        state.validationMessage = "Branch names can't contain spaces."
+        return .none
+      }
+    case .newBranch(let name):
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else {
+        state.validationMessage = "Branch name required."
+        return .none
+      }
+      guard !trimmed.contains(where: \.isWhitespace) else {
+        state.validationMessage = "Branch names can't contain spaces."
+        return .none
+      }
+    }
+    if state.agent != nil && trimmedPrompt.isEmpty {
+      state.validationMessage = "Prompt required."
+      return .none
+    }
+    state.validationMessage = nil
+    state.isCreating = true
+
+    // When the sheet was pre-configured from a pasted PR URL, we
+    // already have a high-quality human title ready. Pass it through
+    // so the card shows "PR #42: Fix the widget" from moment one,
+    // instead of the URL hostname that the prompt slice would yield.
+    let suggestedDisplayName: String? = {
+      if case .resolved(let context) = state.pullRequestLookup {
+        return "PR #\(context.parsed.number): \(context.metadata.title)"
+      }
+      return nil
+    }()
+
+    let agent = state.agent
+    // Mirror supacode's sidebar flow: obey the global "Fetch origin
+    // before creating worktree" toggle so both paths behave the same.
+    @Shared(.settingsFile) var settingsFile
+    let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
+    let bypassPermissions =
+      UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+    let sessionID = UUID()
+    let repositoryID = repository.id
+    let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
+    let removeBackingWorktreeOnDelete = Self.shouldRemoveBackingWorktreeOnDelete(
+      selection: selection,
+      rerunOwnedWorktreeID: rerunOwnedWorktreeID
+    )
+    let gitClient = self.gitClient
+    let terminalClient = self.terminalClient
+
+    return .run { send in
+      do {
+        let worktree: Worktree
+        switch selection {
+        case .newBranch(let rawName):
+          let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+          let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
+          // Pre-worktree fetch so the new branch is based on the
+          // *actually* latest upstream, not the local cache. Failures
+          // log but don't block — an offline/auth-broken fetch
+          // shouldn't lose the user their prompt.
+          if fetchOriginBeforeCreation {
+            let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
+            if let matchedRemote = baseRef.supacoolMatchingRemote(from: remotes) {
+              do {
+                try await gitClient.fetchRemote(matchedRemote, repository.rootURL)
+              } catch {
+                newTerminalLogger.warning(
+                  "Pre-worktree fetch \(matchedRemote) failed for "
+                    + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+                )
+              }
+            }
+          }
+          let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+            for: repository.rootURL,
+            globalDefaultPath: nil,
+            repositoryOverridePath: nil
+          )
+          worktree = try await gitClient.createWorktree(
+            branchName,
+            repository.rootURL,
+            baseDirectory,
+            false,
+            false,
+            baseRef
+          )
+
+        case .existingBranch(let rawName):
+          let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+          // Fetch the matching remote first so DWIM can find freshly
+          // pushed branches (e.g. a new PR). Same fetch semantics as
+          // .newBranch above.
+          if fetchOriginBeforeCreation {
+            let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
+            if let firstRemote = remotes.first {
+              do {
+                try await gitClient.fetchRemote(firstRemote, repository.rootURL)
+              } catch {
+                newTerminalLogger.warning(
+                  "Pre-worktree fetch \(firstRemote) failed for "
+                    + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+                )
+              }
+            }
+          }
+          let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+            for: repository.rootURL,
+            globalDefaultPath: nil,
+            repositoryOverridePath: nil
+          )
+          // Common rerun gotcha: the previous session's worktree
+          // directory is still on disk (git's record was dropped, or
+          // supacode's repo cache hasn't refreshed yet) — `worktree
+          // add` then fails with "already exists". If the path looks
+          // like a live git worktree, adopt it instead of failing.
+          if let adopted = Self.adoptExistingWorktreeDirectory(
+            branchName: branchName,
+            baseDirectory: baseDirectory,
+            repoRootURL: repository.rootURL
+          ) {
+            worktree = adopted
+          } else {
+            worktree = try await gitClient.createWorktreeForExistingBranch(
+              branchName,
+              repository.rootURL,
+              baseDirectory
+            )
+          }
+
+        case .existingWorktree(let id):
+          // Pinned by the sheet's picker. If the record vanished
+          // between picker-time and submit we bail. `Identifiable`
+          // on Worktree is @MainActor-isolated, so do the lookup there.
+          let picked: Worktree? = await MainActor.run {
+            repository.worktrees.first { $0.id == id }
+          }
+          guard let picked else { throw NewTerminalError.worktreeMissing }
+          worktree = picked
+
+        case .repoRoot:
+          // Directory mode: resolve the repo-root worktree, or
+          // synthesize one if discovery hasn't caught up yet.
+          let rootURL = repository.rootURL.standardizedFileURL
+          worktree = await MainActor.run {
+            let existing = repository.worktrees.first { wt in
+              wt.workingDirectory == rootURL
+            }
+            return existing
+              ?? Worktree(
+                id: rootURL.path(percentEncoded: false),
+                name: repository.name,
+                detail: "",
+                workingDirectory: rootURL,
+                repositoryRootURL: rootURL
+              )
+          }
+        }
+
+        // Spawn the tab, using sessionID as the tab ID so the
+        // AgentSession can reference it later.
+        let input: String
+        switch (agent, trimmedPrompt.isEmpty) {
+        case (let agent?, false):
+          input = agent.command(prompt: trimmedPrompt, bypassPermissions: bypassPermissions) + "\r"
+        case (let agent?, true):
+          input = agent.commandWithoutPrompt(bypassPermissions: bypassPermissions) + "\r"
+        case (nil, false):
+          input = trimmedPrompt + "\r"
+        case (nil, true):
+          input = ""
+        }
+        await terminalClient.send(
+          .createTabWithInput(
+            worktree,
+            input: input,
+            // Run the repo's setup script (Settings → Repository Settings →
+            // Setup Script) before the agent command.
+            runSetupScriptIfNew: true,
+            id: sessionID
+          )
+        )
+
+        let session = AgentSession(
+          id: sessionID,
+          repositoryID: repositoryID,
+          worktreeID: worktree.id,
+          agent: agent,
+          initialPrompt: trimmedPrompt,
+          displayName: suggestedDisplayName,
+          removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
+        )
+        await send(.sessionReady(session))
+      } catch {
+        await send(.creationFailed(message: error.localizedDescription))
       }
     }
   }

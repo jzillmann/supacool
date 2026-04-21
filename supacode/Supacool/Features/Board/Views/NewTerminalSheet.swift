@@ -552,13 +552,13 @@ struct NewTerminalSheet: View {
 
   private var agentShortcuts: some View {
     Group {
-      Button("") { store.agent = nil }
+      Button("") { store.send(.agentSelected(nil)) }
         .keyboardShortcut("0", modifiers: .command)
         .hidden()
-      Button("") { store.agent = .claude }
+      Button("") { store.send(.agentSelected(.claude)) }
         .keyboardShortcut("1", modifiers: .command)
         .hidden()
-      Button("") { store.agent = .codex }
+      Button("") { store.send(.agentSelected(.codex)) }
         .keyboardShortcut("2", modifiers: .command)
         .hidden()
       // ⌘-Enter submits even while focus is in the multi-line prompt
