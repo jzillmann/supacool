@@ -1234,6 +1234,12 @@ final class GhosttySurfaceView: NSView, Identifiable {
     if let finalText, !finalText.isEmpty,
       let codepoint = finalText.utf8.first, codepoint >= 0x20
     {
+      // Input tap: only printable text (codepoint >= 0x20). Arrow keys,
+      // function keys, and other control-only presses don't carry text and
+      // are deliberately not logged — they're low-signal for a transcript.
+      if action == GHOSTTY_ACTION_PRESS || action == GHOSTTY_ACTION_REPEAT {
+        bridge.onInputTap?(finalText)
+      }
       return finalText.withCString { ptr in
         key.text = ptr
         return ghostty_surface_key(surface, key)
@@ -1592,6 +1598,7 @@ extension GhosttySurfaceView: NSTextInputClient {
     }
     let len = chars.utf8CString.count
     if len == 0 { return }
+    bridge.onInputTap?(chars)
     chars.withCString { ptr in
       ghostty_surface_text(surface, ptr, UInt(len - 1))
     }
@@ -1638,6 +1645,7 @@ extension GhosttySurfaceView: NSServicesMenuRequestor {
     }
     let len = text.utf8CString.count
     guard len > 0 else { return }
+    bridge.onInputTap?(text)
     text.withCString { ptr in
       ghostty_surface_text(surface, ptr, UInt(len - 1))
     }
@@ -1647,6 +1655,7 @@ extension GhosttySurfaceView: NSServicesMenuRequestor {
     guard let str = pboard.getOpinionatedStringContents() else { return false }
     let len = str.utf8CString.count
     if len == 0 { return true }
+    bridge.onInputTap?(str)
     str.withCString { ptr in
       ghostty_surface_text(surface, ptr, UInt(len - 1))
     }

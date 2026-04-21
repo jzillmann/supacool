@@ -22,6 +22,14 @@ final class GhosttySurfaceBridge {
   var onCommandFinished: ((Int?) -> Void)?
   var onChildExited: ((UInt32) -> Void)?
   var onDesktopNotification: ((String, String) -> Void)?
+  /// Invoked for every byte group the user (or programmatic caller) sends
+  /// toward the PTY — physical keystrokes via GhosttySurfaceView, paste via
+  /// `insertText`, programmatic `sendText` / `sendCommand`. The raw, decoded
+  /// UTF-8 string is passed through. The caller (TranscriptRecorder wiring
+  /// in WorktreeTerminalState) is responsible for honoring `state.secureInput`
+  /// — this bridge stays agnostic so the same hook can be used for other
+  /// consumers (e.g. screen-reader feedback) if they want different gating.
+  var onInputTap: ((String) -> Void)?
   private var progressResetTask: Task<Void, Never>?
 
   deinit {
@@ -42,6 +50,7 @@ final class GhosttySurfaceBridge {
 
   func sendText(_ text: String) {
     guard let surface else { return }
+    onInputTap?(text)
     text.withCString { ptr in
       ghostty_surface_text(surface, ptr, UInt(text.lengthOfBytes(using: .utf8)))
     }
@@ -52,20 +61,33 @@ final class GhosttySurfaceBridge {
     sendText(finalCommand)
   }
 
-  /// Reads the entire visible screen as plain text using the GhosttyKit C API.
+  /// What slice of the surface a `readScreenContents` call should read.
+  ///   - `.screen`: only the visible viewport. Cheap, what existing callers
+  ///      (awaiting-input detection) expect.
+  ///   - `.surface`: visible viewport PLUS the full scrollback. Used by the
+  ///      transcript recorder so we capture what the agent wrote even after
+  ///      the user scrolled or the screen scrolled past.
+  enum ScreenReadScope {
+    case screen
+    case surface
+  }
+
+  /// Reads the terminal contents as plain text using the GhosttyKit C API.
   /// Returns an empty string when the surface is unavailable or the read fails.
-  func readScreenContents() -> String {
+  /// Default scope preserves existing call-site behavior.
+  func readScreenContents(scope: ScreenReadScope = .screen) -> String {
     guard let surface else { return "" }
     var text = ghostty_text_s()
+    let tag: ghostty_point_tag_e = scope == .surface ? GHOSTTY_POINT_SURFACE : GHOSTTY_POINT_SCREEN
     let selection = ghostty_selection_s(
       top_left: ghostty_point_s(
-        tag: GHOSTTY_POINT_SCREEN,
+        tag: tag,
         coord: GHOSTTY_POINT_COORD_TOP_LEFT,
         x: 0,
         y: 0
       ),
       bottom_right: ghostty_point_s(
-        tag: GHOSTTY_POINT_SCREEN,
+        tag: tag,
         coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
         x: 0,
         y: 0
