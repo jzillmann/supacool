@@ -195,23 +195,53 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var repoChip: some View {
     if let repo = repositories[id: session.repositoryID] {
-      HStack(spacing: 4) {
-        Image(systemName: "folder.fill")
-          .font(.caption2)
-          .foregroundStyle(.yellow)
-        Text(repo.name)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        if let worktreeLabel {
-          Image(systemName: "arrow.triangle.branch")
+      HStack(spacing: 6) {
+        HStack(spacing: 4) {
+          Image(systemName: "folder.fill")
             .font(.caption2)
-            .foregroundStyle(.tertiary)
-          Text(worktreeLabel)
+            .foregroundStyle(.yellow)
+          Text(repo.name)
             .font(.caption)
             .foregroundStyle(.secondary)
-            .lineLimit(1)
         }
+        workspaceBadge
       }
+    }
+  }
+
+  /// Always-on workspace badge beside the repo name. On a worktree it
+  /// shows the branch in accent color; at repo root it shows a muted
+  /// "repo root" pill so the user is never in doubt about whether they
+  /// are editing the tracked working copy directly.
+  @ViewBuilder
+  private var workspaceBadge: some View {
+    if let worktreeLabel {
+      HStack(spacing: 3) {
+        Image(systemName: "arrow.triangle.branch")
+          .font(.caption2)
+        Text(worktreeLabel)
+          .font(.caption.weight(.medium))
+          .lineLimit(1)
+      }
+      .foregroundStyle(Color.accentColor)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(Color.accentColor.opacity(0.12))
+      .clipShape(Capsule())
+      .help("Running in worktree \(worktreeLabel)")
+    } else {
+      HStack(spacing: 3) {
+        Image(systemName: "dot.circle")
+          .font(.caption2)
+        Text("repo root")
+          .font(.caption.weight(.medium))
+      }
+      .foregroundStyle(.orange)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(Color.orange.opacity(0.12))
+      .clipShape(Capsule())
+      .help("Running at repo root — edits touch the tracked working copy directly.")
     }
   }
 
