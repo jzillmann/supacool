@@ -96,6 +96,11 @@ struct BoardFeature {
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
+    /// User tapped the "repo root" pill in the focused terminal header.
+    /// Pops the New Terminal sheet pre-filled with this session's repo
+    /// and agent, Worktree segment pre-selected. The original session
+    /// keeps running — this spawns a sibling, it does not migrate.
+    case graduateSessionToWorktree(id: AgentSession.ID, repositories: [Repository])
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
 
     // MARK: Remote reconnect
@@ -421,6 +426,19 @@ struct BoardFeature {
 
       case ._reconnectFailed(let id, let message):
         boardLogger.warning("Remote reconnect failed for session \(id): \(message)")
+        return .none
+
+      case .graduateSessionToWorktree(let id, let repositories):
+        guard let previous = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        // Blur the focused session so the sheet lands over the board;
+        // the original session keeps running in its card.
+        state.focusedSessionID = nil
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          graduatingFrom: previous
+        )
         return .none
 
       case .rerunDetachedSession(let id, let repositories):

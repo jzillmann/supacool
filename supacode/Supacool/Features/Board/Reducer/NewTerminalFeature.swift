@@ -166,6 +166,24 @@ struct NewTerminalFeature {
       }
       // else: repo root — selectedWorkspace stays .repoRoot
     }
+
+    /// Constructor for "graduate to worktree": a repo-root session wants
+    /// to spawn a sibling on a fresh worktree so the user can start
+    /// making changes without touching the tracked working copy. The
+    /// original session keeps running; this one boots blank with the
+    /// Worktree segment pre-armed (empty branch name — the user types or
+    /// uses the ✨ suggest button).
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      graduatingFrom previous: AgentSession
+    ) {
+      self.availableRepositories = availableRepositories
+      selectedRepositoryID = availableRepositories[id: previous.repositoryID]?.id
+        ?? availableRepositories.first?.id
+      agent = previous.agent
+      selectedWorkspace = .newBranch(name: "")
+      workspaceQuery = ""
+    }
   }
 
   enum Action: BindableAction, Equatable {

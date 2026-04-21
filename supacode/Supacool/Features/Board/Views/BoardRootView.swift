@@ -203,6 +203,14 @@ struct BoardRootView: View {
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
         onRename: { beginRename(session) },
+        onGraduateToWorktree: {
+          store.send(
+            .graduateSessionToWorktree(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in

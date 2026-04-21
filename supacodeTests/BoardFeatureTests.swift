@@ -481,6 +481,39 @@ struct BoardFeatureTests {
 
   // MARK: - Rerun
 
+  @Test(.dependencies) func graduateSessionToWorktreeOpensSheetAndKeepsOriginal() async throws {
+    // Tapping the "repo root" pill on a focused session should open the
+    // New Terminal sheet pre-armed for a worktree spawn — original
+    // session must stay in the list (this is a sibling spawn, not a
+    // migration), and focus must drop so the sheet lands over the board.
+    let original = Self.sampleSession(repositoryID: "/tmp/repo")
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [original] }
+    state.focusedSessionID = original.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.graduateSessionToWorktree(id: original.id, repositories: [repo])) {
+      $0.focusedSessionID = nil
+    }
+
+    let sheet = try #require(store.state.newTerminalSheet)
+    #expect(sheet.selectedRepositoryID == repo.id)
+    #expect(sheet.agent == original.agent)
+    #expect(sheet.selectedWorkspace == .newBranch(name: ""))
+    #expect(sheet.prompt.isEmpty)
+    #expect(store.state.sessions.contains(where: { $0.id == original.id }))
+  }
+
   @Test(.dependencies) func rerunDetachedSessionKeepsOriginalUntilCancel() async {
     // Clicking Rerun should NOT remove the original card from state —
     // otherwise a failed/cancelled sheet would lose the session and its

@@ -31,6 +31,12 @@ struct FullScreenTerminalView: View {
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
 
+  /// Tap handler for the "repo root" pill — fires the graduate-to-worktree
+  /// flow (pops the New Terminal sheet pre-armed for a worktree spawn on
+  /// this session's repo). Only invoked when the session is running at
+  /// the repo root; on a worktree the pill is not tappable.
+  let onGraduateToWorktree: () -> Void
+
   /// `⌘←/↑` → `-1`, `⌘→/↓` → `+1`. Signals the parent to open (or
   /// advance) the ⌘-Tab-style session switcher overlay. The overlay
   /// itself handles subsequent arrow keys once presented.
@@ -230,18 +236,23 @@ struct FullScreenTerminalView: View {
       .clipShape(Capsule())
       .help("Running in worktree \(worktreeLabel)")
     } else {
-      HStack(spacing: 3) {
-        Image(systemName: "dot.circle")
-          .font(.caption2)
-        Text("repo root")
-          .font(.caption.weight(.medium))
+      Button(action: onGraduateToWorktree) {
+        HStack(spacing: 3) {
+          Image(systemName: "dot.circle")
+            .font(.caption2)
+          Text("repo root")
+            .font(.caption.weight(.medium))
+          Image(systemName: "arrow.right.circle")
+            .font(.caption2)
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(Capsule())
       }
-      .foregroundStyle(.orange)
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(Color.orange.opacity(0.12))
-      .clipShape(Capsule())
-      .help("Running at repo root — edits touch the tracked working copy directly.")
+      .buttonStyle(.plain)
+      .help("Running at repo root — click to graduate this investigation into a fresh worktree.")
     }
   }
 
