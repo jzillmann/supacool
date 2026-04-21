@@ -384,6 +384,23 @@ struct BoardRootView: View {
       ToolbarSpacer(.flexible)
       ToolbarItem(placement: .primaryAction) {
         Button {
+          autoZoomBackOnPrompt.toggle()
+        } label: {
+          Label(
+            "Auto-return to board",
+            systemImage: autoZoomBackOnPrompt
+              ? "arrow.uturn.left.circle.fill"
+              : "arrow.uturn.left.circle"
+          )
+        }
+        .help(
+          autoZoomBackOnPrompt
+            ? "Auto-return to board after submitting a prompt (on) — click to disable"
+            : "Auto-return to board after submitting a prompt (off) — click to enable"
+        )
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
           store.send(.openNewTerminalSheet(repositories: Array(repositories)))
         } label: {
           Label("New Terminal", systemImage: "plus")
