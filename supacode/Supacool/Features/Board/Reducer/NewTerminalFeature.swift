@@ -712,7 +712,8 @@ struct NewTerminalFeature {
       worktreeID: worktreeKey,
       tabID: sessionID,
       surfaceID: sessionID,
-      agentCommand: agentCommand
+      agentCommand: agentCommand,
+      agent: agent
     )
     let sshCommand = remoteSpawnClient.sshInvocation(invocation)
     let worktreeShim = Worktree(

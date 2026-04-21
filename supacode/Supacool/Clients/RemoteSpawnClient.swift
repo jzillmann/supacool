@@ -51,6 +51,11 @@ nonisolated struct RemoteSpawnInvocation: Equatable, Sendable {
   /// shell. For claude / codex, pass the full CLI invocation (e.g.
   /// `"claude code --resume <id>"`).
   let agentCommand: String?
+  /// When set, the bootstrap runs a merge snippet that installs
+  /// Supacool's progress + notification hooks into the remote agent's
+  /// config before exec. Leave `nil` for shell sessions (nothing to
+  /// hook) — the session still spawns, the board just won't light up.
+  let agent: AgentType?
 }
 
 extension RemoteSpawnClient: DependencyKey {
@@ -101,7 +106,7 @@ nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
     "-R", reverseForward,
     "-o", "SetEnv=\(setEnvPairs.joined(separator: " "))",
     inv.sshAlias,
-    renderBootstrapCommand(agentCommand: inv.agentCommand),
+    renderBootstrapCommand(agentCommand: inv.agentCommand, agent: inv.agent),
   ]
 
   return args.map { remoteSpawnShellQuote($0) }.joined(separator: " ")
@@ -112,8 +117,11 @@ nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
 /// bootstrap script and the remote decodes + execs it with `bash -s`.
 /// Invariant: exactly one set of single quotes around the whole thing,
 /// since the enclosing ssh arg is shell-escaped once by `renderSSHInvocation`.
-nonisolated func renderBootstrapCommand(agentCommand: String?) -> String {
-  let script = renderBootstrapScript(agentCommand: agentCommand)
+nonisolated func renderBootstrapCommand(
+  agentCommand: String?,
+  agent: AgentType? = nil
+) -> String {
+  let script = renderBootstrapScript(agentCommand: agentCommand, agent: agent)
   let encoded = Data(script.utf8).base64EncodedString()
   // Decode and pipe into bash. `bash -s --` prevents `--` from being
   // interpreted as an option; we pass no positional args.
@@ -122,7 +130,10 @@ nonisolated func renderBootstrapCommand(agentCommand: String?) -> String {
 
 /// Pure function, unit-tested directly. Runs inside the remote shell on
 /// every spawn — idempotent on success, noisy-on-fatal-error on failure.
-nonisolated func renderBootstrapScript(agentCommand: String?) -> String {
+nonisolated func renderBootstrapScript(
+  agentCommand: String?,
+  agent: AgentType? = nil
+) -> String {
   let execCommand: String
   if let agentCommand, !agentCommand.isEmpty {
     // Pass through tmux so the agent is the foreground process in the
@@ -132,6 +143,10 @@ nonisolated func renderBootstrapScript(agentCommand: String?) -> String {
     // No agent — plain login shell inside tmux.
     execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACODE_WORKTREE_PATH\""
   }
+
+  // Hook install runs BEFORE exec — silent skip when python3 isn't on
+  // the remote. Shell sessions skip entirely (nothing to hook).
+  let hookInstall = agent.flatMap { RemoteHookInstaller.bootstrapSnippet(for: $0) } ?? ""
 
   return """
     set -e
@@ -143,6 +158,7 @@ nonisolated func renderBootstrapScript(agentCommand: String?) -> String {
     if ! infocmp xterm-ghostty >/dev/null 2>&1; then
       export TERM=xterm-256color
     fi
+    \(hookInstall)
     \(execCommand)
     """
 }

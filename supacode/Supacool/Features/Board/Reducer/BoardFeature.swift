@@ -406,7 +406,8 @@ struct BoardFeature {
           worktreeID: session.worktreeID,
           tabID: id,
           surfaceID: id,
-          agentCommand: session.agent.map { Self.remoteAgentCommand(for: $0, session: session) }
+          agentCommand: session.agent.map { Self.remoteAgentCommand(for: $0, session: session) },
+          agent: session.agent
         )
         let sshCommand = remoteSpawnClient.sshInvocation(invocation)
         let worktree = Self.remoteShimWorktree(for: session)

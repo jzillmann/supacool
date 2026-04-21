@@ -129,7 +129,8 @@ struct RemoteSpawnClientTests {
       worktreeID: inv.worktreeID,
       tabID: UUID(uuidString: "DEADBEEF-1234-1234-1234-123456789ABC")!,
       surfaceID: UUID(uuidString: "DEADBEEF-4321-4321-4321-CBA987654321")!,
-      agentCommand: inv.agentCommand
+      agentCommand: inv.agentCommand,
+      agent: inv.agent
     )
     let rendered = renderSSHInvocation(inv)
     #expect(rendered.contains("SUPACODE_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
@@ -146,7 +147,8 @@ struct RemoteSpawnClientTests {
       worktreeID: "remote:dev:/home/jz",
       tabID: UUID(),
       surfaceID: UUID(),
-      agentCommand: agent
+      agentCommand: agent,
+      agent: nil
     )
   }
 }
