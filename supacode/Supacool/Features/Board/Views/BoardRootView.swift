@@ -394,6 +394,9 @@ struct BoardRootView: View {
       // between the title/repo block and the action.
       ToolbarSpacer(.flexible)
       ToolbarItem(placement: .primaryAction) {
+        FootprintChip()
+      }
+      ToolbarItem(placement: .primaryAction) {
         Button {
           autoZoomBackOnPrompt.toggle()
         } label: {
