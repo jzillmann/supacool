@@ -73,4 +73,27 @@ struct AwaitingInputSignalTests {
     )
     #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
   }
+
+  @Test func approvalPromptScreenMatchesFallbackClassifier() {
+    let screen = """
+      Do you want to make this edit to e2e-no-silent-failures.md?
+      1. Yes
+      2. Yes, and allow Claude to edit its own settings for this session
+      3. No
+
+      Esc to cancel  Tab to amend
+      """
+    #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
+
+  @Test func genericStaticYesNoScreenDoesNotMatchFallbackClassifier() {
+    let screen = """
+      Proposed plan:
+      1. Yes
+      2. No
+
+      Waiting for more output...
+      """
+    #expect(!WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
 }

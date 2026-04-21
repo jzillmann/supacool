@@ -338,6 +338,55 @@ struct WorktreeTerminalManagerTests {
     #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
   }
 
+  @Test func stableApprovalPromptScreenPromotesAwaitingInputWithoutHook() async {
+    let clock = TestClock()
+    let screenContents = LockIsolated(
+      """
+      Do you want to make this edit to e2e-no-silent-failures.md?
+      1. Yes
+      2. Yes, and allow Claude to edit its own settings for this session
+      3. No
+
+      Esc to cancel  Tab to amend
+      """
+    )
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      awaitingInputTTL: .seconds(8),
+      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputActivityPollInterval: .seconds(1),
+      clock: clock,
+      readScreenContents: { _, _ in screenContents.value }
+    )
+    let worktree = makeWorktree()
+
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+    guard let state = manager.stateIfExists(for: worktree.id),
+      let tabId = state.tabManager.selectedTabId
+    else {
+      Issue.record("Expected blocking script tab")
+      return
+    }
+
+    await clock.advance(by: .seconds(1))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .seconds(1))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    screenContents.setValue("Waiting for the next instruction")
+
+    await clock.advance(by: .seconds(1))
+    #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+    await clock.advance(by: .milliseconds(250))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+  }
+
   @Test func busyTransitionBeforeDebounceSuppressesAwaitingInputBadge() async {
     let clock = TestClock()
     let server = AgentHookSocketServer()

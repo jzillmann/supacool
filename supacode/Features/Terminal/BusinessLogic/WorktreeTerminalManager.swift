@@ -7,6 +7,7 @@ private let awaitingInputTTLDefault: Duration = .seconds(8)
 private let awaitingInputTransitionDebounceDefault: Duration = .milliseconds(250)
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
+private let awaitingInputPromptDetectionStableSamples = 2
 
 @MainActor
 @Observable
@@ -16,6 +17,12 @@ final class WorktreeTerminalManager {
     var rawActive = false
     var presented = false
     var lastScreenFingerprint: String?
+  }
+
+  private struct AwaitingInputPromptCandidate {
+    let worktreeID: Worktree.ID
+    var fingerprint: String
+    var stableSampleCount = 1
   }
 
   private let runtime: GhosttyRuntime
@@ -33,6 +40,8 @@ final class WorktreeTerminalManager {
   private var awaitingInputExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var awaitingInputDebounceTasks: [UUID: Task<Void, Never>] = [:]
   private var awaitingInputActivityTasks: [UUID: Task<Void, Never>] = [:]
+  private var awaitingInputPromptCandidates: [UUID: AwaitingInputPromptCandidate] = [:]
+  private var awaitingInputPromptScanTask: Task<Void, Never>?
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
@@ -60,6 +69,7 @@ final class WorktreeTerminalManager {
       try await clock.sleep(for: duration)
     }
     self.readScreenContentsOverride = readScreenContents
+    startAwaitingInputPromptScreenScanning()
     let resolvedServer = socketServer ?? AgentHookSocketServer()
     guard resolvedServer.socketPath != nil else {
       self.socketServer = nil
@@ -131,6 +141,43 @@ final class WorktreeTerminalManager {
     return true
   }
 
+  /// Screen-based fallback for hook misses. This only matches the inline
+  /// approval UI used by Claude's edit / permission prompts, and still
+  /// requires repeated identical samples before the tab is promoted.
+  nonisolated static func isAwaitingInputPromptScreen(_ screen: String) -> Bool {
+    let lines = screen
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map {
+        $0
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+          .lowercased()
+      }
+      .filter { !$0.isEmpty }
+
+    guard !lines.isEmpty else { return false }
+
+    let normalized = lines.joined(separator: "\n")
+    let hasPrimaryPromptLead =
+      normalized.contains("do you want to make this edit")
+      || normalized.contains("claude needs your permission")
+      || normalized.contains("do you want to allow claude")
+      || normalized.contains("allow claude to edit its own settings")
+    let hasApprovalOptions =
+      lines.contains { $0 == "1. yes" || $0.hasPrefix("1. yes,") || $0.hasPrefix("1. allow") }
+      && lines.contains {
+        $0 == "2. yes"
+          || $0.hasPrefix("2. yes,")
+          || $0.hasPrefix("2. allow")
+          || $0 == "2. no"
+      }
+    let hasDismissOption = lines.contains { $0 == "3. no" || $0.hasPrefix("3. no,") }
+    let hasPromptFooter =
+      normalized.contains("esc to cancel")
+      && (normalized.contains("tab to amend") || normalized.contains("enter to confirm"))
+
+    return hasPrimaryPromptLead && hasApprovalOptions && hasDismissOption && hasPromptFooter
+  }
+
   /// Persists the agent-native session identifier from a hook payload onto
   /// the matching `AgentSession` (by tabID). Silently no-ops when no session
   /// exists for the tab yet, or when the payload carried no session id.
@@ -162,8 +209,8 @@ final class WorktreeTerminalManager {
   /// Whether the agent in this tab is paused on user input (permission
   /// prompt, clarification). Set by a `Notification` hook event, held on a
   /// short lease, and cleared when terminal activity resumes or the lease
-  /// expires. Requires the Notification hook to be installed
-  /// (Settings → Coding Agents → Notifications).
+  /// expires. Hook signals are preferred, but a narrow screen-pattern
+  /// fallback can also promote known approval prompts when a hook is missed.
   func isAwaitingInput(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
     awaitingInputByTab[tabID.rawValue]?.presented == true
   }
@@ -495,9 +542,21 @@ final class WorktreeTerminalManager {
   }
 
   private func markAwaitingInputSignal(worktreeID: Worktree.ID, tabID: UUID) {
+    markAwaitingInputSignal(
+      worktreeID: worktreeID,
+      tabID: tabID,
+      fingerprint: screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID))
+    )
+  }
+
+  private func markAwaitingInputSignal(
+    worktreeID: Worktree.ID,
+    tabID: UUID,
+    fingerprint: String?
+  ) {
     var tracker = awaitingInputByTab[tabID] ?? AwaitingInputTracker(worktreeID: worktreeID)
     tracker.rawActive = true
-    tracker.lastScreenFingerprint = screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID))
+    tracker.lastScreenFingerprint = fingerprint
     awaitingInputByTab[tabID] = tracker
     scheduleAwaitingInputExpiry(for: tabID)
     scheduleAwaitingInputActivityPolling(for: tabID)
@@ -507,6 +566,7 @@ final class WorktreeTerminalManager {
   private func clearAwaitingInput(tabID: UUID) {
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
     awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
+    awaitingInputPromptCandidates.removeValue(forKey: tabID)
 
     guard var tracker = awaitingInputByTab[tabID] else { return }
     tracker.rawActive = false
@@ -523,13 +583,15 @@ final class WorktreeTerminalManager {
 
   private func scheduleAwaitingInputExpiry(for tabID: UUID) {
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
-    awaitingInputExpiryTasks[tabID] = Task { [weak self] in
-      guard let self else { return }
+    let sleep = self.sleep
+    let awaitingInputTTL = self.awaitingInputTTL
+    awaitingInputExpiryTasks[tabID] = Task { [weak self, sleep, awaitingInputTTL] in
       do {
-        try await self.sleep(self.awaitingInputTTL)
+        try await sleep(awaitingInputTTL)
       } catch {
         return
       }
+      guard let self else { return }
       await self.expireAwaitingInput(tabID: tabID)
     }
   }
@@ -541,14 +603,16 @@ final class WorktreeTerminalManager {
 
   private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
-    awaitingInputActivityTasks[tabID] = Task { [weak self] in
-      guard let self else { return }
+    let sleep = self.sleep
+    let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
+    awaitingInputActivityTasks[tabID] = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
       while !Task.isCancelled {
         do {
-          try await self.sleep(self.awaitingInputActivityPollInterval)
+          try await sleep(awaitingInputActivityPollInterval)
         } catch {
           return
         }
+        guard let self else { return }
         await self.sampleAwaitingInputActivity(tabID: tabID)
       }
     }
@@ -586,14 +650,82 @@ final class WorktreeTerminalManager {
     desiredState: Bool
   ) {
     awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
-    awaitingInputDebounceTasks[tabID] = Task { [weak self] in
-      guard let self else { return }
+    let sleep = self.sleep
+    let awaitingInputTransitionDebounce = self.awaitingInputTransitionDebounce
+    awaitingInputDebounceTasks[tabID] = Task { [weak self, sleep, awaitingInputTransitionDebounce] in
       do {
-        try await self.sleep(self.awaitingInputTransitionDebounce)
+        try await sleep(awaitingInputTransitionDebounce)
       } catch {
         return
       }
+      guard let self else { return }
       await self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState)
+    }
+  }
+
+  private func startAwaitingInputPromptScreenScanning() {
+    guard awaitingInputPromptScanTask == nil else { return }
+    let sleep = self.sleep
+    let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
+    awaitingInputPromptScanTask = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
+      while !Task.isCancelled {
+        do {
+          try await sleep(awaitingInputActivityPollInterval)
+        } catch {
+          return
+        }
+        guard let self else { return }
+        await self.sampleAwaitingInputPromptScreens()
+      }
+    }
+  }
+
+  private func sampleAwaitingInputPromptScreens() {
+    var openTabIDs = Set<UUID>()
+
+    for (worktreeID, state) in states {
+      for tab in state.tabManager.tabs {
+        let tabID = tab.id.rawValue
+        openTabIDs.insert(tabID)
+
+        guard let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tab.id),
+          Self.isAwaitingInputPromptScreen(fingerprint)
+        else {
+          awaitingInputPromptCandidates.removeValue(forKey: tabID)
+          continue
+        }
+
+        var candidate: AwaitingInputPromptCandidate
+        if var existing = awaitingInputPromptCandidates[tabID] {
+          if existing.fingerprint == fingerprint {
+            existing.stableSampleCount += 1
+          } else {
+            existing = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
+          }
+          candidate = existing
+        } else {
+          candidate = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
+        }
+
+        awaitingInputPromptCandidates[tabID] = candidate
+
+        guard candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples else { continue }
+        markAwaitingInputSignal(worktreeID: candidate.worktreeID, tabID: tabID, fingerprint: fingerprint)
+      }
+    }
+
+    cleanupAwaitingInputTracking(closedTabIDs: Set(awaitingInputByTab.keys).subtracting(openTabIDs))
+    awaitingInputPromptCandidates = awaitingInputPromptCandidates.filter { openTabIDs.contains($0.key) }
+  }
+
+  private func cleanupAwaitingInputTracking(closedTabIDs: Set<UUID>) {
+    guard !closedTabIDs.isEmpty else { return }
+    for tabID in closedTabIDs {
+      awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
+      awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
+      awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
+      awaitingInputPromptCandidates.removeValue(forKey: tabID)
+      awaitingInputByTab.removeValue(forKey: tabID)
     }
   }
 
