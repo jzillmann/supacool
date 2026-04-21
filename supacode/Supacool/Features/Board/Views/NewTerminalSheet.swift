@@ -54,7 +54,7 @@ struct NewTerminalSheet: View {
         } else {
           repositoryRow
             .disabled(isWorkspaceLockedByPR)
-          worktreeToggle
+          worktreeModePicker
             .disabled(isWorkspaceLockedByPR)
           if isUsingWorktree, !isWorkspaceLockedByPR {
             workspaceField
@@ -231,7 +231,6 @@ struct NewTerminalSheet: View {
     }
   }
 
-  /// Repository selector. With a single registered repo the picker
   /// Segmented picker that flips between a local repo-backed session and
   /// any of the configured remote SSH hosts. Rendered at the top of the
   /// agent section so the rest of the form (repo/worktree OR remote path)
@@ -323,19 +322,13 @@ struct NewTerminalSheet: View {
     return host.overrides.defaultRemoteWorkspaceRoot
   }
 
-  /// would just show one immutable choice — collapse it to a static
-  /// label to cut a visual row from the sheet. Multi-repo users still
-  /// see the full picker.
+  /// Repository picker. Hidden entirely with zero or one registered repo
+  /// — the single-repo case is unambiguous, and the zero-repo case is
+  /// caught by the footer validation message. Only multi-repo users see
+  /// the picker.
   @ViewBuilder
   private var repositoryRow: some View {
-    if store.availableRepositories.count <= 1 {
-      LabeledContent {
-        Text(store.availableRepositories.first?.name ?? "No repositories registered")
-          .foregroundStyle(.secondary)
-      } label: {
-        Text("Repository")
-      }
-    } else {
+    if store.availableRepositories.count > 1 {
       Picker(selection: $store.selectedRepositoryID) {
         ForEach(store.availableRepositories) { repo in
           Text(repo.name).tag(Optional(repo.id))
@@ -347,14 +340,19 @@ struct NewTerminalSheet: View {
     }
   }
 
-  /// Yes/no gate for the worktree workflow. OFF runs the agent at the
-  /// repo root; ON reveals the branch field below where the user picks
-  /// (or creates) a branch to check out into a fresh worktree.
-  private var worktreeToggle: some View {
-    Toggle(isOn: useWorktreeBinding) {
-      Text("New worktree")
-      Text("Off = run at repo root. On = check out a branch in a worktree.")
+  /// Two-segment picker that mirrors the Agent picker's visual style.
+  /// "Investigate" runs the agent at the repo root (read-only intent);
+  /// "Worktree" reveals the branch field below where the user picks or
+  /// creates a branch to check out into a fresh worktree.
+  private var worktreeModePicker: some View {
+    Picker(selection: useWorktreeBinding) {
+      Text("Investigate").tag(false)
+      Text("Worktree").tag(true)
+    } label: {
+      Text("Scope")
+      Text("Investigate at repo root, or work on a branch in a worktree.")
     }
+    .pickerStyle(.segmented)
   }
 
   /// True when the current selection isn't `.repoRoot` — i.e. the user
