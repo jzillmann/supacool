@@ -9,6 +9,10 @@ enum BoardSessionStatus: Equatable, Sendable {
   case interrupted
   case fresh
   case parked
+  /// SSH link dropped for a remote session — the remote tmux almost
+  /// certainly survived, but the ssh tab's PTY is gone. User clicks
+  /// Reconnect to re-spawn ssh and `tmux attach`.
+  case disconnected
 
   static let initialLaunchGrace: TimeInterval = 3
   static let idleRebucketDelay: TimeInterval = 1.2
@@ -22,6 +26,7 @@ enum BoardSessionStatus: Equatable, Sendable {
     case .interrupted: "Interrupted"
     case .fresh: "Starting"
     case .parked: "Parked"
+    case .disconnected: "Disconnected"
     }
   }
 
@@ -34,6 +39,7 @@ enum BoardSessionStatus: Equatable, Sendable {
     case .interrupted: .yellow
     case .fresh: .blue
     case .parked: .secondary
+    case .disconnected: .red
     }
   }
 
@@ -46,6 +52,7 @@ enum BoardSessionStatus: Equatable, Sendable {
     case .interrupted: "exclamationmark.triangle.fill"
     case .fresh: "sparkles"
     case .parked: "parkingsign"
+    case .disconnected: "bolt.slash.fill"
     }
   }
 
@@ -60,6 +67,12 @@ enum BoardSessionStatus: Equatable, Sendable {
       return .parked
     }
     if !tabExists {
+      // Remote sessions model "tab gone" differently: the ssh link
+      // dropped, but tmux on the remote almost always survives.
+      // `.disconnected` drives the Reconnect overlay.
+      if session.isRemote {
+        return .disconnected
+      }
       return session.lastKnownBusy ? .interrupted : .detached
     }
     if awaitingInput {

@@ -112,6 +112,36 @@ struct BoardSessionStatusTests {
     )
   }
 
+  @Test func remoteSessionWithMissingTabIsDisconnected() {
+    var remote = sampleSession()
+    remote.remoteWorkspaceID = UUID()
+    remote.remoteHostID = UUID()
+    remote.tmuxSessionName = "supacool-xyz"
+    #expect(
+      BoardSessionStatus.classify(
+        session: remote,
+        tabExists: false,
+        awaitingInput: false,
+        busy: false
+      ) == .disconnected
+    )
+  }
+
+  @Test func remoteSessionPrefersDisconnectedOverInterrupted() {
+    // A remote session that was busy when the ssh link dropped used to
+    // classify as `.interrupted` (local rule). Remote rule overrides.
+    var remote = sampleSession(lastKnownBusy: true)
+    remote.remoteWorkspaceID = UUID()
+    #expect(
+      BoardSessionStatus.classify(
+        session: remote,
+        tabExists: false,
+        awaitingInput: false,
+        busy: false
+      ) == .disconnected
+    )
+  }
+
   private func sampleSession(
     createdAt: Date = Date(timeIntervalSinceReferenceDate: 0),
     hasCompletedAtLeastOnce: Bool = false,
