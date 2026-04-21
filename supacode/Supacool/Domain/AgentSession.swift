@@ -95,6 +95,29 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// next card-appearance triggers a refresh.
   var referencesScannedAt: Date?
 
+  /// Non-nil when this session runs on a remote host. Points at the
+  /// `RemoteWorkspace` that supplies `hostID` + `remoteWorkingDirectory`.
+  var remoteWorkspaceID: RemoteWorkspace.ID?
+
+  /// Denormalized cache of `RemoteWorkspace.hostID` so the board card can
+  /// render a host badge without looking up the workspace every frame.
+  /// Stays in sync by being written together with `remoteWorkspaceID`.
+  var remoteHostID: RemoteHost.ID?
+
+  /// Deterministic tmux session name used on the remote host. Fixed at
+  /// creation time so reconnects re-attach the same session
+  /// (`tmux new-session -A -s <name>`). Conventionally
+  /// `"supacool-" + id.uuidString.lowercased()`.
+  var tmuxSessionName: String?
+
+  /// True when ssh to the remote host died and the user hasn't clicked
+  /// Reconnect yet. Board classifier flips the card to `.disconnected`.
+  /// Cleared on successful reconnect.
+  var remoteConnectionLost: Bool
+
+  /// Is this a remote session?
+  var isRemote: Bool { remoteWorkspaceID != nil }
+
   init(
     id: UUID = UUID(),
     repositoryID: String,
@@ -113,7 +136,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     autoObserver: Bool = false,
     autoObserverPrompt: String = "",
     references: [SessionReference] = [],
-    referencesScannedAt: Date? = nil
+    referencesScannedAt: Date? = nil,
+    remoteWorkspaceID: RemoteWorkspace.ID? = nil,
+    remoteHostID: RemoteHost.ID? = nil,
+    tmuxSessionName: String? = nil,
+    remoteConnectionLost: Bool = false
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -133,6 +160,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.autoObserverPrompt = autoObserverPrompt
     self.references = references
     self.referencesScannedAt = referencesScannedAt
+    self.remoteWorkspaceID = remoteWorkspaceID
+    self.remoteHostID = remoteHostID
+    self.tmuxSessionName = tmuxSessionName
+    self.remoteConnectionLost = remoteConnectionLost
   }
 
   // Forward-compatible Codable — convention documented in
@@ -153,6 +184,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
+    case remoteWorkspaceID, remoteHostID, tmuxSessionName, remoteConnectionLost
   }
 
   init(from decoder: Decoder) throws {
@@ -178,6 +210,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
+    remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
+    remoteHostID = try c.decodeIfPresent(UUID.self, forKey: .remoteHostID)
+    tmuxSessionName = try c.decodeIfPresent(String.self, forKey: .tmuxSessionName)
+    remoteConnectionLost =
+      try c.decodeIfPresent(Bool.self, forKey: .remoteConnectionLost) ?? false
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,
