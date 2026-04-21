@@ -358,13 +358,19 @@ final class WorktreeTerminalState {
     surface.sendText(text)
   }
 
-  /// Reads the visible screen contents of the focused surface in the given tab.
+  /// Reads the screen contents of the focused surface in the given tab.
+  /// Default scope is `.screen` (visible viewport only — what existing
+  /// awaiting-input callers expect). Pass `.surface` to get the full
+  /// scrollback included, used by the Supacool transcript recorder.
   /// Returns nil when the tab or focused surface is not found.
-  func readScreenContents(tabID: TerminalTabID) -> String? {
+  func readScreenContents(
+    tabID: TerminalTabID,
+    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+  ) -> String? {
     guard let surfaceID = focusedSurfaceIdByTab[tabID],
       let surface = surfaces[surfaceID]
     else { return nil }
-    return surface.bridge.readScreenContents()
+    return surface.bridge.readScreenContents(scope: scope)
   }
 
   /// Sends raw text to the focused surface of the given tab without requiring
@@ -1160,6 +1166,13 @@ final class WorktreeTerminalState {
     view.bridge.onDesktopNotification = { [weak self, weak view] title, body in
       guard let self, let view else { return }
       self.appendNotification(title: title, body: body, surfaceId: view.id)
+    }
+    // Supacool transcript recorder — capture every byte the user sends to
+    // the PTY. Skip while secureInput is on so passwords typed at sudo /
+    // SSH prompts never land in the transcript file.
+    view.bridge.onInputTap = { [weak view] text in
+      guard let view, view.bridge.state.secureInput != GHOSTTY_SECURE_INPUT_ON else { return }
+      TranscriptRecorder.shared.appendInput(tabID: tabId, text: text)
     }
     view.bridge.onCloseRequest = { [weak self, weak view] processAlive in
       guard let self, let view else { return }

@@ -98,6 +98,18 @@ final class WorktreeTerminalManager {
         tabID: TerminalTabID(rawValue: tabID),
         active: active
       )
+      // Supacool transcript: when the agent reports going idle, snapshot
+      // the full surface (visible + scrollback) into the per-session
+      // transcript file. The recorder dedupes against its last snapshot,
+      // so this is safe to call on every idle hook.
+      if !active {
+        let wrappedTabID = TerminalTabID(rawValue: tabID)
+        if let fullText = state.readScreenContents(tabID: wrappedTabID, scope: .surface),
+          !fullText.isEmpty
+        {
+          TranscriptRecorder.shared.snapshotOutput(tabID: wrappedTabID, fullText: fullText)
+        }
+      }
     }
     server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
