@@ -152,7 +152,20 @@ final class GhosttySurfaceView: NSView, Identifiable {
     .string,
     .fileURL,
     .URL,
+    // Supacool: surface-level image drops (screenshots, Finder drags).
+    // Handled by `imageDropHandler` below; unset on vanilla supacode so
+    // the fallback still pastes the local path.
+    .tiff,
+    .png,
+    .init("public.image"),
   ]
+
+  /// Supacool injection point for image drops. When set, a dropped image
+  /// URL is handed off to this closure; the returned string is pasted
+  /// into the surface. `nil` → default behaviour (paste the local path).
+  /// Kept static so the Supacool app can install it once at launch
+  /// without touching upstream init paths.
+  nonisolated(unsafe) static var imageDropHandler: (@Sendable (URL, UUID) async -> String?)?
 
   static func normalizedWorkingDirectoryPath(_ path: String) -> String {
     var normalized = path
@@ -1457,6 +1470,25 @@ extension GhosttySurfaceView {
 
   override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
     let pasteboard = sender.draggingPasteboard
+
+    // Supacool: image file drops get routed through the image-drop
+    // handler FIRST so remote sessions can scp the file to the host.
+    // Only kicks in when the handler is registered AND the dropped URL
+    // actually points at an image file.
+    if let handler = Self.imageDropHandler,
+      let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+      let imageURL = urls.first(where: Self.urlIsImage),
+      urls.count == 1
+    {
+      let surfaceID = self.id
+      Task { @MainActor [weak self] in
+        guard let pasted = await handler(imageURL, surfaceID) else { return }
+        let escaped = NSPasteboard.ghosttyEscape(pasted)
+        self?.insertText(escaped, replacementRange: NSRange(location: 0, length: 0))
+      }
+      return true
+    }
+
     let content: String?
     if let url = pasteboard.string(forType: .URL) {
       content = NSPasteboard.ghosttyEscape(url)
@@ -1475,6 +1507,11 @@ extension GhosttySurfaceView {
       self.insertText(content, replacementRange: NSRange(location: 0, length: 0))
     }
     return true
+  }
+
+  nonisolated private static func urlIsImage(_ url: URL) -> Bool {
+    let ext = url.pathExtension.lowercased()
+    return ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "tif", "bmp"].contains(ext)
   }
 }
 

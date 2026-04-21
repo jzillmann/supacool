@@ -118,6 +118,10 @@ struct SupacodeApp: App {
   @State private var worktreeInfoWatcher: WorktreeInfoWatcherManager
   @State private var commandKeyObserver: CommandKeyObserver
   @State private var store: StoreOf<AppFeature>
+  /// Supacool: routes dropped screenshots through `ImageTransportClient`
+  /// (local copy vs. scp-to-remote) so remote terminals get an uploaded
+  /// path the agent can read instead of a meaningless Mac-side path.
+  @State private var imageDropCoordinator: ImageDropCoordinator
 
   @MainActor init() {
     NSWindow.allowsAutomaticWindowTabbing = false
@@ -215,6 +219,19 @@ struct SupacodeApp: App {
       )
     }
     _store = State(initialValue: appStore)
+
+    // Supacool: install the image-drop coordinator BEFORE touching
+    // `appDelegate` so every stored-property init is satisfied.
+    // One static handler on GhosttySurfaceView routes dropped
+    // screenshots through ImageTransportClient — local sessions copy
+    // to $TMPDIR, remote sessions scp over the ssh spawn flow's
+    // ControlMaster.
+    let imageDropCoordinator = ImageDropCoordinator(transport: .liveValue)
+    _imageDropCoordinator = State(initialValue: imageDropCoordinator)
+    GhosttySurfaceView.imageDropHandler = { @Sendable url, surfaceID in
+      await imageDropCoordinator.handleDrop(url: url, surfaceID: surfaceID)
+    }
+
     appDelegate.appStore = appStore
     appDelegate.terminalManager = terminalManager
   }
