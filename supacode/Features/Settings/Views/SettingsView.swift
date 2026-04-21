@@ -63,6 +63,8 @@ struct SettingsView: View {
           .tag(SettingsSection.codingAgents)
         Label("GitHub", image: "github-mark")
           .tag(SettingsSection.github)
+        Label("Remote Hosts", systemImage: "network")
+          .tag(SettingsSection.remoteHosts)
         Label("Shortcuts", systemImage: "keyboard")
           .tag(SettingsSection.shortcuts)
         Label("Updates", systemImage: "arrow.down.circle")
@@ -97,6 +99,8 @@ struct SettingsView: View {
         UpdatesSettingsView(settingsStore: settingsStore, updatesStore: updatesStore)
       case .github:
         GithubSettingsView(store: settingsStore)
+      case .remoteHosts:
+        RemoteHostsSettingsView()
       case .repository(let repositoryID):
         if let repository = repositories[id: repositoryID] {
           IfLetStore(
