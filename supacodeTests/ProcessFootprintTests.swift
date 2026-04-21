@@ -37,6 +37,48 @@ struct ProcessFootprintTests {
     #expect(rows[1].pid == 9973)
   }
 
+  @Test func buildSnapshotAttributesSessionFootprints() {
+    // Same tree as the next test but with two anchors — one at the
+    // claude PID (expect: claude + its mcp child), one at the dangling
+    // zsh PID (expect: zsh alone, no descendants).
+    let rows: [RawProcess] = [
+      RawProcess(pid: 2136, ppid: 1, rssKB: 44_000, command: "Supacool"),
+      RawProcess(pid: 5822, ppid: 2136, rssKB: 320, command: "login"),
+      RawProcess(pid: 5824, ppid: 5822, rssKB: 320, command: "zsh"),
+      RawProcess(pid: 9973, ppid: 5824, rssKB: 21_000, command: "claude"),
+      RawProcess(pid: 10153, ppid: 9973, rssKB: 5_000, command: "mcp server"),
+      RawProcess(pid: 11808, ppid: 2136, rssKB: 320, command: "login"),
+      RawProcess(pid: 11810, ppid: 11808, rssKB: 320, command: "zsh"),
+    ]
+    let claudeSessionID = UUID()
+    let shellSessionID = UUID()
+    let missingSessionID = UUID()
+    let anchors = [
+      SessionAnchor(sessionID: claudeSessionID, anchorPID: 9973),
+      SessionAnchor(sessionID: shellSessionID, anchorPID: 11810),
+      SessionAnchor(sessionID: missingSessionID, anchorPID: 99999),
+    ]
+    let snapshot = buildSnapshot(
+      from: rows,
+      rootPID: 2136,
+      sessionAnchors: anchors,
+      now: Date(timeIntervalSince1970: 0)
+    )
+    #expect(snapshot.sessionFootprints.count == 2)
+    #expect(snapshot.sessionFootprints[missingSessionID] == nil)
+
+    let claude = snapshot.sessionFootprints[claudeSessionID]
+    #expect(claude?.anchorPID == 9973)
+    #expect(claude?.processCount == 2)
+    #expect(claude?.aggregatedBytes == (21_000 + 5_000) * 1024)
+    #expect(claude?.heaviestLeaf?.pid == 9973)
+
+    let shell = snapshot.sessionFootprints[shellSessionID]
+    #expect(shell?.anchorPID == 11810)
+    #expect(shell?.processCount == 1)
+    #expect(shell?.aggregatedBytes == 320 * 1024)
+  }
+
   @Test func buildSnapshotAggregatesSubtreeRSS() {
     // Tree:
     //   Supacool (2136, 44_000 KB)

@@ -18,7 +18,23 @@ nonisolated struct ProcessFootprintClient: Sendable {
   /// Samples the process tree rooted at `rootPID` and returns a snapshot.
   /// Passing `ProcessInfo.processInfo.processIdentifier` scopes the
   /// walk to this app and everything it spawned.
-  var sample: @Sendable (_ rootPID: Int32) async throws -> ProcessFootprintSnapshot
+  ///
+  /// `sessionAnchors` optionally carries per-session "this is where my
+  /// tree starts" PIDs (the Ghostty foreground PID per tab). When
+  /// provided, the snapshot additionally attributes aggregate RSS to
+  /// each session so the caller can render per-card footprints without
+  /// running a second `ps` pass.
+  var sample:
+    @Sendable (_ rootPID: Int32, _ sessionAnchors: [SessionAnchor]) async throws ->
+      ProcessFootprintSnapshot
+}
+
+/// A caller-supplied mapping from a board session id to the foreground
+/// PID of its Ghostty surface. `ProcessFootprintClient` walks the
+/// subtree rooted at each anchor and attributes its RSS to the session.
+nonisolated struct SessionAnchor: Equatable, Sendable, Hashable {
+  let sessionID: UUID
+  let anchorPID: Int32
 }
 
 nonisolated struct ProcessFootprintSnapshot: Equatable, Sendable {
@@ -31,6 +47,11 @@ nonisolated struct ProcessFootprintSnapshot: Equatable, Sendable {
   let subtrees: [Subtree]
   /// Total number of descendant processes (flat count).
   let descendantCount: Int
+  /// Per-session aggregated RSS, keyed by the `sessionID` the caller
+  /// passed in via `SessionAnchor`. Absent when no anchors were
+  /// supplied or when an anchor PID wasn't present in the sampled
+  /// tree (surface hadn't spawned yet, etc.).
+  let sessionFootprints: [UUID: SessionFootprint]
 
   /// Sum of everything in the tree including the root.
   var totalBytes: UInt64 { rootBytes + descendantBytes }
@@ -56,6 +77,17 @@ nonisolated struct ProcessFootprintSnapshot: Equatable, Sendable {
     let rssBytes: UInt64
     let command: String
   }
+
+  /// Per-session attribution computed by walking the subtree rooted at
+  /// the session's anchor PID. Process count includes the anchor.
+  struct SessionFootprint: Equatable, Sendable {
+    let anchorPID: Int32
+    let aggregatedBytes: UInt64
+    let processCount: Int
+    /// Heaviest individual process in the session's subtree — useful
+    /// for tooltips ("this session is heavy because of <compile>").
+    let heaviestLeaf: LeafProcess?
+  }
 }
 
 extension ProcessFootprintClient: DependencyKey {
@@ -63,7 +95,7 @@ extension ProcessFootprintClient: DependencyKey {
 
   static func live(shell: ShellClient = .liveValue) -> ProcessFootprintClient {
     ProcessFootprintClient(
-      sample: { rootPID in
+      sample: { rootPID, anchors in
         // `=` suffix on each column suppresses headers and gives us
         // space-separated fields with the command as the trailing
         // tail. `ps -axo` omits the login shells of other users, which
@@ -80,14 +112,19 @@ extension ProcessFootprintClient: DependencyKey {
           throw error
         }
         let parsed = parsePSOutput(output.stdout)
-        let snapshot = buildSnapshot(from: parsed, rootPID: rootPID, now: Date())
+        let snapshot = buildSnapshot(
+          from: parsed,
+          rootPID: rootPID,
+          sessionAnchors: anchors,
+          now: Date()
+        )
         return snapshot
       }
     )
   }
 
   static let testValue = ProcessFootprintClient(
-    sample: { _ in
+    sample: { _, _ in
       struct UnimplementedSample: Error {}
       throw UnimplementedSample()
     }
@@ -148,9 +185,14 @@ nonisolated func parsePSOutput(_ output: String) -> [RawProcess] {
 /// Builds the snapshot by walking descendants of `rootPID` breadth-first,
 /// aggregating RSS per top-level child subtree. Bytes are the `ps` KB
 /// number × 1024.
+///
+/// When `sessionAnchors` is non-empty, each anchor's subtree is walked
+/// independently (reusing the same children-by-ppid index) to produce
+/// per-session RSS attribution.
 nonisolated func buildSnapshot(
   from rows: [RawProcess],
   rootPID: Int32,
+  sessionAnchors: [SessionAnchor] = [],
   now: Date
 ) -> ProcessFootprintSnapshot {
   let byPID = Dictionary(uniqueKeysWithValues: rows.map { ($0.pid, $0) })
@@ -203,12 +245,44 @@ nonisolated func buildSnapshot(
 
   subtrees.sort { $0.aggregatedBytes > $1.aggregatedBytes }
 
+  var sessionFootprints: [UUID: ProcessFootprintSnapshot.SessionFootprint] = [:]
+  for anchor in sessionAnchors {
+    guard let anchorRow = byPID[anchor.anchorPID] else { continue }
+    var subtreeRows: [RawProcess] = [anchorRow]
+    var queue: [Int32] = [anchor.anchorPID]
+    while let cur = queue.first {
+      queue.removeFirst()
+      for childPID in (childrenOf[cur] ?? []) {
+        if let row = byPID[childPID] {
+          subtreeRows.append(row)
+          queue.append(childPID)
+        }
+      }
+    }
+    let aggregatedBytes = subtreeRows.reduce(UInt64(0)) { $0 + $1.rssKB } * 1024
+    let heaviest = subtreeRows.max(by: { $0.rssKB < $1.rssKB })
+    let heaviestLeaf = heaviest.map {
+      ProcessFootprintSnapshot.LeafProcess(
+        pid: $0.pid,
+        rssBytes: UInt64($0.rssKB) * 1024,
+        command: $0.command
+      )
+    }
+    sessionFootprints[anchor.sessionID] = ProcessFootprintSnapshot.SessionFootprint(
+      anchorPID: anchor.anchorPID,
+      aggregatedBytes: aggregatedBytes,
+      processCount: subtreeRows.count,
+      heaviestLeaf: heaviestLeaf
+    )
+  }
+
   return ProcessFootprintSnapshot(
     sampledAt: now,
     rootBytes: rootBytes,
     descendantBytes: descendantBytes,
     subtrees: subtrees,
-    descendantCount: descendantCount
+    descendantCount: descendantCount,
+    sessionFootprints: sessionFootprints
   )
 }
 

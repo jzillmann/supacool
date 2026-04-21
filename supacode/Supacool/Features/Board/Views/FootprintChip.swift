@@ -18,16 +18,17 @@ struct FootprintChip: View {
   /// while keeping the cost of a `ps -ax` walk negligible.
   private static let pollInterval: Duration = .seconds(20)
 
-  @Dependency(ProcessFootprintClient.self) private var footprint
+  /// Shared, observable footprint store. One instance is created by the
+  /// board and passed down via environment; cards read from it without
+  /// starting their own samplers.
+  let store: SessionFootprintStore
 
-  @State private var snapshot: ProcessFootprintSnapshot?
   @State private var isSheetPresented: Bool = false
-  @State private var isRefreshing: Bool = false
 
   var body: some View {
     Button {
       isSheetPresented = true
-      Task { await refresh() }
+      Task { await store.refresh() }
     } label: {
       HStack(spacing: 4) {
         Image(systemName: "memorychip")
@@ -46,28 +47,28 @@ struct FootprintChip: View {
     .task { await pollLoop() }
     .sheet(isPresented: $isSheetPresented) {
       FootprintAnalysisSheet(
-        snapshot: snapshot,
-        isRefreshing: isRefreshing,
-        onRefresh: { Task { await refresh() } },
+        snapshot: store.snapshot,
+        isRefreshing: store.isRefreshing,
+        onRefresh: { Task { await store.refresh() } },
         onDismiss: { isSheetPresented = false }
       )
     }
   }
 
   private var displayTotal: String {
-    guard let snapshot else { return "—" }
+    guard let snapshot = store.snapshot else { return "—" }
     return FootprintChip.formatBytes(snapshot.totalBytes)
   }
 
   private var tint: Color {
-    guard let snapshot else { return .secondary }
+    guard let snapshot = store.snapshot else { return .secondary }
     if snapshot.totalBytes >= FootprintChip.criticalThresholdBytes { return .red }
     if snapshot.totalBytes >= FootprintChip.warnThresholdBytes { return .orange }
     return .secondary
   }
 
   private var helpText: String {
-    guard let snapshot else {
+    guard let snapshot = store.snapshot else {
       return "Sampling memory footprint of Supacool + its descendants…"
     }
     return """
@@ -79,22 +80,10 @@ struct FootprintChip: View {
   }
 
   private func pollLoop() async {
-    await refresh()
+    await store.refresh()
     while !Task.isCancelled {
       try? await Task.sleep(for: FootprintChip.pollInterval)
-      await refresh()
-    }
-  }
-
-  private func refresh() async {
-    isRefreshing = true
-    defer { isRefreshing = false }
-    do {
-      let newShot = try await footprint.sample(ProcessInfo.processInfo.processIdentifier)
-      snapshot = newShot
-    } catch {
-      // Sampling errors are non-fatal; the chip keeps showing the last
-      // known value (or — on first failure) stays as a dash.
+      await store.refresh()
     }
   }
 
@@ -255,6 +244,19 @@ struct FootprintAnalysisSheet: View {
       "  Descendants: \(FootprintChip.formatBytes(snapshot.descendantBytes)) "
         + "across \(snapshot.descendantCount) processes"
     )
+    if !snapshot.sessionFootprints.isEmpty {
+      lines.append("")
+      lines.append("Per-session attribution (anchor PID → aggregate RSS):")
+      let sorted = snapshot.sessionFootprints.sorted { $0.value.aggregatedBytes > $1.value.aggregatedBytes }
+      for (sessionID, fp) in sorted {
+        lines.append(
+          "  \(sessionID.uuidString.prefix(8))… "
+            + "anchor PID \(fp.anchorPID): "
+            + "\(FootprintChip.formatBytes(fp.aggregatedBytes)) "
+            + "(\(fp.processCount) process\(fp.processCount == 1 ? "" : "es"))"
+        )
+      }
+    }
     lines.append("")
     lines.append("Top-level subtrees (sorted by aggregate RSS):")
     for (index, sub) in snapshot.subtrees.enumerated() {

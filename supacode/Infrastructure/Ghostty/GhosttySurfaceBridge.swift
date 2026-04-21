@@ -56,6 +56,22 @@ final class GhosttySurfaceBridge {
     }
   }
 
+  /// Returns the PID of the foreground process group currently driving
+  /// this surface — typically the shell if no command is running, or
+  /// the launched command (agent CLI, script, etc.) while it executes.
+  /// Returns `nil` when the surface has no running child or when the
+  /// PID comes back as zero (unspawned / exited).
+  ///
+  /// Exposed so Supacool can attribute memory/CPU usage of the process
+  /// tree rooted at this PID back to the specific session card in the
+  /// board UI.
+  var foregroundPID: Int32? {
+    guard let surface else { return nil }
+    let raw = ghostty_surface_foreground_pid(surface)
+    guard raw > 0, raw <= UInt64(Int32.max) else { return nil }
+    return Int32(raw)
+  }
+
   func sendCommand(_ command: String) {
     let finalCommand = command.hasSuffix("\n") ? command : "\(command)\n"
     sendText(finalCommand)

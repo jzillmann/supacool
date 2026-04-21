@@ -529,6 +529,13 @@ final class WorktreeTerminalManager {
     states[worktreeID]?.readScreenContents(tabID: tabID)
   }
 
+  /// Foreground PID of a session's focused surface, or nil when the
+  /// tab has no live surface (not yet spawned, or already exited).
+  /// Used by Supacool's per-session memory attribution.
+  func foregroundPID(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Int32? {
+    states[worktreeID]?.foregroundPID(tabID: tabID)
+  }
+
   func stateIfExists(for worktreeID: Worktree.ID) -> WorktreeTerminalState? {
     states[worktreeID]
   }

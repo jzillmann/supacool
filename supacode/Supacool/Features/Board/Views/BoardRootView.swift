@@ -58,6 +58,13 @@ struct BoardRootView: View {
   /// 3s feels long enough to watch the agent start without being in the way.
   private let pendingExitDelay: Duration = .seconds(3)
 
+  /// Shared memory-footprint sampler for the toolbar chip + per-card
+  /// pills. Created once in the `.task` block so one `ps` pass feeds
+  /// every consumer on the board.
+  @State private var footprintStore: SessionFootprintStore?
+
+  @Dependency(ProcessFootprintClient.self) private var processFootprint
+
   private struct PendingExit: Equatable {
     let destination: AgentSession.ID?
     let startedAt: Date
@@ -79,6 +86,8 @@ struct BoardRootView: View {
       }
     }
     .onDisappear { removePendingExitEscapeMonitor() }
+    .task { ensureFootprintStore() }
+    .environment(\.sessionFootprintStore, footprintStore)
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
@@ -394,7 +403,9 @@ struct BoardRootView: View {
       // between the title/repo block and the action.
       ToolbarSpacer(.flexible)
       ToolbarItem(placement: .primaryAction) {
-        FootprintChip()
+        if let footprintStore {
+          FootprintChip(store: footprintStore)
+        }
       }
       ToolbarItem(placement: .primaryAction) {
         Button {
@@ -463,6 +474,34 @@ struct BoardRootView: View {
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID)
     )
+  }
+
+  /// Produces `SessionAnchor`s — one per live session that has a
+  /// foreground PID — for the footprint chip. Sessions without an
+  /// active surface (detached, disconnected, not yet spawned) are
+  /// omitted; they have no tree to attribute.
+  private func collectSessionAnchors() -> [SessionAnchor] {
+    store.sessions.compactMap { session in
+      let tabID = TerminalTabID(rawValue: session.id)
+      guard
+        let pid = terminalManager.foregroundPID(
+          worktreeID: session.worktreeID,
+          tabID: tabID
+        )
+      else { return nil }
+      return SessionAnchor(sessionID: session.id, anchorPID: pid)
+    }
+  }
+
+  /// Instantiates the shared `SessionFootprintStore` on first appear
+  /// and wires its anchor provider against the latest `store.sessions`
+  /// so per-session attribution reflects the board's current state on
+  /// every sample tick.
+  private func ensureFootprintStore() {
+    guard footprintStore == nil else { return }
+    let created = SessionFootprintStore(sample: processFootprint.sample)
+    created.setAnchorProvider { collectSessionAnchors() }
+    footprintStore = created
   }
 
   /// One hidden watcher per session, regardless of which mode (board or

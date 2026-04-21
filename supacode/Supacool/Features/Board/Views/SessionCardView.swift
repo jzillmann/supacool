@@ -26,6 +26,7 @@ struct SessionCardView: View {
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
   @State private var isAutoObserverPopoverShown: Bool = false
+  @Environment(\.sessionFootprintStore) private var footprintStore
 
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
@@ -65,6 +66,9 @@ struct SessionCardView: View {
             .lineLimit(1)
         }
         Spacer()
+        if let footprint = footprintStore?.footprint(for: session.id) {
+          footprintBadge(footprint: footprint)
+        }
         Text(relativeTimestamp)
           .font(.caption2)
           .foregroundStyle(.tertiary)
@@ -279,6 +283,50 @@ struct SessionCardView: View {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .abbreviated
     return formatter.localizedString(for: session.lastActivityAt, relativeTo: Date())
+  }
+
+  /// Compact memory badge shown on the card footer when the shared
+  /// footprint store has a sample for this session. Goes orange at
+  /// 2 GB and red at 6 GB per-session — picks up the go-vet-Pulumi
+  /// class of runaway well before it dominates the machine.
+  @ViewBuilder
+  private func footprintBadge(
+    footprint: ProcessFootprintSnapshot.SessionFootprint
+  ) -> some View {
+    let tint = Self.footprintTint(for: footprint.aggregatedBytes)
+    HStack(spacing: 2) {
+      Image(systemName: "memorychip")
+        .font(.caption2)
+      Text(FootprintChip.formatBytes(footprint.aggregatedBytes))
+        .font(.caption2.monospacedDigit())
+    }
+    .foregroundStyle(tint)
+    .padding(.horizontal, 5)
+    .padding(.vertical, 2)
+    .background(tint.opacity(0.12))
+    .clipShape(Capsule())
+    .help(footprintHelp(footprint))
+  }
+
+  private func footprintHelp(
+    _ footprint: ProcessFootprintSnapshot.SessionFootprint
+  ) -> String {
+    let procs =
+      "\(footprint.processCount) process"
+      + (footprint.processCount == 1 ? "" : "es")
+    let base =
+      "\(procs) rooted at PID \(footprint.anchorPID) — "
+      + "\(FootprintChip.formatBytes(footprint.aggregatedBytes))"
+    if let heavy = footprint.heaviestLeaf, heavy.pid != footprint.anchorPID {
+      return base + "\nHeaviest: \(FootprintChip.formatBytes(heavy.rssBytes)) \(heavy.command)"
+    }
+    return base
+  }
+
+  private static func footprintTint(for bytes: UInt64) -> Color {
+    if bytes >= 6 * 1024 * 1024 * 1024 { return .red }
+    if bytes >= 2 * 1024 * 1024 * 1024 { return .orange }
+    return .secondary
   }
 }
 

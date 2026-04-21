@@ -392,6 +392,17 @@ final class WorktreeTerminalState {
     return surface.bridge.readScreenContents(scope: scope)
   }
 
+  /// Returns the foreground PID of the focused surface in the given
+  /// tab, or nil when the tab has no live surface. Used by Supacool's
+  /// board-level memory indicator to map RSS subtrees back to the
+  /// specific session that owns them.
+  func foregroundPID(tabID: TerminalTabID) -> Int32? {
+    guard let surfaceID = focusedSurfaceIdByTab[tabID],
+      let surface = surfaces[surfaceID]
+    else { return nil }
+    return surface.bridge.foregroundPID
+  }
+
   /// Sends raw text to the focused surface of the given tab without requiring
   /// focus — used by the Auto-Observer to inject responses without stealing
   /// keyboard focus from whatever the user is currently doing.
