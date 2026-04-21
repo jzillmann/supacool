@@ -391,16 +391,6 @@ struct BoardRootView: View {
         .help("New Terminal (⌘N)")
         .disabled(repositories.isEmpty)
       }
-      #if DEBUG
-        ToolbarItem(placement: .automatic) {
-          Button {
-            store.send(.createSession(Self.fakeSession()))
-          } label: {
-            Label("Debug: Add Fake Session", systemImage: "hammer")
-          }
-          .help("Insert a fake session for UI testing (DEBUG only)")
-        }
-      #endif
     }
   }
 
@@ -469,24 +459,6 @@ struct BoardRootView: View {
     }
   }
 
-  #if DEBUG
-    private static func fakeSession() -> AgentSession {
-      let prompts = [
-        "Refactor auth module to async/await",
-        "Write unit tests for payment service",
-        "Document the new webhook endpoints",
-        "Fix flaky integration tests",
-        "Investigate slow database query",
-      ]
-      return AgentSession(
-        repositoryID: "/tmp/fake-repo",
-        worktreeID: "/tmp/fake-repo",
-        agent: Bool.random() ? .claude : .codex,
-        initialPrompt: prompts.randomElement() ?? "Debug session",
-        hasCompletedAtLeastOnce: Bool.random()
-      )
-    }
-  #endif
 }
 
 // MARK: - Prune alert
