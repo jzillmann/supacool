@@ -98,45 +98,25 @@ struct RepoPickerButton: View {
       Divider()
 
       ForEach(repositories) { repo in
-        HStack(spacing: 0) {
-          Button {
-            onToggleRepository(repo.id)
-          } label: {
-            HStack {
-              Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
-              Image(systemName: "folder.fill")
-                .font(.caption)
-                .foregroundStyle(.yellow)
-              Text(repo.name)
-                .font(.callout)
-                .lineLimit(1)
-              Spacer()
-            }
-            .padding(.leading, 12)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
-          }
-          .buttonStyle(.plain)
-
-          // Trailing broom — prunes stale worktree refs for this repo
-          // and surfaces any Supacool session cards left orphaned by the
-          // cleanup. Popover dismisses so the alert presented by the
-          // root view has the screen to itself.
-          Button {
-            isPresented = false
-            onPruneWorktrees(repo)
-          } label: {
-            Image(systemName: "sparkles.square.on.square")
+        Button {
+          onToggleRepository(repo.id)
+        } label: {
+          HStack {
+            Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
+              .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
+            Image(systemName: "folder.fill")
+              .font(.caption)
+              .foregroundStyle(.yellow)
+            Text(repo.name)
               .font(.callout)
-              .foregroundStyle(.secondary)
-              .padding(.horizontal, 12)
-              .padding(.vertical, 6)
-              .contentShape(Rectangle())
+              .lineLimit(1)
+            Spacer()
           }
-          .buttonStyle(.plain)
-          .help("Prune stale worktrees for \(repo.name)")
+          .padding(.horizontal, 12)
+          .padding(.vertical, 6)
+          .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
       }
 
       Divider()
@@ -176,10 +156,57 @@ struct RepoPickerButton: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+
+        // Discoverable entry point for `git worktree prune`. Expands
+        // into a submenu of repos (or fires directly when there's only
+        // one) so the user doesn't have to guess which tiny icon cleans
+        // up worktrees.
+        pruneFooter
       }
     }
     .frame(minWidth: 240)
     .padding(.vertical, 4)
+  }
+
+  @ViewBuilder
+  private var pruneFooter: some View {
+    if repositories.count == 1, let only = repositories.first {
+      Button {
+        isPresented = false
+        onPruneWorktrees(only)
+      } label: {
+        pruneFooterLabel(text: "Prune Stale Worktrees…")
+      }
+      .buttonStyle(.plain)
+      .help("Run git worktree prune and clean up orphan session cards")
+    } else {
+      Menu {
+        ForEach(repositories) { repo in
+          Button(repo.name) {
+            isPresented = false
+            onPruneWorktrees(repo)
+          }
+        }
+      } label: {
+        pruneFooterLabel(text: "Prune Stale Worktrees…")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .help("Pick a repository to run git worktree prune against")
+    }
+  }
+
+  private func pruneFooterLabel(text: String) -> some View {
+    HStack {
+      Image(systemName: "wand.and.sparkles")
+        .foregroundStyle(.secondary)
+      Text(text)
+        .font(.callout.weight(.medium))
+      Spacer()
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .contentShape(Rectangle())
   }
 
   private func isIncluded(_ repo: Repository) -> Bool {
