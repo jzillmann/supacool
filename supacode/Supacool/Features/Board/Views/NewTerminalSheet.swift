@@ -48,25 +48,30 @@ struct NewTerminalSheet: View {
 
       Section {
         agentPicker
-        repositoryRow
-          .disabled(isWorkspaceLockedByPR)
-        worktreeToggle
-          .disabled(isWorkspaceLockedByPR)
-        if isUsingWorktree, !isWorkspaceLockedByPR {
-          workspaceField
-          ForEach(workspaceSuggestions, id: \.id) { suggestion in
-            WorkspaceSuggestionRow(
-              suggestion: suggestion,
-              isSelected: suggestion.selection == store.selectedWorkspace
-            )
-            .contentShape(Rectangle())
-            .onTapGesture {
-              store.send(.workspaceSelected(suggestion.selection))
+        destinationPicker
+        if store.destination.isRemote {
+          remoteWorkingDirectoryField
+        } else {
+          repositoryRow
+            .disabled(isWorkspaceLockedByPR)
+          worktreeToggle
+            .disabled(isWorkspaceLockedByPR)
+          if isUsingWorktree, !isWorkspaceLockedByPR {
+            workspaceField
+            ForEach(workspaceSuggestions, id: \.id) { suggestion in
+              WorkspaceSuggestionRow(
+                suggestion: suggestion,
+                isSelected: suggestion.selection == store.selectedWorkspace
+              )
+              .contentShape(Rectangle())
+              .onTapGesture {
+                store.send(.workspaceSelected(suggestion.selection))
+              }
+              // The suggestion list is part of the Workspace row, not its
+              // own section — drop the auto-rendered divider above so the
+              // field + matches read as one unit.
+              .listRowSeparator(.hidden, edges: .top)
             }
-            // The suggestion list is part of the Workspace row, not its
-            // own section — drop the auto-rendered divider above so the
-            // field + matches read as one unit.
-            .listRowSeparator(.hidden, edges: .top)
           }
         }
         if store.agent != nil {
@@ -227,6 +232,97 @@ struct NewTerminalSheet: View {
   }
 
   /// Repository selector. With a single registered repo the picker
+  /// Segmented picker that flips between a local repo-backed session and
+  /// any of the configured remote SSH hosts. Rendered at the top of the
+  /// agent section so the rest of the form (repo/worktree OR remote path)
+  /// adapts underneath.
+  @ViewBuilder
+  private var destinationPicker: some View {
+    // With no imported remote hosts the picker adds nothing — keep the
+    // local-only sheet visually clean.
+    if store.availableRemoteHosts.isEmpty {
+      EmptyView()
+    } else {
+      Picker(selection: destinationBinding) {
+        Text("Local").tag(NewTerminalFeature.Destination.local)
+        ForEach(store.availableRemoteHosts) { host in
+          Text(host.alias).tag(NewTerminalFeature.Destination.remote(hostID: host.id))
+        }
+      } label: {
+        Text("Destination")
+        Text("Run locally, or SSH into one of the imported remote hosts.")
+      }
+      .pickerStyle(.menu)
+    }
+  }
+
+  /// Absolute path on the remote host where tmux will start. Suggestions
+  /// pull from `availableRemoteWorkspaces` (workspaces you've spawned
+  /// into before) plus the host's configured default root, if any.
+  @ViewBuilder
+  private var remoteWorkingDirectoryField: some View {
+    LabeledContent {
+      VStack(alignment: .trailing, spacing: 6) {
+        TextField(
+          remoteDefaultRoot ?? "/absolute/path/on/remote",
+          text: $store.remoteWorkingDirectoryDraft
+        )
+        .textFieldStyle(.roundedBorder)
+        .frame(maxWidth: 340)
+        if !remoteWorkspaceSuggestions.isEmpty {
+          VStack(alignment: .leading, spacing: 2) {
+            ForEach(remoteWorkspaceSuggestions, id: \.id) { ws in
+              Button {
+                store.remoteWorkingDirectoryDraft = ws.remoteWorkingDirectory
+              } label: {
+                HStack {
+                  Image(systemName: "clock.arrow.circlepath")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                  Text(ws.remoteWorkingDirectory)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                  Spacer()
+                }
+                .contentShape(Rectangle())
+              }
+              .buttonStyle(.plain)
+            }
+          }
+          .padding(.top, 4)
+        }
+      }
+    } label: {
+      Text("Remote directory")
+      Text("Absolute path on the host — tmux starts here.")
+    }
+  }
+
+  /// Two-way binding that dispatches `destinationChanged` on set so the
+  /// reducer can clear stale validation state.
+  private var destinationBinding: Binding<NewTerminalFeature.Destination> {
+    Binding(
+      get: { store.destination },
+      set: { store.send(.destinationChanged($0)) }
+    )
+  }
+
+  /// Workspaces previously used for whichever remote host is selected.
+  /// Empty list → no inline suggestions, the user types a fresh path.
+  private var remoteWorkspaceSuggestions: [RemoteWorkspace] {
+    guard case .remote(let hostID) = store.destination else { return [] }
+    return store.availableRemoteWorkspaces.filter { $0.hostID == hostID }
+  }
+
+  /// The chosen host's default remote workspace root, shown as a
+  /// placeholder in the path field so users know the expected shape.
+  private var remoteDefaultRoot: String? {
+    guard case .remote(let hostID) = store.destination,
+      let host = store.availableRemoteHosts.first(where: { $0.id == hostID })
+    else { return nil }
+    return host.overrides.defaultRemoteWorkspaceRoot
+  }
+
   /// would just show one immutable choice — collapse it to a static
   /// label to cut a visual row from the sheet. Multi-repo users still
   /// see the full picker.

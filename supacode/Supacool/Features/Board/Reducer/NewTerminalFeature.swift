@@ -56,6 +56,19 @@ nonisolated struct PullRequestContext: Equatable, Sendable {
 ///     `delegate(.created(session))`.
 @Reducer
 struct NewTerminalFeature {
+  /// Where the new session runs. Local → a worktree inside one of the
+  /// configured repositories. Remote → a working directory on an SSH host
+  /// from `@Shared(.remoteHosts)`.
+  nonisolated enum Destination: Hashable, Sendable {
+    case local
+    case remote(hostID: RemoteHost.ID)
+
+    var isRemote: Bool {
+      if case .remote = self { return true }
+      return false
+    }
+  }
+
   @ObservableState
   struct State: Equatable {
     let availableRepositories: IdentifiedArrayOf<Repository>
@@ -63,6 +76,22 @@ struct NewTerminalFeature {
     var prompt: String = ""
     /// `nil` = raw shell session (no agent CLI invoked).
     var agent: AgentType? = .claude
+
+    // MARK: - Destination (local vs. remote host)
+
+    var destination: Destination = .local
+    /// Absolute remote path — only read when `destination` is `.remote`.
+    /// Either matches an existing `RemoteWorkspace` for the chosen host
+    /// (we reuse the record) or names a fresh directory (we persist a
+    /// new workspace on create).
+    var remoteWorkingDirectoryDraft: String = ""
+    /// Snapshot of `@Shared(.remoteHosts)` — refreshed on `.task` so the
+    /// segmented picker renders without having to put `@Shared` directly
+    /// on this struct (which breaks KeyPath Sendability for the
+    /// existing `.binding(\.prompt)` cases).
+    var availableRemoteHosts: [RemoteHost] = []
+    /// Snapshot of `@Shared(.remoteWorkspaces)` — same rationale.
+    var availableRemoteWorkspaces: [RemoteWorkspace] = []
 
     // MARK: - Workspace picker
 
@@ -156,6 +185,11 @@ struct NewTerminalFeature {
     case pullRequestLookupResolved(PullRequestContext)
     case pullRequestLookupNotMatched(parsed: ParsedPullRequestURL, reason: String)
     case pullRequestLookupFailed(parsed: ParsedPullRequestURL, message: String)
+
+    /// User flipped the destination segmented picker. `.local` reverts
+    /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
+    /// workspace pickers with the remote working-directory field.
+    case destinationChanged(Destination)
     case delegate(Delegate)
 
     @CasePathable
@@ -169,6 +203,7 @@ struct NewTerminalFeature {
   @Dependency(TerminalClient.self) var terminalClient
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
+  @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
 
   private nonisolated enum CancelID: Hashable, Sendable {
     case branchNameSuggestion
@@ -215,6 +250,14 @@ struct NewTerminalFeature {
         return .none
 
       case .task:
+        // Snapshot the remote catalog so the destination picker and the
+        // (future) workspace autocomplete have data without forcing
+        // `@Shared` onto State — keeps KeyPath Sendability for the
+        // existing binding cases.
+        @Shared(.remoteHosts) var remoteHosts: [RemoteHost]
+        @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
+        state.availableRemoteHosts = remoteHosts
+        state.availableRemoteWorkspaces = remoteWorkspaces
         guard let repoID = state.selectedRepositoryID,
           let repo = state.availableRepositories[id: repoID]
         else { return .none }
@@ -292,7 +335,17 @@ struct NewTerminalFeature {
         state.isSuggestingBranchName = false
         return .none
 
+      case .destinationChanged(let destination):
+        state.destination = destination
+        // Clear any stale local-flow validation message when the user
+        // switches away; the remote flow validates on a different field.
+        state.validationMessage = nil
+        return .none
+
       case .createButtonTapped:
+        if case .remote(let hostID) = state.destination {
+          return handleRemoteCreate(state: &state, hostID: hostID)
+        }
         let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let repoID = state.selectedRepositoryID,
           let repository = state.availableRepositories[id: repoID]
@@ -556,6 +609,117 @@ struct NewTerminalFeature {
       case .delegate:
         return .none
       }
+    }
+  }
+
+  // MARK: - Remote create
+
+  /// Fork of `createButtonTapped` for remote sessions: no git, no
+  /// worktree. Finds (or creates) a `RemoteWorkspace` for the entered
+  /// path, builds a shim `Worktree` + `RemoteSpawnInvocation`, sends
+  /// `.createRemoteTab`, and produces the `AgentSession` with the
+  /// remote fields populated so the board classifier picks it up as
+  /// `.disconnected` the moment the link drops.
+  private func handleRemoteCreate(
+    state: inout State,
+    hostID: RemoteHost.ID
+  ) -> Effect<Action> {
+    let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedPath =
+      state.remoteWorkingDirectoryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+
+    @Shared(.remoteHosts) var remoteHosts: [RemoteHost]
+    @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
+    guard let host = remoteHosts.first(where: { $0.id == hostID }) else {
+      state.validationMessage = "Pick a remote host."
+      return .none
+    }
+    guard !trimmedPath.isEmpty else {
+      state.validationMessage = "Remote working directory required."
+      return .none
+    }
+    guard trimmedPath.hasPrefix("/") || trimmedPath.hasPrefix("~") else {
+      state.validationMessage = "Remote path must be absolute (e.g. /home/me/code)."
+      return .none
+    }
+    if state.agent != nil && trimmedPrompt.isEmpty {
+      state.validationMessage = "Prompt required."
+      return .none
+    }
+    guard let localSocketPath = terminalClient.hookSocketPath() else {
+      state.validationMessage = "Agent hook socket isn't running — can't tunnel hooks."
+      return .none
+    }
+
+    state.validationMessage = nil
+    state.isCreating = true
+
+    // Reuse an existing workspace record if one already points at this
+    // path; otherwise persist a new one and reference it by id.
+    let existing = remoteWorkspaces.first(where: {
+      $0.hostID == hostID && $0.remoteWorkingDirectory == trimmedPath
+    })
+    let workspace: RemoteWorkspace = existing
+      ?? RemoteWorkspace(hostID: hostID, remoteWorkingDirectory: trimmedPath)
+    if existing == nil {
+      $remoteWorkspaces.withLock { $0.append(workspace) }
+    }
+
+    let sessionID = UUID()
+    let tmuxSessionName = "supacool-\(sessionID.uuidString.lowercased())"
+    let worktreeKey = "remote:\(host.sshAlias):\(trimmedPath)"
+    let agent = state.agent
+    let bypassPermissions =
+      UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+
+    let agentCommand: String?
+    if let agent, !trimmedPrompt.isEmpty {
+      agentCommand = agent.command(prompt: trimmedPrompt, bypassPermissions: bypassPermissions)
+    } else if let agent {
+      agentCommand = agent.commandWithoutPrompt(bypassPermissions: bypassPermissions)
+    } else {
+      agentCommand = nil
+    }
+
+    let invocation = RemoteSpawnInvocation(
+      sshAlias: host.sshAlias,
+      remoteWorkingDirectory: trimmedPath,
+      remoteSocketPath: "\(host.overrides.effectiveRemoteTmpdir)"
+        + "/supacool-hook-\(sessionID.uuidString.lowercased().prefix(12)).sock",
+      localSocketPath: localSocketPath,
+      tmuxSessionName: tmuxSessionName,
+      worktreeID: worktreeKey,
+      tabID: sessionID,
+      surfaceID: sessionID,
+      agentCommand: agentCommand
+    )
+    let sshCommand = remoteSpawnClient.sshInvocation(invocation)
+    let worktreeShim = Worktree(
+      id: worktreeKey,
+      name: workspace.displayName,
+      detail: "",
+      workingDirectory: URL(fileURLWithPath: "/"),
+      repositoryRootURL: URL(fileURLWithPath: "/")
+    )
+
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: worktreeKey,
+      worktreeID: worktreeKey,
+      agent: agent,
+      initialPrompt: trimmedPrompt,
+      removeBackingWorktreeOnDelete: false,
+      remoteWorkspaceID: workspace.id,
+      remoteHostID: hostID,
+      tmuxSessionName: tmuxSessionName
+    )
+
+    let terminalClient = self.terminalClient
+    return .run { send in
+      await terminalClient.send(
+        .createRemoteTab(worktreeShim, command: sshCommand, id: sessionID)
+      )
+      await send(.sessionReady(session))
     }
   }
 

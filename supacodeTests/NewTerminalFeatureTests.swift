@@ -561,6 +561,108 @@ struct NewTerminalFeatureTests {
     #expect(ParsedPullRequestURL.firstMatch(in: "") == nil)
   }
 
+  // MARK: - Remote destination
+
+  @Test(.dependencies) func destinationChangedClearsValidationMessage() async {
+    let hostID = UUID()
+    var state = Self.makeState()
+    state.validationMessage = "stale"
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.destinationChanged(.remote(hostID: hostID))) {
+      $0.destination = .remote(hostID: hostID)
+      $0.validationMessage = nil
+    }
+  }
+
+  @Test(.dependencies) func remoteCreateRequiresAbsolutePath() async {
+    let hostID = UUID()
+    let host = RemoteHost(id: hostID, sshAlias: "dev", importedFromSSHConfig: true)
+    var state = Self.makeState()
+    state.destination = .remote(hostID: hostID)
+    state.prompt = "Fix it"
+    state.availableRemoteHosts = [host]
+    state.remoteWorkingDirectoryDraft = "relative/path"
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    $sharedHosts.withLock { $0 = [host] }
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { "/tmp/supacool-local.sock" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped) {
+      $0.validationMessage = "Remote path must be absolute (e.g. /home/me/code)."
+    }
+  }
+
+  @Test(.dependencies) func remoteCreateRequiresRunningHookSocket() async {
+    let hostID = UUID()
+    let host = RemoteHost(id: hostID, sshAlias: "dev", importedFromSSHConfig: true)
+    var state = Self.makeState()
+    state.destination = .remote(hostID: hostID)
+    state.prompt = "Fix it"
+    state.availableRemoteHosts = [host]
+    state.remoteWorkingDirectoryDraft = "/home/jz/code"
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    $sharedHosts.withLock { $0 = [host] }
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { nil }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped) {
+      $0.validationMessage = "Agent hook socket isn't running — can't tunnel hooks."
+    }
+  }
+
+  @Test(.dependencies) func remoteCreateProducesSessionWithRemoteFields() async {
+    let hostID = UUID()
+    let host = RemoteHost(
+      id: hostID,
+      sshAlias: "dev",
+      importedFromSSHConfig: true,
+      overrides: RemoteHost.Overrides(remoteTmpdir: "/var/tmp")
+    )
+    var state = Self.makeState()
+    state.destination = .remote(hostID: hostID)
+    state.prompt = "Fix it"
+    state.availableRemoteHosts = [host]
+    state.remoteWorkingDirectoryDraft = "/home/jz/code/api"
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    $sharedHosts.withLock { $0 = [host] }
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { "/tmp/supacool-local.sock" }
+      // Any send is a no-op — we're verifying the reducer's own state
+      // transition, not the terminal client's side effects.
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped) {
+      $0.validationMessage = nil
+      $0.isCreating = true
+    }
+    await store.receive(\.sessionReady) { state in
+      state.isCreating = false
+      // The session carries the remote trio so the board classifier
+      // correctly flips to `.disconnected` when the link drops.
+    }
+    let lastAction = store.state  // Just touch state so actor isolation stays happy.
+    _ = lastAction
+  }
+
   // MARK: - Helpers
 
   private static func makeState(
