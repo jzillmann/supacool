@@ -125,6 +125,7 @@ struct NewTerminalFeature {
 
     var validationMessage: String?
     var isCreating: Bool = false
+    var planMode: Bool = false
     /// True while the background inference client is generating a branch name.
     var isSuggestingBranchName: Bool = false
     /// If rerun came from a session-owned worktree, preserve ownership only
@@ -156,6 +157,7 @@ struct NewTerminalFeature {
       selectedRepositoryID = resolvedRepoID
       prompt = previous.initialPrompt
       agent = previous.agent
+      planMode = previous.planMode
 
       if previous.isRemote {
         @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
@@ -210,6 +212,7 @@ struct NewTerminalFeature {
       selectedRepositoryID = availableRepositories[id: previous.repositoryID]?.id
         ?? availableRepositories.first?.id
       agent = previous.agent
+      planMode = previous.planMode
       selectedWorkspace = .newBranch(name: "")
       workspaceQuery = ""
     }
@@ -569,6 +572,7 @@ struct NewTerminalFeature {
     }()
 
     let agent = state.agent
+    let planMode = agent?.supportsPlanMode == true && state.planMode
     // Mirror supacode's sidebar flow: obey the global "Fetch origin
     // before creating worktree" toggle so both paths behave the same.
     @Shared(.settingsFile) var settingsFile
@@ -714,9 +718,16 @@ struct NewTerminalFeature {
         let input: String
         switch (agent, trimmedPrompt.isEmpty) {
         case (let agent?, false):
-          input = agent.command(prompt: trimmedPrompt, bypassPermissions: bypassPermissions) + "\r"
+          input = agent.command(
+            prompt: trimmedPrompt,
+            bypassPermissions: bypassPermissions,
+            planMode: planMode
+          ) + "\r"
         case (let agent?, true):
-          input = agent.commandWithoutPrompt(bypassPermissions: bypassPermissions) + "\r"
+          input = agent.commandWithoutPrompt(
+            bypassPermissions: bypassPermissions,
+            planMode: planMode
+          ) + "\r"
         case (nil, false):
           input = trimmedPrompt + "\r"
         case (nil, true):
@@ -740,7 +751,8 @@ struct NewTerminalFeature {
           agent: agent,
           initialPrompt: trimmedPrompt,
           displayName: suggestedDisplayName,
-          removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
+          removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
+          planMode: planMode
         )
         await send(.sessionReady(session))
       } catch {
@@ -811,14 +823,22 @@ struct NewTerminalFeature {
     let worktreeKey = "remote:\(host.sshAlias):\(trimmedPath)"
     let repositoryID = repositoryIDOverride ?? worktreeKey
     let agent = state.agent
+    let planMode = agent?.supportsPlanMode == true && state.planMode
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
 
     let agentCommand: String?
     if let agent, !trimmedPrompt.isEmpty {
-      agentCommand = agent.command(prompt: trimmedPrompt, bypassPermissions: bypassPermissions)
+      agentCommand = agent.command(
+        prompt: trimmedPrompt,
+        bypassPermissions: bypassPermissions,
+        planMode: planMode
+      )
     } else if let agent {
-      agentCommand = agent.commandWithoutPrompt(bypassPermissions: bypassPermissions)
+      agentCommand = agent.commandWithoutPrompt(
+        bypassPermissions: bypassPermissions,
+        planMode: planMode
+      )
     } else {
       agentCommand = nil
     }
@@ -852,6 +872,7 @@ struct NewTerminalFeature {
       agent: agent,
       initialPrompt: trimmedPrompt,
       removeBackingWorktreeOnDelete: false,
+      planMode: planMode,
       remoteWorkspaceID: workspace.id,
       remoteHostID: hostID,
       repositoryRemoteTargetID: repositoryRemoteTargetID,

@@ -154,6 +154,33 @@ struct NewTerminalFeatureTests {
     #expect(spawnedInput.value == "codex --dangerously-bypass-approvals-and-sandbox 'List the tests'\r")
   }
 
+  @Test(.dependencies) func claudePlanModeSpawnsWithoutBypassFlag() async {
+    UserDefaults.standard.set(true, forKey: "supacool.bypassPermissions")
+
+    var state = Self.makeState()
+    state.prompt = "Plan the refactor"
+    state.agent = .claude
+    state.planMode = true
+
+    let spawnedInput = LockIsolated<String?>(nil)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput(_, let input, _, _) = command {
+          spawnedInput.setValue(input)
+        }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(spawnedInput.value == "claude --permission-mode plan 'Plan the refactor'\r")
+  }
+
   // MARK: - Shell-quoting safety
 
   @Test func shellQuoteEscapesSingleQuotes() {
@@ -330,7 +357,8 @@ struct NewTerminalFeatureTests {
       worktreeID: "/tmp/repo",
       agent: .codex,
       initialPrompt: "Write tests for auth",
-      displayName: "Write tests for auth"
+      displayName: "Write tests for auth",
+      planMode: true
     )
     let repos = IdentifiedArray(uniqueElements: [
       Self.makeRepository(id: "/tmp/repo", name: "test-repo")
@@ -340,6 +368,7 @@ struct NewTerminalFeatureTests {
 
     #expect(state.prompt == "Write tests for auth")
     #expect(state.agent == .codex)
+    #expect(state.planMode == true)
     #expect(state.selectedRepositoryID == "/tmp/repo")
     #expect(state.selectedWorkspace == .repoRoot)
     #expect(state.workspaceQuery.isEmpty)

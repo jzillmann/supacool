@@ -81,6 +81,9 @@ struct NewTerminalSheet: View {
         }
         if store.agent != nil {
           DisclosureGroup(isExpanded: $isAdvancedExpanded) {
+            if store.agent?.supportsPlanMode == true {
+              planModeToggle
+            }
             bypassPermissionsToggle
           } label: {
             // SwiftUI's default DisclosureGroup only toggles when the
@@ -424,7 +427,19 @@ struct NewTerminalSheet: View {
   private var bypassPermissionsToggle: some View {
     Toggle(isOn: $bypassPermissions) {
       Text("Skip permission prompts")
-      Text("Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use.")
+      Text(
+        store.planMode && store.agent?.supportsPlanMode == true
+          ? "Disabled while plan mode is on."
+          : "Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use."
+      )
+    }
+    .disabled(store.planMode && store.agent?.supportsPlanMode == true)
+  }
+
+  private var planModeToggle: some View {
+    Toggle(isOn: $store.planMode) {
+      Text("Plan mode")
+      Text("Launch Claude with --permission-mode plan. It can inspect and propose changes, but won't execute them until you approve.")
     }
   }
 

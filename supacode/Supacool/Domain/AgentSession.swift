@@ -67,6 +67,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// alert if their terminal disappears.
   var isPriority: Bool
 
+  /// Launches the agent in "plan mode" when the selected CLI supports
+  /// it. Persisted so rerun can prefill the same launch behavior.
+  var planMode: Bool
+
   /// Agent-native session identifier captured from the hook payload:
   /// Claude Code's `session_id`, or the Codex equivalent. Absent until the
   /// first hook event arrives. Used to auto-resume (`claude --resume <id>` /
@@ -141,6 +145,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastBusyTransitionAt: Date? = nil,
     removeBackingWorktreeOnDelete: Bool = false,
     isPriority: Bool = false,
+    planMode: Bool = false,
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
     autoObserver: Bool = false,
@@ -166,6 +171,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.lastBusyTransitionAt = lastBusyTransitionAt
     self.removeBackingWorktreeOnDelete = removeBackingWorktreeOnDelete
     self.isPriority = isPriority
+    self.planMode = planMode
     self.agentNativeSessionID = agentNativeSessionID
     self.parked = parked
     self.autoObserver = autoObserver
@@ -193,7 +199,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
-    case removeBackingWorktreeOnDelete, isPriority
+    case removeBackingWorktreeOnDelete, isPriority, planMode
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
@@ -219,6 +225,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     removeBackingWorktreeOnDelete =
       try c.decodeIfPresent(Bool.self, forKey: .removeBackingWorktreeOnDelete) ?? false
     isPriority = try c.decodeIfPresent(Bool.self, forKey: .isPriority) ?? false
+    planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false

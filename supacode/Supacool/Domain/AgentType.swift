@@ -30,16 +30,39 @@ nonisolated enum AgentType: String, CaseIterable, Codable, Sendable, Identifiabl
     }
   }
 
+  /// Agent CLIs do not expose identical launch controls. Today only
+  /// Claude Code has a dedicated interactive "plan mode".
+  var supportsPlanMode: Bool {
+    switch self {
+    case .claude: true
+    case .codex: false
+    }
+  }
+
   /// Shell command used to launch the agent with an initial prompt.
   /// The string is what we type into the terminal (newline appended by caller).
-  func command(prompt: String, bypassPermissions: Bool = false) -> String {
-    let flag = bypassPermissions ? " \(bypassPermissionsFlag)" : ""
-    return "\(binary)\(flag) \(Self.shellQuote(prompt))"
+  func command(
+    prompt: String,
+    bypassPermissions: Bool = false,
+    planMode: Bool = false
+  ) -> String {
+    let flags = launchFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: planMode
+    )
+    return "\(binary)\(flags.isEmpty ? "" : " \(flags.joined(separator: " "))") \(Self.shellQuote(prompt))"
   }
 
   /// Command used when no prompt is provided.
-  func commandWithoutPrompt(bypassPermissions: Bool = false) -> String {
-    bypassPermissions ? "\(binary) \(bypassPermissionsFlag)" : binary
+  func commandWithoutPrompt(
+    bypassPermissions: Bool = false,
+    planMode: Bool = false
+  ) -> String {
+    let flags = launchFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: planMode
+    )
+    return flags.isEmpty ? binary : "\(binary) \(flags.joined(separator: " "))"
   }
 
   /// Shell command that resumes a prior session by its agent-native id.
@@ -72,6 +95,20 @@ nonisolated enum AgentType: String, CaseIterable, Codable, Sendable, Identifiabl
     case .claude: "claude"
     case .codex: "codex"
     }
+  }
+
+  private func launchFlags(
+    bypassPermissions: Bool,
+    planMode: Bool
+  ) -> [String] {
+    var flags: [String] = []
+    if planMode, supportsPlanMode {
+      flags.append("--permission-mode")
+      flags.append("plan")
+    } else if bypassPermissions {
+      flags.append(bypassPermissionsFlag)
+    }
+    return flags
   }
 
   /// Single-quote escape: wraps the input in `'...'`, replacing any embedded
