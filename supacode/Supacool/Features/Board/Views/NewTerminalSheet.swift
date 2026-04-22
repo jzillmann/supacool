@@ -705,7 +705,11 @@ struct NewTerminalSheet: View {
     let replacement: String
     switch skillAutocompleteAgent {
     case .claude?:
-      replacement = skill.isUserInvocable ? "/\(skill.name)" : skill.name
+      // Always preserve the leading `/` the user typed. The
+      // `isUserInvocable` flag drives section grouping in the popover,
+      // not what we commit — Claude treats `/<name>` as an explicit
+      // invocation regardless of bucket.
+      replacement = "/\(skill.name)"
     case .codex?:
       replacement = "$\(skill.name)"
     case .none:

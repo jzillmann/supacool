@@ -127,7 +127,10 @@ struct SkillAutocompletePopover: View {
   private func displayName(for skill: Skill) -> String {
     switch agent {
     case .claude:
-      return skill.isUserInvocable ? "/\(skill.name)" : skill.name
+      // Always show the slash so the row matches what we'll actually
+      // commit — the section header (Slash Commands / Agent Skills)
+      // already conveys the bucket distinction.
+      return "/\(skill.name)"
     case .codex:
       return "$\(skill.name)"
     }
