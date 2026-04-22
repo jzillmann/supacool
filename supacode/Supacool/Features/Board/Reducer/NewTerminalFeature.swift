@@ -227,6 +227,7 @@ struct NewTerminalFeature {
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
+  @Dependency(RepoSyncClient.self) var repoSyncClient
 
   private nonisolated enum CancelID: Hashable, Sendable {
     case branchNameSuggestion
@@ -492,6 +493,7 @@ struct NewTerminalFeature {
     let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+    let repoSyncClient = self.repoSyncClient
     let sessionID = UUID()
     let repositoryID = repository.id
     let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
@@ -593,6 +595,20 @@ struct NewTerminalFeature {
           worktree = picked
 
         case .repoRoot:
+          // Pre-flight: try to fast-forward the repo root to
+          // origin/<default> before we hand the terminal to the user.
+          // Supacool's model is that users don't modify the root
+          // directly — worktrees are where work happens — so "on
+          // investigate, put me on latest main" is the expected
+          // behavior. The client has conservative guards built in;
+          // dirty trees, non-default branches, fetch errors, and
+          // diverged histories all cause it to skip silently without
+          // mutating anything. Failure never blocks the spawn.
+          let syncOutcome = await repoSyncClient.syncIfSafe(repository.rootURL)
+          newTerminalLogger.info(
+            "Repo-root pre-flight sync for "
+              + "\(repository.rootURL.path(percentEncoded: false)): \(syncOutcome)"
+          )
           // Directory mode: resolve the repo-root worktree, or
           // synthesize one if discovery hasn't caught up yet.
           let rootURL = repository.rootURL.standardizedFileURL
