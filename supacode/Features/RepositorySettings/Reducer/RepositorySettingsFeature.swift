@@ -7,6 +7,7 @@ struct RepositorySettingsFeature {
   struct State: Equatable {
     var rootURL: URL
     var settings: RepositorySettings
+    var availableRemoteHosts: [RemoteHost] = []
     var globalDefaultWorktreeBaseDirectoryPath: String?
     var globalCopyIgnoredOnWorktreeCreate: Bool = false
     var globalCopyUntrackedOnWorktreeCreate: Bool = false
@@ -37,6 +38,12 @@ struct RepositorySettingsFeature {
       globalPullRequestMergeStrategy: PullRequestMergeStrategy
     )
     case branchDataLoaded([String], defaultBaseRef: String)
+    case addRemoteTarget(
+      hostID: RemoteHost.ID,
+      remoteWorkingDirectory: String,
+      displayName: String?
+    )
+    case removeRemoteTarget(id: RepositoryRemoteTarget.ID)
     case delegate(Delegate)
     case binding(BindingAction<State>)
   }
@@ -56,8 +63,10 @@ struct RepositorySettingsFeature {
         let rootURL = state.rootURL
         @Shared(.repositorySettings(rootURL)) var repositorySettings
         @Shared(.settingsFile) var settingsFile
+        @Shared(.remoteHosts) var remoteHosts
         let settings = repositorySettings
         let global = settingsFile.global
+        state.availableRemoteHosts = remoteHosts
         let globalDefaultWorktreeBaseDirectoryPath = global.defaultWorktreeBaseDirectoryPath
         let globalCopyIgnored = global.copyIgnoredOnWorktreeCreate
         let globalCopyUntracked = global.copyUntrackedOnWorktreeCreate
@@ -132,24 +141,45 @@ struct RepositorySettingsFeature {
         state.isBranchDataLoaded = true
         return .none
 
+      case .addRemoteTarget(let hostID, let remoteWorkingDirectory, let displayName):
+        let trimmedPath = remoteWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return .none }
+        let trimmedName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = RepositoryRemoteTarget(
+          hostID: hostID,
+          remoteWorkingDirectory: trimmedPath,
+          displayName: trimmedName?.isEmpty == false ? trimmedName : nil
+        )
+        state.settings.remoteTargets.append(target)
+        return persistSettingsAndNotify(state: &state)
+
+      case .removeRemoteTarget(let id):
+        state.settings.remoteTargets.removeAll(where: { $0.id == id })
+        return persistSettingsAndNotify(state: &state)
+
       case .binding:
         if state.isBareRepository {
           state.settings.copyIgnoredOnWorktreeCreate = nil
           state.settings.copyUntrackedOnWorktreeCreate = nil
         }
-        let rootURL = state.rootURL
-        var normalizedSettings = state.settings
-        normalizedSettings.worktreeBaseDirectoryPath = SupacodePaths.normalizedWorktreeBaseDirectoryPath(
-          normalizedSettings.worktreeBaseDirectoryPath,
-          repositoryRootURL: rootURL
-        )
-        @Shared(.repositorySettings(rootURL)) var repositorySettings
-        $repositorySettings.withLock { $0 = normalizedSettings }
-        return .send(.delegate(.settingsChanged(rootURL)))
+        return persistSettingsAndNotify(state: &state)
 
       case .delegate:
         return .none
       }
     }
+  }
+
+  private func persistSettingsAndNotify(state: inout State) -> Effect<Action> {
+    let rootURL = state.rootURL
+    var normalizedSettings = state.settings
+    normalizedSettings.worktreeBaseDirectoryPath = SupacodePaths.normalizedWorktreeBaseDirectoryPath(
+      normalizedSettings.worktreeBaseDirectoryPath,
+      repositoryRootURL: rootURL
+    )
+    state.settings = normalizedSettings
+    @Shared(.repositorySettings(rootURL)) var repositorySettings
+    $repositorySettings.withLock { $0 = normalizedSettings }
+    return .send(.delegate(.settingsChanged(rootURL)))
   }
 }

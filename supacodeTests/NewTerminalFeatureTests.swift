@@ -699,6 +699,95 @@ struct NewTerminalFeatureTests {
     _ = lastAction
   }
 
+  @Test(.dependencies) func taskLoadsRepositoryRemoteTargetsFromSettings() async {
+    let hostID = UUID()
+    let target = RepositoryRemoteTarget(
+      id: UUID(),
+      hostID: hostID,
+      remoteWorkingDirectory: "/srv/widgets",
+      displayName: "staging"
+    )
+    let repoURL = URL(fileURLWithPath: "/tmp/repo")
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    @Shared(.repositorySettings(repoURL)) var repositorySettings
+    $sharedHosts.withLock {
+      $0 = [RemoteHost(id: hostID, sshAlias: "devbox", importedFromSSHConfig: true)]
+    }
+    $repositorySettings.withLock {
+      $0.remoteTargets = [target]
+    }
+
+    let store = TestStore(initialState: Self.makeState()) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.task) {
+      $0.availableRemoteHosts = [RemoteHost(id: hostID, sshAlias: "devbox", importedFromSSHConfig: true)]
+      $0.availableRepositoryRemoteTargets = [target]
+      $0.isLoadingBranches = true
+    }
+  }
+
+  @Test(.dependencies) func repositoryRemoteDestinationPrefillsPath() async {
+    let hostID = UUID()
+    let target = RepositoryRemoteTarget(
+      id: UUID(),
+      hostID: hostID,
+      remoteWorkingDirectory: "/srv/widgets",
+      displayName: "staging"
+    )
+    var state = Self.makeState()
+    state.availableRepositoryRemoteTargets = [target]
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.destinationChanged(.repositoryRemote(targetID: target.id))) {
+      $0.destination = .repositoryRemote(targetID: target.id)
+      $0.remoteWorkingDirectoryDraft = "/srv/widgets"
+      $0.validationMessage = nil
+    }
+  }
+
+  @Test(.dependencies) func repositoryRemoteCreateUsesTargetPathWithoutManualDraft() async {
+    let hostID = UUID()
+    let host = RemoteHost(id: hostID, sshAlias: "dev", importedFromSSHConfig: true)
+    let target = RepositoryRemoteTarget(
+      id: UUID(),
+      hostID: hostID,
+      remoteWorkingDirectory: "/home/jz/code/api",
+      displayName: "staging"
+    )
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    $sharedHosts.withLock { $0 = [host] }
+
+    var state = Self.makeState()
+    state.destination = .repositoryRemote(targetID: target.id)
+    state.prompt = "Fix it"
+    state.availableRemoteHosts = [host]
+    state.availableRepositoryRemoteTargets = [target]
+    state.remoteWorkingDirectoryDraft = ""
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { "/tmp/supacool-local.sock" }
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped) {
+      $0.validationMessage = nil
+      $0.isCreating = true
+    }
+    await store.receive(\.sessionReady) {
+      $0.isCreating = false
+    }
+  }
+
   // MARK: - Helpers
 
   private static func makeState(

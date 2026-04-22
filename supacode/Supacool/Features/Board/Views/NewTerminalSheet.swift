@@ -49,28 +49,33 @@ struct NewTerminalSheet: View {
       Section {
         agentPicker
         destinationPicker
-        if store.destination.isRemote {
+        if store.destination.isManualRemote {
           remoteWorkingDirectoryField
-        } else {
+        }
+        if !store.destination.isManualRemote {
           repositoryRow
             .disabled(isWorkspaceLockedByPR)
-          worktreeModePicker
-            .disabled(isWorkspaceLockedByPR)
-          if isUsingWorktree, !isWorkspaceLockedByPR {
-            workspaceField
-            ForEach(workspaceSuggestions, id: \.id) { suggestion in
-              WorkspaceSuggestionRow(
-                suggestion: suggestion,
-                isSelected: suggestion.selection == store.selectedWorkspace
-              )
-              .contentShape(Rectangle())
-              .onTapGesture {
-                store.send(.workspaceSelected(suggestion.selection))
+          if store.destination.isRemote {
+            repositoryRemoteTargetRow
+          } else {
+            worktreeModePicker
+              .disabled(isWorkspaceLockedByPR)
+            if isUsingWorktree, !isWorkspaceLockedByPR {
+              workspaceField
+              ForEach(workspaceSuggestions, id: \.id) { suggestion in
+                WorkspaceSuggestionRow(
+                  suggestion: suggestion,
+                  isSelected: suggestion.selection == store.selectedWorkspace
+                )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                  store.send(.workspaceSelected(suggestion.selection))
+                }
+                // The suggestion list is part of the Workspace row, not its
+                // own section — drop the auto-rendered divider above so the
+                // field + matches read as one unit.
+                .listRowSeparator(.hidden, edges: .top)
               }
-              // The suggestion list is part of the Workspace row, not its
-              // own section — drop the auto-rendered divider above so the
-              // field + matches read as one unit.
-              .listRowSeparator(.hidden, edges: .top)
             }
           }
         }
@@ -253,17 +258,21 @@ struct NewTerminalSheet: View {
   private var destinationPicker: some View {
     // With no imported remote hosts the picker adds nothing — keep the
     // local-only sheet visually clean.
-    if store.availableRemoteHosts.isEmpty {
+    if store.availableRemoteHosts.isEmpty && store.availableRepositoryRemoteTargets.isEmpty {
       EmptyView()
     } else {
       Picker(selection: destinationBinding) {
         Text("Local").tag(NewTerminalFeature.Destination.local)
+        ForEach(store.availableRepositoryRemoteTargets) { target in
+          Text(repositoryRemoteTargetLabel(target))
+            .tag(NewTerminalFeature.Destination.repositoryRemote(targetID: target.id))
+        }
         ForEach(store.availableRemoteHosts) { host in
-          Text(host.alias).tag(NewTerminalFeature.Destination.remote(hostID: host.id))
+          Text("Custom: \(host.alias)").tag(NewTerminalFeature.Destination.remote(hostID: host.id))
         }
       } label: {
         Text("Destination")
-        Text("Run locally, or SSH into one of the imported remote hosts.")
+        Text("Run locally, on a repo-linked remote target, or on a custom SSH host.")
       }
       .pickerStyle(.menu)
     }
@@ -336,6 +345,24 @@ struct NewTerminalSheet: View {
     return host.overrides.defaultRemoteWorkspaceRoot
   }
 
+  @ViewBuilder
+  private var repositoryRemoteTargetRow: some View {
+    if let target = selectedRepositoryRemoteTarget {
+      LabeledContent {
+        VStack(alignment: .trailing, spacing: 2) {
+          Text(repositoryRemoteTargetLabel(target))
+            .font(.callout.weight(.medium))
+          Text(target.remoteWorkingDirectory)
+            .font(.caption.monospaced())
+            .foregroundStyle(.secondary)
+        }
+      } label: {
+        Text("Remote target")
+        Text("This repository will start on the selected remote host and path.")
+      }
+    }
+  }
+
   /// Repository picker. Hidden entirely with zero or one registered repo
   /// — the single-repo case is unambiguous, and the zero-repo case is
   /// caught by the footer validation message. Only multi-repo users see
@@ -399,6 +426,18 @@ struct NewTerminalSheet: View {
       Text("Skip permission prompts")
       Text("Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use.")
     }
+  }
+
+  private var selectedRepositoryRemoteTarget: RepositoryRemoteTarget? {
+    guard case .repositoryRemote(let targetID) = store.destination else { return nil }
+    return store.availableRepositoryRemoteTargets.first(where: { $0.id == targetID })
+  }
+
+  private func repositoryRemoteTargetLabel(_ target: RepositoryRemoteTarget) -> String {
+    let hostName =
+      store.availableRemoteHosts.first(where: { $0.id == target.hostID })?.alias
+      ?? "Unknown host"
+    return "\(target.displayName) · \(hostName)"
   }
 
   // MARK: - Workspace picker

@@ -61,9 +61,19 @@ struct NewTerminalFeature {
   /// from `@Shared(.remoteHosts)`.
   nonisolated enum Destination: Hashable, Sendable {
     case local
+    case repositoryRemote(targetID: RepositoryRemoteTarget.ID)
     case remote(hostID: RemoteHost.ID)
 
     var isRemote: Bool {
+      switch self {
+      case .local:
+        return false
+      case .repositoryRemote, .remote:
+        return true
+      }
+    }
+
+    var isManualRemote: Bool {
       if case .remote = self { return true }
       return false
     }
@@ -92,6 +102,10 @@ struct NewTerminalFeature {
     var availableRemoteHosts: [RemoteHost] = []
     /// Snapshot of `@Shared(.remoteWorkspaces)` — same rationale.
     var availableRemoteWorkspaces: [RemoteWorkspace] = []
+    /// Remote launch targets configured on the selected repository.
+    /// When non-empty, the destination picker offers "Local" plus these
+    /// named remotes so the user chooses the intended target explicitly.
+    var availableRepositoryRemoteTargets: [RepositoryRemoteTarget] = []
 
     // MARK: - Workspace picker
 
@@ -142,6 +156,21 @@ struct NewTerminalFeature {
       selectedRepositoryID = resolvedRepoID
       prompt = previous.initialPrompt
       agent = previous.agent
+
+      if previous.isRemote {
+        @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
+        if let workspaceID = previous.remoteWorkspaceID,
+          let workspace = remoteWorkspaces.first(where: { $0.id == workspaceID })
+        {
+          remoteWorkingDirectoryDraft = workspace.remoteWorkingDirectory
+        }
+        if let targetID = previous.repositoryRemoteTargetID {
+          destination = .repositoryRemote(targetID: targetID)
+        } else if let hostID = previous.remoteHostID {
+          destination = .remote(hostID: hostID)
+        }
+        return
+      }
 
       // Restore the workspace so rerun lands in the same context.
       //
@@ -283,6 +312,8 @@ struct NewTerminalFeature {
         state.workspaceQuery = ""
         state.availableLocalBranches = []
         state.availableRemoteBranches = []
+        state.availableRepositoryRemoteTargets = []
+        state.destination = .local
         return .send(.task)
 
       case .binding(\.prompt):
@@ -301,6 +332,14 @@ struct NewTerminalFeature {
         @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
         state.availableRemoteHosts = remoteHosts
         state.availableRemoteWorkspaces = remoteWorkspaces
+        if let repoID = state.selectedRepositoryID,
+          let repository = state.availableRepositories[id: repoID]
+        {
+          @Shared(.repositorySettings(repository.rootURL)) var repositorySettings
+          state.availableRepositoryRemoteTargets = repositorySettings.remoteTargets
+        } else {
+          state.availableRepositoryRemoteTargets = []
+        }
         guard let repoID = state.selectedRepositoryID,
           let repo = state.availableRepositories[id: repoID]
         else { return .none }
@@ -380,6 +419,11 @@ struct NewTerminalFeature {
 
       case .destinationChanged(let destination):
         state.destination = destination
+        if case .repositoryRemote(let targetID) = destination,
+          let target = state.availableRepositoryRemoteTargets.first(where: { $0.id == targetID })
+        {
+          state.remoteWorkingDirectoryDraft = target.remoteWorkingDirectory
+        }
         // Clear any stale local-flow validation message when the user
         // switches away; the remote flow validates on a different field.
         state.validationMessage = nil
@@ -390,8 +434,27 @@ struct NewTerminalFeature {
         return .none
 
       case .createButtonTapped:
+        if case .repositoryRemote(let targetID) = state.destination {
+          guard let target = state.availableRepositoryRemoteTargets.first(where: { $0.id == targetID }) else {
+            state.validationMessage = "Pick a remote target."
+            return .none
+          }
+          return handleRemoteCreate(
+            state: &state,
+            hostID: target.hostID,
+            remoteWorkingDirectory: target.remoteWorkingDirectory,
+            repositoryIDOverride: state.selectedRepositoryID,
+            repositoryRemoteTargetID: target.id
+          )
+        }
         if case .remote(let hostID) = state.destination {
-          return handleRemoteCreate(state: &state, hostID: hostID)
+          return handleRemoteCreate(
+            state: &state,
+            hostID: hostID,
+            remoteWorkingDirectory: nil,
+            repositoryIDOverride: nil,
+            repositoryRemoteTargetID: nil
+          )
         }
         return handleLocalCreate(state: &state)
 
@@ -696,11 +759,15 @@ struct NewTerminalFeature {
   /// `.disconnected` the moment the link drops.
   private func handleRemoteCreate(
     state: inout State,
-    hostID: RemoteHost.ID
+    hostID: RemoteHost.ID,
+    remoteWorkingDirectory: String?,
+    repositoryIDOverride: Repository.ID?,
+    repositoryRemoteTargetID: RepositoryRemoteTarget.ID?
   ) -> Effect<Action> {
     let trimmedPrompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedPath =
-      state.remoteWorkingDirectoryDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+      (remoteWorkingDirectory ?? state.remoteWorkingDirectoryDraft)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
 
     @Shared(.remoteHosts) var remoteHosts: [RemoteHost]
     @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
@@ -742,6 +809,7 @@ struct NewTerminalFeature {
     let sessionID = UUID()
     let tmuxSessionName = "supacool-\(sessionID.uuidString.lowercased())"
     let worktreeKey = "remote:\(host.sshAlias):\(trimmedPath)"
+    let repositoryID = repositoryIDOverride ?? worktreeKey
     let agent = state.agent
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
@@ -779,13 +847,14 @@ struct NewTerminalFeature {
 
     let session = AgentSession(
       id: sessionID,
-      repositoryID: worktreeKey,
+      repositoryID: repositoryID,
       worktreeID: worktreeKey,
       agent: agent,
       initialPrompt: trimmedPrompt,
       removeBackingWorktreeOnDelete: false,
       remoteWorkspaceID: workspace.id,
       remoteHostID: hostID,
+      repositoryRemoteTargetID: repositoryRemoteTargetID,
       tmuxSessionName: tmuxSessionName
     )
 

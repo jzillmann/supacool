@@ -3,6 +3,9 @@ import SwiftUI
 
 struct RepositorySettingsView: View {
   @Bindable var store: StoreOf<RepositorySettingsFeature>
+  @State private var selectedRemoteHostID: RemoteHost.ID?
+  @State private var remoteTargetPathDraft: String = ""
+  @State private var remoteTargetNameDraft: String = ""
 
   var body: some View {
     let baseRefOptions =
@@ -80,6 +83,75 @@ struct RepositorySettingsView: View {
       } footer: {
         Text("e.g., `\(exampleWorktreePath)`")
       }
+      Section {
+        if store.availableRemoteHosts.isEmpty {
+          Text("Add a remote host in Settings → Remote Hosts first.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else {
+          Picker(
+            "Remote host",
+            selection: Binding(
+              get: {
+                selectedRemoteHostID ?? store.availableRemoteHosts.first?.id
+              },
+              set: { selectedRemoteHostID = $0 }
+            )
+          ) {
+            ForEach(store.availableRemoteHosts) { host in
+              Text(host.alias).tag(Optional(host.id))
+            }
+          }
+          TextField(
+            text: $remoteTargetPathDraft,
+            prompt: Text("/absolute/path/on/remote")
+          ) {
+            Text("Remote directory").monospaced(false)
+            Text("Supacool starts remote sessions here for this repository.").monospaced(false)
+          }
+          .monospaced()
+          TextField(
+            text: $remoteTargetNameDraft,
+            prompt: Text("Optional label (e.g. staging, prod)")
+          ) {
+            Text("Label").monospaced(false)
+            Text("Shown in the New Terminal target picker.").monospaced(false)
+          }
+          .monospaced()
+          Button("Add Remote Target", action: addRemoteTarget)
+            .disabled(!canAddRemoteTarget)
+        }
+
+        if store.settings.remoteTargets.isEmpty {
+          Text("No remote targets for this repository yet.")
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        } else {
+          ForEach(store.settings.remoteTargets) { target in
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(target.displayName)
+                  .font(.callout.weight(.medium))
+                Text(remoteTargetSubtitle(target))
+                  .font(.caption.monospaced())
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button(role: .destructive) {
+                store.send(.removeRemoteTarget(id: target.id))
+              } label: {
+                Image(systemName: "minus.circle")
+              }
+              .buttonStyle(.plain)
+              .help("Remove this remote target")
+            }
+          }
+        }
+      } header: {
+        Text("Remote Targets")
+      } footer: {
+        Text("If this repo also exists remotely, New Terminal will ask whether to run locally or on one of these targets.")
+      }
       Section("Pull Requests") {
         Picker(selection: settings.pullRequestMergeStrategy) {
           Text("Global \(Text(store.globalPullRequestMergeStrategy.title).foregroundStyle(.secondary))")
@@ -134,7 +206,38 @@ struct RepositorySettingsView: View {
     .padding(.trailing, -6)
     .task {
       store.send(.task)
+      if selectedRemoteHostID == nil {
+        selectedRemoteHostID = store.availableRemoteHosts.first?.id
+      }
     }
+  }
+
+  private var canAddRemoteTarget: Bool {
+    selectedRemoteHostID != nil
+      && !remoteTargetPathDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func addRemoteTarget() {
+    guard let hostID = selectedRemoteHostID ?? store.availableRemoteHosts.first?.id else { return }
+    let path = remoteTargetPathDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !path.isEmpty else { return }
+    let name = remoteTargetNameDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    store.send(
+      .addRemoteTarget(
+        hostID: hostID,
+        remoteWorkingDirectory: path,
+        displayName: name.isEmpty ? nil : name
+      )
+    )
+    remoteTargetPathDraft = ""
+    remoteTargetNameDraft = ""
+  }
+
+  private func remoteTargetSubtitle(_ target: RepositoryRemoteTarget) -> String {
+    let hostName =
+      store.availableRemoteHosts.first(where: { $0.id == target.hostID })?.alias
+      ?? "Unknown host"
+    return "\(hostName)  \(target.remoteWorkingDirectory)"
   }
 }
 

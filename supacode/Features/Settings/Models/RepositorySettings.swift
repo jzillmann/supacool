@@ -6,6 +6,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
   var deleteScript: String
   var runScript: String
   var openActionID: String
+  var remoteTargets: [RepositoryRemoteTarget]
   var worktreeBaseRef: String?
   var worktreeBaseDirectoryPath: String?
   var copyIgnoredOnWorktreeCreate: Bool?
@@ -18,6 +19,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     case deleteScript
     case runScript
     case openActionID
+    case remoteTargets
     case worktreeBaseRef
     case worktreeBaseDirectoryPath
     case copyIgnoredOnWorktreeCreate
@@ -31,6 +33,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     deleteScript: "",
     runScript: "",
     openActionID: OpenWorktreeAction.automaticSettingsID,
+    remoteTargets: [],
     worktreeBaseRef: nil,
     worktreeBaseDirectoryPath: nil,
     copyIgnoredOnWorktreeCreate: nil,
@@ -44,6 +47,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     deleteScript: String,
     runScript: String,
     openActionID: String,
+    remoteTargets: [RepositoryRemoteTarget] = [],
     worktreeBaseRef: String?,
     worktreeBaseDirectoryPath: String? = nil,
     copyIgnoredOnWorktreeCreate: Bool? = nil,
@@ -55,6 +59,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     self.deleteScript = deleteScript
     self.runScript = runScript
     self.openActionID = openActionID
+    self.remoteTargets = remoteTargets
     self.worktreeBaseRef = worktreeBaseRef
     self.worktreeBaseDirectoryPath = worktreeBaseDirectoryPath
     self.copyIgnoredOnWorktreeCreate = copyIgnoredOnWorktreeCreate
@@ -79,6 +84,9 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     openActionID =
       try container.decodeIfPresent(String.self, forKey: .openActionID)
       ?? Self.default.openActionID
+    remoteTargets =
+      try container.decodeIfPresent([RepositoryRemoteTarget].self, forKey: .remoteTargets)
+      ?? Self.default.remoteTargets
     worktreeBaseRef =
       try container.decodeIfPresent(String.self, forKey: .worktreeBaseRef)
     worktreeBaseDirectoryPath =

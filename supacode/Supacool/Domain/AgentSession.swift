@@ -104,6 +104,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// Stays in sync by being written together with `remoteWorkspaceID`.
   var remoteHostID: RemoteHost.ID?
 
+  /// Repository-linked remote target used to launch this session, when
+  /// present. Lets rerun restore the same repository destination.
+  var repositoryRemoteTargetID: RepositoryRemoteTarget.ID?
+
   /// Deterministic tmux session name used on the remote host. Fixed at
   /// creation time so reconnects re-attach the same session
   /// (`tmux new-session -A -s <name>`). Conventionally
@@ -139,6 +143,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     referencesScannedAt: Date? = nil,
     remoteWorkspaceID: RemoteWorkspace.ID? = nil,
     remoteHostID: RemoteHost.ID? = nil,
+    repositoryRemoteTargetID: RepositoryRemoteTarget.ID? = nil,
     tmuxSessionName: String? = nil,
     remoteConnectionLost: Bool = false
   ) {
@@ -162,6 +167,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.referencesScannedAt = referencesScannedAt
     self.remoteWorkspaceID = remoteWorkspaceID
     self.remoteHostID = remoteHostID
+    self.repositoryRemoteTargetID = repositoryRemoteTargetID
     self.tmuxSessionName = tmuxSessionName
     self.remoteConnectionLost = remoteConnectionLost
   }
@@ -184,7 +190,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
-    case remoteWorkspaceID, remoteHostID, tmuxSessionName, remoteConnectionLost
+    case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
+    case tmuxSessionName, remoteConnectionLost
   }
 
   init(from decoder: Decoder) throws {
@@ -212,6 +219,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
     remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
     remoteHostID = try c.decodeIfPresent(UUID.self, forKey: .remoteHostID)
+    repositoryRemoteTargetID = try c.decodeIfPresent(UUID.self, forKey: .repositoryRemoteTargetID)
     tmuxSessionName = try c.decodeIfPresent(String.self, forKey: .tmuxSessionName)
     remoteConnectionLost =
       try c.decodeIfPresent(Bool.self, forKey: .remoteConnectionLost) ?? false
