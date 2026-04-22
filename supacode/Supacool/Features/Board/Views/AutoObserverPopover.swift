@@ -24,7 +24,7 @@ struct AutoObserverPopover: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       Toggle(
-        "Auto-observer",
+        "Auto-responder",
         isOn: Binding(
           get: { session.autoObserver },
           set: { _ in onToggle() }

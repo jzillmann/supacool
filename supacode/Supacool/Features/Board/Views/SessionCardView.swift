@@ -162,7 +162,7 @@ struct SessionCardView: View {
         .foregroundStyle(session.autoObserver ? Color.accentColor : Color.secondary)
     }
     .buttonStyle(.plain)
-    .help("Auto-observer: auto-answer obvious prompts (click to configure)")
+    .help("Auto-responder: auto-answer obvious prompts (click to configure)")
     .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .top) {
       AutoObserverPopover(
         session: session,

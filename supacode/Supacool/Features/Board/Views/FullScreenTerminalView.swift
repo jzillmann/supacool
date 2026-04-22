@@ -61,11 +61,11 @@ struct FullScreenTerminalView: View {
   @State private var isConfirmingRemove: Bool = false
   @State private var isRecentPromptsPopoverShown: Bool = false
 
-  /// Surface id of the split we created via the header button — `nil`
-  /// when the button is in "create" mode, non-nil when in "close" mode.
-  /// Reconciled from the live leaf set so closing the split via
-  /// Ghostty's own keybindings (⌘D) flips the button back to "create".
-  @State private var managedSplitSurfaceID: UUID?
+  /// First leaf we ever observed in this session's tab — the agent's
+  /// own surface. Captured the first time the tab has exactly one leaf
+  /// so the split toggle can identify it for the lifetime of the
+  /// session and never close it by mistake.
+  @State private var agentSurfaceID: UUID?
 
   var body: some View {
     VStack(spacing: 0) {
@@ -156,9 +156,9 @@ struct FullScreenTerminalView: View {
         }
         .help("Double-click to rename")
       infoButton
+      openDiffButton
       recentPromptsButton
       autoObserverButton
-      openDiffButton
       splitButton
       Spacer()
       agentChip
@@ -317,11 +317,6 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Toggles a plain-shell split beside the agent surface in this
-  /// session's tab. First click splits; second click closes the split
-  /// we created (does NOT open a third). If the user closed our split
-  /// via Ghostty's own ⌘D, `managedSplitSurfaceID` is reconciled to nil
-
   /// Small ⓘ button in the header that surfaces the session's initial
   /// config (prompt, agent, repo, worktree, captured resume id). Shares
   /// the same `SessionInfoPopover` view used by the board card.
@@ -411,7 +406,7 @@ struct FullScreenTerminalView: View {
         .modifier(HeaderIconTintStyle(tint: session.autoObserver ? .accentColor : .secondary))
     }
     .buttonStyle(.plain)
-    .help("Auto-observer: auto-answer obvious prompts (click to configure)")
+    .help("Auto-responder: auto-answer obvious prompts (click to configure)")
     .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .bottom) {
       AutoObserverPopover(
         session: session,
@@ -421,58 +416,69 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// on the next render so the button flips back to "create" mode.
+  /// Header button that toggles a single shell split beside the agent
+  /// surface. Only ever toggles between 1 and 2 leaves: clicking when a
+  /// split exists (no matter who created it — us or Ghostty's ⌘D)
+  /// closes every non-agent leaf. Mirrored by ⌘E.
   @ViewBuilder
   private var splitButton: some View {
     let worktree = resolveWorktree()
-    let managedStillLive = managedSplitStillLive(worktree: worktree)
+    let isSplit = currentLeafCount(worktree: worktree) > 1
     Button {
       toggleShellSplit()
     } label: {
-      Image(systemName: managedStillLive ? "rectangle" : "rectangle.split.2x1")
+      Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
     }
     .buttonStyle(.plain)
     .disabled(worktree == nil)
-    .help(managedStillLive ? "Close the shell split (⌘E)" : "Open a plain shell split in this session (⌘E)")
-    .onChange(of: session.id) { _, _ in managedSplitSurfaceID = nil }
-    .task(id: session.id) { reconcileManagedSplit() }
+    .help(isSplit ? "Close the shell split (⌘E)" : "Open a plain shell split in this session (⌘E)")
+    .onChange(of: session.id) { _, _ in agentSurfaceID = nil }
+    .task(id: session.id) { captureAgentSurfaceIfNeeded() }
   }
 
-  /// Toggle the shell split beside the agent surface. If the split we
-  /// created is still live, close it; otherwise open a fresh one to the
-  /// right. Mirrored by ⌘E.
+  /// Toggle the shell split beside the agent surface. With 2+ leaves,
+  /// close every non-agent leaf so the toolbar always returns to the
+  /// single-pane state. With 1 leaf, split to the right.
   private func toggleShellSplit() {
     guard let worktree = resolveWorktree() else { return }
     let state = terminalManager.state(for: worktree) { false }
     let tabID = TerminalTabID(rawValue: session.id)
-    if let id = managedSplitSurfaceID, managedSplitStillLive(worktree: worktree) {
-      state.closeSurface(id: id)
-      managedSplitSurfaceID = nil
+    guard state.containsTabTree(tabID) else { return }
+    let leaves = state.splitTree(for: tabID).leaves()
+    captureAgentSurfaceIfNeeded(leaves: leaves)
+    if leaves.count > 1 {
+      for leaf in leaves where leaf.id != agentSurfaceID {
+        _ = state.closeSurface(id: leaf.id)
+      }
     } else {
-      managedSplitSurfaceID = state.splitFocusedSurface(in: tabID, direction: .right)
+      _ = state.splitFocusedSurface(in: tabID, direction: .right)
     }
   }
 
-  /// Whether our tracked split surface is still in the tab's leaf set.
-  /// If the user closed it via Ghostty's own ⌘D we shouldn't stay in
-  /// "close" mode — the next click should split again.
-  private func managedSplitStillLive(worktree: Worktree?) -> Bool {
-    guard let worktree, let id = managedSplitSurfaceID else { return false }
+  private func currentLeafCount(worktree: Worktree?) -> Int {
+    guard let worktree else { return 0 }
     let state = terminalManager.state(for: worktree) { false }
     let tabID = TerminalTabID(rawValue: session.id)
-    guard state.containsTabTree(tabID) else { return false }
-    return state.splitTree(for: tabID).leaves().contains { $0.id == id }
+    guard state.containsTabTree(tabID) else { return 0 }
+    return state.splitTree(for: tabID).leaves().count
   }
 
-  private func reconcileManagedSplit() {
-    guard let worktree = resolveWorktree() else {
-      managedSplitSurfaceID = nil
-      return
+  private func captureAgentSurfaceIfNeeded(leaves: [GhosttySurfaceView]? = nil) {
+    guard agentSurfaceID == nil else { return }
+    let resolved: [GhosttySurfaceView]
+    if let leaves {
+      resolved = leaves
+    } else {
+      guard let worktree = resolveWorktree() else { return }
+      let state = terminalManager.state(for: worktree) { false }
+      let tabID = TerminalTabID(rawValue: session.id)
+      guard state.containsTabTree(tabID) else { return }
+      resolved = state.splitTree(for: tabID).leaves()
     }
-    if !managedSplitStillLive(worktree: worktree) {
-      managedSplitSurfaceID = nil
+    if resolved.count == 1 {
+      agentSurfaceID = resolved[0].id
     }
   }
 
