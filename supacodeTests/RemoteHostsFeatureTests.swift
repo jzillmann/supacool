@@ -88,9 +88,59 @@ struct RemoteHostsFeatureTests {
     await store.send(.reloadFromSSHConfig) { $0.isReloading = true }
     await store.receive(\._reloadFailed) {
       $0.isReloading = false
-      $0.lastImportError = "no config file"
+      $0.inlineError = "no config file"
     }
     #expect(store.state.hosts.isEmpty)
+  }
+
+  @Test func addManualHostCreatesNonImportedEntry() async throws {
+    let store = TestStore(initialState: RemoteHostsFeature.State()) {
+      RemoteHostsFeature()
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.addManualHost(sshAlias: "devbox"))
+    #expect(store.state.hosts.map(\.sshAlias) == ["devbox"])
+    #expect(store.state.hosts.first?.importedFromSSHConfig == false)
+    #expect(store.state.inlineError == nil)
+  }
+
+  @Test func addManualHostClearsForgottenAliasAndPreventsImportDuplicate() async throws {
+    var state = RemoteHostsFeature.State()
+    state.forgottenAliases = ["devbox"]
+    let store = TestStore(initialState: state) {
+      RemoteHostsFeature()
+    } withDependencies: {
+      $0.sshConfigClient = SSHConfigClient(
+        listAliases: { ["devbox"] },
+        effectiveConfig: { _ in fatalError("unused") }
+      )
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.addManualHost(sshAlias: "devbox"))
+    #expect(store.state.forgottenAliases.isEmpty)
+    #expect(store.state.hosts.map(\.sshAlias) == ["devbox"])
+
+    await store.send(.reloadFromSSHConfig) { $0.isReloading = true }
+    await store.receive(\._aliasesLoaded) { $0.isReloading = false }
+    #expect(store.state.hosts.map(\.sshAlias) == ["devbox"])
+  }
+
+  @Test func addManualHostRejectsDuplicateAlias() async throws {
+    var state = RemoteHostsFeature.State()
+    state.$hosts.withLock {
+      $0 = [RemoteHost(sshAlias: "devbox")]
+    }
+    let store = TestStore(initialState: state) {
+      RemoteHostsFeature()
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.addManualHost(sshAlias: "DEVBOX")) {
+      $0.inlineError = "Remote host already exists."
+    }
+    #expect(store.state.hosts.count == 1)
   }
 
   @Test func renameHostPersists() async throws {

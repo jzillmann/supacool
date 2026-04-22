@@ -13,11 +13,13 @@ struct RemoteHostsSettingsView: View {
   @State private var store = Store(initialState: RemoteHostsFeature.State()) {
     RemoteHostsFeature()
   }
+  @State private var manualSSHAliasDraft: String = ""
 
   var body: some View {
     Form {
       Section {
         header
+        manualAddRow
         if store.hosts.isEmpty {
           emptyState
         } else {
@@ -40,7 +42,7 @@ struct RemoteHostsSettingsView: View {
             )
           }
         }
-        if let message = store.lastImportError {
+        if let message = store.inlineError {
           Text(message)
             .font(.caption)
             .foregroundStyle(.red)
@@ -79,6 +81,21 @@ struct RemoteHostsSettingsView: View {
     }
   }
 
+  private var manualAddRow: some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text("Manual host")
+        .foregroundStyle(.secondary)
+        .frame(width: 160, alignment: .leading)
+      HStack(spacing: 8) {
+        TextField("SSH alias (what `ssh <alias>` uses)", text: $manualSSHAliasDraft)
+          .textFieldStyle(.roundedBorder)
+          .onSubmit(addManualHost)
+        Button("Add", action: addManualHost)
+          .disabled(manualSSHAliasDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+    }
+  }
+
   private var emptyState: some View {
     VStack(alignment: .leading, spacing: 6) {
       Text("No remote hosts yet.")
@@ -88,6 +105,16 @@ struct RemoteHostsSettingsView: View {
         .foregroundStyle(.secondary)
     }
     .padding(.vertical, 6)
+  }
+
+  private func addManualHost() {
+    let trimmed = manualSSHAliasDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    let previousCount = store.hosts.count
+    store.send(.addManualHost(sshAlias: trimmed))
+    if store.hosts.count > previousCount {
+      manualSSHAliasDraft = ""
+    }
   }
 }
 

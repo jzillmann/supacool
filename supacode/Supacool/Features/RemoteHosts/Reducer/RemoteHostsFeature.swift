@@ -24,9 +24,9 @@ struct RemoteHostsFeature {
     /// these on reload so a manual delete stays sticky. Cleared if the
     /// user re-adds the host via a future "Unhide" affordance.
     var forgottenAliases: Set<String> = []
-    /// Populated by `.reloadFailed` — surfaced as a row in the settings
-    /// view so the user sees why nothing moved.
-    var lastImportError: String?
+    /// Inline settings error shown for reload failures and manual-entry
+    /// validation so the user can see why nothing changed.
+    var inlineError: String?
     /// True while a reload is in flight; disables the Reload button.
     var isReloading: Bool = false
   }
@@ -41,6 +41,7 @@ struct RemoteHostsFeature {
     case _reloadFailed(String)
 
     // Host CRUD
+    case addManualHost(sshAlias: String)
     case renameHost(id: RemoteHost.ID, newAlias: String)
     case updateOverrides(id: RemoteHost.ID, overrides: RemoteHost.Overrides)
     case removeHost(id: RemoteHost.ID)
@@ -55,7 +56,7 @@ struct RemoteHostsFeature {
       case .appeared, .reloadFromSSHConfig:
         guard !state.isReloading else { return .none }
         state.isReloading = true
-        state.lastImportError = nil
+        state.inlineError = nil
         return .run { [sshConfigClient] send in
           do {
             let aliases = try await sshConfigClient.listAliases()
@@ -69,7 +70,7 @@ struct RemoteHostsFeature {
 
       case ._aliasesLoaded(let aliases):
         state.isReloading = false
-        let existing = Set(state.hosts.filter { $0.importedFromSSHConfig }.map(\.sshAlias))
+        let existing = Set(state.hosts.map(\.sshAlias))
         let additions =
           aliases
           .filter { !existing.contains($0) }
@@ -84,7 +85,27 @@ struct RemoteHostsFeature {
 
       case ._reloadFailed(let message):
         state.isReloading = false
-        state.lastImportError = message
+        state.inlineError = message
+        return .none
+
+      case .addManualHost(let sshAlias):
+        let trimmed = sshAlias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+          state.inlineError = "SSH alias required."
+          return .none
+        }
+        let alreadyExists = state.hosts.contains {
+          $0.sshAlias.localizedCaseInsensitiveCompare(trimmed) == .orderedSame
+        }
+        guard !alreadyExists else {
+          state.inlineError = "Remote host already exists."
+          return .none
+        }
+        state.inlineError = nil
+        state.forgottenAliases.remove(trimmed)
+        state.$hosts.withLock { hosts in
+          hosts.append(RemoteHost(sshAlias: trimmed))
+        }
         return .none
 
       case .renameHost(let id, let newAlias):
