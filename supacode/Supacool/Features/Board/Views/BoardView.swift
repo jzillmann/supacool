@@ -25,13 +25,22 @@ struct BoardView: View {
   @FocusState private var hasKeyboardFocus: Bool
   @Namespace private var cardTransitionNamespace
 
+  /// Per-card frames in the board's shared coordinate space. Populated by
+  /// each card via `BoardCardFramesKey`; read by Up/Down navigation so
+  /// arrow keys jump to the card directly above/below (not the next one
+  /// in index order — the grid is multi-column).
+  @State private var cardFrames: [AgentSession.ID: CGRect] = [:]
+
   private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
+  private static let boardGridCoordSpace = "BoardGrid"
 
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
     // to the window title. What's left here is just the grid body.
     bodyContent
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .coordinateSpace(name: Self.boardGridCoordSpace)
+      .onPreferenceChange(BoardCardFramesKey.self) { cardFrames = $0 }
       .focusable()
       .focusEffectDisabled()
       .focused($hasKeyboardFocus)
@@ -41,9 +50,9 @@ struct BoardView: View {
         hasKeyboardFocus = true
       }
       .onKeyPress(.leftArrow) { moveHighlight(by: -1); return .handled }
-      .onKeyPress(.upArrow) { moveHighlight(by: -1); return .handled }
+      .onKeyPress(.upArrow) { moveVertical(direction: -1); return .handled }
       .onKeyPress(.rightArrow) { moveHighlight(by: +1); return .handled }
-      .onKeyPress(.downArrow) { moveHighlight(by: +1); return .handled }
+      .onKeyPress(.downArrow) { moveVertical(direction: +1); return .handled }
       .onKeyPress(.return) {
         if let id = highlightedSessionID {
           store.send(.focusSession(id: id))
@@ -87,6 +96,50 @@ struct BoardView: View {
       nextIndex = (currentIndex + delta + order.count) % order.count
     }
     highlightedSessionID = order[nextIndex]
+  }
+
+  /// Spatial Up/Down — jumps to the card whose frame sits directly above
+  /// or below the current one, using the per-card frames published via
+  /// `BoardCardFramesKey`. Falls back to the sequential step if frames
+  /// haven't been published yet (first frame after launch) or the
+  /// current card has no neighbor in that direction.
+  private func moveVertical(direction: Int) {
+    let order = currentNavOrder
+    guard !order.isEmpty else { return }
+    guard let currentID = highlightedSessionID,
+      let currentFrame = cardFrames[currentID]
+    else {
+      moveHighlight(by: direction)
+      return
+    }
+    let eligible = Set(order)
+    let candidates = cardFrames
+      .filter { eligible.contains($0.key) && $0.key != currentID }
+      .map { (id: $0.key, frame: $0.value) }
+    // Half a card-height tolerance for "same row" — anything within
+    // that band of the current card's midY is skipped so Up/Down only
+    // ever crosses rows.
+    let rowTolerance = currentFrame.height * 0.5
+    let inDirection = candidates.filter {
+      direction < 0
+        ? $0.frame.midY < currentFrame.midY - rowTolerance
+        : $0.frame.midY > currentFrame.midY + rowTolerance
+    }
+    guard !inDirection.isEmpty else { return }
+    // Nearest row first (smallest |Δy|), then nearest column within that
+    // row (smallest |Δx|).
+    let target = inDirection.min { lhs, rhs in
+      let lhsRow = abs(lhs.frame.midY - currentFrame.midY)
+      let rhsRow = abs(rhs.frame.midY - currentFrame.midY)
+      if abs(lhsRow - rhsRow) > rowTolerance {
+        return lhsRow < rhsRow
+      }
+      return abs(lhs.frame.midX - currentFrame.midX)
+        < abs(rhs.frame.midX - currentFrame.midX)
+    }
+    if let target {
+      highlightedSessionID = target.id
+    }
   }
 
   private func ensureHighlightValid() {
@@ -306,6 +359,17 @@ struct BoardView: View {
             )
             .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
             .transition(.opacity.combined(with: .scale(scale: 0.98)))
+            .background(
+              // Publishes this card's frame in the board's shared
+              // coordinate space so Up/Down can jump spatially — see
+              // `moveVertical`.
+              GeometryReader { geo in
+                Color.clear.preference(
+                  key: BoardCardFramesKey.self,
+                  value: [session.id: geo.frame(in: .named(Self.boardGridCoordSpace))]
+                )
+              }
+            )
           }
         }
       }
@@ -320,6 +384,20 @@ struct BoardView: View {
     visible.map { session in
       "\(session.id.uuidString):\(classify(session).label)"
     }
+  }
+}
+
+/// Per-card frame reporter. Each card publishes its frame in the board's
+/// shared coordinate space so `BoardView.moveVertical` can pick the card
+/// directly above/below the current one instead of stepping through the
+/// flat nav order (which gives the wrong result on a multi-column grid).
+private struct BoardCardFramesKey: PreferenceKey {
+  static let defaultValue: [AgentSession.ID: CGRect] = [:]
+  static func reduce(
+    value: inout [AgentSession.ID: CGRect],
+    nextValue: () -> [AgentSession.ID: CGRect]
+  ) {
+    value.merge(nextValue(), uniquingKeysWith: { _, new in new })
   }
 }
 
