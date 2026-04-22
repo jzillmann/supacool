@@ -26,13 +26,20 @@ nonisolated enum ClaudeHookSettingsError: Error {
 
 // MARK: - Progress hooks.
 
-// UserPromptSubmit sets busy, Stop/SessionEnd/PostToolUseFailure clears it.
+// UserPromptSubmit/PreToolUse sets busy, Stop/SessionEnd/PostToolUseFailure clears it.
+// PreToolUse is the only hook that fires when Claude resumes after a permission
+// grant — without it "Wants Input" lingers until the screen-fingerprint poll or
+// the 8s TTL clears it. The socket send is a ~30-byte echo through nc -U -w1,
+// so the 5s timeout is ample even under load.
 private nonisolated struct ClaudeProgressPayload: Encodable {
   let hooks: [String: [AgentHookGroup]] = [
     "UserPromptSubmit": [
       .init(hooks: [
         .init(command: ClaudeHookSettings.busyOn, timeout: 10)
       ]),
+    ],
+    "PreToolUse": [
+      .init(matcher: "", hooks: [.init(command: ClaudeHookSettings.busyOn, timeout: 5)])
     ],
     "Stop": [
       .init(hooks: [.init(command: ClaudeHookSettings.busyOff, timeout: 10)])
