@@ -164,6 +164,7 @@ struct BoardRootView: View {
     // Extracted into a ViewModifier to keep the SwiftUI type-checker
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
+    .modifier(PriorityTerminationAlertModifier(store: store))
   }
 
   @ViewBuilder
@@ -212,10 +213,12 @@ struct BoardRootView: View {
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
         onRename: { beginRename(session) },
-        onGraduateToWorktree: {
+        onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+        onConvertToWorktree: { branchName in
           store.send(
-            .graduateSessionToWorktree(
+            .convertSessionToWorktree(
               id: session.id,
+              branchName: branchName,
               repositories: Array(repositories)
             )
           )
@@ -524,11 +527,39 @@ struct BoardRootView: View {
         },
         onAwaitingInputEntered: {
           store.send(.autoObserverTriggered(id: session.id))
+        },
+        onPriorityTermination: { status in
+          store.send(.prioritySessionTerminated(id: session.id, status: status))
         }
       )
     }
   }
 
+}
+
+private struct PriorityTerminationAlertModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+
+  func body(content: Content) -> some View {
+    content.alert(
+      store.priorityTerminationAlert?.title ?? "Priority session terminated",
+      isPresented: Binding(
+        get: { store.priorityTerminationAlert != nil },
+        set: { if !$0 { store.send(.dismissPriorityTerminationAlert) } }
+      ),
+      presenting: store.priorityTerminationAlert
+    ) { alert in
+      Button("Open Session") {
+        store.send(.dismissPriorityTerminationAlert)
+        store.send(.focusSession(id: alert.sessionID))
+      }
+      Button("Dismiss", role: .cancel) {
+        store.send(.dismissPriorityTerminationAlert)
+      }
+    } message: { alert in
+      Text(alert.message)
+    }
+  }
 }
 
 // MARK: - Prune alert

@@ -95,6 +95,24 @@ struct BoardFeatureTests {
     await store.send(.renameSession(id: session.id, newName: "   "))
   }
 
+  @Test(.dependencies) func togglePriorityFlipsPersistedBit() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.togglePriority(id: session.id)) {
+      $0.$sessions.withLock { $0[0].isPriority = true }
+    }
+
+    await store.send(.togglePriority(id: session.id)) {
+      $0.$sessions.withLock { $0[0].isPriority = false }
+    }
+  }
+
   @Test(.dependencies) func removeSessionDropsItAndClearsFocusIfFocused() async {
     let session = Self.sampleSession()
     var state = BoardFeature.State()
@@ -201,6 +219,45 @@ struct BoardFeatureTests {
 
     // Second call is a no-op — flag is already set and lastActivityAt stays.
     await store.send(.markSessionCompletedOnce(id: session.id))
+  }
+
+  @Test(.dependencies) func priorityTerminationPresentsAlertAndDelegates() async {
+    let session = Self.sampleSession(displayName: "Deploy fix", isPriority: true)
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.prioritySessionTerminated(id: session.id, status: .interrupted)) {
+      $0.priorityTerminationAlert = BoardFeature.PriorityTerminationAlertState(
+        sessionID: session.id,
+        displayName: "Deploy fix",
+        status: .interrupted
+      )
+    }
+    await store.receive(
+      .delegate(
+        .prioritySessionTerminated(
+          title: "Priority session terminated",
+          body: "Deploy fix stopped while the agent was still working."
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func priorityTerminationIgnoresNonPrioritySessions() async {
+    let session = Self.sampleSession(displayName: "Regular session", isPriority: false)
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.prioritySessionTerminated(id: session.id, status: .detached))
+    #expect(store.state.priorityTerminationAlert == nil)
   }
 
   @Test(.dependencies) func updateSessionBusyStatePersistsTransitionTimestamp() async {
@@ -481,11 +538,66 @@ struct BoardFeatureTests {
 
   // MARK: - Rerun
 
-  @Test(.dependencies) func graduateSessionToWorktreeOpensSheetAndKeepsOriginal() async throws {
-    // Tapping the "repo root" pill on a focused session should open the
-    // New Terminal sheet pre-armed for a worktree spawn — original
-    // session must stay in the list (this is a sibling spawn, not a
-    // migration), and focus must drop so the sheet lands over the board.
+  @Test(.dependencies) func convertSessionToWorktreeCreatesWorktreeAndSendsCD() async throws {
+    // Confirming the "convert to worktree" popover on the repo-root pill
+    // should create a worktree via gitClient and type `cd '<path>'` into
+    // the session's focused surface. No surface/process churn, no new
+    // session — the original card keeps running.
+    let original = Self.sampleSession(repositoryID: "/tmp/repo")
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentTexts = LockIsolated<[String]>([])
+    let createdBranches = LockIsolated<[String]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [original] }
+    state.focusedSessionID = original.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.gitClient.createWorktree = { name, repoRoot, _, _, _, _ in
+        createdBranches.withValue { $0.append(name) }
+        return Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+          createdAt: Date(),
+          branch: name
+        )
+      }
+      $0.terminalClient.send = { command in
+        if case .sendText(_, _, let text) = command {
+          sentTexts.withValue { $0.append(text) }
+        }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .convertSessionToWorktree(
+        id: original.id,
+        branchName: "feature/new-flow",
+        repositories: [repo]
+      )
+    )
+    await store.finish()
+
+    #expect(createdBranches.value == ["feature/new-flow"])
+    #expect(sentTexts.value == ["cd '/tmp/repo/worktrees/feature/new-flow'"])
+    // Original session is untouched — the focus state, the sessions
+    // list, and anything the reducer might have touched stays put.
+    #expect(store.state.sessions.contains(where: { $0.id == original.id }))
+    #expect(store.state.focusedSessionID == original.id)
+    #expect(store.state.newTerminalSheet == nil)
+  }
+
+  @Test(.dependencies) func convertSessionToWorktreeIgnoresEmptyBranchName() async {
     let original = Self.sampleSession(repositoryID: "/tmp/repo")
     let repo = Repository(
       id: "/tmp/repo",
@@ -495,23 +607,22 @@ struct BoardFeatureTests {
     )
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [original] }
-    state.focusedSessionID = original.id
 
     let store = TestStore(initialState: state) {
       BoardFeature()
     }
     store.exhaustivity = .off
 
-    await store.send(.graduateSessionToWorktree(id: original.id, repositories: [repo])) {
-      $0.focusedSessionID = nil
-    }
-
-    let sheet = try #require(store.state.newTerminalSheet)
-    #expect(sheet.selectedRepositoryID == repo.id)
-    #expect(sheet.agent == original.agent)
-    #expect(sheet.selectedWorkspace == .newBranch(name: ""))
-    #expect(sheet.prompt.isEmpty)
-    #expect(store.state.sessions.contains(where: { $0.id == original.id }))
+    // Whitespace-only branch name is a no-op — no effect runs, so no
+    // gitClient / terminalClient overrides are required.
+    await store.send(
+      .convertSessionToWorktree(
+        id: original.id,
+        branchName: "   ",
+        repositories: [repo]
+      )
+    )
+    await store.finish()
   }
 
   @Test(.dependencies) func rerunDetachedSessionKeepsOriginalUntilCancel() async {
@@ -728,7 +839,8 @@ struct BoardFeatureTests {
     repositoryID: String = "/tmp/repo",
     worktreeID: String? = nil,
     displayName: String? = nil,
-    removeBackingWorktreeOnDelete: Bool = false
+    removeBackingWorktreeOnDelete: Bool = false,
+    isPriority: Bool = false
   ) -> AgentSession {
     AgentSession(
       id: id,
@@ -737,7 +849,8 @@ struct BoardFeatureTests {
       agent: .claude,
       initialPrompt: "Fix the failing tests",
       displayName: displayName,
-      removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
+      removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
+      isPriority: isPriority
     )
   }
 }

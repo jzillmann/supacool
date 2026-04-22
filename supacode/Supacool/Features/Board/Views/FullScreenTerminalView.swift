@@ -30,12 +30,14 @@ struct FullScreenTerminalView: View {
   /// Opens the rename alert owned by `BoardRootView`. Triggered from the
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
+  let onTogglePriority: () -> Void
 
-  /// Tap handler for the "repo root" pill — fires the graduate-to-worktree
-  /// flow (pops the New Terminal sheet pre-armed for a worktree spawn on
-  /// this session's repo). Only invoked when the session is running at
-  /// the repo root; on a worktree the pill is not tappable.
-  let onGraduateToWorktree: () -> Void
+  /// Called when the user confirms the "convert to worktree" popover on
+  /// the repo-root pill. The board reducer creates the worktree on disk
+  /// and types `cd '<path>'` into the focused surface — no surface or
+  /// agent churn. Only meaningful while the session is running at the
+  /// repo root; on a worktree the pill is not tappable.
+  let onConvertToWorktree: (String) -> Void
 
   /// `⌘←/↑` → `-1`, `⌘→/↓` → `+1`. Signals the parent to open (or
   /// advance) the ⌘-Tab-style session switcher overlay. The overlay
@@ -60,6 +62,10 @@ struct FullScreenTerminalView: View {
   @State private var isQuickDiffPresented: Bool = false
   @State private var isConfirmingRemove: Bool = false
   @State private var isRecentPromptsPopoverShown: Bool = false
+  @State private var isConvertPopoverShown: Bool = false
+  /// Draft branch name shown in the convert-to-worktree popover.
+  /// Initialized from the session display name when the popover opens.
+  @State private var convertBranchDraft: String = ""
 
   /// First leaf we ever observed in this session's tab — the agent's
   /// own surface. Captured the first time the tab has exactly one leaf
@@ -155,6 +161,7 @@ struct FullScreenTerminalView: View {
           Button("Rename…", systemImage: "pencil", action: onRename)
         }
         .help("Double-click to rename")
+      priorityButton
       infoButton
       openDiffButton
       recentPromptsButton
@@ -236,7 +243,10 @@ struct FullScreenTerminalView: View {
       .clipShape(Capsule())
       .help("Running in worktree \(worktreeLabel)")
     } else {
-      Button(action: onGraduateToWorktree) {
+      Button {
+        convertBranchDraft = suggestedBranchName(from: session.displayName)
+        isConvertPopoverShown = true
+      } label: {
         HStack(spacing: 3) {
           Image(systemName: "dot.circle")
             .font(.caption2)
@@ -252,8 +262,71 @@ struct FullScreenTerminalView: View {
         .clipShape(Capsule())
       }
       .buttonStyle(.plain)
-      .help("Running at repo root — click to graduate this investigation into a fresh worktree.")
+      .help("Running at repo root — click to create a worktree and cd into it.")
+      .popover(isPresented: $isConvertPopoverShown, arrowEdge: .bottom) {
+        convertToWorktreePopover
+      }
     }
+  }
+
+  /// Popover content for the repo-root pill. Collects a branch name and
+  /// commits the "create worktree + type `cd`" flow — see
+  /// `BoardFeature.convertSessionToWorktree`.
+  private var convertToWorktreePopover: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Create worktree")
+        .font(.subheadline.weight(.semibold))
+      Text("Creates a new branch + worktree, then types `cd '<path>'` into this terminal for you to run.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      TextField("branch-name", text: $convertBranchDraft)
+        .textFieldStyle(.roundedBorder)
+        .onSubmit { submitConvertToWorktree() }
+      HStack {
+        Spacer()
+        Button("Cancel") { isConvertPopoverShown = false }
+          .keyboardShortcut(.cancelAction)
+        Button("Create") { submitConvertToWorktree() }
+          .keyboardShortcut(.defaultAction)
+          .disabled(trimmedConvertBranch.isEmpty)
+      }
+    }
+    .padding(14)
+    .frame(width: 320)
+  }
+
+  private var trimmedConvertBranch: String {
+    convertBranchDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func submitConvertToWorktree() {
+    let name = trimmedConvertBranch
+    guard !name.isEmpty else { return }
+    onConvertToWorktree(name)
+    isConvertPopoverShown = false
+  }
+
+  /// Best-effort slugifier: lowercases, keeps [a-z0-9], collapses any
+  /// run of other characters into a single `-`, trims leading/trailing
+  /// dashes, and caps at 40 chars so git-wt directory paths don't blow
+  /// up. Returns an empty string for pathological input — the popover
+  /// keeps the Create button disabled until the user types something.
+  private func suggestedBranchName(from source: String) -> String {
+    var result = ""
+    var previousWasDash = false
+    for scalar in source.lowercased().unicodeScalars {
+      let char = Character(scalar)
+      if char.isLetter || char.isNumber {
+        result.append(char)
+        previousWasDash = false
+      } else if !previousWasDash {
+        result.append("-")
+        previousWasDash = true
+      }
+    }
+    let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    return String(trimmed.prefix(40))
   }
 
   /// Combined diff button: left-click opens the in-house QuickDiffSheet;
@@ -338,6 +411,20 @@ struct FullScreenTerminalView: View {
         onRerun: resolveWorktree() == nil ? onRerun : nil
       )
     }
+  }
+
+  private var priorityButton: some View {
+    Button(action: onTogglePriority) {
+      Image(systemName: session.isPriority ? "flag.fill" : "flag")
+        .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconTintStyle(tint: session.isPriority ? .pink : .secondary))
+    }
+    .buttonStyle(.plain)
+    .help(
+      session.isPriority
+        ? "Priority session - click to remove priority"
+        : "Mark session as priority"
+    )
   }
 
   /// Header button that pops up a list of reconstructed prompts from the

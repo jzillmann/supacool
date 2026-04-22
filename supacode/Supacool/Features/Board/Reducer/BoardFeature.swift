@@ -47,6 +47,11 @@ struct BoardFeature {
     /// so the user sees concrete feedback — how many refs were cleaned,
     /// whether any session cards are now orphaned.
     var pruneAlert: PruneAlertState?
+
+    /// Presented when a priority session's live terminal disappears
+    /// during this app run. Lets the user jump straight into the now-
+    /// detached card and decide whether to resume, rerun, or remove it.
+    var priorityTerminationAlert: PriorityTerminationAlertState?
   }
 
   /// One-shot summary shown after a prune attempt. Identifiable so we
@@ -65,6 +70,38 @@ struct BoardFeature {
     }
   }
 
+  nonisolated struct PriorityTerminationAlertState: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let sessionID: AgentSession.ID
+    let displayName: String
+    let status: BoardSessionStatus
+
+    init(
+      id: UUID = UUID(),
+      sessionID: AgentSession.ID,
+      displayName: String,
+      status: BoardSessionStatus
+    ) {
+      self.id = id
+      self.sessionID = sessionID
+      self.displayName = displayName
+      self.status = status
+    }
+
+    var title: String { "Priority session terminated" }
+
+    var message: String {
+      switch status {
+      case .interrupted:
+        "\(displayName) stopped while the agent was still working."
+      case .detached:
+        "\(displayName) finished and its terminal exited."
+      default:
+        "\(displayName) terminated."
+      }
+    }
+  }
+
   enum Action: BindableAction, Equatable {
     case binding(BindingAction<State>)
 
@@ -72,9 +109,12 @@ struct BoardFeature {
     case createSession(AgentSession)
     case renameSession(id: AgentSession.ID, newName: String)
     case removeSession(id: AgentSession.ID)
+    case togglePriority(id: AgentSession.ID)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
     case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
+    case prioritySessionTerminated(id: AgentSession.ID, status: BoardSessionStatus)
+    case dismissPriorityTerminationAlert
     /// Park: destroy the PTY to free resources, flag the session as
     /// parked so the board sorts it into the bottom bucket. Metadata
     /// (prompt, captured resume id) is preserved so the user can unpark
@@ -96,11 +136,17 @@ struct BoardFeature {
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
-    /// User tapped the "repo root" pill in the focused terminal header.
-    /// Pops the New Terminal sheet pre-filled with this session's repo
-    /// and agent, Worktree segment pre-selected. The original session
-    /// keeps running — this spawns a sibling, it does not migrate.
-    case graduateSessionToWorktree(id: AgentSession.ID, repositories: [Repository])
+    /// User confirmed the "convert to worktree" popover on the repo-root
+    /// pill in the focused terminal header. Creates the worktree on disk
+    /// via git-wt and types `cd '<path>'` into the session's focused
+    /// surface — no surface/process churn. The terminal stays alive in
+    /// its current tab; the user reviews the command and presses Enter.
+    case convertSessionToWorktree(
+      id: AgentSession.ID,
+      branchName: String,
+      repositories: [Repository]
+    )
+    case _convertSessionToWorktreeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
 
     // MARK: Remote reconnect
@@ -152,6 +198,7 @@ struct BoardFeature {
   }
 
   enum Delegate: Equatable {
+    case prioritySessionTerminated(title: String, body: String)
     case sessionRemoved(
       sessionID: AgentSession.ID,
       repositoryID: Repository.ID,
@@ -167,6 +214,7 @@ struct BoardFeature {
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
+  @Dependency(GitClientDependency.self) var gitClient
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -194,6 +242,13 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].displayName = trimmed
+        }
+        return .none
+
+      case .togglePriority(let id):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].isPriority.toggle()
         }
         return .none
 
@@ -234,6 +289,25 @@ struct BoardFeature {
           sessions[index].hasCompletedAtLeastOnce = true
           sessions[index].lastActivityAt = Date()
         }
+        return .none
+
+      case .prioritySessionTerminated(let id, let status):
+        guard status == .detached || status == .interrupted,
+          let session = state.sessions.first(where: { $0.id == id }),
+          session.isPriority
+        else {
+          return .none
+        }
+        let alert = PriorityTerminationAlertState(
+          sessionID: id,
+          displayName: session.displayName,
+          status: status
+        )
+        state.priorityTerminationAlert = alert
+        return .send(.delegate(.prioritySessionTerminated(title: alert.title, body: alert.message)))
+
+      case .dismissPriorityTerminationAlert:
+        state.priorityTerminationAlert = nil
         return .none
 
       case .updateSessionBusyState(let id, let busy):
@@ -428,17 +502,52 @@ struct BoardFeature {
         boardLogger.warning("Remote reconnect failed for session \(id): \(message)")
         return .none
 
-      case .graduateSessionToWorktree(let id, let repositories):
-        guard let previous = state.sessions.first(where: { $0.id == id }) else {
+      case .convertSessionToWorktree(let id, let branchName, let repositories):
+        let trimmedBranch = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedBranch.isEmpty,
+          let session = state.sessions.first(where: { $0.id == id }),
+          let repository = repositories.first(where: { $0.id == session.repositoryID })
+        else {
           return .none
         }
-        // Blur the focused session so the sheet lands over the board;
-        // the original session keeps running in its card.
-        state.focusedSessionID = nil
-        state.newTerminalSheet = NewTerminalFeature.State(
-          availableRepositories: IdentifiedArray(uniqueElements: repositories),
-          graduatingFrom: previous
-        )
+        let repoRoot = repository.rootURL
+        let worktreeID = session.worktreeID
+        let tabID = TerminalTabID(rawValue: session.id)
+        return .run { [gitClient, terminalClient] send in
+          do {
+            let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+              for: repoRoot,
+              globalDefaultPath: nil,
+              repositoryOverridePath: nil
+            )
+            let worktree = try await gitClient.createWorktree(
+              trimmedBranch,
+              repoRoot,
+              baseDirectory,
+              false,
+              false,
+              ""
+            )
+            let escapedPath = worktree.id.replacingOccurrences(of: "'", with: "'\\''")
+            await terminalClient.send(
+              .sendText(
+                worktreeID: worktreeID,
+                tabID: tabID,
+                text: "cd '\(escapedPath)'"
+              )
+            )
+          } catch {
+            await send(
+              ._convertSessionToWorktreeFailed(
+                id: id,
+                message: error.localizedDescription
+              )
+            )
+          }
+        }
+
+      case ._convertSessionToWorktreeFailed(let id, let message):
+        boardLogger.warning("Convert to worktree failed for session \(id): \(message)")
         return .none
 
       case .rerunDetachedSession(let id, let repositories):
