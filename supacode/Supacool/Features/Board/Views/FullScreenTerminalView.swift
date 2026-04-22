@@ -266,7 +266,7 @@ struct FullScreenTerminalView: View {
     Button {
       isQuickDiffPresented = true
     } label: {
-      Image(systemName: "text.magnifyingglass")
+      Image(systemName: "plus.forwardslash.minus")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
     }
@@ -277,7 +277,7 @@ struct FullScreenTerminalView: View {
         Button {
           isQuickDiffPresented = true
         } label: {
-          Label("Built-in Quick Diff (⌘⇧D)", systemImage: "text.magnifyingglass")
+          Label("Built-in Quick Diff (⌘⇧D)", systemImage: "plus.forwardslash.minus")
         }
         Divider()
         ForEach(Self.gitGuiPresets, id: \.self) { preset in
