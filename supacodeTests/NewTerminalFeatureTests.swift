@@ -274,6 +274,132 @@ struct NewTerminalFeatureTests {
     #expect(fetchCalls.value == 0)
   }
 
+  /// PR-armed create with an unfetched remote branch: the reducer must
+  /// (a) fetch the remote even when the global `fetchOriginBeforeWorktreeCreation`
+  /// setting is off (PR branches are remote-by-definition), (b) detect
+  /// that the local branch still isn't present, (c) fire a refspec fetch
+  /// that creates the local branch, then (d) call
+  /// `createWorktreeForExistingBranch`. Regression against the
+  /// "fatal: invalid reference" failure from image #22.
+  @Test(.dependencies) func prArmedExistingBranchFetchesRefspecThenWorktreeAdds() async {
+    @Shared(.settingsFile) var settingsFile
+    // Deliberately OFF — PR-armed path must force-fetch anyway.
+    $settingsFile.withLock { $0.global.fetchOriginBeforeWorktreeCreation = false }
+
+    var state = Self.makeState()
+    state.prompt = "Analyze PR"
+    let branchName = "refactor/overview-card-consistency"
+    state.selectedWorkspace = .existingBranch(name: branchName)
+    state.pullRequestLookup = .resolved(
+      PullRequestContext(
+        parsed: ParsedPullRequestURL(
+          url: "https://github.com/acme/widgets/pull/2349",
+          owner: "acme",
+          repo: "widgets",
+          number: 2349
+        ),
+        metadata: SupacoolPRMetadata(
+          title: "refactor",
+          headRefName: branchName,
+          baseRefName: "main",
+          headRepositoryOwner: "acme",
+          state: "OPEN",
+          isDraft: false
+        ),
+        matchedRepositoryID: "/tmp/repo",
+        isFork: false
+      )
+    )
+
+    let events = LockIsolated<[String]>([])
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.gitClient.remoteNames = { _ in ["origin"] }
+      $0.gitClient.fetchRemote = { remote, _ in
+        events.withValue { $0.append("fetchRemote:\(remote)") }
+      }
+      $0.gitClient.branchExists = { name, _ in
+        events.withValue { $0.append("branchExists:\(name)") }
+        return false
+      }
+      $0.gitClient.fetchBranchRefspec = { name, remote, _ in
+        events.withValue { $0.append("fetchRefspec:\(remote):\(name)") }
+      }
+      $0.gitClient.createWorktreeForExistingBranch = { name, repoRoot, _ in
+        events.withValue { $0.append("createForExisting:\(name)") }
+        return Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(events.value == [
+      "fetchRemote:origin",
+      "branchExists:\(branchName)",
+      "fetchRefspec:origin:\(branchName)",
+      "createForExisting:\(branchName)",
+    ])
+  }
+
+  /// Non-PR existing-branch path: when `branchExists` returns false the
+  /// reducer must still run the refspec fetch (covers the case where the
+  /// user typed a branch name for a freshly-pushed branch). The initial
+  /// per-setting fetch still runs too.
+  @Test(.dependencies) func existingBranchFallsBackToRefspecWhenMissing() async {
+    @Shared(.settingsFile) var settingsFile
+    $settingsFile.withLock { $0.global.fetchOriginBeforeWorktreeCreation = true }
+
+    var state = Self.makeState()
+    state.prompt = "work on a branch"
+    state.selectedWorkspace = .existingBranch(name: "feat/remote-only")
+    state.pullRequestLookup = .idle
+
+    let events = LockIsolated<[String]>([])
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.gitClient.remoteNames = { _ in ["origin"] }
+      $0.gitClient.fetchRemote = { remote, _ in
+        events.withValue { $0.append("fetchRemote:\(remote)") }
+      }
+      $0.gitClient.branchExists = { _, _ in false }
+      $0.gitClient.fetchBranchRefspec = { name, remote, _ in
+        events.withValue { $0.append("fetchRefspec:\(remote):\(name)") }
+      }
+      $0.gitClient.createWorktreeForExistingBranch = { name, repoRoot, _ in
+        events.withValue { $0.append("createForExisting:\(name)") }
+        return Worktree(
+          id: "\(repoRoot.path)/worktrees/\(name)",
+          name: name,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: "\(repoRoot.path)/worktrees/\(name)"),
+          repositoryRootURL: repoRoot,
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(events.value == [
+      "fetchRemote:origin",
+      "fetchRefspec:origin:feat/remote-only",
+      "createForExisting:feat/remote-only",
+    ])
+  }
+
   /// If the network is down or auth is broken, the fetch must fail silently
   /// and the worktree must still be created — losing the user's prompt to
   /// a transient network blip would be a nasty regression.

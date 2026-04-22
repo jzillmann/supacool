@@ -45,6 +45,16 @@ struct GitClientDependency: Sendable {
   var renameBranch: @Sendable (_ worktreeURL: URL, _ branchName: String) async throws -> Void
   var remoteNames: @Sendable (_ repoRoot: URL) async throws -> [String]
   var fetchRemote: @Sendable (_ remote: String, _ repoRoot: URL) async throws -> Void
+  /// Whether a local branch with the given name exists in the repo.
+  /// Used by the New Terminal create path to skip a refspec-fetch when
+  /// the local branch already resolves.
+  var branchExists: @Sendable (_ branchName: String, _ repoRoot: URL) async throws -> Bool
+  /// One-shot `git fetch <remote> <branch>:<branch>` — pulls a remote
+  /// branch into a local branch of the same name. Lets a freshly-pushed
+  /// PR branch resolve immediately without a separate
+  /// fetch + branch-create pair.
+  var fetchBranchRefspec:
+    @Sendable (_ branchName: String, _ remote: String, _ repoRoot: URL) async throws -> Void
   var remoteInfo: @Sendable (_ repositoryRoot: URL) async -> GithubRemoteInfo?
   /// `git status --porcelain=v1 -z` output for the worktree. The `-z`
   /// byte-delimiter keeps paths with spaces / newlines intact — callers
@@ -121,6 +131,12 @@ extension GitClientDependency: DependencyKey {
     },
     remoteNames: { try await GitClient().remoteNames(for: $0) },
     fetchRemote: { remote, repoRoot in try await GitClient().fetchRemote(remote, for: repoRoot) },
+    branchExists: { branchName, repoRoot in
+      try await GitClient().branchExists(branchName, for: repoRoot)
+    },
+    fetchBranchRefspec: { branchName, remote, repoRoot in
+      try await GitClient().fetchBranchRefspec(branchName, remote: remote, for: repoRoot)
+    },
     remoteInfo: { repositoryRoot in
       await GitClient().remoteInfo(for: repositoryRoot)
     },

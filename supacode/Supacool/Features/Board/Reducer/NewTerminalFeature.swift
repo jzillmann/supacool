@@ -589,6 +589,10 @@ struct NewTerminalFeature {
     )
     let gitClient = self.gitClient
     let terminalClient = self.terminalClient
+    // Snapshot at submit-time so the create effect can distinguish a
+    // PR-armed existing-branch selection (the banner pinned this branch)
+    // from a user-typed one.
+    let prLookupAtSubmit = state.pullRequestLookup
 
     return .run { send in
       do {
@@ -630,20 +634,66 @@ struct NewTerminalFeature {
 
         case .existingBranch(let rawName):
           let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-          // Fetch the matching remote first so DWIM can find freshly
-          // pushed branches (e.g. a new PR). Same fetch semantics as
-          // .newBranch above.
-          if fetchOriginBeforeCreation {
-            let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
-            if let firstRemote = remotes.first {
-              do {
-                try await gitClient.fetchRemote(firstRemote, repository.rootURL)
-              } catch {
-                newTerminalLogger.warning(
-                  "Pre-worktree fetch \(firstRemote) failed for "
-                    + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-                )
-              }
+          // PR-armed create: the PR banner pinned this branch name, so
+          // we *know* it lives on the remote. Force the fetch even if
+          // the user has the global setting disabled — without it,
+          // `git worktree add` would fail with "invalid reference" on a
+          // branch that's never been fetched into this clone.
+          let isPRArmed = Self.isPRArmedExistingBranch(
+            pullRequestLookup: prLookupAtSubmit,
+            branchName: branchName
+          )
+          let shouldFetchRemote = fetchOriginBeforeCreation || isPRArmed
+          let remotes = shouldFetchRemote
+            ? ((try? await gitClient.remoteNames(repository.rootURL)) ?? [])
+            : []
+          if shouldFetchRemote, let firstRemote = remotes.first {
+            do {
+              try await gitClient.fetchRemote(firstRemote, repository.rootURL)
+            } catch {
+              newTerminalLogger.warning(
+                "Pre-worktree fetch \(firstRemote) failed for "
+                  + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+              )
+            }
+          }
+          // The first fetch may have failed silently (offline / auth),
+          // and modern git's `worktree add` DWIM only triggers once the
+          // remote-tracking ref is already in .git/refs/remotes. If the
+          // local branch still doesn't resolve, do a targeted refspec
+          // fetch that creates the local branch directly — one-shot,
+          // so the next step always sees a resolvable ref.
+          let localBranchPresent =
+            (try? await gitClient.branchExists(branchName, repository.rootURL)) ?? false
+          if !localBranchPresent {
+            // Reuse `remotes` if we already populated it above; if not
+            // (general setting off and not PR-armed — this branch), probe
+            // remotes now for the refspec-fetch fallback.
+            let resolvedRemotes: [String]
+            if remotes.isEmpty {
+              resolvedRemotes =
+                (try? await gitClient.remoteNames(repository.rootURL)) ?? []
+            } else {
+              resolvedRemotes = remotes
+            }
+            guard let firstRemote = resolvedRemotes.first else {
+              throw NewTerminalError.branchNotFoundAfterFetch(name: branchName)
+            }
+            do {
+              try await gitClient.fetchBranchRefspec(
+                branchName,
+                firstRemote,
+                repository.rootURL
+              )
+            } catch {
+              newTerminalLogger.warning(
+                "Refspec fetch \(firstRemote) \(branchName):\(branchName) failed for "
+                  + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
+              )
+              // If the branch doesn't exist locally and the refspec
+              // fetch couldn't create it, fail now with a clear
+              // message rather than handing git an invalid reference.
+              throw NewTerminalError.branchNotFoundAfterFetch(name: branchName)
             }
           }
           let baseDirectory = SupacodePaths.worktreeBaseDirectory(
@@ -1105,6 +1155,19 @@ struct NewTerminalFeature {
   /// preserved but git's record (or the in-app cache) drifted. Returns
   /// nil when there's nothing to adopt — let the normal create path
   /// handle (and surface) the real failure.
+  /// Returns true when the `.existingBranch(name: branchName)` selection
+  /// in `createButtonTapped` was pre-armed by the PR banner (as opposed
+  /// to typed manually in the workspace field). Drives the force-fetch
+  /// path: PR branches are remote-by-definition, so we fetch even when
+  /// the global `fetchOriginBeforeWorktreeCreation` setting is off.
+  nonisolated static func isPRArmedExistingBranch(
+    pullRequestLookup: PullRequestLookupState,
+    branchName: String
+  ) -> Bool {
+    guard case .resolved(let context) = pullRequestLookup else { return false }
+    return context.metadata.headRefName == branchName
+  }
+
   nonisolated static func adoptExistingWorktreeDirectory(
     branchName: String,
     baseDirectory: URL,
@@ -1153,10 +1216,17 @@ struct NewTerminalFeature {
 /// worktree was removed between picker-time and submit).
 nonisolated enum NewTerminalError: LocalizedError {
   case worktreeMissing
+  /// Neither the local branch nor the remote-tracking ref exists, and a
+  /// refspec fetch against the first configured remote failed. Without
+  /// a resolvable ref, `git worktree add` would emit its cryptic
+  /// "invalid reference" — this surfaces something the user can act on.
+  case branchNotFoundAfterFetch(name: String)
 
   var errorDescription: String? {
     switch self {
     case .worktreeMissing: "Picked worktree is no longer available."
+    case .branchNotFoundAfterFetch(let name):
+      "Branch '\(name)' not found locally or on any configured remote."
     }
   }
 }

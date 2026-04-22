@@ -21,6 +21,8 @@ enum GitOperation: String {
   case remoteInfo = "remote_info"
   case remoteList = "remote_list"
   case fetchOrigin = "fetch_origin"
+  case branchExists = "branch_exists"
+  case fetchBranchRefspec = "fetch_branch_refspec"
   case statusPorcelain = "status_porcelain"
   case diffFile = "diff_file"
   case numstatFile = "numstat_file"
@@ -298,6 +300,42 @@ struct GitClient {
     _ = try await runGit(
       operation: .fetchOrigin,
       arguments: ["-C", path, "fetch", remote]
+    )
+  }
+
+  /// Returns true when a local branch with the given name exists. Uses
+  /// `rev-parse --verify --quiet` which exits 0 on hit / 1 on miss — we
+  /// translate the miss into `false` instead of propagating the error.
+  nonisolated func branchExists(_ branchName: String, for repoRoot: URL) async throws -> Bool {
+    let path = repoRoot.path(percentEncoded: false)
+    do {
+      _ = try await runGit(
+        operation: .branchExists,
+        arguments: [
+          "-C", path, "rev-parse", "--verify", "--quiet", "refs/heads/\(branchName)",
+        ]
+      )
+      return true
+    } catch GitClientError.commandFailed {
+      return false
+    }
+  }
+
+  /// Fetches a single branch from the given remote directly into a
+  /// local branch of the same name via the `<src>:<dst>` refspec form.
+  /// One-shot equivalent of `git fetch <remote>` followed by
+  /// `git branch <name> <remote>/<name>` — useful when the user wants
+  /// to work on a branch that exists on the remote but hasn't been
+  /// fetched into this clone yet (e.g. a freshly pushed PR).
+  nonisolated func fetchBranchRefspec(
+    _ branchName: String,
+    remote: String,
+    for repoRoot: URL
+  ) async throws {
+    let path = repoRoot.path(percentEncoded: false)
+    _ = try await runGit(
+      operation: .fetchBranchRefspec,
+      arguments: ["-C", path, "fetch", remote, "\(branchName):\(branchName)"]
     )
   }
 
