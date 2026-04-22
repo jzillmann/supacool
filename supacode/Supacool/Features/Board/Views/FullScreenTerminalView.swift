@@ -11,6 +11,7 @@ import SwiftUI
 struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
+  let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
   let terminalManager: WorktreeTerminalManager
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
@@ -152,6 +153,7 @@ struct FullScreenTerminalView: View {
       Divider().frame(height: 18)
 
       repoChip
+      pullRequestStatus
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -219,6 +221,21 @@ struct FullScreenTerminalView: View {
         }
         workspaceBadge
       }
+    }
+  }
+
+  @ViewBuilder
+  private var pullRequestStatus: some View {
+    if let model = PullRequestStatusModel(
+      pullRequest: Self.matchedPullRequest(
+        session: session,
+        repositories: repositories,
+        worktreeInfoByID: worktreeInfoByID
+      )
+    ) {
+      PullRequestStatusButton(model: model)
+        .font(.caption)
+        .padding(.leading, 2)
     }
   }
 
@@ -630,6 +647,26 @@ struct FullScreenTerminalView: View {
       return worktree.branch ?? worktree.name
     }
     return URL(fileURLWithPath: session.worktreeID).lastPathComponent
+  }
+
+  @MainActor
+  static func matchedPullRequest(
+    session: AgentSession,
+    repositories: IdentifiedArrayOf<Repository>,
+    worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
+  ) -> GithubPullRequest? {
+    guard let repo = repositories[id: session.repositoryID] else { return nil }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    guard session.worktreeID != rootPath else { return nil }
+    guard let worktree = repo.worktrees.first(where: { $0.id == session.worktreeID }) else {
+      return nil
+    }
+    let pullRequest = worktreeInfoByID[session.worktreeID]?.pullRequest
+    guard let pullRequest else { return nil }
+    guard pullRequest.headRefName == nil || pullRequest.headRefName == worktree.name else {
+      return nil
+    }
+    return pullRequest
   }
 
   @ViewBuilder

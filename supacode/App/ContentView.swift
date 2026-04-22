@@ -42,6 +42,7 @@ struct ContentView: View {
         BoardRootView(
           store: boardStore,
           repositories: store.repositories.repositories,
+          worktreeInfoByID: store.repositories.worktreeInfoByID,
           terminalManager: terminalManager,
           onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
           onConfigureRepositories: {

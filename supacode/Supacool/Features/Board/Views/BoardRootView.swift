@@ -12,6 +12,7 @@ import SwiftUI
 struct BoardRootView: View {
   @Bindable var store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
+  let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
   let terminalManager: WorktreeTerminalManager
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
@@ -175,6 +176,7 @@ struct BoardRootView: View {
       FullScreenTerminalView(
         session: session,
         repositories: repositories,
+        worktreeInfoByID: worktreeInfoByID,
         terminalManager: terminalManager,
         onBackToBoard: { store.send(.focusSession(id: nil)) },
         onNewTerminal: {
