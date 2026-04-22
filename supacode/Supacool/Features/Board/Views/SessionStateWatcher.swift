@@ -13,6 +13,7 @@ struct SessionStateWatcher: View {
   let onBusyStateChange: (Bool) -> Void
   let onBusyToIdleTransition: () -> Void
   let onAwaitingInputEntered: () -> Void
+  let onPriorityTermination: (BoardSessionStatus) -> Void
 
   private var isBusyNow: Bool {
     terminalManager.isAgentBusy(
@@ -40,6 +41,9 @@ struct SessionStateWatcher: View {
         if oldValue != .awaitingInput && newValue == .awaitingInput {
           onAwaitingInputEntered()
         }
+        if session.isPriority, Self.didTerminate(from: oldValue, to: newValue) {
+          onPriorityTermination(newValue)
+        }
       }
       .onAppear {
         // Reconcile: if our stored busy flag doesn't match reality at
@@ -48,5 +52,19 @@ struct SessionStateWatcher: View {
           onBusyStateChange(isBusyNow)
         }
       }
+  }
+
+  private static func didTerminate(
+    from oldValue: BoardSessionStatus,
+    to newValue: BoardSessionStatus
+  ) -> Bool {
+    guard oldValue != newValue else { return false }
+    guard newValue == .detached || newValue == .interrupted else { return false }
+    switch oldValue {
+    case .inProgress, .waitingOnMe, .awaitingInput, .fresh:
+      return true
+    case .detached, .interrupted, .parked, .disconnected:
+      return false
+    }
   }
 }

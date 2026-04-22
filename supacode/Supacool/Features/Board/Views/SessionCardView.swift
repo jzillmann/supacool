@@ -11,6 +11,7 @@ struct SessionCardView: View {
   let onTap: () -> Void
   let onRemove: () -> Void
   var onRename: (() -> Void)?
+  var onTogglePriority: (() -> Void)? = nil
   var onRerun: (() -> Void)?
   var onResume: (() -> Void)?
   var onResumePicker: (() -> Void)?
@@ -37,6 +38,9 @@ struct SessionCardView: View {
           .help(AgentType.displayName(for: session.agent))
         if session.agent != nil {
           sessionIDIndicator
+        }
+        if let onTogglePriority {
+          priorityButton(action: onTogglePriority)
         }
         Spacer()
         infoButton
@@ -80,9 +84,14 @@ struct SessionCardView: View {
     .background(cardBackground)
     .overlay {
       cardShape
-        .strokeBorder(status.color.opacity(0.25), lineWidth: 1)
+        .strokeBorder(cardBorderColor, lineWidth: cardBorderWidth)
         .allowsHitTesting(false)
     }
+    .shadow(
+      color: session.isPriority ? priorityColor.opacity(isHovered ? 0.24 : 0.16) : .clear,
+      radius: session.isPriority ? 10 : 0,
+      y: session.isPriority ? 4 : 0
+    )
     .clipShape(cardShape)
     .contentShape(cardShape)
     // The card hosts its own info/unpark buttons, so a giant outer Button
@@ -101,6 +110,14 @@ struct SessionCardView: View {
     .contextMenu {
       if let onRename {
         Button("Rename…", systemImage: "pencil", action: onRename)
+        Divider()
+      }
+      if let onTogglePriority {
+        Button(
+          session.isPriority ? "Remove Priority" : "Mark as Priority",
+          systemImage: session.isPriority ? "flag.slash" : "flag.fill",
+          action: onTogglePriority
+        )
         Divider()
       }
       if let onResume {
@@ -125,6 +142,20 @@ struct SessionCardView: View {
       }
       Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
     }
+  }
+
+  private func priorityButton(action: @escaping () -> Void) -> some View {
+    Button(action: action) {
+      Image(systemName: session.isPriority ? "flag.fill" : "flag")
+        .font(.caption)
+        .foregroundStyle(session.isPriority ? priorityColor : .secondary)
+    }
+    .buttonStyle(.plain)
+    .help(
+      session.isPriority
+        ? "Priority session - click to remove priority"
+        : "Mark session as priority"
+    )
   }
 
   /// Small ⓘ button on the card header that shows the session's initial
@@ -259,9 +290,19 @@ struct SessionCardView: View {
     RoundedRectangle(cornerRadius: 10, style: .continuous)
   }
 
+  private var cardBorderColor: Color {
+    session.isPriority ? priorityColor.opacity(isHovered ? 0.92 : 0.76) : status.color.opacity(0.25)
+  }
+
+  private var cardBorderWidth: CGFloat {
+    session.isPriority ? 2 : 1
+  }
+
   private var cardBackground: some ShapeStyle {
     AnyShapeStyle(.background.secondary)
   }
+
+  private var priorityColor: Color { .pink }
 
   private var agentIcon: String {
     switch session.agent {
@@ -412,21 +453,24 @@ struct ReferenceChip: View {
       repositoryName: "my-repo",
       status: .inProgress,
       onTap: {},
-      onRemove: {}
+      onRemove: {},
+      onTogglePriority: {}
     )
     SessionCardView(
       session: session,
       repositoryName: "my-repo",
       status: .waitingOnMe,
       onTap: {},
-      onRemove: {}
+      onRemove: {},
+      onTogglePriority: {}
     )
     SessionCardView(
       session: session,
       repositoryName: "my-repo",
       status: .detached,
       onTap: {},
-      onRemove: {}
+      onRemove: {},
+      onTogglePriority: {}
     )
   }
   .padding()

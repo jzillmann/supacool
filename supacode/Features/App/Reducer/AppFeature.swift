@@ -25,6 +25,7 @@ struct AppFeature {
     var isRunScriptPromptPresented = false
     var notificationIndicatorCount: Int = 0
     var lastKnownSystemNotificationsEnabled: Bool
+    var scenePhase: ScenePhase = .active
     var pendingDeeplinks: [Deeplink] = []
     var isDeeplinkCheatsheetRequested = false
     @Presents var alert: AlertState<Alert>?
@@ -115,6 +116,7 @@ struct AppFeature {
         )
 
       case .scenePhaseChanged(let phase):
+        state.scenePhase = phase
         switch phase {
         case .active:
           analyticsClient.capture("app_activated", nil)
@@ -242,6 +244,14 @@ struct AppFeature {
         guard let worktree = state.repositories.worktree(for: worktreeID) else { return .none }
         return .run { _ in
           await terminalClient.send(.selectTab(worktree, tabID: tabId))
+        }
+
+      case .board(.delegate(.prioritySessionTerminated(let title, let body))):
+        guard state.scenePhase != .active, state.settings.systemNotificationsEnabled else {
+          return .none
+        }
+        return .run { _ in
+          await systemNotificationClient.send(title, body)
         }
 
       case .board(.delegate(.sessionRemoved(let sessionID, let repositoryID, let worktreeID, let deleteBackingWorktree))):

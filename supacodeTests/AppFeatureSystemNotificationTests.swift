@@ -1,6 +1,7 @@
 import ComposableArchitecture
 import DependenciesTestSupport
 import Foundation
+import SwiftUI
 import Testing
 
 @testable import Supacool
@@ -215,5 +216,39 @@ struct AppFeatureSystemNotificationTests {
 
     #expect(plays.value == 1)
     #expect(sends.value == 0)
+  }
+
+  @Test(.dependencies) func priorityTerminationSendsSystemNotificationWhenBackgrounded() async {
+    var globalSettings = GlobalSettings.default
+    globalSettings.systemNotificationsEnabled = true
+    let sends = LockIsolated<[(String, String)]>([])
+    var initialState = AppFeature.State(
+      settings: SettingsFeature.State(settings: globalSettings)
+    )
+    initialState.scenePhase = .background
+    let store = TestStore(initialState: initialState) {
+      AppFeature()
+    } withDependencies: {
+      $0.systemNotificationClient.send = { title, body in
+        sends.withValue { $0.append((title, body)) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .board(
+        .delegate(
+          .prioritySessionTerminated(
+            title: "Priority session terminated",
+            body: "Deploy fix finished and its terminal exited."
+          )
+        )
+      )
+    )
+    await store.finish()
+
+    #expect(sends.value.count == 1)
+    #expect(sends.value.first?.0 == "Priority session terminated")
+    #expect(sends.value.first?.1 == "Deploy fix finished and its terminal exited.")
   }
 }

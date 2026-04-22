@@ -223,15 +223,19 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func priorityTerminationPresentsAlertAndDelegates() async {
     let session = Self.sampleSession(displayName: "Deploy fix", isPriority: true)
+    let alertID = UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.uuid = .constant(alertID)
     }
 
     await store.send(.prioritySessionTerminated(id: session.id, status: .interrupted)) {
       $0.priorityTerminationAlert = BoardFeature.PriorityTerminationAlertState(
+        id: alertID,
         sessionID: session.id,
         displayName: "Deploy fix",
         status: .interrupted

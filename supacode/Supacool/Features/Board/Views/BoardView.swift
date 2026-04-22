@@ -271,7 +271,7 @@ struct BoardView: View {
           columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)],
           spacing: 14
         ) {
-          ForEach(sessions) { session in
+          ForEach(sessions, id: \.id) { session in
             let sessionStatus = classify(session)
             SessionCardContainer(
               session: session,
@@ -282,6 +282,7 @@ struct BoardView: View {
               onTap: { store.send(.focusSession(id: session.id)) },
               onRemove: { store.send(.removeSession(id: session.id)) },
               onRename: { onRenameSession(session) },
+              onTogglePriority: { store.send(.togglePriority(id: session.id)) },
               onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
                 ? {
                   store.send(
@@ -440,6 +441,7 @@ private struct SessionCardContainer: View {
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRename: () -> Void
+  let onTogglePriority: () -> Void
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
@@ -459,6 +461,7 @@ private struct SessionCardContainer: View {
       onTap: onTap,
       onRemove: onRemove,
       onRename: onRename,
+      onTogglePriority: onTogglePriority,
       onRerun: onRerun,
       onResume: onResume,
       onResumePicker: onResumePicker,

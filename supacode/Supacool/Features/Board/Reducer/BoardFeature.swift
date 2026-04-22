@@ -215,6 +215,7 @@ struct BoardFeature {
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(GitClientDependency.self) var gitClient
+  @Dependency(\.uuid) var uuid
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -299,6 +300,7 @@ struct BoardFeature {
           return .none
         }
         let alert = PriorityTerminationAlertState(
+          id: uuid(),
           sessionID: id,
           displayName: session.displayName,
           status: status

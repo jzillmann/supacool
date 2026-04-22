@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-enum BoardSessionStatus: Equatable, Sendable {
+nonisolated enum BoardSessionStatus: Equatable, Sendable {
   case inProgress
   case waitingOnMe
   case awaitingInput
