@@ -172,18 +172,18 @@ final class WorktreeTerminalManager {
     }
   }
 
-  /// Decide whether a `Notification` hook event represents the agent actually
-  /// blocking on user input (permission prompt, idle reminder) versus an
+  /// Decide whether a hook event represents the agent actually blocking
+  /// on user input (permission prompt, idle reminder) versus an
   /// informational ping that doesn't pause work.
   ///
-  /// Claude Code fires `Notification` hooks for both. The blocking ones use a
-  /// short, stable set of message prefixes; everything else (custom user
-  /// notifications, status pings) keeps the card in its current state.
-  /// Codex doesn't yet emit a clean signal here — preserve the legacy
-  /// "any Notification event" behavior for it until we audit its payloads.
+  /// Claude Code fires `Notification` hooks for both blocking and
+  /// informational cases; the blocking ones use a short, stable set of
+  /// message prefixes. Codex fires a dedicated `PermissionRequest`
+  /// event for the blocking case, which is the clean signal we want.
   nonisolated static func isAwaitingInputSignal(_ notification: AgentHookNotification) -> Bool {
-    guard notification.event == "Notification" else { return false }
-    if notification.agent.lowercased().contains("claude") {
+    let agent = notification.agent.lowercased()
+    if agent.contains("claude") {
+      guard notification.event == "Notification" else { return false }
       let body = notification.body ?? ""
       let blockingPrefixes = [
         "Claude needs your permission",
@@ -191,7 +191,15 @@ final class WorktreeTerminalManager {
       ]
       return blockingPrefixes.contains(where: { body.hasPrefix($0) })
     }
-    return true
+    if agent.contains("codex") {
+      // PermissionRequest is the precise signal; keep the legacy
+      // wildcard on Notification for forward compatibility in case
+      // Codex grows one.
+      return notification.event == "PermissionRequest"
+        || notification.event == "Notification"
+    }
+    // Unknown agents: preserve the legacy "any Notification event" heuristic.
+    return notification.event == "Notification"
   }
 
   /// Screen-based fallback for hook misses. This only matches the inline

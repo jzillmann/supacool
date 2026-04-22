@@ -63,7 +63,31 @@ struct AwaitingInputSignalTests {
     #expect(!WorktreeTerminalManager.isAwaitingInputSignal(note))
   }
 
-  @Test func codexPreservesLegacyBehavior() {
+  @Test func codexPermissionRequestIsAwaitingInput() {
+    let note = AgentHookNotification(
+      agent: "codex",
+      event: "PermissionRequest",
+      title: nil,
+      body: "approve shell escalation?",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
+  }
+
+  @Test func codexStopIsNotAwaitingInput() {
+    let note = AgentHookNotification(
+      agent: "codex",
+      event: "Stop",
+      title: nil,
+      body: "finished turn",
+      sessionID: nil
+    )
+    #expect(!WorktreeTerminalManager.isAwaitingInputSignal(note))
+  }
+
+  /// Forward-compat: if Codex ever grows a Notification event, treat it
+  /// as blocking until we can audit its payloads.
+  @Test func codexNotificationEventStillTreatedAsAwaitingInput() {
     let note = AgentHookNotification(
       agent: "codex",
       event: "Notification",
