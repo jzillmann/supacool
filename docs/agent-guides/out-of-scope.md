@@ -24,15 +24,7 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **Signals this is creeping back**: anyone adds a background daemon, or anyone talks about a "supacool-daemon" companion process.
 
-## 4. Splitting "Waiting on Me" into "Ready" vs "Wants Input"
-
-**What it is**: distinguish sessions where the agent finished a turn successfully (`.ready`) from sessions where the agent is explicitly prompting for more input mid-task (`.wantsInput`).
-
-**Why it's out**: supacode's agent hook protocol emits `busy: true` / `busy: false` transitions but doesn't carry a "wants input" signal. Adding one requires a hook-protocol extension on BOTH sides (supacode's AgentHookSocketServer AND claude/codex's hook script). Deferred until the heuristic (which currently buckets both cases as "Waiting on Me") gets noisy enough to warrant it.
-
-**The workaround** — infer from `!agentBusy && commandExitCode == nil` that the agent is still running but idle — is a possible later refinement if it's worth the complexity.
-
-## 5. Archive, pin, or group cards
+## 4. Archive, pin, or group cards
 
 **What it is**: the old sidebar-era flow had "Pinned" / "All" worktree view modes, archive, and manual ordering. The Matrix Board has none of that.
 
@@ -40,25 +32,25 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **If the card list gets huge** (>50 sessions), revisit — at that scale, dismissibility matters.
 
-## 6. Rich per-card previews (last assistant snippet, token usage, cost)
+## 5. Rich per-card previews (last assistant snippet, token usage, cost)
 
 **What it is**: cards that show the agent's latest output on the card face, plus metadata like token count or estimated cost.
 
 **Why it's out**: requires wiring into the hook protocol or scraping PTY output. Worth doing when the board gets dense enough that "name + timestamp" isn't enough to triage.
 
-## 7. Mobile / web UI
+## 6. Mobile / web UI
 
 **What it is**: earlier brainstorms explored a web dashboard served by a headless engine, viewable from phone.
 
 **Why it's out**: Supacool is a native macOS terminal app by design. The "view from anywhere" dream is workflow-engine scope (see #1).
 
-## 8. Renaming everything `supacode` → `Supacool` in source
+## 7. Renaming everything `supacode` → `Supacool` in source
 
 **What it is**: Xcode target, source directory, module name, all the orphaned view files.
 
 **Why it's out**: every renamed file is a guaranteed merge conflict forever. Supacool's philosophy is **minimum drift**: rename only the user-visible bits (display name, bundle id, window title). Internal names stay `supacode`. See [upstream-sync.md](./upstream-sync.md).
 
-## 9. Custom fork of ghostty or git-wt
+## 8. Custom fork of ghostty or git-wt
 
 **What it is**: editing the ghostty zig source directly rather than just passing build flags.
 
