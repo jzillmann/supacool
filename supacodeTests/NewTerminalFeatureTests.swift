@@ -288,6 +288,42 @@ struct NewTerminalFeatureTests {
 
   // MARK: - Rerun initializer
 
+  @Test(.dependencies) func workspaceQueryRoundTripKeepsWorktreeIntent() async {
+    // Regression for "click Worktree → click Workspace field → picker
+    // reverts to Investigate". The user explicitly chose a worktree
+    // selection; re-binding the empty query must keep the `.newBranch`
+    // intent (pending name) instead of flipping back to `.repoRoot`.
+    var state = Self.makeState()
+    state.selectedWorkspace = .newBranch(name: "")
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    // Simulate @Bindable's empty round-trip on focus.
+    await store.send(\.binding.workspaceQuery, "")
+
+    #expect(store.state.selectedWorkspace == .newBranch(name: ""))
+  }
+
+  @Test(.dependencies) func workspaceQueryEmptyFromRepoRootStaysRepoRoot() async {
+    // Complement to the regression above: from `.repoRoot` an empty
+    // binding round-trip must stay on `.repoRoot` — we shouldn't
+    // suddenly switch to `.newBranch`.
+    var state = Self.makeState()
+    state.selectedWorkspace = .repoRoot
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.workspaceQuery, "")
+
+    #expect(store.state.selectedWorkspace == .repoRoot)
+  }
+
   @Test func rerunInitializerPrefillsFromPreviousSession() {
     let previous = AgentSession(
       repositoryID: "/tmp/repo",

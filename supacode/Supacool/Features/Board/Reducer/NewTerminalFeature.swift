@@ -247,13 +247,32 @@ struct NewTerminalFeature {
         if state.workspaceQuery.contains(where: \.isWhitespace) {
           state.workspaceQuery = state.workspaceQuery.replacing(/\s+/, with: "-")
         }
-        // Typing in the workspace field re-infers the selection from the
-        // current query + known worktrees/branches. Exact matches win;
-        // otherwise we treat the query as a new branch name.
-        state.selectedWorkspace = Self.inferSelection(
-          from: state.workspaceQuery,
-          state: state
-        )
+        // An empty query used to flip the selection back to `.repoRoot`,
+        // which fought the new explicit Investigate/Worktree segmented
+        // picker: the user would click Worktree, focus the Workspace
+        // field (which re-emits the binding via @Bindable's round-trip),
+        // and watch the picker snap back to Investigate on an empty
+        // round-trip. While the user has explicitly chosen a worktree
+        // selection, keep it — just blank the branch name in the
+        // `.newBranch` case so the field stays in "pending name" mode
+        // rather than reverting intent.
+        let trimmed = state.workspaceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+          switch state.selectedWorkspace {
+          case .newBranch:
+            state.selectedWorkspace = .newBranch(name: "")
+          case .existingBranch, .existingWorktree, .repoRoot:
+            state.selectedWorkspace = .repoRoot
+          }
+        } else {
+          // Typing a non-empty query re-infers the selection from the
+          // current query + known worktrees/branches. Exact matches win;
+          // otherwise we treat the query as a new branch name.
+          state.selectedWorkspace = Self.inferSelection(
+            from: state.workspaceQuery,
+            state: state
+          )
+        }
         state.validationMessage = nil
         return .none
 

@@ -75,8 +75,22 @@ struct NewTerminalSheet: View {
           }
         }
         if store.agent != nil {
-          DisclosureGroup("Advanced", isExpanded: $isAdvancedExpanded) {
+          DisclosureGroup(isExpanded: $isAdvancedExpanded) {
             bypassPermissionsToggle
+          } label: {
+            // SwiftUI's default DisclosureGroup only toggles when the
+            // chevron itself is clicked — clicking the label text
+            // does nothing. Widening the hit area + a manual
+            // onTapGesture makes the whole row act like a button,
+            // which is what the user expects.
+            Text("Advanced")
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .contentShape(Rectangle())
+              .onTapGesture {
+                withAnimation(.easeOut(duration: 0.18)) {
+                  isAdvancedExpanded.toggle()
+                }
+              }
           }
         }
       } footer: {
