@@ -5,7 +5,14 @@ import Sharing
 
 private let terminalLogger = SupaLogger("Terminal")
 private let awaitingInputTTLDefault: Duration = .seconds(8)
-private let awaitingInputTransitionDebounceDefault: Duration = .milliseconds(250)
+/// How long an `awaitingInput` signal must stay active before the chip
+/// is actually shown. Wider than the off-debounce so Codex's
+/// `PermissionRequest → PreToolUse` auto-approve round-trips (~200–500ms)
+/// don't produce a visible blink between "In Progress" and "Wants Input".
+private let awaitingInputTransitionOnDebounceDefault: Duration = .milliseconds(750)
+/// Mirror debounce for turning the chip off. Kept tight so the card
+/// responds quickly when the user actually answers a prompt.
+private let awaitingInputTransitionOffDebounceDefault: Duration = .milliseconds(250)
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptDetectionStableSamples = 2
@@ -46,7 +53,8 @@ final class WorktreeTerminalManager {
   private let runtime: GhosttyRuntime
   private let sleep: @Sendable (Duration) async throws -> Void
   private let awaitingInputTTL: Duration
-  private let awaitingInputTransitionDebounce: Duration
+  private let awaitingInputTransitionOnDebounce: Duration
+  private let awaitingInputTransitionOffDebounce: Duration
   private let awaitingInputActivityPollInterval: Duration
   private let agentPIDSweepInterval: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
@@ -78,7 +86,8 @@ final class WorktreeTerminalManager {
     runtime: GhosttyRuntime,
     socketServer: AgentHookSocketServer? = nil,
     awaitingInputTTL: Duration = awaitingInputTTLDefault,
-    awaitingInputTransitionDebounce: Duration = awaitingInputTransitionDebounceDefault,
+    awaitingInputTransitionOnDebounce: Duration = awaitingInputTransitionOnDebounceDefault,
+    awaitingInputTransitionOffDebounce: Duration = awaitingInputTransitionOffDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
@@ -87,7 +96,8 @@ final class WorktreeTerminalManager {
   ) {
     self.runtime = runtime
     self.awaitingInputTTL = awaitingInputTTL
-    self.awaitingInputTransitionDebounce = awaitingInputTransitionDebounce
+    self.awaitingInputTransitionOnDebounce = awaitingInputTransitionOnDebounce
+    self.awaitingInputTransitionOffDebounce = awaitingInputTransitionOffDebounce
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
     self.agentPIDSweepInterval = agentPIDSweepInterval
     self.isProcessAlive = isProcessAlive
@@ -733,10 +743,13 @@ final class WorktreeTerminalManager {
   ) {
     awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
     let sleep = self.sleep
-    let awaitingInputTransitionDebounce = self.awaitingInputTransitionDebounce
-    awaitingInputDebounceTasks[tabID] = Task { [weak self, sleep, awaitingInputTransitionDebounce] in
+    let debounce =
+      desiredState
+      ? awaitingInputTransitionOnDebounce
+      : awaitingInputTransitionOffDebounce
+    awaitingInputDebounceTasks[tabID] = Task { [weak self, sleep, debounce] in
       do {
-        try await sleep(awaitingInputTransitionDebounce)
+        try await sleep(debounce)
       } catch {
         return
       }

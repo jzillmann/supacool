@@ -247,7 +247,8 @@ struct WorktreeTerminalManagerTests {
       runtime: GhosttyRuntime(),
       socketServer: server,
       awaitingInputTTL: .seconds(8),
-      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputTransitionOnDebounce: .milliseconds(250),
+      awaitingInputTransitionOffDebounce: .milliseconds(250),
       awaitingInputActivityPollInterval: .seconds(1),
       clock: clock
     )
@@ -296,7 +297,8 @@ struct WorktreeTerminalManagerTests {
       runtime: GhosttyRuntime(),
       socketServer: server,
       awaitingInputTTL: .seconds(8),
-      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputTransitionOnDebounce: .milliseconds(250),
+      awaitingInputTransitionOffDebounce: .milliseconds(250),
       awaitingInputActivityPollInterval: .seconds(1),
       clock: clock,
       readScreenContents: { _, _ in screenContents.value }
@@ -353,7 +355,8 @@ struct WorktreeTerminalManagerTests {
     let manager = WorktreeTerminalManager(
       runtime: GhosttyRuntime(),
       awaitingInputTTL: .seconds(8),
-      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputTransitionOnDebounce: .milliseconds(250),
+      awaitingInputTransitionOffDebounce: .milliseconds(250),
       awaitingInputActivityPollInterval: .seconds(1),
       clock: clock,
       readScreenContents: { _, _ in screenContents.value }
@@ -394,7 +397,8 @@ struct WorktreeTerminalManagerTests {
       runtime: GhosttyRuntime(),
       socketServer: server,
       awaitingInputTTL: .seconds(8),
-      awaitingInputTransitionDebounce: .milliseconds(250),
+      awaitingInputTransitionOnDebounce: .milliseconds(250),
+      awaitingInputTransitionOffDebounce: .milliseconds(250),
       awaitingInputActivityPollInterval: .seconds(1),
       clock: clock
     )
@@ -425,6 +429,54 @@ struct WorktreeTerminalManagerTests {
     server.onBusy?(worktree.id, tabId.rawValue, surface.id, true, nil)
 
     await clock.advance(by: .seconds(1))
+    #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+  }
+
+  /// Codex auto-approve round-trip (PermissionRequest → ~400ms →
+  /// PreToolUse busyOn) must not produce a visible "Wants Input"
+  /// blink. Guarded by the 750ms default on-debounce.
+  @Test func codexAutoApproveRoundTripDoesNotFlickerAwaitingInputBadge() async {
+    let clock = TestClock()
+    let server = AgentHookSocketServer()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: server,
+      awaitingInputTTL: .seconds(8),
+      // Use production defaults for the presentation debounces so this
+      // test pins the actual shipping behavior.
+      awaitingInputActivityPollInterval: .seconds(1),
+      clock: clock
+    )
+    let worktree = makeWorktree()
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+    guard let state = manager.stateIfExists(for: worktree.id),
+      let tabId = state.tabManager.selectedTabId,
+      let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected blocking script tab and surface")
+      return
+    }
+
+    // Codex: PermissionRequest then auto-approved PreToolUse ~400ms later.
+    server.onNotification?(
+      worktree.id,
+      tabId.rawValue,
+      surface.id,
+      AgentHookNotification(
+        agent: "codex",
+        event: "PermissionRequest",
+        title: nil,
+        body: "approve shell escalation?",
+        sessionID: nil
+      )
+    )
+    await clock.advance(by: .milliseconds(400))
+    // Before on-debounce fires, the busy signal arrives and clears
+    // the awaiting lease. The chip must never become visible.
+    server.onBusy?(worktree.id, tabId.rawValue, surface.id, true, nil)
+    await clock.advance(by: .milliseconds(500))
+
     #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
   }
 
