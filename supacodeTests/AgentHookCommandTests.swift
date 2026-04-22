@@ -8,12 +8,36 @@ struct AgentHookCommandTests {
 
   @Test func busyActiveCommandContainsFlag1() {
     let command = AgentHookSettingsCommand.busyCommand(active: true)
-    #expect(command.contains("$SUPACODE_SURFACE_ID 1"))
+    #expect(command.contains("$SUPACODE_SURFACE_ID 1 $PPID"))
   }
 
   @Test func busyInactiveCommandContainsFlag0() {
     let command = AgentHookSettingsCommand.busyCommand(active: false)
-    #expect(command.contains("$SUPACODE_SURFACE_ID 0"))
+    #expect(command.contains("$SUPACODE_SURFACE_ID 0 $PPID"))
+  }
+
+  @Test func busyCommandPassesPPIDAsFifthField() {
+    let command = AgentHookSettingsCommand.busyCommand(active: true)
+    #expect(command.contains("$PPID"))
+  }
+
+  @Test func historicalBusyCommandsAreTheTwoPreviousShapes() {
+    let historical = AgentHookSettingsCommand.historicalBusyCommands
+    #expect(historical.count == 2)
+    // Neither of the historical strings should contain $PPID — that's
+    // the whole point. They also must NOT match the current output,
+    // otherwise upgrading would re-prune a valid install.
+    for historicalCommand in historical {
+      #expect(!historicalCommand.contains("$PPID"))
+      #expect(historicalCommand != AgentHookSettingsCommand.busyCommand(active: true))
+      #expect(historicalCommand != AgentHookSettingsCommand.busyCommand(active: false))
+    }
+  }
+
+  @Test func historicalBusyCommandsAreRecognizedAsManaged() {
+    for historicalCommand in AgentHookSettingsCommand.historicalBusyCommands {
+      #expect(AgentHookCommandOwnership.isSupacodeManagedCommand(historicalCommand))
+    }
   }
 
   @Test func busyCommandChecksAllFourEnvVars() {

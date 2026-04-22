@@ -7,15 +7,20 @@ private nonisolated let socketLogger = SupaLogger("AgentHookSocket")
 /// messages from `nc -U`.
 ///
 /// Two message formats are supported:
-/// - **Busy flag**: `<worktreeID> <tabID> <surfaceID> <0|1>\n`
+/// - **Busy flag**: `<worktreeID> <tabID> <surfaceID> <0|1> [<pid>]\n`
+///   The 5th field is the agent process PID (`$PPID` from the hook
+///   shell). Pre-upgrade clients omit it; parsing tolerates both
+///   shapes for backwards compatibility.
 /// - **Notification**: `<worktreeID> <tabID> <surfaceID> <agent>\n<JSON payload>\n`
 @MainActor
 final class AgentHookSocketServer {
   private(set) var socketPath: String?
 
   private var listenTask: Task<Void, Never>?
-  /// (worktreeID, tabID, surfaceID, active).
-  var onBusy: ((String, UUID, UUID, Bool) -> Void)?
+  /// (worktreeID, tabID, surfaceID, active, pid).
+  /// `pid` is `nil` when the hook was installed before the `$PPID`
+  /// extension; those clients omit the 5th field.
+  var onBusy: ((String, UUID, UUID, Bool, Int32?) -> Void)?
   /// (worktreeID, tabID, surfaceID, notification).
   var onNotification: ((String, UUID, UUID, AgentHookNotification) -> Void)?
 
@@ -104,8 +109,8 @@ final class AgentHookSocketServer {
 
         await MainActor.run { [weak self] in
           switch message {
-          case .busy(let worktreeID, let tabID, let surfaceID, let active):
-            self?.onBusy?(worktreeID, tabID, surfaceID, active)
+          case .busy(let worktreeID, let tabID, let surfaceID, let active, let pid):
+            self?.onBusy?(worktreeID, tabID, surfaceID, active, pid)
           case .notification(let worktreeID, let tabID, let surfaceID, let notification):
             self?.onNotification?(worktreeID, tabID, surfaceID, notification)
           }
@@ -165,7 +170,7 @@ final class AgentHookSocketServer {
   private nonisolated static let maxPayloadSize = 65_536
 
   nonisolated enum Message: Sendable {
-    case busy(worktreeID: String, tabID: UUID, surfaceID: UUID, active: Bool)
+    case busy(worktreeID: String, tabID: UUID, surfaceID: UUID, active: Bool, pid: Int32?)
     case notification(worktreeID: String, tabID: UUID, surfaceID: UUID, notification: AgentHookNotification)
   }
 
@@ -228,11 +233,15 @@ final class AgentHookSocketServer {
       return nil
     }
 
-    // Format: worktreeID tabID surfaceID <flag|agent>.
-    // Single line with 4 fields → busy flag.
+    // Format: worktreeID tabID surfaceID <flag|agent> [<pid>].
+    // Single line with 4–5 fields → busy flag (5th is agent PID).
     // Multiple lines → notification (4th field is agent, rest is JSON).
     let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
-    let headerParts = lines[0].split(separator: " ", maxSplits: 3)
+    // Busy (single line) may carry a 5th PID field, so allow up to 4
+    // splits on the header. Notifications stop at 3 splits — the 4th
+    // field is a single token (agent name).
+    let isBusy = lines.count == 1
+    let headerParts = lines[0].split(separator: " ", maxSplits: isBusy ? 4 : 3)
     guard
       headerParts.count >= 3,
       let tabID = UUID(uuidString: String(headerParts[1])),
@@ -244,9 +253,16 @@ final class AgentHookSocketServer {
 
     let worktreeID = String(headerParts[0])
 
-    if lines.count == 1, headerParts.count == 4 {
+    if isBusy, headerParts.count == 4 || headerParts.count == 5 {
       let active = String(headerParts[3]) != "0"
-      return .busy(worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID, active: active)
+      let pid: Int32? = headerParts.count == 5 ? Int32(String(headerParts[4])) : nil
+      return .busy(
+        worktreeID: worktreeID,
+        tabID: tabID,
+        surfaceID: surfaceID,
+        active: active,
+        pid: pid
+      )
     }
 
     // Multiple lines → notification. Fourth header field is the agent name.

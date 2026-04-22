@@ -118,7 +118,7 @@ struct WorktreeTerminalManagerTests {
       return
     }
 
-    server.onBusy?(encodedID, tabId.rawValue, surface.id, true)
+    server.onBusy?(encodedID, tabId.rawValue, surface.id, true, nil)
 
     #expect(manager.taskStatus(for: worktree.id) == .running)
   }
@@ -422,7 +422,7 @@ struct WorktreeTerminalManagerTests {
         sessionID: nil
       )
     )
-    server.onBusy?(worktree.id, tabId.rawValue, surface.id, true)
+    server.onBusy?(worktree.id, tabId.rawValue, surface.id, true, nil)
 
     await clock.advance(by: .seconds(1))
     #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))

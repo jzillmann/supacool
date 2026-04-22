@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 import Sharing
@@ -8,6 +9,14 @@ private let awaitingInputTransitionDebounceDefault: Duration = .milliseconds(250
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptDetectionStableSamples = 2
+private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
+
+private let defaultIsProcessAlive: @Sendable (Int32) -> Bool = { pid in
+  // `kill(pid, 0)` returns 0 when the process exists (signal-less ping).
+  // ESRCH → process gone. EPERM → exists but we can't signal it; still alive.
+  if kill(pid, 0) == 0 { return true }
+  return errno != ESRCH
+}
 
 @MainActor
 @Observable
@@ -25,11 +34,22 @@ final class WorktreeTerminalManager {
     var stableSampleCount = 1
   }
 
+  /// Supacool-only. Per-tab registration of the agent process PID so a
+  /// background sweep can clear stale busy/awaiting state if the agent
+  /// crashes (SIGKILL, OOM) before a clean `Stop`/`SessionEnd` hook fires.
+  private struct AgentPIDRegistration {
+    let worktreeID: Worktree.ID
+    let surfaceID: UUID
+    let pid: Int32
+  }
+
   private let runtime: GhosttyRuntime
   private let sleep: @Sendable (Duration) async throws -> Void
   private let awaitingInputTTL: Duration
   private let awaitingInputTransitionDebounce: Duration
   private let awaitingInputActivityPollInterval: Duration
+  private let agentPIDSweepInterval: Duration
+  private let isProcessAlive: @Sendable (Int32) -> Bool
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
@@ -42,6 +62,8 @@ final class WorktreeTerminalManager {
   private var awaitingInputActivityTasks: [UUID: Task<Void, Never>] = [:]
   private var awaitingInputPromptCandidates: [UUID: AwaitingInputPromptCandidate] = [:]
   private var awaitingInputPromptScanTask: Task<Void, Never>?
+  private var awaitingInputPromptScanTickCount: Int = 0
+  private var agentPIDByTab: [UUID: AgentPIDRegistration] = [:]
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
@@ -58,6 +80,8 @@ final class WorktreeTerminalManager {
     awaitingInputTTL: Duration = awaitingInputTTLDefault,
     awaitingInputTransitionDebounce: Duration = awaitingInputTransitionDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
+    agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
+    isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     clock: C = ContinuousClock(),
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
   ) {
@@ -65,6 +89,8 @@ final class WorktreeTerminalManager {
     self.awaitingInputTTL = awaitingInputTTL
     self.awaitingInputTransitionDebounce = awaitingInputTransitionDebounce
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
+    self.agentPIDSweepInterval = agentPIDSweepInterval
+    self.isProcessAlive = isProcessAlive
     self.sleep = { duration in
       try await clock.sleep(for: duration)
     }
@@ -81,14 +107,29 @@ final class WorktreeTerminalManager {
   }
 
   private func configureSocketServer(_ server: AgentHookSocketServer) {
-    server.onBusy = { [weak self] worktreeID, tabID, surfaceID, active in
+    server.onBusy = { [weak self] worktreeID, tabID, surfaceID, active, pid in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
       terminalLogger.debug(
-        "Hook busy: worktree=\(decoded) tab=\(tabID) surface=\(surfaceID) active=\(active)"
+        "Hook busy: worktree=\(decoded) tab=\(tabID) surface=\(surfaceID) "
+          + "active=\(active) pid=\(pid.map(String.init) ?? "nil")"
       )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
         return
+      }
+      // Register / unregister the agent PID so the 30s sweep can clear
+      // stale busy state if the agent crashes before a clean hook fires.
+      // Pre-upgrade hooks send pid=nil; don't disturb existing tracking.
+      if let pid {
+        if active {
+          self?.agentPIDByTab[tabID] = AgentPIDRegistration(
+            worktreeID: decoded,
+            surfaceID: surfaceID,
+            pid: pid
+          )
+        } else {
+          self?.agentPIDByTab.removeValue(forKey: tabID)
+        }
       }
       // Any busy transition (resumed or finished) supersedes a prior
       // "awaiting input" signal for this tab.
@@ -714,6 +755,7 @@ final class WorktreeTerminalManager {
   }
 
   private func sampleAwaitingInputPromptScreens() {
+    tickAgentPIDSweepIfNeeded()
     var openTabIDs = Set<UUID>()
 
     for (worktreeID, state) in states {
@@ -759,7 +801,56 @@ final class WorktreeTerminalManager {
       awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputPromptCandidates.removeValue(forKey: tabID)
       awaitingInputByTab.removeValue(forKey: tabID)
+      agentPIDByTab.removeValue(forKey: tabID)
     }
+  }
+
+  // MARK: - Agent PID sweep (Supacool)
+
+  /// Ticks the sweep counter from the 1s prompt-scan loop and runs a
+  /// full `kill(pid, 0)` sweep every `agentPIDSweepInterval`. Piggy-
+  /// backing on the existing timer avoids a second background Task
+  /// whose mere presence was observed to destabilise TestClock-driven
+  /// tests when Swift Testing runs multiple tests in parallel.
+  private func tickAgentPIDSweepIfNeeded() {
+    awaitingInputPromptScanTickCount &+= 1
+    let ticksPerSweep = max(
+      1,
+      Int(agentPIDSweepInterval / awaitingInputActivityPollInterval)
+    )
+    guard awaitingInputPromptScanTickCount % ticksPerSweep == 0 else { return }
+    sweepAgentPIDs()
+  }
+
+  /// Walks registered agent PIDs and clears busy/awaiting state for any
+  /// whose process has died. Safety net for SIGKILL/OOM where no hook
+  /// fires to report the transition.
+  func sweepAgentPIDs() {
+    guard !agentPIDByTab.isEmpty else { return }
+    var dead: [(tabID: UUID, registration: AgentPIDRegistration)] = []
+    for (tabID, registration) in agentPIDByTab where !isProcessAlive(registration.pid) {
+      dead.append((tabID, registration))
+    }
+    for (tabID, registration) in dead {
+      terminalLogger.info(
+        "Agent PID \(registration.pid) gone; clearing tab \(tabID) busy/awaiting state"
+      )
+      agentPIDByTab.removeValue(forKey: tabID)
+      clearAwaitingInput(tabID: tabID)
+      guard let state = states[registration.worktreeID] else { continue }
+      state.setAgentBusy(
+        surfaceID: registration.surfaceID,
+        tabID: TerminalTabID(rawValue: tabID),
+        active: false
+      )
+    }
+  }
+
+  /// Whether an agent PID has been registered for this tab (pre-upgrade
+  /// hook clients don't send a PID so this can be false even for a live
+  /// agent). Exposed for tests and for the Matrix Board's sweep debug UI.
+  func registeredAgentPID(tabID: UUID) -> Int32? {
+    agentPIDByTab[tabID]?.pid
   }
 
   private func commitAwaitingInputPresentation(for tabID: UUID, desiredState: Bool) {

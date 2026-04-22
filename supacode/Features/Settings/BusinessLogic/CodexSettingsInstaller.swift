@@ -53,7 +53,8 @@ nonisolated struct CodexSettingsInstaller {
     try await enableHooksFeature()
     try fileInstaller.install(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try CodexHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try CodexHookSettings.progressHookGroupsByEvent(),
+      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
     )
   }
 
@@ -68,7 +69,8 @@ nonisolated struct CodexSettingsInstaller {
   func uninstallProgressHooks() throws {
     try fileInstaller.uninstall(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try CodexHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try CodexHookSettings.progressHookGroupsByEvent(),
+      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
     )
   }
 

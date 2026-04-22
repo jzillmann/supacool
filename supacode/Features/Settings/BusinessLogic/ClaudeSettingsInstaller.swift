@@ -32,7 +32,8 @@ nonisolated struct ClaudeSettingsInstaller {
   func installProgressHooks() throws {
     try fileInstaller.install(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent(),
+      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
     )
   }
 
@@ -46,7 +47,8 @@ nonisolated struct ClaudeSettingsInstaller {
   func uninstallProgressHooks() throws {
     try fileInstaller.uninstall(
       settingsURL: settingsURL,
-      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent()
+      hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent(),
+      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
     )
   }
 

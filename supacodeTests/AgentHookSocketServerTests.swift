@@ -15,7 +15,7 @@ struct AgentHookSocketServerTests {
     let raw = "\(worktreeID) \(tabID.uuidString) \(surfaceID.uuidString) 1"
     let message = AgentHookSocketServer.parse(data: Data(raw.utf8))
 
-    guard case .busy(let wID, let tID, let sID, let active) = message else {
+    guard case .busy(let wID, let tID, let sID, let active, let pid) = message else {
       Issue.record("Expected busy message, got \(String(describing: message))")
       return
     }
@@ -23,6 +23,7 @@ struct AgentHookSocketServerTests {
     #expect(tID == tabID)
     #expect(sID == surfaceID)
     #expect(active == true)
+    #expect(pid == nil)
   }
 
   @Test func parsesValidBusyInactiveMessage() {
@@ -31,11 +32,12 @@ struct AgentHookSocketServerTests {
     let raw = "wt \(tabID.uuidString) \(surfaceID.uuidString) 0"
     let message = AgentHookSocketServer.parse(data: Data(raw.utf8))
 
-    guard case .busy(_, _, _, let active) = message else {
+    guard case .busy(_, _, _, let active, let pid) = message else {
       Issue.record("Expected busy message")
       return
     }
     #expect(active == false)
+    #expect(pid == nil)
   }
 
   @Test func nonZeroBusyFlagTreatedAsActive() {
@@ -44,11 +46,39 @@ struct AgentHookSocketServerTests {
     let raw = "wt \(tabID.uuidString) \(surfaceID.uuidString) anything"
     let message = AgentHookSocketServer.parse(data: Data(raw.utf8))
 
-    guard case .busy(_, _, _, let active) = message else {
+    guard case .busy(_, _, _, let active, _) = message else {
       Issue.record("Expected busy message")
       return
     }
     #expect(active == true)
+  }
+
+  @Test func parsesBusyMessageWithPID() {
+    let tabID = UUID()
+    let surfaceID = UUID()
+    let raw = "wt \(tabID.uuidString) \(surfaceID.uuidString) 1 12345"
+    let message = AgentHookSocketServer.parse(data: Data(raw.utf8))
+
+    guard case .busy(_, _, _, let active, let pid) = message else {
+      Issue.record("Expected busy message, got \(String(describing: message))")
+      return
+    }
+    #expect(active == true)
+    #expect(pid == 12345)
+  }
+
+  @Test func busyMessageWithNonIntegerPIDIsParsedAsNil() {
+    let tabID = UUID()
+    let surfaceID = UUID()
+    let raw = "wt \(tabID.uuidString) \(surfaceID.uuidString) 0 not-a-number"
+    let message = AgentHookSocketServer.parse(data: Data(raw.utf8))
+
+    guard case .busy(_, _, _, let active, let pid) = message else {
+      Issue.record("Expected busy message")
+      return
+    }
+    #expect(active == false)
+    #expect(pid == nil)
   }
 
   // MARK: - Notification message parsing.

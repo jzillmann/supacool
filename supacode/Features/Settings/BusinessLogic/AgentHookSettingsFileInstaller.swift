@@ -85,12 +85,17 @@ nonisolated struct AgentHookSettingsFileInstaller {
   }
 
   /// Removes matching hooks and any legacy Supacode-owned commands.
+  /// `additionalHistoricalCommands` covers pre-upgrade command strings
+  /// that should also be pruned even though they don't match the current
+  /// payload (e.g. pre-PID `busyCommand`).
   func uninstall(
     settingsURL: URL,
-    hookGroupsByEvent: @autoclosure () throws -> [String: [JSONValue]]
+    hookGroupsByEvent: @autoclosure () throws -> [String: [JSONValue]],
+    additionalHistoricalCommands: Set<String> = []
   ) throws {
     let settingsObject = try loadSettingsObject(at: settingsURL)
     let commandsToPrune = Self.commands(from: try hookGroupsByEvent())
+      .union(additionalHistoricalCommands)
     var mergedObject = settingsObject
     var hooksObject = (mergedObject["hooks"]?.objectValue) ?? [:]
     for event in hooksObject.keys {
@@ -108,12 +113,14 @@ nonisolated struct AgentHookSettingsFileInstaller {
 
   func install(
     settingsURL: URL,
-    hookGroupsByEvent: @autoclosure () throws -> [String: [JSONValue]]
+    hookGroupsByEvent: @autoclosure () throws -> [String: [JSONValue]],
+    additionalHistoricalCommands: Set<String> = []
   ) throws {
     let settingsObject = try loadSettingsObject(at: settingsURL)
     let mergedObject = try mergedSettingsObject(
       from: settingsObject,
-      hookGroupsByEvent: try hookGroupsByEvent()
+      hookGroupsByEvent: try hookGroupsByEvent(),
+      additionalHistoricalCommands: additionalHistoricalCommands
     )
     try writeSettings(mergedObject, to: settingsURL)
   }
@@ -152,7 +159,8 @@ nonisolated struct AgentHookSettingsFileInstaller {
 
   private func mergedSettingsObject(
     from settingsObject: [String: JSONValue],
-    hookGroupsByEvent: [String: [JSONValue]]
+    hookGroupsByEvent: [String: [JSONValue]],
+    additionalHistoricalCommands: Set<String> = []
   ) throws -> [String: JSONValue] {
     var mergedObject = settingsObject
     var hooksObject: [String: JSONValue]
@@ -167,7 +175,10 @@ nonisolated struct AgentHookSettingsFileInstaller {
 
     // Only prune commands that belong to the feature being installed
     // (or uninstalled). This preserves hooks from other features.
+    // Historical commands are included so pre-upgrade strings (e.g. the
+    // pre-PID busy command) get replaced rather than duplicated.
     let commandsToPrune = Self.commands(from: hookGroupsByEvent)
+      .union(additionalHistoricalCommands)
     for event in hooksObject.keys {
       let existing = try existingGroups(for: event, hooksObject: hooksObject)
       let filtered = existing.compactMap { prunedGroup($0, removing: commandsToPrune) }
