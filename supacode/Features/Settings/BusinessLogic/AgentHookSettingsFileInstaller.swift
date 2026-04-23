@@ -10,6 +10,20 @@ nonisolated struct AgentHookSettingsFileInstaller {
     let invalidRootObject: @Sendable () -> Error
   }
 
+  /// Tri-state view of what the on-disk settings file contains, relative to
+  /// the expected hook payload for a given feature.
+  ///
+  /// - `.current`: every expected command is installed. Safe.
+  /// - `.stale`: some Supacode-owned commands are present but the expected
+  ///   set is not a subset — typically the app has added or renamed a hook
+  ///   since the user last clicked Install. A reinstall is required.
+  /// - `.missing`: nothing Supacode-owned is present for this feature.
+  enum InstallState: Equatable, Sendable {
+    case current
+    case stale
+    case missing
+  }
+
   private enum LoadError: Error {
     case invalidRootObject
   }
@@ -64,6 +78,58 @@ nonisolated struct AgentHookSettingsFileInstaller {
       }
       return false
     }
+  }
+
+  /// Returns whether the settings file is `.current`, `.stale`, or `.missing`
+  /// for the given expected hook groups.
+  func installState(
+    settingsURL: URL,
+    hookGroupsByEvent: [String: [JSONValue]]
+  ) -> InstallState {
+    let expectedCommands = Self.commands(from: hookGroupsByEvent)
+    guard !expectedCommands.isEmpty else { return .missing }
+
+    let installedCommands: Set<String>
+    do {
+      installedCommands = try loadInstalledCommands(at: settingsURL)
+    } catch {
+      if !Self.isFileNotFound(error) {
+        logWarning("Failed to inspect hook install state at \(settingsURL.path): \(error)")
+      }
+      return .missing
+    }
+
+    if expectedCommands.isSubset(of: installedCommands) {
+      return .current
+    }
+    let hasSomeExpected = !expectedCommands.isDisjoint(with: installedCommands)
+    let hasSupacodeCommand = installedCommands.contains { command in
+      AgentHookCommandOwnership.isSupacodeManagedCommand(command)
+    }
+    return (hasSomeExpected || hasSupacodeCommand) ? .stale : .missing
+  }
+
+  private func loadInstalledCommands(at settingsURL: URL) throws -> Set<String> {
+    let settingsObject = try loadSettingsObject(at: settingsURL)
+    guard let hooksValue = settingsObject["hooks"],
+      let hooksObject = hooksValue.objectValue
+    else { return [] }
+    var installed = Set<String>()
+    for (_, value) in hooksObject {
+      guard let groups = value.arrayValue else { continue }
+      for group in groups {
+        guard let groupObject = group.objectValue,
+          let hooks = groupObject["hooks"]?.arrayValue
+        else { continue }
+        for hook in hooks {
+          guard let hookObject = hook.objectValue,
+            let command = hookObject["command"]?.stringValue
+          else { continue }
+          installed.insert(command)
+        }
+      }
+    }
+    return installed
   }
 
   private static func commands(from hookGroupsByEvent: [String: [JSONValue]]) -> Set<String> {

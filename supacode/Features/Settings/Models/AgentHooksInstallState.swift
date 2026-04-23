@@ -30,7 +30,7 @@ nonisolated enum AgentHooksInstallState: Equatable, Sendable {
 }
 
 /// Identifies a specific hook feature for a specific agent.
-enum AgentHookSlot: Equatable, Sendable {
+nonisolated enum AgentHookSlot: Equatable, Sendable {
   case claudeProgress
   case claudeNotifications
   case codexProgress

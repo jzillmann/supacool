@@ -1,6 +1,6 @@
 import Foundation
 
-enum SettingsSection: Hashable {
+enum SettingsSection: Hashable, Sendable {
   case general
   case notifications
   case worktree

@@ -29,6 +29,23 @@ nonisolated struct ClaudeSettingsInstaller {
     )
   }
 
+  func installState(progress: Bool) -> AgentHookSettingsFileInstaller.InstallState {
+    let groups: [String: [JSONValue]]
+    do {
+      groups =
+        try progress
+        ? ClaudeHookSettings.progressHookGroupsByEvent()
+        : ClaudeHookSettings.notificationHookGroupsByEvent()
+    } catch {
+      Self.reportInvalidHookConfiguration(error, progress: progress)
+      return .missing
+    }
+    return fileInstaller.installState(
+      settingsURL: settingsURL,
+      hookGroupsByEvent: groups
+    )
+  }
+
   func installProgressHooks() throws {
     try fileInstaller.install(
       settingsURL: settingsURL,

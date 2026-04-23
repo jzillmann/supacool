@@ -75,6 +75,12 @@ struct BoardRootView: View {
     currentContent
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
+    // Floating tray (stale hooks, draft cards, etc.) hovers over whichever
+    // mode is active — board grid or full-screen terminal.
+    .overlay(alignment: .bottomTrailing) {
+      BoardTrayView(store: store)
+        .allowsHitTesting(!store.trayCards.isEmpty)
+    }
     // Hidden per-session watchers. Live at the root so busy/awaiting-input
     // transitions still trigger the auto-observer (and persist
     // lastKnownBusy) while the user is inside a full-screen terminal.

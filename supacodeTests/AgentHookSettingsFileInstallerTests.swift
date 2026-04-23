@@ -234,6 +234,118 @@ struct AgentHookSettingsFileInstallerTests {
     #expect(warnings.value[0].contains(url.path))
   }
 
+  // MARK: - installState (tri-state).
+
+  @Test func installStateMissingWhenNoFile() {
+    let url = makeTempURL()
+    let installer = makeInstaller()
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) == .missing)
+  }
+
+  @Test func installStateCurrentAfterInstall() throws {
+    let url = makeTempURL()
+    defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
+
+    let installer = makeInstaller()
+    let groups = sampleHookGroups()
+    try installer.install(settingsURL: url, hookGroupsByEvent: groups)
+
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: groups) == .current)
+  }
+
+  @Test func installStateStaleWhenOneExpectedCommandMissing() throws {
+    let url = makeTempURL()
+    defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
+
+    // Install the sample payload (busy-off on Stop only).
+    let installer = makeInstaller()
+    try installer.install(settingsURL: url, hookGroupsByEvent: sampleHookGroups())
+
+    // Now ask about an *extended* payload that also expects a PreToolUse
+    // busy-on hook. The file has one of the two expected commands → stale.
+    let extendedGroups: [String: [JSONValue]] = sampleHookGroups().merging(
+      [
+        "PreToolUse": [
+          .object([
+            "hooks": .array([
+              .object([
+                "type": "command",
+                "command": .string(AgentHookSettingsCommand.busyCommand(active: true)),
+                "timeout": 5,
+              ]),
+            ]),
+          ]),
+        ],
+      ],
+      uniquingKeysWith: { lhs, _ in lhs }
+    )
+
+    #expect(
+      installer.installState(settingsURL: url, hookGroupsByEvent: extendedGroups) == .stale
+    )
+  }
+
+  @Test func installStateStaleWhenOnlyLegacyCommandPresent() throws {
+    let url = makeTempURL()
+    defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
+
+    // Legacy pre-upgrade settings: a Supacode-owned legacy command lives in
+    // the file, but none of the current expected commands. The installer
+    // should report `.stale` (not `.missing`) so we can prompt a reinstall.
+    let legacy: JSONValue = .object([
+      "hooks": .object([
+        "Stop": .array([
+          .object([
+            "hooks": .array([
+              .object([
+                "type": "command",
+                "command": "SUPACODE_CLI_PATH agent-hook --stop",
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
+    ])
+    try fileManager.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+    )
+    try JSONEncoder().encode(legacy).write(to: url)
+
+    let installer = makeInstaller()
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) == .stale)
+  }
+
+  @Test func installStateMissingWhenFileHasUnrelatedHooks() throws {
+    let url = makeTempURL()
+    defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
+
+    // Third-party (non-Supacode) hooks only — this is "you never installed
+    // anything of ours", not "you have drift."
+    let foreign: JSONValue = .object([
+      "hooks": .object([
+        "Stop": .array([
+          .object([
+            "hooks": .array([
+              .object([
+                "type": "command",
+                "command": "echo third-party",
+              ]),
+            ]),
+          ]),
+        ]),
+      ]),
+    ])
+    try fileManager.createDirectory(
+      at: url.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+    )
+    try JSONEncoder().encode(foreign).write(to: url)
+
+    let installer = makeInstaller()
+    #expect(installer.installState(settingsURL: url, hookGroupsByEvent: sampleHookGroups()) == .missing)
+  }
+
   @Test func containsMatchingHooksDoesNotLogMissingFile() {
     let url = makeTempURL()
     let warnings = LockIsolated<[String]>([])

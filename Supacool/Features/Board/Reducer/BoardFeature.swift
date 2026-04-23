@@ -1,5 +1,6 @@
 import ComposableArchitecture
 import Foundation
+import IdentifiedCollections
 
 private nonisolated let boardLogger = SupaLogger("Board")
 
@@ -52,6 +53,11 @@ struct BoardFeature {
     /// during this app run. Lets the user jump straight into the now-
     /// detached card and decide whether to resume, rerun, or remove it.
     var priorityTerminationAlert: PriorityTerminationAlertState?
+
+    /// Transient cards floating in the bottom-right tray over the board.
+    /// Not persisted — refilled on each app launch by whichever subsystem
+    /// owns the signal (stale hooks check, New Terminal drafts, etc.).
+    var trayCards: IdentifiedArrayOf<TrayCard> = []
   }
 
   /// One-shot summary shown after a prune attempt. Identifiable so we
@@ -199,6 +205,15 @@ struct BoardFeature {
     /// hasn't renamed in the meantime).
     case _autoDisplayNameSuggested(id: AgentSession.ID, suggested: String)
 
+    // MARK: Tray
+    /// Push a new tray card. De-dupes by `kind` so repeated launches don't
+    /// stack multiple identical cards (e.g. two stale-hooks entries).
+    case trayCardPushed(TrayCard)
+    /// User tapped the card body. Behavior depends on `kind`.
+    case trayCardPrimaryTapped(id: TrayCard.ID)
+    /// User tapped the × on a card. Removes it for the session.
+    case trayCardDismissed(id: TrayCard.ID)
+
     // MARK: Worktree prune
     /// User clicked the broom button next to a repo in the picker.
     /// Kicks off `git worktree prune --verbose` and surfaces a summary.
@@ -213,8 +228,13 @@ struct BoardFeature {
     case delegate(Delegate)
   }
 
+  @CasePathable
   enum Delegate: Equatable {
     case prioritySessionTerminated(title: String, body: String)
+    /// Emitted when a tray card asks to open the Settings window on a
+    /// specific section (e.g. the stale-hooks card routes to Coding Agents).
+    /// AppFeature listens and forwards to SettingsFeature.
+    case openSettingsRequested(section: SettingsSection)
     /// `worktreeID` is the session's state-key worktree — used for tab
     /// destruction and (when `deleteBackingWorktree` is true) for backing
     /// worktree cleanup. `additionalWorktreeIDsToDelete` carries any
@@ -856,6 +876,27 @@ struct BoardFeature {
       case .dismissPruneAlert:
         state.pruneAlert = nil
         return .none
+
+      case .trayCardPushed(let card):
+        // De-dupe by kind so repeated pushes of the same logical card
+        // (e.g. stale-hooks on every launch) don't stack.
+        if state.trayCards.contains(where: { $0.kind == card.kind }) {
+          return .none
+        }
+        state.trayCards.append(card)
+        return .none
+
+      case .trayCardDismissed(let id):
+        state.trayCards.remove(id: id)
+        return .none
+
+      case .trayCardPrimaryTapped(let id):
+        guard let card = state.trayCards[id: id] else { return .none }
+        switch card.kind {
+        case .staleHooks:
+          state.trayCards.remove(id: id)
+          return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
+        }
 
       case .delegate:
         return .none
