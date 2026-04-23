@@ -1103,6 +1103,87 @@ struct BoardFeatureTests {
     await store.receive(\.delegate.sessionRemoved)
   }
 
+  @Test(.dependencies) func trayCardSecondaryTappedStaleHooksRequestsReinstall() async {
+    // Optimistic: the card clears immediately on Reinstall tap, the
+    // delegate carries the slots forward for AppFeature to fan out.
+    let card = TrayCard(
+      kind: .staleHooks(slots: [.claudeProgress, .codexNotifications])
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardSecondaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+    await store.receive(\.delegate.reinstallHooksRequested)
+  }
+
+  @Test(.dependencies) func trayNoteHookInstalledNarrowsStaleCard() async {
+    // A per-slot success narrows a multi-slot stale card rather than
+    // removing it outright — the remaining drift still needs fixing.
+    let card = TrayCard(
+      kind: .staleHooks(slots: [.claudeProgress, .codexNotifications])
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayNoteHookInstalled(slot: .claudeProgress)) {
+      $0.trayCards[id: card.id]?.kind = .staleHooks(slots: [.codexNotifications])
+    }
+  }
+
+  @Test(.dependencies) func trayNoteHookInstalledRemovesCardWhenEmpty() async {
+    let card = TrayCard(kind: .staleHooks(slots: [.codexProgress]))
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayNoteHookInstalled(slot: .codexProgress)) {
+      $0.trayCards = []
+    }
+  }
+
+  @Test(.dependencies) func trayNoteHookInstalledClearsMatchingFailureCard() async {
+    // A retry success should dismiss a stale failure card for the same
+    // slot — the user shouldn't have to × a resolved error.
+    let failureCard = TrayCard(
+      kind: .hookInstallFailed(slot: .claudeNotifications, message: "boom")
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [failureCard]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayNoteHookInstalled(slot: .claudeNotifications)) {
+      $0.trayCards = []
+    }
+  }
+
+  @Test(.dependencies) func trayCardPrimaryTappedHookInstallFailedOpensSettings() async {
+    let card = TrayCard(
+      kind: .hookInstallFailed(slot: .claudeProgress, message: "permission denied")
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardPrimaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+    await store.receive(\.delegate.openSettingsRequested)
+  }
+
   // MARK: - Helpers
 
   private static func sessionCreatingCard(for session: AgentSession) -> TrayCard {

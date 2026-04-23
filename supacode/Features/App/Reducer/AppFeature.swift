@@ -261,6 +261,22 @@ struct AppFeature {
       case .board(.delegate(.openSettingsRequested(let section))):
         return .send(.settings(.setSelection(section)))
 
+      case .board(.delegate(.reinstallHooksRequested(let slots))):
+        return .run { send in
+          for slot in slots {
+            await send(.settings(.agentHookInstallTapped(slot)))
+          }
+        }
+
+      case .settings(.delegate(.hookInstallSucceeded(let slot))):
+        return .send(.board(.trayNoteHookInstalled(slot: slot)))
+
+      case .settings(.delegate(.hookInstallFailed(let slot, let message))):
+        let card = TrayCard(
+          kind: .hookInstallFailed(slot: slot, message: message)
+        )
+        return .send(.board(.trayCardPushed(card)))
+
       case .board(
         .delegate(
           .sessionRemoved(

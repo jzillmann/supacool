@@ -17,6 +17,9 @@ struct BoardTrayView: View {
           TrayCardView(
             card: card,
             onPrimary: { store.send(.trayCardPrimaryTapped(id: card.id)) },
+            onSecondary: card.kind.hasSecondaryAction
+              ? { store.send(.trayCardSecondaryTapped(id: card.id)) }
+              : nil,
             onDismiss: { store.send(.trayCardDismissed(id: card.id)) }
           )
           .transition(
@@ -37,6 +40,7 @@ struct BoardTrayView: View {
 private struct TrayCardView: View {
   let card: TrayCard
   let onPrimary: () -> Void
+  let onSecondary: (() -> Void)?
   let onDismiss: () -> Void
 
   @State private var isHovering: Bool = false
@@ -75,6 +79,13 @@ private struct TrayCardView: View {
       }
       .multilineTextAlignment(.leading)
       .frame(maxWidth: 220, alignment: .leading)
+
+      if let onSecondary, let secondaryTitle = presentation.secondaryTitle {
+        Button(secondaryTitle, action: onSecondary)
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          .help(presentation.secondaryHelp ?? secondaryTitle)
+      }
 
       Button(action: onDismiss) {
         Image(systemName: "xmark")
@@ -118,8 +129,10 @@ private struct TrayCardView: View {
         title: "Hooks out of date",
         subtitle: slots.isEmpty
           ? "Reinstall coding-agent hooks."
-          : "Reinstall \(Self.describe(slots)) in Settings → Coding Agents.",
-        helpText: "Open Settings → Coding Agents to reinstall the latest hook payload."
+          : "Drift in \(Self.describe(slots)).",
+        helpText: "Open Settings → Coding Agents to inspect.",
+        secondaryTitle: "Reinstall",
+        secondaryHelp: "Reinstall the listed hooks now"
       )
     case .sessionCreating(_, let displayName):
       return TrayCardPresentation(
@@ -129,6 +142,23 @@ private struct TrayCardView: View {
         subtitle: displayName,
         helpText: "Open this session"
       )
+    case .hookInstallFailed(let slot, let message):
+      return TrayCardPresentation(
+        icon: "xmark.octagon.fill",
+        tint: .red,
+        title: "\(Self.label(for: slot)) install failed",
+        subtitle: message,
+        helpText: "Open Settings → Coding Agents to retry."
+      )
+    }
+  }
+
+  private static func label(for slot: AgentHookSlot) -> String {
+    switch slot {
+    case .claudeProgress: "Claude Progress"
+    case .claudeNotifications: "Claude Notifications"
+    case .codexProgress: "Codex Progress"
+    case .codexNotifications: "Codex Notifications"
     }
   }
 
@@ -158,4 +188,6 @@ private struct TrayCardPresentation {
   let title: String
   let subtitle: String?
   let helpText: String
+  var secondaryTitle: String?
+  var secondaryHelp: String?
 }

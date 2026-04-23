@@ -217,8 +217,18 @@ struct BoardFeature {
     case trayCardPushed(TrayCard)
     /// User tapped the card body. Behavior depends on `kind`.
     case trayCardPrimaryTapped(id: TrayCard.ID)
+    /// User tapped a card's secondary button (e.g. "Reinstall" on a
+    /// stale-hooks card). Currently only `.staleHooks` defines one; other
+    /// kinds no-op. Removing the card is the responsibility of this
+    /// handler / the follow-up effect, not a caller responsibility.
+    case trayCardSecondaryTapped(id: TrayCard.ID)
     /// User tapped the × on a card. Removes it for the session.
     case trayCardDismissed(id: TrayCard.ID)
+    /// Fired by AppFeature when SettingsFeature reports a successful
+    /// install for a slot. Narrows any stale-hooks card so the user sees
+    /// progress (card shrinks as slots get fixed) and disappears when
+    /// the last slot is handled.
+    case trayNoteHookInstalled(slot: AgentHookSlot)
 
     // MARK: Worktree prune
     /// User clicked the broom button next to a repo in the picker.
@@ -248,6 +258,10 @@ struct BoardFeature {
     /// specific section (e.g. the stale-hooks card routes to Coding Agents).
     /// AppFeature listens and forwards to SettingsFeature.
     case openSettingsRequested(section: SettingsSection)
+    /// User clicked "Reinstall" on a stale-hooks card. AppFeature fans
+    /// these slots out to `settings.agentHookInstallTapped` so the
+    /// existing install machinery runs.
+    case reinstallHooksRequested(slots: [AgentHookSlot])
     /// `worktreeID` is the session's state-key worktree — used for tab
     /// destruction and (when `deleteBackingWorktree` is true) for backing
     /// worktree cleanup. `additionalWorktreeIDsToDelete` carries any
@@ -942,7 +956,45 @@ struct BoardFeature {
         case .sessionCreating(let sessionID, _):
           state.trayCards.remove(id: id)
           return .send(.focusSession(id: sessionID))
+        case .hookInstallFailed:
+          state.trayCards.remove(id: id)
+          return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
         }
+
+      case .trayCardSecondaryTapped(let id):
+        guard let card = state.trayCards[id: id] else { return .none }
+        switch card.kind {
+        case .staleHooks(let slots):
+          // Optimistic: drop the card immediately so the user sees a
+          // response. If any slot install fails, AppFeature will push a
+          // `.hookInstallFailed` card describing the failure.
+          state.trayCards.remove(id: id)
+          return .send(.delegate(.reinstallHooksRequested(slots: slots)))
+        case .sessionCreating, .hookInstallFailed:
+          return .none
+        }
+
+      case .trayNoteHookInstalled(let slot):
+        // Narrow any stale-hooks cards that include this slot. If the
+        // card's slot list becomes empty, the card is removed entirely.
+        // Also clears any matching `hookInstallFailed` card for this slot
+        // so a success after a prior failure reads as resolution.
+        for card in state.trayCards {
+          switch card.kind {
+          case .staleHooks(let slots) where slots.contains(slot):
+            let remaining = slots.filter { $0 != slot }
+            if remaining.isEmpty {
+              state.trayCards.remove(id: card.id)
+            } else {
+              state.trayCards[id: card.id]?.kind = .staleHooks(slots: remaining)
+            }
+          case .hookInstallFailed(let failedSlot, _) where failedSlot == slot:
+            state.trayCards.remove(id: card.id)
+          default:
+            break
+          }
+        }
+        return .none
 
       case .openWorktreeJanitor(let repositoryID, let repositoryName):
         state.worktreeJanitor = WorktreeJanitorFeature.State(
@@ -955,6 +1007,17 @@ struct BoardFeature {
       case .worktreeJanitor(.presented(.delegate(.dismissed))):
         state.worktreeJanitor = nil
         return .none
+
+      case .worktreeJanitor(.presented(.delegate(.removeOrphanSessionCardsRequested(let ids)))):
+        // Chain .removeSession per orphan id — same path
+        // .confirmPruneOrphans used to take, so tab cleanup and the
+        // sessionRemoved delegate all flow through the existing
+        // machinery without reimplementing it here.
+        return .run { send in
+          for id in ids {
+            await send(.removeSession(id: id))
+          }
+        }
 
       case .worktreeJanitor:
         return .none

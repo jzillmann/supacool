@@ -50,6 +50,9 @@ struct SettingsFeatureAgentHookTests {
     await store.receive(\.agentHookActionCompleted) {
       $0.claudeProgressState = .installed
     }
+    // Success emits a delegate so BoardFeature can narrow / clear any
+    // stale-hooks or failure card referencing this slot.
+    await store.receive(\.delegate.hookInstallSucceeded)
   }
 
   @Test(.dependencies) func installTransitionsToFailedOnError() async {
@@ -70,6 +73,9 @@ struct SettingsFeatureAgentHookTests {
     await store.receive(\.agentHookActionCompleted) {
       $0.codexProgressState = .failed(CodexSettingsInstallerError.codexUnavailable.localizedDescription)
     }
+    // Failure emits a delegate so BoardFeature can surface a red
+    // "install failed" tray card.
+    await store.receive(\.delegate.hookInstallFailed)
   }
 
   @Test(.dependencies) func installWhileLoadingIsNoOp() async {

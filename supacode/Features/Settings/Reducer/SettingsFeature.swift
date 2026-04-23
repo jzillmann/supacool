@@ -143,6 +143,14 @@ struct SettingsFeature {
   @CasePathable
   enum Delegate: Equatable {
     case settingsChanged(GlobalSettings)
+    /// Emitted after a successful `.agentHookInstallTapped` install
+    /// completes. AppFeature forwards this to BoardFeature so tray
+    /// cards (stale-hooks / hook-install-failed) that reference this
+    /// slot get cleared or narrowed.
+    case hookInstallSucceeded(slot: AgentHookSlot)
+    /// Emitted after a failed `.agentHookInstallTapped`. AppFeature
+    /// surfaces this as a red tray notification.
+    case hookInstallFailed(slot: AgentHookSlot, message: String)
   }
 
   @Dependency(AnalyticsClient.self) private var analyticsClient
@@ -298,11 +306,18 @@ struct SettingsFeature {
 
       case .agentHookActionCompleted(let slot, .success(let installed)):
         state[hookSlot: slot] = installed ? .installed : .notInstalled
+        // Only install-path successes deserve the delegate (uninstall
+        // reuses the same completion action with installed=false).
+        if installed {
+          return .send(.delegate(.hookInstallSucceeded(slot: slot)))
+        }
         return .none
 
       case .agentHookActionCompleted(let slot, .failure(let error)):
         state[hookSlot: slot] = .failed(error.localizedDescription)
-        return .none
+        return .send(
+          .delegate(.hookInstallFailed(slot: slot, message: error.localizedDescription))
+        )
 
       case .updateShortcut(let id, let override):
         if let override {

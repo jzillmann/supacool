@@ -26,4 +26,19 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// first busy transition (= the agent is running). Primary tap focuses
   /// the session so the user jumps straight into the fresh terminal.
   case sessionCreating(sessionID: AgentSession.ID, displayName: String)
+
+  /// A hook install / reinstall errored. Surfaced as a red tray card so
+  /// users see failures initiated from both the tray (reinstall on a
+  /// stale-hooks card) and Settings → Coding Agents. Primary tap opens
+  /// Settings so they can diagnose; × dismisses.
+  case hookInstallFailed(slot: AgentHookSlot, message: String)
+
+  /// Whether this kind offers a secondary call-to-action button next to
+  /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
+  var hasSecondaryAction: Bool {
+    switch self {
+    case .staleHooks: true
+    case .sessionCreating, .hookInstallFailed: false
+    }
+  }
 }
