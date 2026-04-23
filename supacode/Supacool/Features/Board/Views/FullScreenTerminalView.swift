@@ -352,7 +352,9 @@ struct FullScreenTerminalView: View {
   /// external app is remembered in `gitGuiApp` and shown with a checkmark.
   @ViewBuilder
   private var openDiffButton: some View {
-    let url = URL(fileURLWithPath: session.worktreeID)
+    // Diff is a display/context operation — show the user's current
+    // workspace, not the immutable state anchor.
+    let url = URL(fileURLWithPath: session.currentWorkspacePath)
     Button {
       isQuickDiffPresented = true
     } label: {
@@ -391,7 +393,7 @@ struct FullScreenTerminalView: View {
     }
     .sheet(isPresented: $isQuickDiffPresented) {
       QuickDiffSheet(
-        worktreeURL: URL(fileURLWithPath: session.worktreeID),
+        worktreeURL: URL(fileURLWithPath: session.currentWorkspacePath),
         onDismiss: { isQuickDiffPresented = false }
       )
     }
@@ -638,15 +640,19 @@ struct FullScreenTerminalView: View {
   /// The worktree's branch (or its directory name as a fallback) — shown
   /// only when the session is running in a dedicated worktree, not at the
   /// repo root. Returns `nil` for directory-mode sessions so we don't
-  /// duplicate the repo name.
+  /// duplicate the repo name. Reads `currentWorkspacePath` so that a
+  /// session converted from repo root to a worktree shows the new branch
+  /// immediately, even though its underlying terminal state stays keyed
+  /// on the original `worktreeID`.
   private var worktreeLabel: String? {
     guard let repo = repositories[id: session.repositoryID] else { return nil }
     let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
-    guard session.worktreeID != rootPath else { return nil }
-    if let worktree = repo.worktrees.first(where: { $0.id == session.worktreeID }) {
+    let workspacePath = session.currentWorkspacePath
+    guard workspacePath != rootPath else { return nil }
+    if let worktree = repo.worktrees.first(where: { $0.id == workspacePath }) {
       return worktree.branch ?? worktree.name
     }
-    return URL(fileURLWithPath: session.worktreeID).lastPathComponent
+    return URL(fileURLWithPath: workspacePath).lastPathComponent
   }
 
   @MainActor
@@ -657,11 +663,12 @@ struct FullScreenTerminalView: View {
   ) -> GithubPullRequest? {
     guard let repo = repositories[id: session.repositoryID] else { return nil }
     let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
-    guard session.worktreeID != rootPath else { return nil }
-    guard let worktree = repo.worktrees.first(where: { $0.id == session.worktreeID }) else {
+    let workspacePath = session.currentWorkspacePath
+    guard workspacePath != rootPath else { return nil }
+    guard let worktree = repo.worktrees.first(where: { $0.id == workspacePath }) else {
       return nil
     }
-    let pullRequest = worktreeInfoByID[session.worktreeID]?.pullRequest
+    let pullRequest = worktreeInfoByID[workspacePath]?.pullRequest
     guard let pullRequest else { return nil }
     guard pullRequest.headRefName == nil || pullRequest.headRefName == worktree.name else {
       return nil

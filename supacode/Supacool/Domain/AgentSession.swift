@@ -21,7 +21,21 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// The workspace backing this session — either the repo root (directory
   /// mode) or a git worktree path. Matches `Worktree.ID` in the existing
   /// `WorktreeTerminalManager` states dictionary.
+  ///
+  /// IMMUTABLE once the session is created. Used as the state-lookup key
+  /// everywhere terminal state is accessed: `states[worktreeID]`, hook
+  /// socket routing, `sessionTabExists`, `isAgentBusy`, etc. Conceptually:
+  /// "where this tab was born and where its state is anchored". A tab's
+  /// underlying shell process can `cd` anywhere without this moving.
   let worktreeID: String
+
+  /// The worktree the user currently thinks of the session as running in.
+  /// Mutable. Diverges from `worktreeID` after the "convert to worktree"
+  /// popover: the shell physically `cd`s into the new worktree but the
+  /// terminal state container stays put, so hooks and running agents are
+  /// never disrupted. UI-level readers (header badge, PR lookup, diff
+  /// button, new-terminal inheritance) use this field.
+  var currentWorkspacePath: String
 
   /// The coding-agent CLI this session was spawned with. `nil` means a raw
    /// shell session — no agent CLI was invoked, just a terminal tab (with an
@@ -135,6 +149,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     id: UUID = UUID(),
     repositoryID: String,
     worktreeID: String,
+    currentWorkspacePath: String? = nil,
     agent: AgentType?,
     initialPrompt: String,
     displayName: String? = nil,
@@ -161,6 +176,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.id = id
     self.repositoryID = repositoryID
     self.worktreeID = worktreeID
+    self.currentWorkspacePath = currentWorkspacePath ?? worktreeID
     self.agent = agent
     self.initialPrompt = initialPrompt
     self.displayName = displayName ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
@@ -197,7 +213,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   // `decodeIfPresent ?? default` line below. Do NOT fall back to the
   // synthesized init — it will break backward compat silently.
   enum CodingKeys: String, CodingKey {
-    case id, repositoryID, worktreeID, agent, initialPrompt, displayName
+    case id, repositoryID, worktreeID, currentWorkspacePath, agent, initialPrompt, displayName
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
     case removeBackingWorktreeOnDelete, isPriority, planMode
     case agentNativeSessionID, parked
@@ -212,6 +228,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     id = try c.decode(UUID.self, forKey: .id)
     repositoryID = try c.decode(String.self, forKey: .repositoryID)
     worktreeID = try c.decode(String.self, forKey: .worktreeID)
+    currentWorkspacePath =
+      try c.decodeIfPresent(String.self, forKey: .currentWorkspacePath) ?? worktreeID
     agent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
     initialPrompt = try c.decode(String.self, forKey: .initialPrompt)
     displayName = try c.decodeIfPresent(String.self, forKey: .displayName)

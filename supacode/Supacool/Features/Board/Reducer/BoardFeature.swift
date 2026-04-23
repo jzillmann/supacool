@@ -130,6 +130,15 @@ struct BoardFeature {
 
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
+    /// Opens the new-terminal sheet with workspace / repo fields pre-filled
+    /// from a focused session's current context. Intended for the ⌘N /
+    /// "new terminal" affordance inside FullScreenTerminalView — so a
+    /// second terminal opened from a session that has converted to a
+    /// worktree lands in the same worktree, not back at the default.
+    case openNewTerminalSheetInheritingFrom(
+      id: AgentSession.ID,
+      repositories: [Repository]
+    )
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
     /// Fallback resume path: no captured id, so we launch the agent's own
@@ -146,6 +155,13 @@ struct BoardFeature {
       branchName: String,
       repositories: [Repository]
     )
+    /// Internal success callback for `convertSessionToWorktree`. Fires on
+    /// the main actor once `gitClient.createWorktree` returns, so we can
+    /// update `currentWorkspacePath` synchronously with state. Kept
+    /// separate from the `cd` send — the effect is interested in sending
+    /// the text AND announcing the path change, but only the latter
+    /// touches state.
+    case _convertSessionToWorktreeSucceeded(id: AgentSession.ID, newWorkspacePath: String)
     case _convertSessionToWorktreeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
 
@@ -199,11 +215,18 @@ struct BoardFeature {
 
   enum Delegate: Equatable {
     case prioritySessionTerminated(title: String, body: String)
+    /// `worktreeID` is the session's state-key worktree — used for tab
+    /// destruction and (when `deleteBackingWorktree` is true) for backing
+    /// worktree cleanup. `additionalWorktreeIDsToDelete` carries any
+    /// *other* worktrees this session created during its lifetime (e.g.
+    /// the convert-to-worktree popover), which outlive the original
+    /// state key and still need cleanup.
     case sessionRemoved(
       sessionID: AgentSession.ID,
       repositoryID: Repository.ID,
       worktreeID: Worktree.ID,
-      deleteBackingWorktree: Bool
+      deleteBackingWorktree: Bool,
+      additionalWorktreeIDsToDelete: [Worktree.ID]
     )
   }
 
@@ -257,10 +280,31 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
+        // Primary backing-worktree cleanup: applies to sessions that own
+        // their original worktree (created via the New Terminal sheet's
+        // `.newBranch` flow, which sets `removeBackingWorktreeOnDelete`).
         let deleteBackingWorktree =
           session.removeBackingWorktreeOnDelete
           && session.worktreeID != session.repositoryID
-          && !state.sessions.contains(where: { $0.id != id && $0.worktreeID == session.worktreeID })
+          && !Self.sessionsUsingWorkspace(
+            session.worktreeID, excluding: id, sessions: state.sessions
+          )
+        // Converted-worktree cleanup: the convert-to-worktree popover
+        // creates a fresh branch+worktree on disk while leaving the
+        // session's immutable `worktreeID` anchored at the repo root.
+        // Clean that up on delete so we don't leave a dangling worktree
+        // whenever the user trashes a converted repo-root session.
+        let convertedPath = session.currentWorkspacePath
+        let hasConvertedWorkspace =
+          convertedPath != session.worktreeID
+          && convertedPath != session.repositoryID
+        let deleteConvertedWorkspace =
+          hasConvertedWorkspace
+          && !Self.sessionsUsingWorkspace(
+            convertedPath, excluding: id, sessions: state.sessions
+          )
+        let additionalDeletes: [Worktree.ID] =
+          deleteConvertedWorkspace ? [convertedPath] : []
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
@@ -271,7 +315,8 @@ struct BoardFeature {
               sessionID: session.id,
               repositoryID: session.repositoryID,
               worktreeID: session.worktreeID,
-              deleteBackingWorktree: deleteBackingWorktree
+              deleteBackingWorktree: deleteBackingWorktree,
+              additionalWorktreeIDsToDelete: additionalDeletes
             )
           )
         )
@@ -373,6 +418,18 @@ struct BoardFeature {
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories)
         )
+        return .none
+
+      case .openNewTerminalSheetInheritingFrom(let id, let repositories):
+        let available = IdentifiedArray(uniqueElements: repositories)
+        if let session = state.sessions.first(where: { $0.id == id }) {
+          state.newTerminalSheet = NewTerminalFeature.State(
+            availableRepositories: available,
+            inheritingFrom: session
+          )
+        } else {
+          state.newTerminalSheet = NewTerminalFeature.State(availableRepositories: available)
+        }
         return .none
 
       case .resumeDetachedSession(let id, let repositories):
@@ -530,6 +587,12 @@ struct BoardFeature {
               false,
               ""
             )
+            await send(
+              ._convertSessionToWorktreeSucceeded(
+                id: id,
+                newWorkspacePath: worktree.id
+              )
+            )
             let escapedPath = worktree.id.replacingOccurrences(of: "'", with: "'\\''")
             await terminalClient.send(
               .sendText(
@@ -547,6 +610,13 @@ struct BoardFeature {
             )
           }
         }
+
+      case ._convertSessionToWorktreeSucceeded(let id, let newWorkspacePath):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].currentWorkspacePath = newWorkspacePath
+        }
+        return .none
 
       case ._convertSessionToWorktreeFailed(let id, let message):
         boardLogger.warning("Convert to worktree failed for session \(id): \(message)")
@@ -797,6 +867,21 @@ struct BoardFeature {
   /// Build the `Worktree` value handed to `TerminalClient` when resuming. The
   /// returned `worktree.id` is pinned to `session.worktreeID` verbatim so the
   /// new tab lands under the same key the detached view probes for.
+  /// True when any session other than the one being removed still has
+  /// the given path as either its state anchor (`worktreeID`) or its
+  /// current workspace. Used by `removeSession` to avoid deleting a
+  /// worktree directory that another session depends on.
+  nonisolated fileprivate static func sessionsUsingWorkspace(
+    _ path: Worktree.ID,
+    excluding excludedID: AgentSession.ID,
+    sessions: [AgentSession]
+  ) -> Bool {
+    sessions.contains { other in
+      other.id != excludedID
+        && (other.worktreeID == path || other.currentWorkspacePath == path)
+    }
+  }
+
   /// Current value of the New Terminal sheet's "Skip permission prompts"
   /// toggle. Mirrored via @AppStorage in the view layer; the reducer
   /// reads it on demand so resume paths stay in sync with whatever the

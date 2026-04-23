@@ -133,7 +133,8 @@ struct BoardFeatureTests {
           sessionID: session.id,
           repositoryID: session.repositoryID,
           worktreeID: session.worktreeID,
-          deleteBackingWorktree: false
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: []
         )
       )
     )
@@ -161,7 +162,8 @@ struct BoardFeatureTests {
           sessionID: session.id,
           repositoryID: "/tmp/repo",
           worktreeID: "/tmp/repo/wt-1",
-          deleteBackingWorktree: true
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: []
         )
       )
     )
@@ -197,7 +199,86 @@ struct BoardFeatureTests {
           sessionID: removed.id,
           repositoryID: "/tmp/repo",
           worktreeID: worktreeID,
-          deleteBackingWorktree: false
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func removeSessionCleansUpConvertedWorktree() async {
+    // A repo-root session that used the "convert to worktree" popover
+    // has `worktreeID == repositoryID` but a divergent
+    // `currentWorkspacePath`. Removing the card should delete the
+    // converted worktree on disk so we don't leak directories every
+    // time the user trashes a converted session.
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      currentWorkspacePath: "/tmp/repo/worktrees/feature-x",
+      agent: .claude,
+      initialPrompt: "Work on feature X"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeSession(id: session.id)) {
+      $0.$sessions.withLock { $0 = [] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo",
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: ["/tmp/repo/worktrees/feature-x"]
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func removeSessionKeepsConvertedWorktreeIfSharedWithOtherSession() async {
+    // If another live session points at the same converted worktree
+    // (e.g. a sibling session created via "new terminal inheriting from
+    // focused session"), deleting the original must NOT remove the
+    // worktree out from under the sibling.
+    let convertedPath = "/tmp/repo/worktrees/shared-x"
+    let converter = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      currentWorkspacePath: convertedPath,
+      agent: .claude,
+      initialPrompt: "Original"
+    )
+    let sibling = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: convertedPath, // sibling was spawned directly in the worktree
+      agent: .claude,
+      initialPrompt: "Sibling"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [converter, sibling] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeSession(id: converter.id)) {
+      $0.$sessions.withLock { $0 = [sibling] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: converter.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo",
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: []
         )
       )
     )
@@ -545,8 +626,11 @@ struct BoardFeatureTests {
   @Test(.dependencies) func convertSessionToWorktreeCreatesWorktreeAndSendsCD() async throws {
     // Confirming the "convert to worktree" popover on the repo-root pill
     // should create a worktree via gitClient and type `cd '<path>'` into
-    // the session's focused surface. No surface/process churn, no new
-    // session — the original card keeps running.
+    // the session's focused surface. No surface/process churn — the tab
+    // stays alive under its original `worktreeID` state key so hooks and
+    // running agents are unaffected. The session's `currentWorkspacePath`
+    // flips to the new worktree so the header badge, PR lookup, and
+    // subsequent ⌘N all reflect the new workspace immediately.
     let original = Self.sampleSession(repositoryID: "/tmp/repo")
     let repo = Repository(
       id: "/tmp/repo",
@@ -594,11 +678,63 @@ struct BoardFeatureTests {
 
     #expect(createdBranches.value == ["feature/new-flow"])
     #expect(sentTexts.value == ["cd '/tmp/repo/worktrees/feature/new-flow'"])
-    // Original session is untouched — the focus state, the sessions
-    // list, and anything the reducer might have touched stays put.
-    #expect(store.state.sessions.contains(where: { $0.id == original.id }))
+    // Session is still in the list with the same focus, and the
+    // immutable `worktreeID` state key is preserved so existing
+    // terminal state lookups continue to resolve. Only the mutable
+    // `currentWorkspacePath` field flips to the new worktree path.
+    let updated = try #require(store.state.sessions.first(where: { $0.id == original.id }))
+    #expect(updated.worktreeID == original.worktreeID)
+    #expect(updated.currentWorkspacePath == "/tmp/repo/worktrees/feature/new-flow")
     #expect(store.state.focusedSessionID == original.id)
     #expect(store.state.newTerminalSheet == nil)
+  }
+
+  @Test(.dependencies) func openNewTerminalSheetInheritsWorkspaceFromFocusedSession() async {
+    // After a session has been converted from repo root to a worktree
+    // (`currentWorkspacePath` diverges from the immutable `worktreeID`),
+    // pressing ⌘N / + inside the focused terminal should preload the
+    // sheet on the NEW worktree — not reset to repo root.
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo", // started at repo root
+      currentWorkspacePath: "/tmp/repo/worktrees/feature-x", // converted
+      agent: .claude,
+      initialPrompt: "Fix tests"
+    )
+    let worktree = Worktree(
+      id: "/tmp/repo/worktrees/feature-x",
+      name: "feature-x",
+      detail: "",
+      workingDirectory: URL(fileURLWithPath: "/tmp/repo/worktrees/feature-x"),
+      repositoryRootURL: URL(fileURLWithPath: "/tmp/repo"),
+      createdAt: Date(),
+      branch: "feature-x"
+    )
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: [worktree]
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.focusedSessionID = session.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .openNewTerminalSheetInheritingFrom(id: session.id, repositories: [repo])
+    )
+
+    let sheet = store.state.newTerminalSheet
+    #expect(sheet?.selectedRepositoryID == "/tmp/repo")
+    #expect(sheet?.selectedWorkspace == .existingWorktree(id: "/tmp/repo/worktrees/feature-x"))
+    #expect(sheet?.workspaceQuery == "feature-x")
+    // Fresh prompt — inheritance copies context, not content.
+    #expect(sheet?.prompt == "")
   }
 
   @Test(.dependencies) func convertSessionToWorktreeIgnoresEmptyBranchName() async {

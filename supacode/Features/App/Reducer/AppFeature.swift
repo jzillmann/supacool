@@ -254,7 +254,17 @@ struct AppFeature {
           await systemNotificationClient.send(title, body)
         }
 
-      case .board(.delegate(.sessionRemoved(let sessionID, let repositoryID, let worktreeID, let deleteBackingWorktree))):
+      case .board(
+        .delegate(
+          .sessionRemoved(
+            let sessionID,
+            let repositoryID,
+            let worktreeID,
+            let deleteBackingWorktree,
+            let additionalWorktreeIDsToDelete
+          )
+        )
+      ):
         let worktree = resolveBoardSessionWorktree(
           repositoryID: repositoryID,
           worktreeID: worktreeID,
@@ -266,6 +276,13 @@ struct AppFeature {
           }
           if deleteBackingWorktree {
             await send(.repositories(.deleteWorktreeConfirmed(worktreeID, repositoryID)))
+          }
+          // Clean up any worktrees the session created over its lifetime
+          // that aren't the state-key worktree (today: the convert-to-
+          // worktree popover creates these). No tab destruction needed —
+          // no surface state was ever anchored under these paths.
+          for extraID in additionalWorktreeIDsToDelete {
+            await send(.repositories(.deleteWorktreeConfirmed(extraID, repositoryID)))
           }
         }
 
