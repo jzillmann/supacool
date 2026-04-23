@@ -70,16 +70,14 @@ No. Synthesized `encode(to:)` is fine because it writes every declared field. Th
 
 Files following this pattern:
 
-- `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacode/agent-sessions.json`
-- `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacode/board-filters.json`
+- `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacool/agent-sessions.json`
+- `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacool/board-filters.json`
 
 If you add another `@Shared`-backed Codable, append it here.
 
-## Why we share `~/.supacode/` with stock supacode
+## On-disk location
 
-Supacode's `SupacodePaths.baseDirectory` is hardcoded to `~/.supacode/`. Supacool inherits it. In theory, running both apps side-by-side would clobber each other's data. In practice: Supacool has a different bundle ID (`app.morethan.supacool`) so macOS treats them as separate apps, but they read/write the same JSON files.
-
-For a personal fork with one user this is fine — you're not going to have stock supacode AND Supacool registered on the same machine fighting over the same `~/.supacode/layouts.json`. If that ever becomes a problem, add a `SupacoolPaths` helper pointing to `~/.supacool/` and migrate the Supacool-specific files there; leave supacode-owned files (layouts, settings, repos) where they are.
+All app data lives under `~/.supacool/` via `SupacoolPaths.baseDirectory`. Stock upstream supacode uses `~/.supacode/`; the two are cleanly separate now, so both apps can coexist without clobbering each other's files. An older Supacool install (pre-rename) kept data in `~/.supacode/`; the one-time migration is documented in `RELEASING.md`.
 
 ## Why the code comment points here
 

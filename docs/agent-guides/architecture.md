@@ -111,15 +111,15 @@ Tab exists:
 
 ## Persistence paths
 
-All persistence lives in `~/.supacode/` (shared with stock supacode — see [`persistence.md`](./persistence.md) for why we accept that overlap):
+All persistence lives in `~/.supacool/` via `SupacoolPaths.baseDirectory`:
 
-- `~/.supacode/agent-sessions.json` — `[AgentSession]` via `AgentSessionsKey` (Supacool)
-- `~/.supacode/board-filters.json` — `BoardFilters` via `BoardFiltersKey` (Supacool)
-- `~/.supacode/layouts.json` — `[Worktree.ID: TerminalLayoutSnapshot]` (supacode, unchanged)
-- `~/.supacode/settings.json` — app settings (supacode, unchanged)
-- `~/.supacode/repos/<name>/…` — per-repo state including repository settings (supacode, unchanged)
+- `~/.supacool/agent-sessions.json` — `[AgentSession]` via `AgentSessionsKey` (Supacool)
+- `~/.supacool/board-filters.json` — `BoardFilters` via `BoardFiltersKey` (Supacool)
+- `~/.supacool/layouts.json` — `[Worktree.ID: TerminalLayoutSnapshot]` (inherited from upstream supacode, unchanged)
+- `~/.supacool/settings.json` — app settings (inherited, unchanged)
+- `~/.supacool/repos/<name>/…` — per-repo state and worktree checkouts (inherited, unchanged)
 
-All these are plain JSON; safe to inspect and edit by hand when debugging.
+All plain JSON; safe to inspect and edit by hand when debugging. Upstream supacode uses `~/.supacode/` — the two are cleanly separate.
 
 ## The "orphan" inventory
 

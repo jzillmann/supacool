@@ -41,15 +41,13 @@ xcodebuild -downloadComponent MetalToolchain
 
 …which installs the iOS Metal Toolchain (one-time, ~1GB) and lets the universal build complete. Prefer fixing the zig flag; only download as a workaround.
 
-## The supacode → Supacool product name
+## Product naming
 
-`PRODUCT_NAME` in the main target's build config is set to the literal `Supacool` (not `$(TARGET_NAME)`). Consequences:
-
-- The built bundle is `Supacool.app` (instead of `supacode.app`).
-- `CFBundleName` synthesized from `PRODUCT_NAME` is `Supacool` — this is what the macOS menu bar shows.
-- `CFBundleDisplayName` is also `Supacool` (set both in Info.plist and via `INFOPLIST_KEY_CFBundleDisplayName`).
-- `CFBundleIdentifier` is `app.morethan.supacool` (so stock supacode and Supacool can coexist on the same machine without collision).
-- Internally, the Xcode target is still named `supacode` and the sources live under `supacode/`. That's a holdover from the fork era — kept because mass renaming is cosmetic and disruptive (Xcode project regeneration, asset paths, log subsystem) without changing behaviour.
+- Xcode project: `supacool.xcodeproj`. Targets: `supacool` (app) and `supacoolTests` (tests).
+- `PRODUCT_NAME = Supacool` → built bundle is `Supacool.app`, executable `Contents/MacOS/Supacool`.
+- `CFBundleDisplayName`, `CFBundleName`: `Supacool`.
+- `CFBundleIdentifier`: `app.morethan.supacool` — distinct from upstream `supabitapp/supacode`'s bundle ID so both can coexist on the same machine.
+- **Source directories on disk** are still named `supacode/` and `supacodeTests/` — kept deliberately as historical markers for code originally derived from the fork. File-path references in docs and build settings (`supacode/Info.plist`, `supacode/supacool.entitlements`) use these legacy names.
 
 ## App icon regeneration
 
@@ -84,10 +82,10 @@ make test
 Supacool-only tests (faster):
 
 ```bash
-xcodebuild test -project supacode.xcodeproj -scheme supacode \
+xcodebuild test -project supacool.xcodeproj -scheme supacool \
   -destination "platform=macOS" \
-  -only-testing:supacodeTests/BoardFeatureTests \
-  -only-testing:supacodeTests/NewTerminalFeatureTests \
+  -only-testing:supacoolTests/BoardFeatureTests \
+  -only-testing:supacoolTests/NewTerminalFeatureTests \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
   -skipMacroValidation 2>&1 | tee /tmp/supacool-tests.log | \
   grep -E "Test case|TEST (SUCCEEDED|FAILED)" | tail -30
@@ -110,7 +108,7 @@ Uses `log stream --predicate 'subsystem == "app.morethan.supacool"'`. If you see
 If builds get weird after pulling upstream or switching branches:
 
 ```bash
-rm -rf /Users/jz/Library/Developer/Xcode/DerivedData/supacode-*
+rm -rf /Users/jz/Library/Developer/Xcode/DerivedData/supacool-* /Users/jz/Library/Developer/Xcode/DerivedData/supacode-*
 make build-app
 ```
 

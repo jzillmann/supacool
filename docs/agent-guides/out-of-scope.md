@@ -44,11 +44,11 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **Why it's out**: Supacool is a native macOS terminal app by design. The "view from anywhere" dream is workflow-engine scope (see #1).
 
-## 7. Renaming everything `supacode` → `Supacool` in source
+## 7. Renaming the `supacode/` source directory
 
-**What it is**: Xcode target, source directory, module name, all the orphaned view files.
+**What it is**: the top-level source directory that still holds originally-supacode code.
 
-**Why it's out**: a holdover from the fork era — kept because mass renaming is cosmetic, disruptive (Xcode project regeneration, asset paths, log subsystem), and doesn't change behaviour. Rename only the user-visible bits (display name, bundle id, window title). Internal names stay `supacode`.
+**Why it's out**: kept as a historical marker for code derived from the upstream fork. The Xcode project, targets, scheme, bundle id, display name, entitlements, and bundle filename are all already `supacool` / `Supacool` — only the on-disk source dir names (`supacode/`, `supacodeTests/`) remain. Renaming them now is pure cosmetics; they're referenced from `supacool.xcodeproj/project.pbxproj` as synchronized root groups and by `INFOPLIST_FILE = supacode/Info.plist`, so a move would cascade through a few build settings without changing anything observable.
 
 ## 8. Custom fork of ghostty or git-wt
 

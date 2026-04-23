@@ -94,9 +94,7 @@ If you change the inset, the placeholder picks up the new value automatically.
 
 ## App-name in the macOS menu bar
 
-The macOS menu bar shows `CFBundleName`. When `PRODUCT_NAME = "$(TARGET_NAME)"` and the target is named `supacode`, `CFBundleName` is synthesized as `supacode` — **even if your `Info.plist` explicitly sets `CFBundleName = Supacool`**. The Info.plist value loses.
-
-Fix: set `PRODUCT_NAME = Supacool` literally in the main target's build config. The synthesized `CFBundleName` now reads `Supacool`. Also set `INFOPLIST_KEY_CFBundleDisplayName = Supacool` + `INFOPLIST_KEY_CFBundleName = Supacool` as belt-and-braces. Side effect: the bundle filename goes from `supacode.app` to `Supacool.app` — the Makefile reads `FULL_PRODUCT_NAME` dynamically so it adapts.
+The macOS menu bar shows `CFBundleName`. If `PRODUCT_NAME = "$(TARGET_NAME)"` is ever reverted while the target is renamed, the synthesized `CFBundleName` would override whatever `Info.plist` says. Supacool's main target therefore sets `PRODUCT_NAME = Supacool` literally, with `INFOPLIST_KEY_CFBundleDisplayName = Supacool` + `INFOPLIST_KEY_CFBundleName = Supacool` as belt-and-braces. Bundle filename becomes `Supacool.app`; `make run-app` reads `FULL_PRODUCT_NAME` dynamically so it adapts either way.
 
 ## Empty-state dead-ends
 

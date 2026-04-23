@@ -131,7 +131,7 @@ GhosttyRuntime (shared runtime)
     └─ ghostty_surface_t[] (independent terminal sessions)
 ```
 
-The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA. Communication uses `TerminalClient`: reducers send `Command`s in, receive `Event`s back via `AsyncStream`. Wired in `supacodeApp.swift`, subscribed in `AppFeature.appLaunched`.
+The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA. Communication uses `TerminalClient`: reducers send `Command`s in, receive `Event`s back via `AsyncStream`. Wired in `SupacoolApp.swift`, subscribed in `AppFeature.appLaunched`.
 
 ### Code guidelines
 
