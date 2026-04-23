@@ -1,9 +1,10 @@
 import Foundation
 
-/// Transient card that floats in the bottom-right tray over the Matrix Board.
-/// Emitted by system state (e.g. stale hooks) or user intent (e.g. a draft
-/// New Terminal). Each card supports a primary tap and an optional dismiss.
-/// Cards are not persisted — they live for the app session.
+/// Short-lived notification card floating in the bottom-right tray over the
+/// Matrix Board. Each card represents a transient signal ("hooks are out of
+/// date", "a session is spawning") — not persistent UI. Every card supports
+/// a primary tap (call-to-action) and × dismiss. Cards are not persisted;
+/// they live for the duration of the signal.
 nonisolated struct TrayCard: Identifiable, Equatable, Sendable {
   let id: UUID
   var kind: TrayCardKind
@@ -19,4 +20,10 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// the payload this build expects. Primary tap opens Settings → Coding
   /// Agents; dismiss snoozes until the next app launch.
   case staleHooks(slots: [AgentHookSlot])
+
+  /// A session was just submitted via New Terminal / Rerun / Resume and is
+  /// still spawning its PTY. Auto-dismissed when the session reports its
+  /// first busy transition (= the agent is running). Primary tap focuses
+  /// the session so the user jumps straight into the fresh terminal.
+  case sessionCreating(sessionID: AgentSession.ID, displayName: String)
 }

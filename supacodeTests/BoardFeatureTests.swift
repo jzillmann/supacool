@@ -26,6 +26,7 @@ struct BoardFeatureTests {
     // stays on the board and sees it appear in "In Progress."
     await store.send(.createSession(session)) {
       $0.$sessions.withLock { $0 = [session] }
+      $0.trayCards = [Self.sessionCreatingCard(for: session)]
     }
   }
 
@@ -40,6 +41,7 @@ struct BoardFeatureTests {
 
     await store.send(.createSession(session)) {
       $0.$sessions.withLock { $0 = [session] }
+      $0.trayCards = [Self.sessionCreatingCard(for: session)]
     }
     await store.receive(\._autoDisplayNameSuggested) {
       $0.$sessions.withLock { sessions in
@@ -61,6 +63,7 @@ struct BoardFeatureTests {
     let session = Self.sampleSession(displayName: "PR #42: Fix the widget")
     await store.send(.createSession(session)) {
       $0.$sessions.withLock { $0 = [session] }
+      $0.trayCards = [Self.sessionCreatingCard(for: session)]
     }
     // No _autoDisplayNameSuggested is expected — the effect short-circuits
     // before calling infer because displayName != deriveDisplayName(prompt).
@@ -1023,7 +1026,91 @@ struct BoardFeatureTests {
     await store.receive(\.delegate.openSettingsRequested)
   }
 
+  @Test(.dependencies) func updateSessionBusyTrueClearsSessionCreatingCard() async {
+    // The "Starting session" card auto-dismisses on the session's first
+    // busy=true transition — that's the signal the PTY is live and the
+    // agent is actually running.
+    let session = Self.sampleSession(displayName: "Starting soon")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.trayCards = [Self.sessionCreatingCard(for: session)]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    // Timestamps are injected via non-deterministic `Date()` in the
+    // reducer — exhaustive equality would flake, so we check tray
+    // clearance separately.
+    store.exhaustivity = .off
+
+    await store.send(.updateSessionBusyState(id: session.id, busy: true))
+    #expect(store.state.trayCards.isEmpty)
+  }
+
+  @Test(.dependencies) func updateSessionBusyFalseKeepsSessionCreatingCard() async {
+    // A busy=false transition (e.g. agent idled before the user saw the
+    // card) must NOT prematurely clear the progress indicator — we only
+    // dismiss on the first positive busy signal.
+    let session = Self.sampleSession(displayName: "Starting soon")
+    var state = BoardFeature.State()
+    state.$sessions.withLock {
+      $0 = [session]
+      $0[0].lastKnownBusy = true
+    }
+    let card = Self.sessionCreatingCard(for: session)
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.updateSessionBusyState(id: session.id, busy: false))
+    #expect(store.state.trayCards == [card])
+  }
+
+  @Test(.dependencies) func trayCardPrimaryTappedSessionCreatingFocusesSession() async {
+    let session = Self.sampleSession(displayName: "Deploy")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let card = Self.sessionCreatingCard(for: session)
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardPrimaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+    await store.receive(.focusSession(id: session.id)) {
+      $0.focusedSessionID = session.id
+    }
+  }
+
+  @Test(.dependencies) func removeSessionClearsLingeringSessionCreatingCard() async {
+    // If the user trashes a card before the first busy transition fires
+    // (e.g. a fast-fail spawn), the creating-card should go too.
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.trayCards = [Self.sessionCreatingCard(for: session)]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeSession(id: session.id)) {
+      $0.$sessions.withLock { $0 = [] }
+      $0.trayCards = []
+    }
+    await store.receive(\.delegate.sessionRemoved)
+  }
+
   // MARK: - Helpers
+
+  private static func sessionCreatingCard(for session: AgentSession) -> TrayCard {
+    TrayCard(
+      id: session.id,
+      kind: .sessionCreating(sessionID: session.id, displayName: session.displayName)
+    )
+  }
 
   private static func sampleSession(
     id: UUID = UUID(),

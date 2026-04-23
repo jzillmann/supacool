@@ -288,6 +288,17 @@ struct BoardFeature {
 
       case .createSession(let session):
         state.$sessions.withLock { $0.append(session) }
+        // Surface a short-lived "Starting session" tray card so the user
+        // sees the spawn is underway without having to hunt the new card
+        // on a crowded board. The card clears on the first busy transition
+        // (= agent is actually running) or via × dismiss. Card id is
+        // anchored to `session.id` so lookups are trivial and tests stay
+        // deterministic without injecting a `uuid` dependency.
+        let creatingCard = TrayCard(
+          id: session.id,
+          kind: .sessionCreating(sessionID: session.id, displayName: session.displayName)
+        )
+        state.trayCards.append(creatingCard)
         // Intentionally do NOT focus the new session. Spawning an agent
         // is background work; the user stays on the board and sees the
         // new card appear in "In Progress." They can tap in when ready.
@@ -341,6 +352,15 @@ struct BoardFeature {
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
+        }
+        // A session removed before its first busy transition leaves a
+        // "Starting session" card behind — clean it up so the tray
+        // doesn't accumulate stale progress indicators.
+        state.trayCards.removeAll { card in
+          if case .sessionCreating(let sessionID, _) = card.kind {
+            return sessionID == id
+          }
+          return false
         }
         return .send(
           .delegate(
@@ -397,6 +417,16 @@ struct BoardFeature {
           sessions[index].lastKnownBusy = busy
           sessions[index].lastBusyTransitionAt = Date()
           sessions[index].lastActivityAt = Date()
+        }
+        // First observed busy=true means the PTY spawned and the agent is
+        // actually running — auto-dismiss the "Starting session" card.
+        if busy {
+          state.trayCards.removeAll { card in
+            if case .sessionCreating(let sessionID, _) = card.kind {
+              return sessionID == id
+            }
+            return false
+          }
         }
         return .none
 
@@ -909,6 +939,9 @@ struct BoardFeature {
         case .staleHooks:
           state.trayCards.remove(id: id)
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
+        case .sessionCreating(let sessionID, _):
+          state.trayCards.remove(id: id)
+          return .send(.focusSession(id: sessionID))
         }
 
       case .openWorktreeJanitor(let repositoryID, let repositoryName):

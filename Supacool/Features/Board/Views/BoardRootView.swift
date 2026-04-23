@@ -155,10 +155,13 @@ struct BoardRootView: View {
       autoZoomBackArmedSessionID = nil
       schedulePendingExit(for: focusedID)
     }
-    // The New-Terminal form now lives in the floating tray (bottom-right)
-    // as a draft card + popover; see `BoardTrayView.draftCard`. The card is
-    // rendered whenever `store.newTerminalSheet != nil`, so the previous
-    // root-level `.sheet(store:)` is gone.
+    // Sheet lives at the root so it's reachable whether you're looking at
+    // the board or at a full-screen terminal.
+    .sheet(
+      store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
+    ) { sheetStore in
+      NewTerminalSheet(store: sheetStore)
+    }
     .alert(
       "Rename session",
       isPresented: Binding(
