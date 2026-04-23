@@ -107,6 +107,7 @@ git checkout supacool && git rebase main
 | Touch the toolbar, cursor, or text input | [`docs/agent-guides/ui-patterns.md`](./docs/agent-guides/ui-patterns.md) |
 | Pull upstream changes in | [`docs/agent-guides/upstream-sync.md`](./docs/agent-guides/upstream-sync.md) |
 | Know what NOT to build | [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md) |
+| Change `RemoteHost` / ssh_config handling | [`docs/agent-guides/remote-hosts.md`](./docs/agent-guides/remote-hosts.md) |
 | Add a new feature end-to-end | Skill: [`.claude/skills/add-feature/SKILL.md`](./.claude/skills/add-feature/SKILL.md) |
 | Sync fork with upstream | Skill: [`.claude/skills/upstream-sync/SKILL.md`](./.claude/skills/upstream-sync/SKILL.md) |
 
