@@ -432,11 +432,6 @@ struct BoardRootView: View {
           onShowAll: { store.send(.showAllRepositories) },
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories,
-          onPruneWorktrees: { repo in
-            store.send(
-              .pruneWorktreesRequested(repositoryID: repo.id, repositoryName: repo.name)
-            )
-          },
           onManageWorktrees: { repo in
             store.send(
               .openWorktreeJanitor(repositoryID: repo.id, repositoryName: repo.name)

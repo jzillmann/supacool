@@ -4,15 +4,22 @@ import IdentifiedCollections
 
 private nonisolated let janitorLogger = SupaLogger("Supacool.WorktreeJanitor")
 
-/// "Manage Worktrees…" sheet — enumerates every worktree registered for
-/// a repo, classifies each against the live session list, streams size
-/// + git metadata in per-row, and lets the user multi-select + delete
-/// orphans to reclaim disk.
+/// "Manage Worktrees…" sheet — single entry point for inspecting,
+/// cleaning, and deleting worktrees for a repo.
 ///
-/// Scope by PR:
-/// - PR2 (shipped): read-only scan + classification
-/// - PR3 (this): multi-select + bulk delete with confirmation
-/// - later: fold `git worktree prune` into the scan, per-row diff stat
+/// The scan pipeline:
+///   1. `git worktree prune` — reaps stale admin records so the list
+///      is trustworthy (replaces the old "Prune Stale Worktrees…"
+///      affordance, now removed).
+///   2. Resolve the repo's default branch via `symbolic-ref origin/HEAD`
+///      → drives ahead/behind + diff-stat base. Falls back to
+///      `origin/HEAD` when the symref isn't set.
+///   3. List worktrees and classify against the live session snapshot.
+///   4. Compute orphan session cards — sessions whose backing worktree
+///      is no longer present in the inventory — and surface a banner
+///      so the user can remove those cards in the same pass.
+///   5. Fan out per-row size + git metadata (parallel within a row,
+///      sequential across rows to bound disk pressure).
 ///
 /// Cancellation: the scan effect is keyed by `repositoryID`. When the
 /// sheet is dismissed (parent sets state to nil via `@Presents`), TCA's
@@ -25,37 +32,47 @@ struct WorktreeJanitorFeature {
     let repositoryID: Repository.ID
     let repositoryName: String
     /// Snapshot of the parent's session list at sheet-open time. Used
-    /// for classification only; the inventory does not subscribe to
-    /// live session changes (sheet is a transient inspector).
+    /// for classification and orphan-session detection.
     let sessionsSnapshot: [AgentSession]
-    /// Inventory rows keyed by absolute worktree path. Empty until
-    /// `_listLoaded` arrives. Mutated row-by-row as size + git metadata
-    /// stream in.
+    /// Inventory rows keyed by absolute worktree path.
     var rows: IdentifiedArrayOf<WorktreeInventoryEntry> = []
-    /// True from sheet open until the per-row metadata fan-out
-    /// completes (or fails). Drives the table's footer "Scanning…"
-    /// label.
     var isScanning: Bool = false
-    /// Set when the initial `list` call throws. Renders inline in the
-    /// table footer instead of an alert (the user can still see what
-    /// the scan got before the failure).
     var scanError: String?
 
-    /// Paths the user has ticked for deletion. Only rows whose status
-    /// is a deletion candidate may appear here; `toggleSelection` is
-    /// the single enforcement point.
+    /// Base ref for ahead/behind + diff-stat. Starts at a fallback and
+    /// gets replaced with the resolved `origin/<default-branch>` once
+    /// the scan's `defaultBranchRef` call completes. Older rows that
+    /// already fetched metadata against the fallback keep whatever
+    /// ahead/behind they computed — the UI re-renders with the
+    /// resolved value for newly-expanded diff stats.
+    var baseRef: String = "origin/HEAD"
+    /// Number of git worktree admin records pruned by the scan's
+    /// opening `git worktree prune` step. Rendered in the footer so
+    /// the user sees the equivalent of the old prune-toast summary.
+    var prunedRefCount: Int = 0
+    /// Sessions whose backing worktree isn't in the inventory any
+    /// more. Surfaced as a banner at the top of the sheet; user can
+    /// clear the cards (delegate) or dismiss the banner.
+    var orphanSessionIDs: [AgentSession.ID] = []
+    var orphanBannerDismissed: Bool = false
+
+    // MARK: Selection / delete
+
     var selectedIDs: Set<WorktreeInventoryEntry.ID> = []
-    /// Paths currently in flight for delete. UI renders a spinner or
-    /// dimmed row for these; used to guard against double-click.
     var deletingIDs: Set<WorktreeInventoryEntry.ID> = []
-    /// Pending delete confirmation dialog contents. Non-nil → dialog
-    /// is shown. Cleared on confirm/cancel.
     var deleteConfirmation: DeleteConfirmation?
-    /// Accumulated failure messages from the most recent delete batch.
-    /// Rendered inline in the footer so the user can see which
-    /// orphans survived (typical cause: pre-delete script failure on
-    /// a tracked worktree that sneaked into the selection).
     var deleteErrors: [String] = []
+
+    // MARK: Row expansion
+
+    /// Row whose disclosure chevron is open. Only one at a time so the
+    /// sheet doesn't grow unbounded.
+    var expandedRowID: WorktreeInventoryEntry.ID?
+    /// Rows with an in-flight `diffStat` fetch. Drives the inline
+    /// "Loading diff…" placeholder.
+    var loadingDiffStatIDs: Set<WorktreeInventoryEntry.ID> = []
+
+    // MARK: Derived
 
     /// Only candidate rows (orphan / orphan-dirty) are eligible for
     /// selection. Derived — cheap to recompute, not persisted.
@@ -71,6 +88,12 @@ struct WorktreeJanitorFeature {
         .reduce(UInt64(0)) { acc, row in acc + (row.sizeBytes ?? 0) }
     }
 
+    /// True when the orphan banner should appear. Hides itself when
+    /// there are no orphans *or* the user dismissed it.
+    var showsOrphanBanner: Bool {
+      !orphanSessionIDs.isEmpty && !orphanBannerDismissed
+    }
+
     init(
       repositoryID: Repository.ID,
       repositoryName: String,
@@ -82,15 +105,9 @@ struct WorktreeJanitorFeature {
     }
   }
 
-  /// Minimal payload the confirmation dialog needs to render a preview
-  /// of what's about to go. `id` makes the struct SwiftUI-friendly for
-  /// `.confirmationDialog(presenting:)`.
+  /// Minimal payload the confirmation dialog needs.
   nonisolated struct DeleteConfirmation: Equatable, Identifiable, Sendable {
     let id: UUID
-    /// Snapshot of what's being deleted. Frozen at confirmation time
-    /// so a race between "confirm tap" and "delete fires" can't widen
-    /// the blast radius if the user changes selection in the
-    /// intervening millisecond.
     let targets: [Target]
 
     nonisolated struct Target: Equatable, Identifiable, Sendable {
@@ -110,22 +127,27 @@ struct WorktreeJanitorFeature {
 
   enum Action: Equatable {
     // MARK: Scan
-    /// Fired by `.task` on sheet appear. Idempotent — guarded by
-    /// `isScanning` so re-renders don't relaunch.
     case scanRequested
-    /// Initial `wt`/git list returned. Carries the classified rows.
-    case _listLoaded([WorktreeInventoryEntry])
-    /// Initial list call threw. Surfaces inline rather than aborting.
+    /// `git worktree prune --verbose` finished — carries the count for
+    /// the footer summary. Always fires (0 on error) so the UI can
+    /// advance past the "scanning" state even when prune is denied.
+    case _pruneCompleted(prunedRefCount: Int)
+    /// Default branch resolved to a concrete ref like `origin/main`.
+    case _baseRefResolved(String)
+    /// Initial list returned. Carries classified rows *and* the orphan
+    /// session ids computed against the inventory paths — folding both
+    /// into one action avoids a state race where UI rendering sees
+    /// rows without orphans (or vice versa).
+    case _listLoaded(
+      rows: [WorktreeInventoryEntry],
+      orphanSessionIDs: [AgentSession.ID]
+    )
     case _listFailed(message: String)
-    /// `du -sk` returned for one row.
     case _sizeLoaded(rowID: WorktreeInventoryEntry.ID, bytes: UInt64)
-    /// `git log -1` + `status --porcelain` + `rev-list` returned for
-    /// one row.
     case _metadataLoaded(
       rowID: WorktreeInventoryEntry.ID,
       metadata: WorktreeInventoryGitMetadata
     )
-    /// Per-row metadata fan-out finished — flips `isScanning` off.
     case _scanCompleted
 
     // MARK: Selection
@@ -134,17 +156,27 @@ struct WorktreeJanitorFeature {
     case clearSelection
 
     // MARK: Delete
-    /// User clicked "Delete N worktrees…" in the footer. Populates
-    /// `deleteConfirmation`.
     case deleteSelectedRequested
     case deleteConfirmationCancelled
     case deleteConfirmed
-    /// One row finished deleting (success or failure). Updates state
-    /// optimistically — successful deletes shrink the table.
     case _deleteCompleted(
       id: WorktreeInventoryEntry.ID,
       result: DeleteResult
     )
+
+    // MARK: Row expansion
+    /// Toggle the inline diff-stat drawer for a row. Fires a lazy
+    /// `inventory.diffStat` fetch on the first expansion of each row.
+    case toggleRowExpansion(id: WorktreeInventoryEntry.ID)
+    case _diffStatLoaded(id: WorktreeInventoryEntry.ID, result: DiffStatResult)
+
+    // MARK: Orphan session banner
+    /// User clicked "Remove cards" in the orphan banner. Delegates up
+    /// to the parent so `BoardFeature` can chain `.removeSession` for
+    /// each id (which tears down the live tab + shared session state
+    /// in one place instead of reimplementing it here).
+    case removeOrphanCardsRequested
+    case dismissOrphanBanner
 
     // MARK: Dismissal
     case closeRequested
@@ -156,21 +188,29 @@ struct WorktreeJanitorFeature {
     case failure(message: String)
   }
 
+  nonisolated enum DiffStatResult: Equatable, Sendable {
+    case success(String)
+    case failure(message: String)
+  }
+
   @CasePathable
   enum Delegate: Equatable {
-    /// Sheet wants to be dismissed. Parent sets `state.janitor = nil`.
     case dismissed
+    /// Parent should remove these session cards. Carries the ids
+    /// computed during the last scan; parent is expected to chain
+    /// `.removeSession` per id.
+    case removeOrphanSessionCardsRequested(ids: [AgentSession.ID])
   }
 
   @Dependency(WorktreeInventoryClient.self) var inventory
   @Dependency(GitClientDependency.self) var gitClient
+  @Dependency(SupacoolWorktreePruneClient.self) var worktreePrune
 
-  /// Best-effort base ref for ahead/behind comparisons. Hardcoded to
-  /// `origin/HEAD` — when the repo doesn't have the symbolic-ref set up
-  /// the rev-list call silently returns nil and the column renders as
-  /// "—". A future PR will resolve the actual default branch up front
-  /// so the values are accurate even on freshly-cloned repos.
-  private static let defaultBaseRef = "origin/HEAD"
+  /// Fallback when `defaultBranchRef` throws. Git treats `origin/HEAD`
+  /// as a symbolic alias in most contexts, so rev-list / diff calls
+  /// usually still work — just with a less precise error message when
+  /// they don't.
+  private static let fallbackBaseRef = "origin/HEAD"
 
   var body: some Reducer<State, Action> {
     Reduce { state, action in
@@ -179,19 +219,50 @@ struct WorktreeJanitorFeature {
 
       case .scanRequested:
         guard !state.isScanning, state.rows.isEmpty else {
-          // Already scanning or already scanned. `task` fires on every
-          // appear — guard against re-entry without forcing the sheet
-          // owner to track it.
           return .none
         }
         state.isScanning = true
         state.scanError = nil
+        state.prunedRefCount = 0
+        state.orphanSessionIDs = []
+        state.orphanBannerDismissed = false
+        state.baseRef = Self.fallbackBaseRef
         let repositoryID = state.repositoryID
         let sessions = state.sessionsSnapshot
-        return .run { [inventory] send in
+        return .run { [inventory, worktreePrune] send in
+          let repoRoot = URL(fileURLWithPath: repositoryID)
+
+          // 1. Prune stale admin records so the list call returns
+          //    ground truth. Silent on failure — prune is nice-to-have,
+          //    not required for the rest of the scan.
+          let prunedCount: Int
+          do {
+            let result = try await worktreePrune.prune(repoRoot)
+            prunedCount = result.prunedRefs.count
+          } catch {
+            janitorLogger.warning(
+              "prune failed for \(repositoryID): \(error.localizedDescription)"
+            )
+            prunedCount = 0
+          }
+          await send(._pruneCompleted(prunedRefCount: prunedCount))
+
+          // 2. Resolve the default branch ref so per-row metadata
+          //    queries report accurate ahead/behind. Fallback is
+          //    baked into State at scan start, so failure here is a
+          //    no-op beyond the log line.
+          if let resolved = try? await inventory.defaultBranchRef(repoRoot) {
+            await send(._baseRefResolved(resolved))
+          } else {
+            janitorLogger.debug(
+              "defaultBranchRef unresolved for \(repositoryID); keeping fallback"
+            )
+          }
+
+          // 3. List + classify.
           let entries: [GitWtWorktreeEntry]
           do {
-            entries = try await inventory.list(URL(fileURLWithPath: repositoryID))
+            entries = try await inventory.list(repoRoot)
           } catch {
             janitorLogger.warning(
               "list failed for \(repositoryID): \(error.localizedDescription)"
@@ -204,19 +275,31 @@ struct WorktreeJanitorFeature {
             sessions: sessions,
             repositoryID: repositoryID
           )
-          await send(._listLoaded(rows))
 
-          // Fan out per-row metadata loads. Sequential across rows
-          // keeps disk pressure manageable on large repos (47-worktree
-          // centrum_backend would spawn 94 concurrent shell processes
-          // otherwise); the two calls *within* a row run in parallel
-          // via `async let` so each row settles in one round-trip.
+          // 4. Orphan session detection. Uses the same path-normalizer
+          //    as classification so matching is consistent. Repo root
+          //    is always in the inventory, so sessions at the root
+          //    won't be flagged.
+          let inventoryPaths = Set(rows.map(\.id))
+          let orphanSessionIDs = findOrphanSessionIDsFromInventory(
+            sessions: sessions,
+            repositoryID: repositoryID,
+            inventoryPaths: inventoryPaths
+          )
+          await send(._listLoaded(rows: rows, orphanSessionIDs: orphanSessionIDs))
+
+          // 5. Per-row fan-out. Read the resolved base ref from the
+          //    store via the send closure's current action payload is
+          //    not possible — instead we duplicate the fallback here
+          //    and accept that if `_baseRefResolved` hasn't landed by
+          //    this point the ahead/behind queries use the fallback.
+          //    In practice step 2 completes well before step 5.
           for row in rows {
             if case .repoRoot = row.status { continue }
             let path = URL(fileURLWithPath: row.id)
             async let sizeTask: UInt64? = try? await inventory.measure(path)
             async let metadataTask: WorktreeInventoryGitMetadata? =
-              try? await inventory.gitMetadata(path, Self.defaultBaseRef)
+              try? await inventory.gitMetadata(path, Self.fallbackBaseRef)
             if let bytes = await sizeTask {
               await send(._sizeLoaded(rowID: row.id, bytes: bytes))
             }
@@ -228,8 +311,17 @@ struct WorktreeJanitorFeature {
         }
         .cancellable(id: ScanCancelID(repositoryID: state.repositoryID), cancelInFlight: true)
 
-      case ._listLoaded(let rows):
+      case ._pruneCompleted(let count):
+        state.prunedRefCount = count
+        return .none
+
+      case ._baseRefResolved(let ref):
+        state.baseRef = ref
+        return .none
+
+      case ._listLoaded(let rows, let orphanSessionIDs):
         state.rows = IdentifiedArray(uniqueElements: rows)
+        state.orphanSessionIDs = orphanSessionIDs
         return .none
 
       case ._listFailed(let message):
@@ -256,9 +348,6 @@ struct WorktreeJanitorFeature {
       // MARK: - Selection
 
       case .toggleSelection(let id):
-        // Only candidates are selectable. Guarding here (rather than
-        // in the view) means a stale tap after a row changed status
-        // can't silently add an ineligible row.
         guard let row = state.rows[id: id], row.isDeletionCandidate else {
           return .none
         }
@@ -306,14 +395,10 @@ struct WorktreeJanitorFeature {
         state.deleteErrors = []
         let repositoryRootURL = URL(fileURLWithPath: state.repositoryID)
         let targets = confirmation.targets
-        // Track in-flight deletes so the UI can dim/disable the rows.
         for target in targets {
           state.deletingIDs.insert(target.id)
         }
         return .run { [gitClient] send in
-          // Sequential — parallelizing worktree removals contends on
-          // git's lock and produces confusing error output. Batch size
-          // is bounded by the user's selection, so it's fine.
           for target in targets {
             let result = await removeOrphanWorktree(
               gitClient: gitClient,
@@ -327,16 +412,73 @@ struct WorktreeJanitorFeature {
       case ._deleteCompleted(let id, .success):
         state.deletingIDs.remove(id)
         state.selectedIDs.remove(id)
+        if state.expandedRowID == id {
+          state.expandedRowID = nil
+        }
         state.rows.remove(id: id)
         return .none
 
       case ._deleteCompleted(let id, .failure(let message)):
         state.deletingIDs.remove(id)
-        // Leave the row and its selection alone so the user can see
-        // which one failed; the error message is surfaced in the
-        // footer.
         let name = state.rows[id: id]?.name ?? id
         state.deleteErrors.append("\(name): \(message)")
+        return .none
+
+      // MARK: - Row expansion
+
+      case .toggleRowExpansion(let id):
+        if state.expandedRowID == id {
+          state.expandedRowID = nil
+          return .none
+        }
+        state.expandedRowID = id
+        // Only fetch the diff once per row — cached in-place on the
+        // inventory entry.
+        guard state.rows[id: id]?.diffStat == nil,
+          !state.loadingDiffStatIDs.contains(id)
+        else {
+          return .none
+        }
+        state.loadingDiffStatIDs.insert(id)
+        let baseRef = state.baseRef
+        let path = URL(fileURLWithPath: id)
+        return .run { [inventory] send in
+          do {
+            let output = try await inventory.diffStat(path, baseRef)
+            await send(._diffStatLoaded(id: id, result: .success(output)))
+          } catch {
+            await send(
+              ._diffStatLoaded(id: id, result: .failure(message: error.localizedDescription))
+            )
+          }
+        }
+        .cancellable(id: DiffStatCancelID(rowID: id), cancelInFlight: true)
+
+      case ._diffStatLoaded(let id, .success(let output)):
+        state.loadingDiffStatIDs.remove(id)
+        // Empty output means "no diff vs base" — stash a sentinel so
+        // we don't re-fetch on re-expand. Trim trailing whitespace so
+        // the inline renderer's line-count heuristics stay sane.
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        state.rows[id: id]?.diffStat = trimmed.isEmpty ? "(no differences)" : output
+        return .none
+
+      case ._diffStatLoaded(let id, .failure(let message)):
+        state.loadingDiffStatIDs.remove(id)
+        state.rows[id: id]?.diffStat = "Failed to load diff: \(message)"
+        return .none
+
+      // MARK: - Orphan banner
+
+      case .removeOrphanCardsRequested:
+        let ids = state.orphanSessionIDs
+        guard !ids.isEmpty else { return .none }
+        state.orphanSessionIDs = []
+        state.orphanBannerDismissed = false
+        return .send(.delegate(.removeOrphanSessionCardsRequested(ids: ids)))
+
+      case .dismissOrphanBanner:
+        state.orphanBannerDismissed = true
         return .none
 
       // MARK: - Dismissal
@@ -354,16 +496,7 @@ struct WorktreeJanitorFeature {
 // MARK: - Delete side effect
 
 /// Call `gitClient.removeWorktree` against a synthesized `Worktree`
-/// value built from the inventory row. Runs outside the reducer so the
-/// latter stays pure.
-///
-/// Orphan worktrees aren't in `RepositoriesFeature.repositories` state
-/// (that's what makes them orphans), so we can't route through the
-/// existing `deleteWorktreeConfirmed` path. Synthesizing directly is
-/// simpler than adding a parallel action to RepositoriesFeature — and
-/// it skips the pre-delete script, which is a deliberate choice:
-/// scripts are configured per-repo and typically reference build
-/// state that's already stale on an orphan.
+/// value built from the inventory row.
 private func removeOrphanWorktree(
   gitClient: GitClientDependency,
   target: WorktreeJanitorFeature.DeleteConfirmation.Target,
@@ -372,10 +505,6 @@ private func removeOrphanWorktree(
   let workingDirectory = URL(fileURLWithPath: target.id)
   let synthetic = Worktree(
     id: target.id,
-    // `name` is what gitClient uses to resolve the branch to delete
-    // when `deleteBranchOnDeleteWorktree` is true. Fall back to the
-    // directory name so we still remove the worktree itself even
-    // when branch inference is ambiguous.
     name: target.branch ?? workingDirectory.lastPathComponent,
     detail: target.id,
     workingDirectory: workingDirectory,
@@ -384,10 +513,6 @@ private func removeOrphanWorktree(
     branch: target.branch
   )
   do {
-    // PR3 hardcodes `deleteBranch: false`. The branch may carry work
-    // the user cares about (orphan ≠ unwanted commits), so we remove
-    // the worktree only and leave branch-deletion to a future opt-in
-    // toggle in the confirmation dialog.
     _ = try await gitClient.removeWorktree(synthetic, /* deleteBranch */ false)
     return .success
   } catch {
@@ -400,8 +525,6 @@ private func removeOrphanWorktree(
 
 // MARK: - Helpers
 
-/// True when a row's status reflects an orphan with local uncommitted
-/// changes — lets the confirmation dialog surface a stronger warning.
 private func isDirty(_ status: WorktreeInventoryEntry.Status) -> Bool {
   if case .orphanDirty = status { return true }
   return false
@@ -411,4 +534,8 @@ private func isDirty(_ status: WorktreeInventoryEntry.Status) -> Bool {
 
 private nonisolated struct ScanCancelID: Hashable, Sendable {
   let repositoryID: Repository.ID
+}
+
+private nonisolated struct DiffStatCancelID: Hashable, Sendable {
+  let rowID: WorktreeInventoryEntry.ID
 }

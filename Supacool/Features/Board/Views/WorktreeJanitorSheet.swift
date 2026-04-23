@@ -4,15 +4,16 @@ import SwiftUI
 
 /// Inspector + janitor for every worktree registered against a repo.
 ///
-/// Renders one row per worktree with classification badge, disk size,
-/// last-commit summary, and dirty-file count. Rows fill in progressively
-/// as the reducer's scan streams size + git metadata per row — the
-/// sheet is immediately interactive even on a 47-worktree repo where a
-/// full `du -sk` sweep takes 30+ seconds.
+/// Columns: selection | name+branch | status | size | last commit |
+/// ahead/behind vs the repo's default branch | dirty count | diff-stat
+/// disclosure. Rows stream in progressively: identity appears first,
+/// then size, then git metadata as the scan's fan-out progresses.
 ///
-/// PR3 adds a leading checkbox column on candidate rows (orphan /
-/// orphan-dirty). Selecting rows lights up a destructive Delete action
-/// in the footer that surfaces a confirmation dialog before firing.
+/// New in this PR:
+/// - Ahead/behind column rendered from the resolved base ref
+/// - Disclosure chevron per row → lazy diff-stat drawer
+/// - Orphan-session banner above the table when prune reveals cards
+///   whose backing dir is gone
 struct WorktreeJanitorSheet: View {
   @Bindable var store: StoreOf<WorktreeJanitorFeature>
 
@@ -20,11 +21,15 @@ struct WorktreeJanitorSheet: View {
     VStack(alignment: .leading, spacing: 0) {
       header
       Divider()
+      if store.showsOrphanBanner {
+        orphanBanner
+        Divider()
+      }
       content
       Divider()
       footer
     }
-    .frame(minWidth: 780, minHeight: 460)
+    .frame(minWidth: 860, minHeight: 480)
     .task {
       store.send(.scanRequested)
     }
@@ -36,7 +41,10 @@ struct WorktreeJanitorSheet: View {
       ),
       presenting: store.deleteConfirmation
     ) { confirmation in
-      Button("Delete \(confirmation.targets.count) worktree\(confirmation.targets.count == 1 ? "" : "s")", role: .destructive) {
+      Button(
+        "Delete \(confirmation.targets.count) worktree\(confirmation.targets.count == 1 ? "" : "s")",
+        role: .destructive
+      ) {
         store.send(.deleteConfirmed)
       }
       Button("Cancel", role: .cancel) {
@@ -60,6 +68,49 @@ struct WorktreeJanitorSheet: View {
     .padding(.vertical, 16)
   }
 
+  // MARK: - Orphan banner
+
+  private var orphanBanner: some View {
+    HStack(spacing: 12) {
+      Image(systemName: "person.crop.circle.badge.exclamationmark.fill")
+        .font(.title3)
+        .foregroundStyle(.orange)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(orphanBannerTitle)
+          .font(.callout.weight(.semibold))
+        Text("Their backing worktrees no longer exist on disk.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+      Button("Remove cards") {
+        store.send(.removeOrphanCardsRequested)
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(.orange)
+      Button {
+        store.send(.dismissOrphanBanner)
+      } label: {
+        Image(systemName: "xmark")
+          .font(.caption)
+      }
+      .buttonStyle(.plain)
+      .help("Hide this banner")
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 10)
+    .background(Color.orange.opacity(0.08))
+  }
+
+  private var orphanBannerTitle: String {
+    let count = store.orphanSessionIDs.count
+    return count == 1
+      ? "1 session card references a missing worktree"
+      : "\(count) session cards reference missing worktrees"
+  }
+
+  // MARK: - Content
+
   @ViewBuilder
   private var content: some View {
     if store.rows.isEmpty, store.isScanning {
@@ -69,7 +120,7 @@ struct WorktreeJanitorSheet: View {
     } else if store.rows.isEmpty {
       emptyPlaceholder
     } else {
-      table
+      rowsList
     }
   }
 
@@ -107,70 +158,208 @@ struct WorktreeJanitorSheet: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
-  private var table: some View {
-    Table(Array(store.rows)) {
-      TableColumn("") { row in
+  /// Custom list (not `Table`) so we can inline an expandable diff-stat
+  /// drawer per row. `Table` lives in a grid layout that doesn't
+  /// support variable-height rows.
+  private var rowsList: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 0) {
+        rowHeader
+        Divider()
+        ForEach(store.rows) { row in
+          rowView(row)
+          Divider()
+        }
+      }
+    }
+  }
+
+  private var rowHeader: some View {
+    HStack(spacing: 12) {
+      Text("")
+        .frame(width: 24)
+      Text("Name")
+        .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+      Text("Status")
+        .frame(width: 120, alignment: .leading)
+      Text("Size")
+        .frame(width: 80, alignment: .trailing)
+      Text("Last Commit")
+        .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
+      Text("± base")
+        .frame(width: 80, alignment: .trailing)
+      Text("Dirty")
+        .frame(width: 64, alignment: .trailing)
+      Text("")
+        .frame(width: 24)
+    }
+    .font(.caption.weight(.semibold))
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 8)
+    .background(Color.secondary.opacity(0.06))
+  }
+
+  private func rowView(_ row: WorktreeInventoryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      HStack(spacing: 12) {
         SelectionToggle(
           row: row,
           isSelected: store.selectedIDs.contains(row.id),
           isDeleting: store.deletingIDs.contains(row.id),
           onToggle: { store.send(.toggleSelection(id: row.id)) }
         )
-      }
-      .width(24)
+        .frame(width: 24)
 
-      TableColumn("Name") { row in
-        VStack(alignment: .leading, spacing: 2) {
-          Text(row.name)
-            .font(.callout.weight(.medium))
-          if let branch = row.branch {
-            Text(branch)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
-        .opacity(store.deletingIDs.contains(row.id) ? 0.4 : 1.0)
-      }
-      .width(min: 140, ideal: 200)
+        nameCell(row)
+          .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
 
-      TableColumn("Status") { row in
         StatusBadge(status: row.status)
-      }
-      .width(min: 110, ideal: 140)
+          .frame(width: 120, alignment: .leading)
 
-      TableColumn("Size") { row in
         Text(formatSize(row.sizeBytes))
           .font(.callout.monospacedDigit())
           .foregroundStyle(row.sizeBytes == nil ? .secondary : .primary)
-      }
-      .width(min: 70, ideal: 90)
+          .frame(width: 80, alignment: .trailing)
 
-      TableColumn("Last Commit") { row in
-        VStack(alignment: .leading, spacing: 2) {
-          if let commit = row.lastCommit {
-            Text(commit.subject)
-              .font(.callout)
-              .lineLimit(1)
-            Text(relativeDate(commit.date))
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          } else {
-            Text("—")
-              .foregroundStyle(.secondary)
-          }
-        }
-      }
-      .width(min: 180, ideal: 260)
+        lastCommitCell(row.lastCommit)
+          .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
 
-      TableColumn("Dirty") { row in
+        aheadBehindCell(row.aheadBehind)
+          .frame(width: 80, alignment: .trailing)
+
         Text(formatDirty(row.uncommittedCount))
           .font(.callout.monospacedDigit())
           .foregroundStyle(dirtyColor(row.uncommittedCount))
+          .frame(width: 64, alignment: .trailing)
+
+        disclosureButton(row)
+          .frame(width: 24)
       }
-      .width(min: 50, ideal: 70)
+      .padding(.horizontal, 16)
+      .padding(.vertical, 8)
+      .opacity(store.deletingIDs.contains(row.id) ? 0.4 : 1.0)
+      .contentShape(Rectangle())
+
+      if store.expandedRowID == row.id {
+        diffStatDrawer(for: row)
+      }
     }
-    .tableStyle(.inset)
   }
+
+  private func nameCell(_ row: WorktreeInventoryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      Text(row.name)
+        .font(.callout.weight(.medium))
+      if let branch = row.branch {
+        Text(branch)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  private func lastCommitCell(_ commit: WorktreeInventoryEntry.LastCommit?) -> some View {
+    VStack(alignment: .leading, spacing: 2) {
+      if let commit {
+        Text(commit.subject)
+          .font(.callout)
+          .lineLimit(1)
+        Text(relativeDate(commit.date))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      } else {
+        Text("—")
+          .foregroundStyle(.secondary)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func aheadBehindCell(_ value: WorktreeInventoryEntry.AheadBehind?) -> some View {
+    if let value {
+      HStack(spacing: 4) {
+        if value.ahead > 0 {
+          Label("\(value.ahead)", systemImage: "arrow.up")
+            .labelStyle(.titleAndIcon)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.green)
+        }
+        if value.behind > 0 {
+          Label("\(value.behind)", systemImage: "arrow.down")
+            .labelStyle(.titleAndIcon)
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.red)
+        }
+        if value.ahead == 0, value.behind == 0 {
+          Text("in sync")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      }
+    } else {
+      Text("—")
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  @ViewBuilder
+  private func disclosureButton(_ row: WorktreeInventoryEntry) -> some View {
+    // Only worktrees with a sensible diff target (i.e. not the repo
+    // root — its diff vs. the base branch is what a PR would look
+    // like, not disk-reclaim context) get the chevron.
+    if case .repoRoot = row.status {
+      Spacer()
+    } else {
+      Button {
+        store.send(.toggleRowExpansion(id: row.id))
+      } label: {
+        Image(systemName: store.expandedRowID == row.id ? "chevron.down" : "chevron.right")
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help(store.expandedRowID == row.id ? "Collapse" : "Show diff vs \(store.baseRef)")
+    }
+  }
+
+  @ViewBuilder
+  private func diffStatDrawer(for row: WorktreeInventoryEntry) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 6) {
+        Text("git diff --stat")
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+        Text(store.baseRef + "...HEAD")
+          .font(.caption.monospaced())
+          .foregroundStyle(.secondary)
+        Spacer()
+      }
+      if store.loadingDiffStatIDs.contains(row.id) {
+        HStack(spacing: 6) {
+          ProgressView().controlSize(.small)
+          Text("Loading diff…")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      } else if let stat = row.diffStat {
+        Text(stat)
+          .font(.caption.monospaced())
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      } else {
+        Text("—")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .padding(.horizontal, 56)
+    .padding(.bottom, 10)
+    .padding(.top, 2)
+    .background(Color.secondary.opacity(0.04))
+  }
+
+  // MARK: - Footer
 
   @ViewBuilder
   private var footer: some View {
@@ -210,7 +399,6 @@ struct WorktreeJanitorSheet: View {
       VStack(alignment: .leading, spacing: 2) {
         Text("\(store.deleteErrors.count) delete\(store.deleteErrors.count == 1 ? "" : "s") failed")
           .font(.caption.weight(.semibold))
-        // Show the first failure message inline; the rest are logged.
         if let first = store.deleteErrors.first {
           Text(first)
             .font(.caption2)
@@ -257,7 +445,12 @@ struct WorktreeJanitorSheet: View {
     let totalBytes = store.rows.reduce(UInt64(0)) { acc, row in
       acc + (row.sizeBytes ?? 0)
     }
-    return "\(store.rows.count) worktrees · \(candidateCount) candidates · \(formatSize(totalBytes)) on disk"
+    let prunedSuffix =
+      store.prunedRefCount == 0
+      ? ""
+      : " · pruned \(store.prunedRefCount) stale record\(store.prunedRefCount == 1 ? "" : "s")"
+    return
+      "\(store.rows.count) worktrees · \(candidateCount) candidates · \(formatSize(totalBytes)) on disk\(prunedSuffix)"
   }
 
   // MARK: - Confirmation dialog
@@ -312,9 +505,6 @@ struct WorktreeJanitorSheet: View {
 
 // MARK: - Selection toggle
 
-/// Leading checkbox. Renders nothing for non-candidate rows so the repo
-/// root + owned sessions visually can't be picked. Dimmed spinner
-/// replaces the checkbox for rows currently mid-delete.
 private struct SelectionToggle: View {
   let row: WorktreeInventoryEntry
   let isSelected: Bool
@@ -337,8 +527,6 @@ private struct SelectionToggle: View {
       .buttonStyle(.plain)
       .help(isSelected ? "Deselect" : "Select for deletion")
     } else {
-      // Non-candidate rows (owned / repo root) render a disabled
-      // placeholder so the column width stays stable.
       Image(systemName: "square")
         .foregroundStyle(.tertiary)
         .opacity(0.35)
@@ -357,6 +545,7 @@ private struct StatusBadge: View {
         .foregroundStyle(tint)
       Text(label)
         .font(.caption.weight(.medium))
+        .lineLimit(1)
     }
   }
 

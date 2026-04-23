@@ -18,14 +18,11 @@ struct RepoPickerButton: View {
   let onShowAll: () -> Void
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
-  /// Tapping the trailing broom button on a repo row runs
-  /// `git worktree prune` for that repo + reconciles any orphan session
-  /// cards. Wired up in BoardRootView.
-  let onPruneWorktrees: (Repository) -> Void
-  /// Opens the read-only "Manage Worktrees…" inspector for the chosen
-  /// repo. Lives next to (not replacing) the prune entry in PR2; PR3
-  /// will fold the prune action into the janitor's scan and remove the
-  /// dedicated prune item.
+  /// Opens the "Manage Worktrees…" inspector for the chosen repo.
+  /// This is the single entry point for worktree hygiene — the
+  /// janitor's scan runs `git worktree prune` internally and also
+  /// reconciles orphan session cards, subsuming the old standalone
+  /// prune affordance.
   let onManageWorktrees: (Repository) -> Void
 
   @State private var isPresented: Bool = false
@@ -162,61 +159,14 @@ struct RepoPickerButton: View {
         }
         .buttonStyle(.plain)
 
-        // Discoverable entry point for `git worktree prune`. Expands
-        // into a submenu of repos (or fires directly when there's only
-        // one) so the user doesn't have to guess which tiny icon cleans
-        // up worktrees.
-        pruneFooter
-        // Read-only janitor inspector. Placed below prune in PR2 so
-        // the existing affordance keeps working untouched; PR3 will
-        // fold prune into the janitor's scan and remove this section's
-        // sibling above.
+        // Unified entry point for worktree hygiene. The janitor's
+        // scan runs `git worktree prune` internally and reconciles
+        // orphan session cards, replacing the old broom footer.
         manageFooter
       }
     }
     .frame(minWidth: 240)
     .padding(.vertical, 4)
-  }
-
-  @ViewBuilder
-  private var pruneFooter: some View {
-    if repositories.count == 1, let only = repositories.first {
-      Button {
-        isPresented = false
-        onPruneWorktrees(only)
-      } label: {
-        pruneFooterLabel(text: "Prune Stale Worktrees…")
-      }
-      .buttonStyle(.plain)
-      .help("Run git worktree prune and clean up orphan session cards")
-    } else {
-      Menu {
-        ForEach(repositories) { repo in
-          Button(repo.name) {
-            isPresented = false
-            onPruneWorktrees(repo)
-          }
-        }
-      } label: {
-        pruneFooterLabel(text: "Prune Stale Worktrees…")
-      }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .help("Pick a repository to run git worktree prune against")
-    }
-  }
-
-  private func pruneFooterLabel(text: String) -> some View {
-    HStack {
-      Image(systemName: "wand.and.sparkles")
-        .foregroundStyle(.secondary)
-      Text(text)
-        .font(.callout.weight(.medium))
-      Spacer()
-    }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
-    .contentShape(Rectangle())
   }
 
   @ViewBuilder

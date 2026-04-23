@@ -41,6 +41,14 @@ nonisolated struct WorktreeInventoryClient: Sendable {
   /// `git diff --stat <baseRef>...HEAD`, raw. Loaded only when the user
   /// expands a row — avoid paying for it on every scan.
   var diffStat: @Sendable (_ path: URL, _ baseRef: String) async throws -> String
+
+  /// Resolves the repo's default branch ref via
+  /// `git symbolic-ref --short refs/remotes/origin/HEAD` → e.g.
+  /// `origin/main`. Used as the base for ahead/behind + diff-stat
+  /// comparisons. Throws when the symref isn't set up (typical on a
+  /// fresh clone before `git remote set-head origin --auto`); callers
+  /// fall back to a hardcoded best-guess.
+  var defaultBranchRef: @Sendable (_ repoRoot: URL) async throws -> String
 }
 
 /// Bundled result of the three cheap per-row git calls. Any field can be
@@ -150,6 +158,22 @@ extension WorktreeInventoryClient: DependencyKey {
           nil
         )
         return out.stdout
+      },
+      defaultBranchRef: { repoRoot in
+        let out = try await shell.run(
+          env,
+          [
+            "git", "-C", repoRoot.path(percentEncoded: false),
+            "symbolic-ref", "--short", "refs/remotes/origin/HEAD",
+          ],
+          nil
+        )
+        let trimmed = out.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+          struct DefaultBranchUnresolvable: Error {}
+          throw DefaultBranchUnresolvable()
+        }
+        return trimmed
       }
     )
   }
@@ -170,6 +194,10 @@ extension WorktreeInventoryClient: DependencyKey {
     diffStat: { _, _ in
       struct UnimplementedDiff: Error {}
       throw UnimplementedDiff()
+    },
+    defaultBranchRef: { _ in
+      struct UnimplementedDefaultBranch: Error {}
+      throw UnimplementedDefaultBranch()
     }
   )
 }
@@ -256,6 +284,42 @@ nonisolated func applyUncommittedCount(
     updated.status = .orphanDirty
   }
   return updated
+}
+
+/// Find session ids in `sessions` whose backing worktree isn't present
+/// in the inventory any more — i.e. session cards that outlived their
+/// directory. Authoritative alternative to
+/// `findOrphanSessionIDs(in:repositoryID:)` in `BoardFeature`, which
+/// stats the filesystem: that version misses the case where the dir
+/// still exists on disk but git has pruned the worktree record (e.g.
+/// user deleted the dir while Supacool was closed and `git worktree
+/// prune` has been run), and vice versa.
+///
+/// Matching mirrors `classifyWorktreeInventory`: a session is only
+/// considered attached when its `worktreeID` or `currentWorkspacePath`
+/// normalizes onto one of `inventoryPaths`. Repo-root sessions
+/// (worktreeID == repositoryID) are never orphans — the repo itself
+/// can't go stale independently.
+nonisolated func findOrphanSessionIDsFromInventory(
+  sessions: [AgentSession],
+  repositoryID: String,
+  inventoryPaths: Set<String>
+) -> [AgentSession.ID] {
+  // Normalize caller-provided paths defensively — `row.id` values from
+  // `classifyWorktreeInventory` are already normalized, but integration
+  // tests (and a future non-classifier caller) may pass raw strings.
+  let normalizedInventory = Set(inventoryPaths.map(normalizePath))
+  return
+    sessions
+    .filter { $0.repositoryID == repositoryID }
+    .filter { $0.worktreeID != $0.repositoryID }
+    .filter { session in
+      let worktreeKey = normalizePath(session.worktreeID)
+      let currentKey = normalizePath(session.currentWorkspacePath)
+      return !normalizedInventory.contains(worktreeKey)
+        && !normalizedInventory.contains(currentKey)
+    }
+    .map(\.id)
 }
 
 // MARK: - Parsers

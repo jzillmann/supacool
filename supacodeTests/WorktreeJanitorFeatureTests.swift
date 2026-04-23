@@ -414,6 +414,341 @@ struct WorktreeJanitorFeatureTests {
       $0.deleteConfirmation = nil
     }
   }
+
+  // MARK: - Prune fold
+
+  @Test func scanRunsPruneBeforeListAndPopulatesCount() async {
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: ["foo", "bar", "baz"], rawOutput: "")
+      }
+      $0.worktreeInventory.list = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested)
+    await store.receive(\._pruneCompleted)
+    #expect(store.state.prunedRefCount == 3)
+  }
+
+  @Test func scanToleratesPruneFailure() async {
+    struct PruneKaboom: Error {}
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in throw PruneKaboom() }
+      $0.worktreeInventory.list = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested)
+    await store.receive(\._pruneCompleted)
+    // Prune failed → count stays 0 — but the rest of the scan still
+    // runs. Reaching `_scanCompleted` is the real assertion here.
+    await store.receive(\._scanCompleted)
+    #expect(store.state.prunedRefCount == 0)
+  }
+
+  // MARK: - Default branch resolution
+
+  @Test func scanResolvesDefaultBranchRef() async {
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: [], rawOutput: "")
+      }
+      $0.worktreeInventory.defaultBranchRef = { _ in "origin/trunk" }
+      $0.worktreeInventory.list = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested)
+    await store.receive(\._baseRefResolved)
+    #expect(store.state.baseRef == "origin/trunk")
+  }
+
+  @Test func scanFallsBackWhenDefaultBranchUnresolvable() async {
+    struct SymRefMissing: Error {}
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: [], rawOutput: "")
+      }
+      $0.worktreeInventory.defaultBranchRef = { _ in throw SymRefMissing() }
+      $0.worktreeInventory.list = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested)
+    await store.receive(\._scanCompleted)
+    // baseRef stays at the fallback.
+    #expect(store.state.baseRef == "origin/HEAD")
+  }
+
+  // MARK: - Orphan session reconciliation
+
+  @Test func scanDetectsOrphanSessionCards() async {
+    // Session's worktree isn't in the inventory → orphan card.
+    let ghost = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r/gone",
+      agent: .claude,
+      initialPrompt: "hack"
+    )
+    // Session at repo root → never an orphan (repo can't go stale
+    // from a worktree perspective).
+    let rootSession = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r",
+      agent: .claude,
+      initialPrompt: "root"
+    )
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r",
+        repositoryName: "r",
+        sessionsSnapshot: [ghost, rootSession]
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.supacoolWorktreePrune.prune = { _ in
+        SupacoolPruneResult(prunedRefs: [], rawOutput: "")
+      }
+      $0.worktreeInventory.list = { _ in
+        [GitWtWorktreeEntry(branch: "main", path: "/r", head: "a", isBare: false)]
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested)
+    await store.receive(\._listLoaded)
+
+    #expect(store.state.orphanSessionIDs == [ghost.id])
+    #expect(store.state.showsOrphanBanner)
+  }
+
+  @Test func dismissOrphanBannerHidesItWithoutRemovingCards() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.orphanSessionIDs = [UUID()]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.dismissOrphanBanner) {
+      $0.orphanBannerDismissed = true
+    }
+    #expect(store.state.showsOrphanBanner == false)
+    // IDs are preserved — user can still remove them via parent.
+    #expect(store.state.orphanSessionIDs.count == 1)
+  }
+
+  @Test func removeOrphanCardsRequestedEmitsDelegate() async {
+    let ids = [UUID(), UUID()]
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.orphanSessionIDs = ids
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.removeOrphanCardsRequested) {
+      $0.orphanSessionIDs = []
+    }
+    await store.receive(\.delegate.removeOrphanSessionCardsRequested)
+  }
+
+  // MARK: - Diff stat row expansion
+
+  @Test func toggleRowExpansionFiresDiffStatFetchOnce() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/wt", name: "wt", branch: "feat", head: "a", status: .orphan)
+    ]
+    let fetchCount = DiffStatCounter()
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.worktreeInventory.diffStat = { _, _ in
+        await fetchCount.increment()
+        return " file.swift | 2 ++\n 1 file changed, 2 insertions(+)\n"
+      }
+    }
+    store.exhaustivity = .off
+
+    // First expansion → fetch fires.
+    await store.send(.toggleRowExpansion(id: "/r/wt")) {
+      $0.expandedRowID = "/r/wt"
+      $0.loadingDiffStatIDs = ["/r/wt"]
+    }
+    await store.receive(\._diffStatLoaded)
+    #expect(await fetchCount.get() == 1)
+    #expect(store.state.rows[id: "/r/wt"]?.diffStat?.contains("1 file changed") == true)
+    #expect(store.state.loadingDiffStatIDs.isEmpty)
+
+    // Collapse.
+    await store.send(.toggleRowExpansion(id: "/r/wt")) {
+      $0.expandedRowID = nil
+    }
+
+    // Re-expand → no new fetch (cached on the row).
+    await store.send(.toggleRowExpansion(id: "/r/wt")) {
+      $0.expandedRowID = "/r/wt"
+    }
+    #expect(await fetchCount.get() == 1)
+  }
+
+  @Test func diffStatFailureSurfacesInlineWithoutClearingRow() async {
+    struct DiffKaboom: LocalizedError {
+      var errorDescription: String? { "diff exploded" }
+    }
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/wt", name: "wt", branch: "feat", head: "a", status: .orphan)
+    ]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.worktreeInventory.diffStat = { _, _ in throw DiffKaboom() }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.toggleRowExpansion(id: "/r/wt"))
+    await store.receive(\._diffStatLoaded)
+    #expect(store.state.rows[id: "/r/wt"]?.diffStat?.contains("diff exploded") == true)
+    #expect(store.state.rows.count == 1)
+  }
+
+  @Test func emptyDiffStatUsesSentinel() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/wt", name: "wt", branch: "feat", head: "a", status: .orphan)
+    ]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.worktreeInventory.diffStat = { _, _ in "" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.toggleRowExpansion(id: "/r/wt"))
+    await store.receive(\._diffStatLoaded)
+    #expect(store.state.rows[id: "/r/wt"]?.diffStat == "(no differences)")
+  }
+}
+
+// MARK: - Pure helper
+
+struct FindOrphanSessionIDsFromInventoryTests {
+  @Test func matchesOnNormalizedPaths() {
+    let ghost = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r/gone",
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    let live = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r/alive",
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    // Trailing slash on the inventory path still matches.
+    let ids = findOrphanSessionIDsFromInventory(
+      sessions: [ghost, live],
+      repositoryID: "/r",
+      inventoryPaths: ["/r/alive/"]
+    )
+    #expect(ids == [ghost.id])
+  }
+
+  @Test func skipsSessionsAtRepoRoot() {
+    let root = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r",
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    let ids = findOrphanSessionIDsFromInventory(
+      sessions: [root],
+      repositoryID: "/r",
+      inventoryPaths: []  // repo itself missing — doesn't matter
+    )
+    #expect(ids.isEmpty)
+  }
+
+  @Test func skipsForeignRepoSessions() {
+    let foreign = AgentSession(
+      repositoryID: "/other",
+      worktreeID: "/other/wt",
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    let ids = findOrphanSessionIDsFromInventory(
+      sessions: [foreign],
+      repositoryID: "/r",
+      inventoryPaths: []
+    )
+    #expect(ids.isEmpty)
+  }
+
+  @Test func currentWorkspacePathProtectsConvertedSessions() {
+    // Simulates the convert-to-worktree popover case: worktreeID
+    // stays at the repo root while currentWorkspacePath points at a
+    // freshly-created worktree.
+    let converted = AgentSession(
+      repositoryID: "/r",
+      worktreeID: "/r/something",
+      currentWorkspacePath: "/r/converted",
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    let ids = findOrphanSessionIDsFromInventory(
+      sessions: [converted],
+      repositoryID: "/r",
+      // Only the `currentWorkspacePath` is in the inventory —
+      // `worktreeID` has been renamed/moved. Still not orphan because
+      // the session's live working dir matches an inventory entry.
+      inventoryPaths: ["/r/converted"]
+    )
+    #expect(ids.isEmpty)
+  }
+}
+
+// MARK: - Helpers
+
+/// Thread-safe counter for diff-stat fetch-count assertions.
+private actor DiffStatCounter {
+  private var count = 0
+  func increment() { count += 1 }
+  func get() -> Int { count }
 }
 
 // MARK: - BoardFeature integration
