@@ -241,164 +241,170 @@ struct WorktreeTerminalManagerTests {
   }
 
   @Test func awaitingInputRequiresStabilizationAndExpires() async {
-    await withDependencies {
-      $0.date.now = Date(timeIntervalSince1970: 1234)
-    } operation: {
-      let clock = TestClock()
-      let server = AgentHookSocketServer()
-      let manager = WorktreeTerminalManager(
-        runtime: GhosttyRuntime(),
-        socketServer: server,
-        awaitingInputTTL: .seconds(8),
-        awaitingInputTransitionOnDebounce: .milliseconds(250),
-        awaitingInputTransitionOffDebounce: .milliseconds(250),
-        awaitingInputActivityPollInterval: .seconds(1),
-        clock: clock
-      )
-      let worktree = makeWorktree()
-
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId,
-        let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-      else {
-        Issue.record("Expected blocking script tab and surface")
-        return
-      }
-
-      server.onNotification?(
-        worktree.id,
-        tabId.rawValue,
-        surface.id,
-        AgentHookNotification(
-          agent: "claude",
-          event: "Notification",
-          title: nil,
-          body: "Claude needs your permission to use Bash",
-          sessionID: nil
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock
         )
-      )
+        let worktree = makeWorktree()
 
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
 
-      await clock.advance(by: .milliseconds(250))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId,
+          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+        else {
+          Issue.record("Expected blocking script tab and surface")
+          return
+        }
 
-      await clock.advance(by: .seconds(8))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude needs your permission to use Bash",
+            sessionID: nil
+          )
+        )
 
-      await clock.advance(by: .milliseconds(250))
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .seconds(8))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
     }
   }
 
   @Test func awaitingInputClearsWhenTerminalOutputResumes() async {
-    await withDependencies {
-      $0.date.now = Date(timeIntervalSince1970: 1234)
-    } operation: {
-      let clock = TestClock()
-      let screenContents = LockIsolated("Claude needs your permission\n1. Allow")
-      let server = AgentHookSocketServer()
-      let manager = WorktreeTerminalManager(
-        runtime: GhosttyRuntime(),
-        socketServer: server,
-        awaitingInputTTL: .seconds(8),
-        awaitingInputTransitionOnDebounce: .milliseconds(250),
-        awaitingInputTransitionOffDebounce: .milliseconds(250),
-        awaitingInputActivityPollInterval: .seconds(1),
-        clock: clock,
-        readScreenContents: { _, _ in screenContents.value }
-      )
-      let worktree = makeWorktree()
-
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId,
-        let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-      else {
-        Issue.record("Expected blocking script tab and surface")
-        return
-      }
-
-      server.onNotification?(
-        worktree.id,
-        tabId.rawValue,
-        surface.id,
-        AgentHookNotification(
-          agent: "claude",
-          event: "Notification",
-          title: nil,
-          body: "Claude needs your permission to use Bash",
-          sessionID: nil
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let screenContents = LockIsolated("Claude needs your permission\n1. Allow")
+        let server = AgentHookSocketServer()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
         )
-      )
+        let worktree = makeWorktree()
 
-      await clock.advance(by: .milliseconds(250))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
 
-      screenContents.setValue("Streaming output resumed\nEdited BoardRootView.swift")
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId,
+          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+        else {
+          Issue.record("Expected blocking script tab and surface")
+          return
+        }
 
-      await clock.advance(by: .seconds(1))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude needs your permission to use Bash",
+            sessionID: nil
+          )
+        )
 
-      await clock.advance(by: .milliseconds(250))
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        screenContents.setValue("Streaming output resumed\nEdited BoardRootView.swift")
+
+        await clock.advance(by: .seconds(1))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
     }
   }
 
   @Test func stableApprovalPromptScreenPromotesAwaitingInputWithoutHook() async {
-    await withDependencies {
-      $0.date.now = Date(timeIntervalSince1970: 1234)
-    } operation: {
-      let clock = TestClock()
-      let screenContents = LockIsolated(
-        """
-        Do you want to make this edit to e2e-no-silent-failures.md?
-        1. Yes
-        2. Yes, and allow Claude to edit its own settings for this session
-        3. No
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let screenContents = LockIsolated(
+          """
+          Do you want to make this edit to e2e-no-silent-failures.md?
+          1. Yes
+          2. Yes, and allow Claude to edit its own settings for this session
+          3. No
 
-        Esc to cancel  Tab to amend
-        """
-      )
-      let manager = WorktreeTerminalManager(
-        runtime: GhosttyRuntime(),
-        awaitingInputTTL: .seconds(8),
-        awaitingInputTransitionOnDebounce: .milliseconds(250),
-        awaitingInputTransitionOffDebounce: .milliseconds(250),
-        awaitingInputActivityPollInterval: .seconds(1),
-        clock: clock,
-        readScreenContents: { _, _ in screenContents.value }
-      )
-      let worktree = makeWorktree()
+          Esc to cancel  Tab to amend
+          """
+        )
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
 
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
 
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId
-      else {
-        Issue.record("Expected blocking script tab")
-        return
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId
+        else {
+          Issue.record("Expected blocking script tab")
+          return
+        }
+
+        await clock.advance(by: .seconds(1))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .seconds(1))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        screenContents.setValue("Waiting for the next instruction")
+
+        await clock.advance(by: .seconds(1))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
       }
-
-      await clock.advance(by: .seconds(1))
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
-
-      await clock.advance(by: .seconds(1))
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
-
-      await clock.advance(by: .milliseconds(250))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
-
-      screenContents.setValue("Waiting for the next instruction")
-
-      await clock.advance(by: .seconds(1))
-      #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
-
-      await clock.advance(by: .milliseconds(250))
-      #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
     }
   }
 
