@@ -6,7 +6,7 @@ Native terminal coding agents command center.
 
 ## Features
 
-Supacool is a fork of [supacode](https://github.com/supabitapp/supacode) — but turned up to eleven. Same native-Mac soul, a very different day-to-day feel.
+Supacool started life as a fork of [supacode](https://github.com/supabitapp/supacode) and is now an independently maintained derivative. Same native-Mac soul, a very different day-to-day feel.
 
 **Inherited from supacode:**
 

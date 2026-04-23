@@ -4,8 +4,8 @@ This directory holds Supacool's **non-code** artefacts: the app icon source (`as
 
 For everything else — the project overview, quickstart, and deep reference docs — see:
 
-- [`/AGENTS.md`](../AGENTS.md) — master doc: fork orientation, quickstart, upstream supacode notes. `CLAUDE.md` symlinks to it.
-- [`/docs/agent-guides/`](../docs/agent-guides/) — architecture, persistence convention, Swift 6 gotchas, upstream-sync playbook, and the explicit out-of-scope list.
+- [`/AGENTS.md`](../AGENTS.md) — master doc: project orientation, quickstart, code conventions. `CLAUDE.md` symlinks to it.
+- [`/docs/agent-guides/`](../docs/agent-guides/) — architecture, persistence convention, Swift 6 gotchas, upstream cherry-pick playbook, and the explicit out-of-scope list.
 - [`/.claude/skills/`](../.claude/skills/) — invokable skill modules for recurring workflows.
 
 ## Why code lives under `supacode/Supacool/`, not here

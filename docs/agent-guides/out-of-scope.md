@@ -48,7 +48,7 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **What it is**: Xcode target, source directory, module name, all the orphaned view files.
 
-**Why it's out**: every renamed file is a guaranteed merge conflict forever. Supacool's philosophy is **minimum drift**: rename only the user-visible bits (display name, bundle id, window title). Internal names stay `supacode`. See [upstream-sync.md](./upstream-sync.md).
+**Why it's out**: a holdover from the fork era — kept because mass renaming is cosmetic, disruptive (Xcode project regeneration, asset paths, log subsystem), and doesn't change behaviour. Rename only the user-visible bits (display name, bundle id, window title). Internal names stay `supacode`.
 
 ## 8. Custom fork of ghostty or git-wt
 
@@ -63,4 +63,4 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 1. Is X on this list? If yes, default "no" unless Comandante explicitly says otherwise.
 2. Is X a customization of supacool's existing card/board/terminal UX? Probably yes, go ahead.
 3. Is X new infrastructure (services, processes, network protocols)? Probably no — separate project.
-4. Is X invasive of upstream supacode files? Review [upstream-sync.md](./upstream-sync.md) and think about the merge cost before proceeding.
+4. Is X better solved by cherry-picking from upstream supacode? Review [upstream-cherry-pick.md](./upstream-cherry-pick.md) — but default to "no", since most upstream code carries dependencies we don't share.

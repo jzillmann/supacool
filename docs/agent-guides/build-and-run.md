@@ -49,7 +49,7 @@ xcodebuild -downloadComponent MetalToolchain
 - `CFBundleName` synthesized from `PRODUCT_NAME` is `Supacool` — this is what the macOS menu bar shows.
 - `CFBundleDisplayName` is also `Supacool` (set both in Info.plist and via `INFOPLIST_KEY_CFBundleDisplayName`).
 - `CFBundleIdentifier` is `app.morethan.supacool` (so stock supacode and Supacool can coexist on the same machine without collision).
-- Internally, the Xcode target is still named `supacode` and the sources live under `supacode/`. That's deliberate — see [upstream-sync.md](./upstream-sync.md) for why renaming the target would make merges harder.
+- Internally, the Xcode target is still named `supacode` and the sources live under `supacode/`. That's a holdover from the fork era — kept because mass renaming is cosmetic and disruptive (Xcode project regeneration, asset paths, log subsystem) without changing behaviour.
 
 ## App icon regeneration
 
