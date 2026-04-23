@@ -19,7 +19,7 @@ private nonisolated let repoSyncLogger = SupaLogger("Supacool.RepoSync")
 /// - Merge must be strict fast-forward (`--ff-only`) — never auto-merge
 ///   or rebase anything.
 ///
-/// Kept under `supacode/Supacool/` so upstream syncs stay conflict-free.
+/// Supacool-specific — lives under `Supacool/` rather than replacing upstream's repo sync.
 nonisolated struct RepoSyncClient: Sendable {
   /// Try to fast-forward the repo root to its default origin branch.
   /// Never mutates state unless every guard passes. Returns a structured

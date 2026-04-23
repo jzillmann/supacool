@@ -66,7 +66,7 @@ Don't use `.pointerStyle(.link)` — it's macOS 15+ only and Supacool's deployme
 
 ## Multi-line text input
 
-Native `TextEditor` has unspecified-and-sometimes-changing internal insets (`textContainerInset` on the underlying `NSTextView`), which makes it hard to align a placeholder with the cursor in a `ZStack`. Supacool's solution: a custom `NSViewRepresentable` called **`PromptTextEditor`** (see `supacode/Supacool/Features/Board/Views/PromptTextEditor.swift`) with:
+Native `TextEditor` has unspecified-and-sometimes-changing internal insets (`textContainerInset` on the underlying `NSTextView`), which makes it hard to align a placeholder with the cursor in a `ZStack`. Supacool's solution: a custom `NSViewRepresentable` called **`PromptTextEditor`** (see `Supacool/Features/Board/Views/PromptTextEditor.swift`) with:
 
 - **Known** inset exposed as `PromptTextEditor.inset = NSSize(width: 5, height: 6)`.
 - Auto-focus on appear via `textView.window?.makeFirstResponder(textView)` scheduled to `DispatchQueue.main.async` so the view is attached to a window when the call fires.

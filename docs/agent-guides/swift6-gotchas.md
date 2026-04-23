@@ -100,7 +100,7 @@ DispatchQueue.main.async { [weak textView] in
 }
 ```
 
-…inside `makeNSView`. See `supacode/Supacool/Features/Board/Views/PromptTextEditor.swift` for the full example.
+…inside `makeNSView`. See `Supacool/Features/Board/Views/PromptTextEditor.swift` for the full example.
 
 ## 7. `decodeIfPresent ?? default` (see [persistence.md](./persistence.md))
 

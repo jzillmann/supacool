@@ -9,7 +9,7 @@ private nonisolated let prClientLogger = SupaLogger("Supacool.GithubPR")
 /// only exposes open/merged/closed state; we also need head + base refs
 /// and the head repository's owner (so we can detect fork PRs).
 ///
-/// Kept under `supacode/Supacool/` so upstream syncs stay conflict-free.
+/// Supacool-specific — lives under `Supacool/` rather than replacing upstream's `GithubCLIClient`.
 struct SupacoolGithubPRClient: Sendable {
   var fetchMetadata:
     @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> SupacoolPRMetadata

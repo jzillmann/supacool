@@ -70,8 +70,8 @@ No. Synthesized `encode(to:)` is fine because it writes every declared field. Th
 
 Files following this pattern:
 
-- `supacode/Supacool/Domain/AgentSession.swift` → persisted in `~/.supacode/agent-sessions.json`
-- `supacode/Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacode/board-filters.json`
+- `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacode/agent-sessions.json`
+- `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacode/board-filters.json`
 
 If you add another `@Shared`-backed Codable, append it here.
 

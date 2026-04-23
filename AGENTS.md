@@ -48,18 +48,20 @@ If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to mi
 .
 ├── AGENTS.md                 # THIS FILE — master doc
 ├── CLAUDE.md → AGENTS.md     # symlink (Claude Code convention)
-├── supacode/                 # app source (top-level dir name kept for historical reasons)
-│   └── Supacool/             # net-new Supacool features (Board, AgentSession, etc.)
+├── Supacool/                 # net-new Supacool Swift source (Board, AgentSession, RemoteHost, etc.)
+│   ├── Clients/, Domain/, Features/   # auto-compiled into the `supacode` target
+│   ├── assets/               # app-icon.svg (non-code)
+│   └── README.md
+├── supacode/                 # originally-supacode source (top-level dir name kept for historical reasons)
 ├── supacodeTests/            # tests, flat. BoardFeatureTests, NewTerminalFeatureTests, etc.
 ├── supacode.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups)
-├── Supacool/                 # NON-code: assets (app-icon.svg) + README; NOT in Xcode target
 ├── docs/agent-guides/        # deep reference docs (start here when doing architecture work)
 ├── .claude/skills/           # Claude-invokable skill modules (recurring workflows)
 ├── ThirdParty/ghostty/       # Ghostty submodule → GhosttyKit.xcframework
 └── Makefile                  # build-ghostty-xcframework, build-app, run-app, test, etc.
 ```
 
-The split between `supacode/` (originally-supacode source) and `supacode/Supacool/` (net-new Supacool features) is a **convention, not a constraint** — a holdover from the fork era that helped keep merges clean. New code can live wherever it fits best architecturally; new top-level Supacool features generally still go under `supacode/Supacool/` for grouping.
+`Supacool/` and `supacode/` are both `PBXFileSystemSynchronizedRootGroup`s in the same `supacode` Xcode target — Swift files dropped into either directory auto-compile with no project-file surgery. The split is a **convention**: net-new Supacool features go under `Supacool/`, originally-supacode source stays under `supacode/`. In-place edits to anything under `supacode/` are fine — there's no upstream-merge cost to worry about anymore.
 
 ---
 

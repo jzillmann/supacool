@@ -1,15 +1,21 @@
-# Supacool assets directory
+# Supacool sources and assets
 
-This directory holds Supacool's **non-code** artefacts: the app icon source (`assets/app-icon.svg`) and this README. Nothing here is compiled into the Xcode target.
+This directory holds Supacool's Swift source code plus non-code artefacts (app icon source, this README).
 
-For everything else — the project overview, quickstart, and deep reference docs — see:
+Layout:
+
+- `Clients/`, `Domain/`, `Features/` — Swift source, auto-compiled into the `supacode` Xcode target via `PBXFileSystemSynchronizedRootGroup` (objectVersion 77).
+- `assets/app-icon.svg` — source-of-truth for the app icon. Not compiled; regenerated into `supacode/Assets.xcassets/AppIcon.appiconset/` via `scripts/generate-app-icon.sh` (see `docs/agent-guides/build-and-run.md`).
+- `README.md` — this file.
+
+Swift files added here are picked up by Xcode automatically on the next build — no project-file surgery needed.
+
+For the project overview, quickstart, and deep reference docs see:
 
 - [`/AGENTS.md`](../AGENTS.md) — master doc: project orientation, quickstart, code conventions. `CLAUDE.md` symlinks to it.
 - [`/docs/agent-guides/`](../docs/agent-guides/) — architecture, persistence convention, Swift 6 gotchas, upstream cherry-pick playbook, and the explicit out-of-scope list.
 - [`/.claude/skills/`](../.claude/skills/) — invokable skill modules for recurring workflows.
 
-## Why code lives under `supacode/Supacool/`, not here
+## Why a separate source root
 
-Supacool's Xcode project uses `PBXFileSystemSynchronizedRootGroup` (objectVersion 77), which auto-discovers `.swift` files inside the synchronized folders. The only synchronized roots are `supacode/` and `supacodeTests/`. Putting code under `supacode/Supacool/` means it auto-compiles without any project-file surgery.
-
-Adding **top-level** `Supacool/` as a new synchronized root would require hand-editing `supacode.xcodeproj/project.pbxproj` — risky and for no real benefit. So this directory stays for docs/assets only, and `supacode/Supacool/` is where the actual Supacool Swift code lives.
+`Supacool/` is a dedicated `PBXFileSystemSynchronizedRootGroup` alongside `supacode/` so that net-new Supacool features live at the top level of the repo rather than nested inside the originally-supacode tree. Historical note: pre-decoupling (before April 2026) code lived under `supacode/Supacool/` to minimize upstream-merge friction; that constraint is gone.

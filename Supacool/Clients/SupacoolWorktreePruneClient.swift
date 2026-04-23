@@ -8,7 +8,7 @@ private nonisolated let pruneClientLogger = SupaLogger("Supacool.WorktreePrune")
 /// how many entries were cleaned up (the upstream
 /// `GitClient.pruneWorktrees` is silent).
 ///
-/// Kept under `supacode/Supacool/` so upstream syncs stay conflict-free.
+/// Supacool-specific — lives under `Supacool/` rather than replacing upstream's `GitClient.pruneWorktrees`.
 struct SupacoolWorktreePruneClient: Sendable {
   var prune: @Sendable (_ repoRoot: URL) async throws -> SupacoolPruneResult
 }

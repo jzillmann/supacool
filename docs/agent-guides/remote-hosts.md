@@ -1,6 +1,6 @@
 # Remote hosts: model & bootstrap sources
 
-Supacool's remote-terminal feature (`supacode/Supacool/Features/RemoteHosts/`, `supacode/Supacool/Domain/RemoteHost.swift`) needs to know how to SSH into a host. This doc captures the model and — more importantly — **why the model stores connection fields itself instead of deferring to `~/.ssh/config` at runtime**.
+Supacool's remote-terminal feature (`Supacool/Features/RemoteHosts/`, `Supacool/Domain/RemoteHost.swift`) needs to know how to SSH into a host. This doc captures the model and — more importantly — **why the model stores connection fields itself instead of deferring to `~/.ssh/config` at runtime**.
 
 > Read this before touching `RemoteHost`, `SSHConfigClient`, `RemoteSpawnClient`, or the Remote Hosts settings panel. There is a prior design (reflected in the git history up to early commits on the `supacool` branch) that *did* defer to OpenSSH; we walked away from it for the reasons below.
 
@@ -106,11 +106,11 @@ No silent overwrite. Supacool's stored state is treated as user-owned from the m
 
 | Concern | File |
 |---|---|
-| Persisted shape | `supacode/Supacool/Domain/RemoteHost.swift` |
-| Persistence key + forward-compat Codable | `supacode/Supacool/Features/RemoteHosts/Persistence/RemoteHostsKey.swift` |
-| Reducer (import + CRUD) | `supacode/Supacool/Features/RemoteHosts/Reducer/RemoteHostsFeature.swift` |
-| ssh_config client (`ssh -G`) | `supacode/Supacool/Clients/SSHConfigClient.swift` |
-| Settings UI | `supacode/Supacool/Features/Settings/Views/RemoteHostsSettingsView.swift` |
-| Spawn command assembly (future) | `supacode/Supacool/Clients/RemoteSpawnClient.swift` |
+| Persisted shape | `Supacool/Domain/RemoteHost.swift` |
+| Persistence key + forward-compat Codable | `Supacool/Features/RemoteHosts/Persistence/RemoteHostsKey.swift` |
+| Reducer (import + CRUD) | `Supacool/Features/RemoteHosts/Reducer/RemoteHostsFeature.swift` |
+| ssh_config client (`ssh -G`) | `Supacool/Clients/SSHConfigClient.swift` |
+| Settings UI | `Supacool/Features/Settings/Views/RemoteHostsSettingsView.swift` |
+| Spawn command assembly (future) | `Supacool/Clients/RemoteSpawnClient.swift` |
 
 Related: `docs/agent-guides/persistence.md` (how to add new fields safely), `docs/agent-guides/architecture.md` (where this fits in the overall TCA graph).

@@ -11,11 +11,11 @@ Goal: you've been asked to add something new to the Matrix Board (e.g. a "pin se
 
 1. Read [`docs/agent-guides/architecture.md`](../../../docs/agent-guides/architecture.md) and [`docs/agent-guides/out-of-scope.md`](../../../docs/agent-guides/out-of-scope.md).
 2. Decide where the feature lives:
-   - New persisted domain data? → `supacode/Supacool/Domain/`
-   - New reducer logic? → extend `supacode/Supacool/Features/Board/Reducer/BoardFeature.swift`
-   - New sub-reducer (own state + actions + sheet)? → new file under `supacode/Supacool/Features/Board/Reducer/`
-   - New view? → `supacode/Supacool/Features/Board/Views/`
-   - New persistence key? → `supacode/Supacool/Features/Board/Persistence/`
+   - New persisted domain data? → `Supacool/Domain/`
+   - New reducer logic? → extend `Supacool/Features/Board/Reducer/BoardFeature.swift`
+   - New sub-reducer (own state + actions + sheet)? → new file under `Supacool/Features/Board/Reducer/`
+   - New view? → `Supacool/Features/Board/Views/`
+   - New persistence key? → `Supacool/Features/Board/Persistence/`
 3. Check the out-of-scope list. If the feature is there, ask Comandante to re-scope before you start.
 
 ## The checklist
@@ -61,7 +61,7 @@ Don't use `.pointerStyle(.link)` — the hand-rolled push/pop pattern matches su
 
 ### If you're adding state that must survive relaunch
 
-Create a new `@Shared` key under `supacode/Supacool/Features/Board/Persistence/`, following `AgentSessionsKey.swift` or `BoardFiltersKey.swift`:
+Create a new `@Shared` key under `Supacool/Features/Board/Persistence/`, following `AgentSessionsKey.swift` or `BoardFiltersKey.swift`:
 
 1. Value type: Codable struct with manual `init(from decoder:)`.
 2. Key struct conforming to `SharedKey` with `load`, `subscribe` (empty), `save`.

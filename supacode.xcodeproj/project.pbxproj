@@ -61,6 +61,11 @@
 			path = supacode;
 			sourceTree = "<group>";
 		};
+		D65AC00100000000000000C0 /* Supacool */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Supacool;
+			sourceTree = "<group>";
+		};
 		D6F821022F1FCBC1004B4174 /* supacodeTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = supacodeTests;
@@ -102,6 +107,7 @@
 				D64162AD2F23CAF100260CA3 /* ghostty */,
 				D64162AF2F23CAF100260CA3 /* git-wt */,
 				D64162AE2F23CAF100260CA3 /* terminfo */,
+				D65AC00100000000000000C0 /* Supacool */,
 				D69CE04C2F1F378200584C57 /* supacode */,
 				D6F821022F1FCBC1004B4174 /* supacodeTests */,
 				D69CE04B2F1F378200584C57 /* Products */,
@@ -144,6 +150,7 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
+				D65AC00100000000000000C0 /* Supacool */,
 				D69CE04C2F1F378200584C57 /* supacode */,
 			);
 			name = supacode;
