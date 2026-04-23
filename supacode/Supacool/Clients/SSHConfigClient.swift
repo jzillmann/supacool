@@ -28,6 +28,12 @@ nonisolated struct EffectiveSSHConfig: Equatable, Sendable {
   /// `identityfile` entries, in the order ssh reports them. Paths are
   /// expanded by `ssh -G` — no `~` left behind.
   let identityFiles: [String]
+  /// `true` if `ssh -G` reported directives Supacool can't faithfully
+  /// re-express from flat connection fields (ProxyJump, ProxyCommand,
+  /// CertificateFile) or if `%`-tokens (`%h`, `%r`, `%u`, `%p`) survived
+  /// expansion inside values we do store. Callers use this to auto-set
+  /// `deferToSSHConfig = true` at import time so runtime stays correct.
+  let hasComplexDirectives: Bool
 }
 
 extension SSHConfigClient: DependencyKey {
@@ -128,7 +134,10 @@ private nonisolated func runEffectiveConfig(
 }
 
 /// Pure parser over the key-value lines emitted by `ssh -G`. Unknown keys
-/// are ignored; only the handful we care about are extracted.
+/// are ignored; the handful we care about are extracted, and any
+/// "complex" directives (ProxyJump / ProxyCommand / CertificateFile) plus
+/// surviving %-tokens in the fields we *do* store are reported so the
+/// caller can auto-set `deferToSSHConfig = true`.
 nonisolated func parseEffectiveConfig(
   alias: String,
   stdout: String
@@ -137,6 +146,7 @@ nonisolated func parseEffectiveConfig(
   var user: String?
   var port: Int?
   var identityFiles: [String] = []
+  var hasComplexDirectives = false
 
   for rawLine in stdout.split(whereSeparator: \.isNewline) {
     let line = rawLine.trimmingCharacters(in: .whitespaces)
@@ -148,12 +158,18 @@ nonisolated func parseEffectiveConfig(
     switch key {
     case "hostname":
       hostname = value
+      if containsUnresolvedToken(value) { hasComplexDirectives = true }
     case "user":
       user = value
+      if containsUnresolvedToken(value) { hasComplexDirectives = true }
     case "port":
       port = Int(value)
     case "identityfile":
       identityFiles.append(value)
+      if containsUnresolvedToken(value) { hasComplexDirectives = true }
+    case "proxyjump", "proxycommand", "certificatefile":
+      // `ssh -G` emits these even when unset as the literal "none".
+      if value.lowercased() != "none" { hasComplexDirectives = true }
     default:
       break
     }
@@ -172,6 +188,15 @@ nonisolated func parseEffectiveConfig(
     hostname: hostname,
     user: user,
     port: port,
-    identityFiles: identityFiles
+    identityFiles: identityFiles,
+    hasComplexDirectives: hasComplexDirectives
   )
+}
+
+/// Returns `true` if `value` contains an `ssh_config` percent token we
+/// don't expand ourselves (`%h`, `%r`, `%u`, `%p`, `%L`, `%l`, `%d`, …).
+/// Literal `%%` escapes are stripped before the check.
+nonisolated func containsUnresolvedToken(_ value: String) -> Bool {
+  let withoutEscapes = value.replacingOccurrences(of: "%%", with: "")
+  return withoutEscapes.contains("%")
 }

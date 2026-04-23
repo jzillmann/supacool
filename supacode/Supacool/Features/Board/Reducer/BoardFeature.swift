@@ -537,6 +537,11 @@ struct BoardFeature {
         }
         let invocation = RemoteSpawnInvocation(
           sshAlias: host.sshAlias,
+          user: host.connection.user,
+          hostname: host.connection.hostname,
+          port: host.connection.port,
+          identityFile: host.connection.identityFile,
+          deferToSSHConfig: host.deferToSSHConfig,
           remoteWorkingDirectory: workspace.remoteWorkingDirectory,
           remoteSocketPath: Self.remoteSocketPath(for: id, host: host),
           localSocketPath: localSocketPath,

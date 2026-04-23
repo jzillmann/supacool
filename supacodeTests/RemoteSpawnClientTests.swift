@@ -105,10 +105,77 @@ struct RemoteSpawnClientTests {
     #expect(rendered.contains("TMUX_SESSION=supacool-abc123"))
   }
 
-  @Test func invocationPassesAliasUnquotedForSimpleNames() {
+  @Test func deferredInvocationPassesAliasUnquotedForSimpleNames() {
     let rendered = renderSSHInvocation(sampleInvocation())
     // The alias "dev" has only safe chars; remoteSpawnShellQuote leaves it bare.
+    // `deferToSSHConfig` defaults true on the sample — so we expect the alias.
     #expect(rendered.contains(" dev "))
+  }
+
+  @Test func deferredInvocationOmitsConnectionFlags() {
+    let rendered = renderSSHInvocation(
+      sampleInvocation(
+        user: "jz",
+        hostname: "dev.example.com",
+        port: 2222,
+        identityFile: "~/.ssh/id_ed25519",
+        deferToSSHConfig: true
+      )
+    )
+    // Even with connection fields set, deferred mode ignores them.
+    #expect(!rendered.contains("-p 2222"))
+    #expect(!rendered.contains("-i "))
+    #expect(!rendered.contains("jz@"))
+    #expect(rendered.contains(" dev "))
+  }
+
+  @Test func explicitInvocationBuildsUserHostAndFlags() {
+    let rendered = renderSSHInvocation(
+      sampleInvocation(
+        user: "jz",
+        hostname: "dev.example.com",
+        port: 2222,
+        identityFile: "~/.ssh/id_ed25519",
+        deferToSSHConfig: false
+      )
+    )
+    #expect(rendered.contains("-p 2222"))
+    // Identity file gets tilde-expanded; we won't hard-code HOME but
+    // we can assert the raw `~/.ssh/…` form is gone.
+    #expect(!rendered.contains(" ~/.ssh/id_ed25519"))
+    #expect(rendered.contains("jz@dev.example.com"))
+    // Alias is NOT appended when we build the target ourselves.
+    #expect(!rendered.contains(" dev "))
+  }
+
+  @Test func explicitInvocationFallsBackToSSHAliasWhenHostnameMissing() {
+    let rendered = renderSSHInvocation(
+      sampleInvocation(
+        user: "jz",
+        hostname: nil,
+        port: nil,
+        identityFile: nil,
+        deferToSSHConfig: false
+      )
+    )
+    #expect(rendered.contains("jz@dev"))
+    #expect(!rendered.contains("-p "))
+    #expect(!rendered.contains("-i "))
+  }
+
+  @Test func explicitInvocationOmitsUserWhenEmpty() {
+    let rendered = renderSSHInvocation(
+      sampleInvocation(
+        user: nil,
+        hostname: "dev.example.com",
+        port: nil,
+        identityFile: nil,
+        deferToSSHConfig: false
+      )
+    )
+    // The target is just the hostname, no user@ prefix.
+    #expect(rendered.contains(" dev.example.com "))
+    #expect(!rendered.contains("@dev.example.com"))
   }
 
   @Test func invocationEndsWithBootstrapBashPipe() {
@@ -119,34 +186,53 @@ struct RemoteSpawnClientTests {
   }
 
   @Test func invocationLowercasesUUIDs() {
-    var inv = sampleInvocation()
-    inv = RemoteSpawnInvocation(
-      sshAlias: inv.sshAlias,
-      remoteWorkingDirectory: inv.remoteWorkingDirectory,
-      remoteSocketPath: inv.remoteSocketPath,
-      localSocketPath: inv.localSocketPath,
-      tmuxSessionName: inv.tmuxSessionName,
-      worktreeID: inv.worktreeID,
+    let inv = sampleInvocation(
       tabID: UUID(uuidString: "DEADBEEF-1234-1234-1234-123456789ABC")!,
-      surfaceID: UUID(uuidString: "DEADBEEF-4321-4321-4321-CBA987654321")!,
-      agentCommand: inv.agentCommand,
-      agent: inv.agent
+      surfaceID: UUID(uuidString: "DEADBEEF-4321-4321-4321-CBA987654321")!
     )
     let rendered = renderSSHInvocation(inv)
     #expect(rendered.contains("SUPACODE_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
     #expect(rendered.contains("SUPACODE_SURFACE_ID=deadbeef-4321-4321-4321-cba987654321"))
   }
 
-  private func sampleInvocation(agent: String? = "claude code") -> RemoteSpawnInvocation {
+  // MARK: expandTilde
+
+  @Test func expandTildeReplacesLeadingHome() {
+    let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+    #expect(expandTilde(in: "~/.ssh/id_ed25519") == "\(home)/.ssh/id_ed25519")
+    #expect(expandTilde(in: "~") == home)
+  }
+
+  @Test func expandTildeLeavesRelativeAndAbsoluteUntouched() {
+    #expect(expandTilde(in: "/etc/passwd") == "/etc/passwd")
+    #expect(expandTilde(in: "relative/path") == "relative/path")
+    #expect(expandTilde(in: "~otheruser/stuff") == "~otheruser/stuff")
+  }
+
+  private func sampleInvocation(
+    user: String? = nil,
+    hostname: String? = nil,
+    port: Int? = nil,
+    identityFile: String? = nil,
+    deferToSSHConfig: Bool = true,
+    tabID: UUID = UUID(),
+    surfaceID: UUID = UUID(),
+    agent: String? = "claude code"
+  ) -> RemoteSpawnInvocation {
     RemoteSpawnInvocation(
       sshAlias: "dev",
+      user: user,
+      hostname: hostname,
+      port: port,
+      identityFile: identityFile,
+      deferToSSHConfig: deferToSSHConfig,
       remoteWorkingDirectory: "/home/jz/code/api",
       remoteSocketPath: "/tmp/supacool-hook-xyz.sock",
       localSocketPath: "/tmp/supacool-local.sock",
       tmuxSessionName: "supacool-abc123",
       worktreeID: "remote:dev:/home/jz",
-      tabID: UUID(),
-      surfaceID: UUID(),
+      tabID: tabID,
+      surfaceID: surfaceID,
       agentCommand: agent,
       agent: nil
     )

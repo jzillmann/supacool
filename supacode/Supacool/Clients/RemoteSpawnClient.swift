@@ -32,6 +32,19 @@ nonisolated struct RemoteSpawnClient: Sendable {
 
 nonisolated struct RemoteSpawnInvocation: Equatable, Sendable {
   let sshAlias: String
+  /// Explicit user / hostname / port / identity file copied from
+  /// `RemoteHost.connection`. Ignored when `deferToSSHConfig == true`.
+  /// When `deferToSSHConfig` is false but a field here is `nil`, we omit
+  /// the corresponding `-p` / `-i` flag and let OpenSSH defaults apply.
+  let user: String?
+  let hostname: String?
+  let port: Int?
+  let identityFile: String?
+  /// When `true`, the runtime invokes `ssh <sshAlias>` with no -p / -i /
+  /// user@host overrides so OpenSSH resolves the connection itself. Used
+  /// for ssh_config entries with ProxyJump / Match / %-token expansion
+  /// we can't faithfully re-express from flat fields.
+  let deferToSSHConfig: Bool
   /// Absolute path on the remote host — where tmux starts.
   let remoteWorkingDirectory: String
   /// Absolute path on the remote to use as the reverse-tunnel's
@@ -56,6 +69,40 @@ nonisolated struct RemoteSpawnInvocation: Equatable, Sendable {
   /// config before exec. Leave `nil` for shell sessions (nothing to
   /// hook) — the session still spawns, the board just won't light up.
   let agent: AgentType?
+
+  init(
+    sshAlias: String,
+    user: String? = nil,
+    hostname: String? = nil,
+    port: Int? = nil,
+    identityFile: String? = nil,
+    deferToSSHConfig: Bool = true,
+    remoteWorkingDirectory: String,
+    remoteSocketPath: String,
+    localSocketPath: String,
+    tmuxSessionName: String,
+    worktreeID: String,
+    tabID: UUID,
+    surfaceID: UUID,
+    agentCommand: String?,
+    agent: AgentType?
+  ) {
+    self.sshAlias = sshAlias
+    self.user = user
+    self.hostname = hostname
+    self.port = port
+    self.identityFile = identityFile
+    self.deferToSSHConfig = deferToSSHConfig
+    self.remoteWorkingDirectory = remoteWorkingDirectory
+    self.remoteSocketPath = remoteSocketPath
+    self.localSocketPath = localSocketPath
+    self.tmuxSessionName = tmuxSessionName
+    self.worktreeID = worktreeID
+    self.tabID = tabID
+    self.surfaceID = surfaceID
+    self.agentCommand = agentCommand
+    self.agent = agent
+  }
 }
 
 extension RemoteSpawnClient: DependencyKey {
@@ -105,11 +152,42 @@ nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
     "-o", "StreamLocalBindUnlink=yes",
     "-R", reverseForward,
     "-o", "SetEnv=\(setEnvPairs.joined(separator: " "))",
-    inv.sshAlias,
-    renderBootstrapCommand(agentCommand: inv.agentCommand, agent: inv.agent),
   ]
 
+  if inv.deferToSSHConfig {
+    args.append(inv.sshAlias)
+  } else {
+    if let port = inv.port {
+      args += ["-p", String(port)]
+    }
+    if let identityFile = inv.identityFile, !identityFile.isEmpty {
+      args += ["-i", expandTilde(in: identityFile)]
+    }
+    let hostname = inv.hostname ?? inv.sshAlias
+    let target: String = {
+      if let user = inv.user, !user.isEmpty { return "\(user)@\(hostname)" }
+      return hostname
+    }()
+    args.append(target)
+  }
+
+  args.append(renderBootstrapCommand(agentCommand: inv.agentCommand, agent: inv.agent))
+
   return args.map { remoteSpawnShellQuote($0) }.joined(separator: " ")
+}
+
+/// Expand a single leading `~` (or `~/`) to `$HOME`. We do this at
+/// command-assembly time, not at import, so the stored value stays
+/// portable across machines.
+nonisolated func expandTilde(in path: String) -> String {
+  guard path.hasPrefix("~") else { return path }
+  let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+  if path == "~" { return home }
+  if path.hasPrefix("~/") {
+    return home + String(path.dropFirst(1))
+  }
+  // `~username/…` — leave as-is; ssh handles it server-side.
+  return path
 }
 
 /// The single-line shell command the remote shell runs. Keeps the Mac

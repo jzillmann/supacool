@@ -954,6 +954,11 @@ struct NewTerminalFeature {
 
     let invocation = RemoteSpawnInvocation(
       sshAlias: host.sshAlias,
+      user: host.connection.user,
+      hostname: host.connection.hostname,
+      port: host.connection.port,
+      identityFile: host.connection.identityFile,
+      deferToSSHConfig: host.deferToSSHConfig,
       remoteWorkingDirectory: trimmedPath,
       remoteSocketPath: "\(host.overrides.effectiveRemoteTmpdir)"
         + "/supacool-hook-\(sessionID.uuidString.lowercased().prefix(12)).sock",

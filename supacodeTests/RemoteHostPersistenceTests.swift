@@ -12,25 +12,41 @@ struct RemoteHostPersistenceTests {
   // MARK: RemoteHost
 
   @Test func remoteHostRoundTripsThroughJSON() throws {
+    let stamp = Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970))
     let host = RemoteHost(
       alias: "Dev Box",
       sshAlias: "dev",
-      importedFromSSHConfig: true,
+      connection: RemoteHost.Connection(
+        user: "jz",
+        hostname: "dev.example.com",
+        port: 2222,
+        identityFile: "~/.ssh/id_ed25519"
+      ),
       overrides: RemoteHost.Overrides(
         remoteTmpdir: "/home/jz/.tmp",
         defaultRemoteWorkspaceRoot: "/home/jz/code",
         notes: "home office"
-      )
+      ),
+      importSource: .sshConfig,
+      importedAt: stamp,
+      deferToSSHConfig: false
     )
 
-    let data = try JSONEncoder().encode(host)
-    let decoded = try JSONDecoder().decode(RemoteHost.self, from: data)
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let data = try encoder.encode(host)
+    let decoded = try decoder.decode(RemoteHost.self, from: data)
 
     #expect(decoded == host)
   }
 
   @Test func remoteHostDecodesLegacyJSONWithoutOverrides() throws {
-    // Simulates a file written by an older build that had no overrides.
+    // Simulates a file written by an older build that had no overrides,
+    // no connection fields, and only the legacy `importedFromSSHConfig`.
+    // Must migrate cleanly: importSource → .sshConfig, deferToSSHConfig
+    // → true (we had no stored connection to spawn with).
     let json = """
       {
         "id": "\(UUID().uuidString)",
@@ -42,6 +58,23 @@ struct RemoteHostPersistenceTests {
     let decoded = try JSONDecoder().decode(RemoteHost.self, from: Data(json.utf8))
     #expect(decoded.overrides.remoteTmpdir == nil)
     #expect(decoded.overrides.effectiveRemoteTmpdir == "/tmp")
+    #expect(decoded.connection.isEmpty)
+    #expect(decoded.importSource == .sshConfig)
+    #expect(decoded.deferToSSHConfig == true)
+  }
+
+  @Test func remoteHostDecodesLegacyManualRowWithoutImportSource() throws {
+    let id = UUID()
+    let json = """
+      {
+        "id": "\(id.uuidString)",
+        "sshAlias": "devbox",
+        "importedFromSSHConfig": false
+      }
+      """
+    let decoded = try JSONDecoder().decode(RemoteHost.self, from: Data(json.utf8))
+    #expect(decoded.importSource == .manual)
+    #expect(decoded.deferToSSHConfig == false)
   }
 
   @Test func remoteHostDecodesBareJSONWithOnlyRequiredFields() throws {
@@ -52,7 +85,43 @@ struct RemoteHostPersistenceTests {
     let decoded = try JSONDecoder().decode(RemoteHost.self, from: Data(json.utf8))
     #expect(decoded.id == id)
     #expect(decoded.alias == "prod")  // falls back to sshAlias
+    #expect(decoded.importSource == .manual)
     #expect(decoded.importedFromSSHConfig == false)
+    #expect(decoded.deferToSSHConfig == false)
+    #expect(decoded.connection.isEmpty)
+  }
+
+  @Test func remoteHostConnectionDefaults() throws {
+    let connection = RemoteHost.Connection()
+    #expect(connection.isEmpty)
+    #expect(connection.effectiveTarget(sshAlias: "jack.local") == "jack.local")
+  }
+
+  @Test func remoteHostConnectionPrependsUser() throws {
+    let connection = RemoteHost.Connection(user: "jz")
+    #expect(connection.effectiveTarget(sshAlias: "jack.local") == "jz@jack.local")
+  }
+
+  @Test func remoteHostConnectionUsesExplicitHostname() throws {
+    let connection = RemoteHost.Connection(user: "jz", hostname: "10.0.0.2")
+    #expect(connection.effectiveTarget(sshAlias: "jack.local") == "jz@10.0.0.2")
+  }
+
+  @Test func remoteHostEncodesBothLegacyAndNewFields() throws {
+    // Downgrade-compat: an older Supacool reading this JSON must still
+    // see `importedFromSSHConfig` so it renders the source badge.
+    let host = RemoteHost(
+      sshAlias: "dev",
+      importSource: .sshConfig,
+      deferToSSHConfig: false
+    )
+    let data = try JSONEncoder().encode(host)
+    let json = try #require(
+      try JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    #expect(json["importSource"] as? String == "sshConfig")
+    #expect(json["importedFromSSHConfig"] as? Bool == true)
+    #expect(json["deferToSSHConfig"] as? Bool == false)
   }
 
   @Test func remoteHostOverridesIndividualMissingFields() throws {

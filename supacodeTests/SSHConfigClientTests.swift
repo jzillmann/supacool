@@ -95,6 +95,7 @@ struct SSHConfigClientTests {
       "/Users/jz/.ssh/id_ed25519",
       "/Users/jz/.ssh/id_rsa",
     ])
+    #expect(parsed.hasComplexDirectives == false)
   }
 
   @Test func parseEffectiveConfigThrowsWithoutHostname() {
@@ -119,5 +120,53 @@ struct SSHConfigClientTests {
     #expect(parsed.user == nil)
     #expect(parsed.port == nil)
     #expect(parsed.identityFiles.isEmpty)
+    #expect(parsed.hasComplexDirectives == false)
+  }
+
+  @Test func parseEffectiveConfigFlagsProxyJump() throws {
+    let stdout = """
+      user jz
+      hostname behind.bastion
+      proxyjump bastion.example.com
+      """
+    let parsed = try parseEffectiveConfig(alias: "behind", stdout: stdout)
+    #expect(parsed.hasComplexDirectives == true)
+  }
+
+  @Test func parseEffectiveConfigFlagsProxyCommand() throws {
+    let stdout = """
+      hostname x.example.com
+      proxycommand ssh -W %h:%p bastion.example.com
+      """
+    let parsed = try parseEffectiveConfig(alias: "x", stdout: stdout)
+    #expect(parsed.hasComplexDirectives == true)
+  }
+
+  @Test func parseEffectiveConfigIgnoresNoneForOptionalDirectives() throws {
+    // `ssh -G` emits `proxyjump none` for unset directives — we must not
+    // flag that as complex.
+    let stdout = """
+      hostname x.example.com
+      proxyjump none
+      proxycommand none
+      certificatefile none
+      """
+    let parsed = try parseEffectiveConfig(alias: "x", stdout: stdout)
+    #expect(parsed.hasComplexDirectives == false)
+  }
+
+  @Test func parseEffectiveConfigFlagsPercentTokensInHostname() throws {
+    let stdout = """
+      user jz
+      hostname %h.internal
+      """
+    let parsed = try parseEffectiveConfig(alias: "x", stdout: stdout)
+    #expect(parsed.hasComplexDirectives == true)
+  }
+
+  @Test func containsUnresolvedTokenHandlesEscapes() {
+    #expect(containsUnresolvedToken("%h") == true)
+    #expect(containsUnresolvedToken("literal-%%") == false)
+    #expect(containsUnresolvedToken("plain.host") == false)
   }
 }

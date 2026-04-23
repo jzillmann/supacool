@@ -23,15 +23,28 @@ struct RemoteHostsSettingsView: View {
         if store.hosts.isEmpty {
           emptyState
         } else {
+          if !store.drift.isEmpty {
+            driftBanner
+          }
           ForEach(store.hosts) { host in
             RemoteHostRow(
               host: host,
+              drift: store.drift[host.id],
               onRename: { newAlias in
                 store.send(.renameHost(id: host.id, newAlias: newAlias))
               },
               onUpdateOverrides: { overrides in
                 store.send(.updateOverrides(id: host.id, overrides: overrides))
               },
+              onUpdateConnection: { connection in
+                store.send(.updateConnection(id: host.id, connection: connection))
+              },
+              onToggleDefer: { deferFlag in
+                store.send(.setDeferToSSHConfig(id: host.id, defer: deferFlag))
+              },
+              onReimport: host.importSource == .sshConfig && store.drift[host.id] != nil
+                ? { store.send(.reimportRow(id: host.id)) }
+                : nil,
               onForget: {
                 if host.importedFromSSHConfig {
                   store.send(.forgetAlias(sshAlias: host.sshAlias))
@@ -58,9 +71,10 @@ struct RemoteHostsSettingsView: View {
     HStack {
       Text(
         """
-        Auto-imported from ~/.ssh/config. Overrides you set here (remote \
-        tmpdir, default workspace root) are Supacool-only — they don't modify \
-        your ssh_config.
+        Auto-imported from ~/.ssh/config. Supacool stores User / Hostname / \
+        Port / Identity file on each host so you can edit them here — changes \
+        never modify your ssh_config. Use "Defer to ssh_config" for hosts \
+        that need ProxyJump or Match directives.
         """
       )
       .font(.callout)
@@ -79,6 +93,22 @@ struct RemoteHostsSettingsView: View {
       .disabled(store.isReloading)
       .help("Re-read ~/.ssh/config and import any new aliases")
     }
+  }
+
+  private var driftBanner: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.yellow)
+      Text(
+        "ssh_config changed for \(store.drift.count) host\(store.drift.count == 1 ? "" : "s") "
+          + "since last import."
+      )
+      .font(.callout)
+      Spacer()
+      Button("Re-import all") { store.send(.reimportAll) }
+        .controlSize(.small)
+    }
+    .padding(.vertical, 4)
   }
 
   private var manualAddRow: some View {
@@ -118,15 +148,25 @@ struct RemoteHostsSettingsView: View {
   }
 }
 
-/// One row per host. Expanding the disclosure reveals the Supacool-only
-/// overrides (tmpdir, default workspace root, notes).
+/// One row per host. Expanding the disclosure reveals the connection
+/// fields (User / Hostname / Port / Identity), the Supacool-only
+/// overrides (tmpdir, default workspace root, notes), and the
+/// "Defer to ssh_config" escape hatch.
 private struct RemoteHostRow: View {
   let host: RemoteHost
+  let drift: RemoteHostsFeature.DriftReport?
   let onRename: (String) -> Void
   let onUpdateOverrides: (RemoteHost.Overrides) -> Void
+  let onUpdateConnection: (RemoteHost.Connection) -> Void
+  let onToggleDefer: (Bool) -> Void
+  let onReimport: (() -> Void)?
   let onForget: () -> Void
 
   @State private var aliasDraft: String = ""
+  @State private var userDraft: String = ""
+  @State private var hostnameDraft: String = ""
+  @State private var portDraft: String = ""
+  @State private var identityFileDraft: String = ""
   @State private var tmpdirDraft: String = ""
   @State private var rootDraft: String = ""
   @State private var notesDraft: String = ""
@@ -134,11 +174,12 @@ private struct RemoteHostRow: View {
 
   var body: some View {
     DisclosureGroup(isExpanded: $isExpanded) {
-      overridesForm
+      detailForm
     } label: {
       rowHeader
     }
     .task(id: host.id) { syncDraftsFromHost() }
+    .task(id: host.connection) { syncDraftsFromHost() }
   }
 
   private var rowHeader: some View {
@@ -152,10 +193,12 @@ private struct RemoteHostRow: View {
           Text(host.sshAlias)
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)
-          if host.importedFromSSHConfig {
-            Text("from ~/.ssh/config")
+          sourceBadge
+          if drift != nil {
+            Label("ssh_config changed", systemImage: "exclamationmark.triangle.fill")
+              .labelStyle(.titleAndIcon)
               .font(.caption)
-              .foregroundStyle(.tertiary)
+              .foregroundStyle(.yellow)
           }
         }
       }
@@ -173,8 +216,32 @@ private struct RemoteHostRow: View {
   }
 
   @ViewBuilder
-  private var overridesForm: some View {
+  private var sourceBadge: some View {
+    switch host.importSource {
+    case .sshConfig:
+      Text("from ~/.ssh/config")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    case .shellHistory:
+      Text("from shell history")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    case .manual:
+      EmptyView()
+    }
+  }
+
+  @ViewBuilder
+  private var detailForm: some View {
     VStack(alignment: .leading, spacing: 10) {
+      if let onReimport {
+        HStack {
+          Button("Re-import from ssh_config", action: onReimport)
+            .controlSize(.small)
+          Spacer()
+        }
+        .padding(.bottom, 2)
+      }
       labeledField(
         "Display name",
         placeholder: host.sshAlias,
@@ -185,6 +252,8 @@ private struct RemoteHostRow: View {
           }
         }
       )
+      connectionFields
+      Divider().padding(.vertical, 2)
       labeledField(
         "Remote tmpdir",
         placeholder: "/tmp",
@@ -203,15 +272,76 @@ private struct RemoteHostRow: View {
         text: $notesDraft,
         onCommit: { commitOverrides() }
       )
+      deferRow
     }
     .padding(.top, 6)
     .padding(.bottom, 4)
+  }
+
+  @ViewBuilder
+  private var connectionFields: some View {
+    labeledField(
+      "User",
+      placeholder: "(optional)",
+      text: $userDraft,
+      highlight: drift?.userChanged ?? false,
+      onCommit: { commitConnection() }
+    )
+    labeledField(
+      "Hostname",
+      placeholder: host.sshAlias,
+      text: $hostnameDraft,
+      highlight: drift?.hostnameChanged ?? false,
+      onCommit: { commitConnection() }
+    )
+    labeledField(
+      "Port",
+      placeholder: "22",
+      text: $portDraft,
+      highlight: drift?.portChanged ?? false,
+      onCommit: { commitConnection() }
+    )
+    labeledField(
+      "Identity file",
+      placeholder: "(optional, e.g. ~/.ssh/id_ed25519)",
+      text: $identityFileDraft,
+      highlight: drift?.identityFileChanged ?? false,
+      onCommit: { commitConnection() }
+    )
+  }
+
+  @ViewBuilder
+  private var deferRow: some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text("Runtime")
+        .foregroundStyle(.secondary)
+        .frame(width: 160, alignment: .leading)
+      VStack(alignment: .leading, spacing: 4) {
+        Toggle(
+          "Defer to ssh_config (run `ssh \(host.sshAlias)`)",
+          isOn: Binding(
+            get: { host.deferToSSHConfig },
+            set: { onToggleDefer($0) }
+          )
+        )
+        .toggleStyle(.checkbox)
+        Text(
+          host.deferToSSHConfig
+            ? "OpenSSH resolves User / Hostname / Port / Identity — the fields above are ignored."
+            : "Supacool uses the fields above; ssh_config isn't consulted."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+    }
   }
 
   private func labeledField(
     _ label: String,
     placeholder: String,
     text: Binding<String>,
+    highlight: Bool = false,
     onCommit: @escaping () -> Void
   ) -> some View {
     HStack(alignment: .firstTextBaseline) {
@@ -220,12 +350,25 @@ private struct RemoteHostRow: View {
         .frame(width: 160, alignment: .leading)
       TextField(placeholder, text: text)
         .textFieldStyle(.roundedBorder)
+        .overlay(
+          RoundedRectangle(cornerRadius: 6)
+            .stroke(.yellow, lineWidth: highlight ? 1 : 0)
+        )
         .onSubmit(onCommit)
+      if highlight {
+        Image(systemName: "exclamationmark.circle")
+          .foregroundStyle(.yellow)
+          .help("This field changed in ssh_config since last import.")
+      }
     }
   }
 
   private func syncDraftsFromHost() {
     aliasDraft = host.alias
+    userDraft = host.connection.user ?? ""
+    hostnameDraft = host.connection.hostname ?? ""
+    portDraft = host.connection.port.map(String.init) ?? ""
+    identityFileDraft = host.connection.identityFile ?? ""
     tmpdirDraft = host.overrides.remoteTmpdir ?? ""
     rootDraft = host.overrides.defaultRemoteWorkspaceRoot ?? ""
     notesDraft = host.overrides.notes ?? ""
@@ -239,6 +382,19 @@ private struct RemoteHostRow: View {
     )
     if overrides != host.overrides {
       onUpdateOverrides(overrides)
+    }
+  }
+
+  private func commitConnection() {
+    let trimmedPort = portDraft.trimmingCharacters(in: .whitespaces)
+    let connection = RemoteHost.Connection(
+      user: userDraft.isEmpty ? nil : userDraft,
+      hostname: hostnameDraft.isEmpty ? nil : hostnameDraft,
+      port: Int(trimmedPort),
+      identityFile: identityFileDraft.isEmpty ? nil : identityFileDraft
+    )
+    if connection != host.connection {
+      onUpdateConnection(connection)
     }
   }
 }
