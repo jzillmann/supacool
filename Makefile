@@ -11,8 +11,8 @@ GHOSTTY_XCFRAMEWORK_PATH := Frameworks/GhosttyKit.xcframework
 GHOSTTY_RESOURCE_PATH := Resources/ghostty
 GHOSTTY_TERMINFO_PATH := Resources/terminfo
 GHOSTTY_BUILD_OUTPUTS := $(GHOSTTY_XCFRAMEWORK_PATH) $(GHOSTTY_RESOURCE_PATH) $(GHOSTTY_TERMINFO_PATH)
-PROJECT_FILE_PATH := supacode.xcodeproj/project.pbxproj
-SPM_CACHE_DIR := /tmp/supacode-spm-cache/SourcePackages
+PROJECT_FILE_PATH := supacool.xcodeproj/project.pbxproj
+SPM_CACHE_DIR := /tmp/supacool-spm-cache/SourcePackages
 FORMAT ?= xcsift
 VERSION ?=
 BUILD ?=
@@ -54,17 +54,17 @@ $(GHOSTTY_BUILD_OUTPUTS):
 	rsync -a --delete "$$terminfo_src/" "$$terminfo_dst/"
 
 build-app: build-ghostty-xcframework # Build the macOS app (Debug)
-	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug build -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Debug build -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
 
 run-app: build-app # Build then launch (Debug) with log streaming
-	@settings="$$(xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug -showBuildSettings -json 2>/dev/null)"; \
+	@settings="$$(xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Debug -showBuildSettings -json 2>/dev/null)"; \
 	build_dir="$$(echo "$$settings" | jq -r '.[0].buildSettings.BUILT_PRODUCTS_DIR')"; \
 	product="$$(echo "$$settings" | jq -r '.[0].buildSettings.FULL_PRODUCT_NAME')"; \
 	exec_name="$$(echo "$$settings" | jq -r '.[0].buildSettings.EXECUTABLE_NAME')"; \
 	"$$build_dir/$$product/Contents/MacOS/$$exec_name"
 
 install-dev-build: build-app # install dev build to /Applications
-	@settings="$$(xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Debug -showBuildSettings -json 2>/dev/null)"; \
+	@settings="$$(xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Debug -showBuildSettings -json 2>/dev/null)"; \
 	build_dir="$$(echo "$$settings" | jq -r '.[0].buildSettings.BUILT_PRODUCTS_DIR')"; \
 	product="$$(echo "$$settings" | jq -r '.[0].buildSettings.FULL_PRODUCT_NAME')"; \
 	src="$$build_dir/$$product"; \
@@ -79,16 +79,16 @@ install-dev-build: build-app # install dev build to /Applications
 	echo "installed $$dst"
 
 archive: build-ghostty-xcframework # Archive Release build for distribution
-	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Release -archivePath build/supacool.xcarchive archive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$$APPLE_TEAM_ID" CODE_SIGN_IDENTITY="$$DEVELOPER_ID_IDENTITY_SHA" OTHER_CODE_SIGN_FLAGS="--timestamp" -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" $(XCODEBUILD_FLAGS) 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release -archivePath build/supacool.xcarchive archive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$$APPLE_TEAM_ID" CODE_SIGN_IDENTITY="$$DEVELOPER_ID_IDENTITY_SHA" OTHER_CODE_SIGN_FLAGS="--timestamp" -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" $(XCODEBUILD_FLAGS) 2>&1 $(FORMATTER)'
 
 export-archive: # Export xarchive
 	bash -o pipefail -c 'xcodebuild -exportArchive -archivePath build/supacool.xcarchive -exportPath build/export -exportOptionsPlist build/ExportOptions.plist 2>&1 $(FORMATTER)'
 
 test: build-ghostty-xcframework # Run all tests
-	bash -o pipefail -c 'xcodebuild test -project supacode.xcodeproj -scheme supacode -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -parallel-testing-enabled NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild test -project supacool.xcodeproj -scheme supacool -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -parallel-testing-enabled NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
 
 format: # Format code with swift-format (local only)
-	swift-format -p --in-place --recursive --configuration ./.swift-format.json supacode supacodeTests
+	swift-format -p --in-place --recursive --configuration ./.swift-format.json Supacool supacode supacodeTests
 
 lint: # Lint code with swiftlint
 	mise exec -- swiftlint --fix --quiet

@@ -1,6 +1,6 @@
 //
 //  ContentView.swift
-//  supacode
+//  supacool
 //
 //  Created by khoi on 20/1/26.
 //

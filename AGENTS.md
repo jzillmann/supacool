@@ -30,10 +30,10 @@ make run-app                         # Build + launch with log stream
 make test                            # Run full test suite
 
 # Only the Supacool tests (faster iteration)
-xcodebuild test -project supacode.xcodeproj -scheme supacode \
+xcodebuild test -project supacool.xcodeproj -scheme supacool \
   -destination "platform=macOS" \
-  -only-testing:supacodeTests/BoardFeatureTests \
-  -only-testing:supacodeTests/NewTerminalFeatureTests \
+  -only-testing:supacoolTests/BoardFeatureTests \
+  -only-testing:supacoolTests/NewTerminalFeatureTests \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
   -skipMacroValidation
 ```
@@ -49,19 +49,19 @@ If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to mi
 ├── AGENTS.md                 # THIS FILE — master doc
 ├── CLAUDE.md → AGENTS.md     # symlink (Claude Code convention)
 ├── Supacool/                 # net-new Supacool Swift source (Board, AgentSession, RemoteHost, etc.)
-│   ├── Clients/, Domain/, Features/   # auto-compiled into the `supacode` target
+│   ├── Clients/, Domain/, Features/   # auto-compiled into the `supacool` target
 │   ├── assets/               # app-icon.svg (non-code)
 │   └── README.md
 ├── supacode/                 # originally-supacode source (top-level dir name kept for historical reasons)
-├── supacodeTests/            # tests, flat. BoardFeatureTests, NewTerminalFeatureTests, etc.
-├── supacode.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups)
+├── supacodeTests/            # tests, flat. Directory name kept; Xcode target is `supacoolTests`.
+├── supacool.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups; targets `supacool` + `supacoolTests`)
 ├── docs/agent-guides/        # deep reference docs (start here when doing architecture work)
 ├── .claude/skills/           # Claude-invokable skill modules (recurring workflows)
 ├── ThirdParty/ghostty/       # Ghostty submodule → GhosttyKit.xcframework
 └── Makefile                  # build-ghostty-xcframework, build-app, run-app, test, etc.
 ```
 
-`Supacool/` and `supacode/` are both `PBXFileSystemSynchronizedRootGroup`s in the same `supacode` Xcode target — Swift files dropped into either directory auto-compile with no project-file surgery. The split is a **convention**: net-new Supacool features go under `Supacool/`, originally-supacode source stays under `supacode/`. In-place edits to anything under `supacode/` are fine — there's no upstream-merge cost to worry about anymore.
+`Supacool/` and `supacode/` are both `PBXFileSystemSynchronizedRootGroup`s in the same `supacool` Xcode target — Swift files dropped into either directory auto-compile with no project-file surgery. The split is a **convention**: net-new Supacool features go under `Supacool/`, originally-supacode source stays under `supacode/`. In-place edits to anything under `supacode/` are fine — there's no upstream-merge cost to worry about anymore. (The directory names `supacode/` and `supacodeTests/` are kept as historical markers; the Xcode targets they belong to are `supacool` and `supacoolTests`.)
 
 ---
 

@@ -56,14 +56,14 @@ jobs:
       - uses: ./.github/actions/setup-macos
       - name: Override build number for tip
         run: |
-          BASE=$(awk -F' = ' '/CURRENT_PROJECT_VERSION = [0-9]+/{gsub(/;/,""); print $2; exit}' supacode.xcodeproj/project.pbxproj)
+          BASE=$(awk -F' = ' '/CURRENT_PROJECT_VERSION = [0-9]+/{gsub(/;/,""); print $2; exit}' supacool.xcodeproj/project.pbxproj)
           OFFSET=${{ github.run_number }}
           if [ "$OFFSET" -gt 999 ]; then
             echo "::error::Tip run_number ($OFFSET) exceeds 999. Bump CURRENT_PROJECT_VERSION before the next tip release."
             exit 1
           fi
           BUILD_NUMBER=$((BASE * 1000 + OFFSET))
-          sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*/CURRENT_PROJECT_VERSION = $BUILD_NUMBER/g" supacode.xcodeproj/project.pbxproj
+          sed -i '' "s/CURRENT_PROJECT_VERSION = [0-9]*/CURRENT_PROJECT_VERSION = $BUILD_NUMBER/g" supacool.xcodeproj/project.pbxproj
           echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
       - name: Setup keychain
         run: |
@@ -91,9 +91,9 @@ jobs:
           : "${SENTRY_DSN:?secret SENTRY_DSN is not set}"
           : "${POSTHOG_API_KEY:?secret POSTHOG_API_KEY is not set}"
           : "${POSTHOG_HOST:?secret POSTHOG_HOST is not set}"
-          sed -i '' "s|__SENTRY_DSN__|${SENTRY_DSN}|g" supacode/App/supacodeApp.swift
-          sed -i '' "s|__POSTHOG_API_KEY__|${POSTHOG_API_KEY}|g" supacode/App/supacodeApp.swift
-          sed -i '' "s|__POSTHOG_HOST__|${POSTHOG_HOST}|g" supacode/App/supacodeApp.swift
+          sed -i '' "s|__SENTRY_DSN__|${SENTRY_DSN}|g" supacode/App/SupacoolApp.swift
+          sed -i '' "s|__POSTHOG_API_KEY__|${POSTHOG_API_KEY}|g" supacode/App/SupacoolApp.swift
+          sed -i '' "s|__POSTHOG_HOST__|${POSTHOG_HOST}|g" supacode/App/SupacoolApp.swift
       - name: Archive Xcode project
         run: make archive
       - name: Upload dSYMs
@@ -122,11 +122,11 @@ jobs:
       - name: Re-sign frameworks
         run: |
           set -ex
-          APP_PATH="$(find build/export -name "supacode.app" -maxdepth 3 -print -quit)"
+          APP_PATH="$(find build/export -name "Supacool.app" -maxdepth 3 -print -quit)"
           bash ./.github/scripts/resign_exported_app.sh build/export
 
-          codesign -d --entitlements - "$APP_PATH/Contents/MacOS/supacode" 2>&1 | tee /tmp/supacode-entitlements.txt
-          grep -q "com.apple.security.device.audio-input" /tmp/supacode-entitlements.txt
+          codesign -d --entitlements - "$APP_PATH/Contents/MacOS/Supacool" 2>&1 | tee /tmp/supacool-entitlements.txt
+          grep -q "com.apple.security.device.audio-input" /tmp/supacool-entitlements.txt
 
       - name: Store notarization credentials
         run: |
@@ -138,7 +138,7 @@ jobs:
           rm notarization_key.p8
       - name: Build DMG
         run: |
-          APP_PATH="$(find build/export -name "supacode.app" -maxdepth 3 -print -quit)"
+          APP_PATH="$(find build/export -name "Supacool.app" -maxdepth 3 -print -quit)"
 
           mise exec -- create-dmg "$APP_PATH" build/ \
             --overwrite \
@@ -151,7 +151,7 @@ jobs:
           fi
       - name: Notarize and staple
         run: |
-          APP_PATH="$(find build/export -name "supacode.app" -maxdepth 3 -print -quit)"
+          APP_PATH="$(find build/export -name "Supacool.app" -maxdepth 3 -print -quit)"
 
           for attempt in 1 2 3; do
             echo "Notarization attempt $attempt..."
@@ -164,7 +164,7 @@ jobs:
           xcrun stapler staple "$APP_PATH"
       - name: Create app zip for Sparkle
         run: |
-          APP_PATH="$(find build/export -name "supacode.app" -maxdepth 3 -print -quit)"
+          APP_PATH="$(find build/export -name "Supacool.app" -maxdepth 3 -print -quit)"
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/supacool.app.zip
       - name: Generate tip appcast
         env:

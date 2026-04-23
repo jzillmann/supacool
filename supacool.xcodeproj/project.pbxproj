@@ -28,7 +28,7 @@
 			containerPortal = D69CE0422F1F378200584C57 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = D69CE0492F1F378200584C57;
-			remoteInfo = supacode;
+			remoteInfo = supacool;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -36,19 +36,19 @@
 		D64162AD2F23CAF100260CA3 /* ghostty */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ghostty; path = Resources/ghostty; sourceTree = "<group>"; };
 		D64162AE2F23CAF100260CA3 /* terminfo */ = {isa = PBXFileReference; lastKnownFileType = folder; name = terminfo; path = Resources/terminfo; sourceTree = "<group>"; };
 		D64162AF2F23CAF100260CA3 /* git-wt */ = {isa = PBXFileReference; lastKnownFileType = folder; name = "git-wt"; path = "Resources/git-wt"; sourceTree = "<group>"; };
-		D69CE04A2F1F378200584C57 /* supacode.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = supacode.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D69CE04A2F1F378200584C57 /* Supacool.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Supacool.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		D6A1CB2F2F1F4A48004FDABD /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = GhosttyKit.xcframework; sourceTree = "<group>"; };
 		D6A1CB342F1F4AC2004FDABD /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
-		D6F821012F1FCBC1004B4174 /* supacodeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = supacodeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D6F821012F1FCBC1004B4174 /* supacoolTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = supacoolTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		D4C9CFFBF3C440848B2DA2B0 /* Exceptions for "supacode" folder in "supacode" target */ = {
+		D4C9CFFBF3C440848B2DA2B0 /* Exceptions for "supacode" folder in "supacool" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
-			target = D69CE0492F1F378200584C57 /* supacode */;
+			target = D69CE0492F1F378200584C57 /* supacool */;
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
@@ -56,7 +56,7 @@
 		D69CE04C2F1F378200584C57 /* supacode */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
-				D4C9CFFBF3C440848B2DA2B0 /* Exceptions for "supacode" folder in "supacode" target */,
+				D4C9CFFBF3C440848B2DA2B0 /* Exceptions for "supacode" folder in "supacool" target */,
 			);
 			path = supacode;
 			sourceTree = "<group>";
@@ -118,8 +118,8 @@
 		D69CE04B2F1F378200584C57 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				D69CE04A2F1F378200584C57 /* supacode.app */,
-				D6F821012F1FCBC1004B4174 /* supacodeTests.xctest */,
+				D69CE04A2F1F378200584C57 /* Supacool.app */,
+				D6F821012F1FCBC1004B4174 /* supacoolTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -136,9 +136,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		D69CE0492F1F378200584C57 /* supacode */ = {
+		D69CE0492F1F378200584C57 /* supacool */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = D69CE0552F1F378200584C57 /* Build configuration list for PBXNativeTarget "supacode" */;
+			buildConfigurationList = D69CE0552F1F378200584C57 /* Build configuration list for PBXNativeTarget "supacool" */;
 			buildPhases = (
 				D69CE0462F1F378200584C57 /* Sources */,
 				D67F9B122F33000100A1B2C3 /* Verify git-wt script */,
@@ -153,7 +153,7 @@
 				D65AC00100000000000000C0 /* Supacool */,
 				D69CE04C2F1F378200584C57 /* supacode */,
 			);
-			name = supacode;
+			name = supacool;
 			packageProductDependencies = (
 				8D787DCF45744283A83F226F /* Dependencies */,
 				B5698573F7354B14B940EA60 /* Sparkle */,
@@ -163,13 +163,13 @@
 				D6D054272F2E3EBF00D70ED5 /* PostHog */,
 				E0DF87922F79E2010033488C /* Kingfisher */,
 			);
-			productName = supacode;
-			productReference = D69CE04A2F1F378200584C57 /* supacode.app */;
+			productName = supacool;
+			productReference = D69CE04A2F1F378200584C57 /* Supacool.app */;
 			productType = "com.apple.product-type.application";
 		};
-		D6F821002F1FCBC1004B4174 /* supacodeTests */ = {
+		D6F821002F1FCBC1004B4174 /* supacoolTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = D6F821072F1FCBC1004B4174 /* Build configuration list for PBXNativeTarget "supacodeTests" */;
+			buildConfigurationList = D6F821072F1FCBC1004B4174 /* Build configuration list for PBXNativeTarget "supacoolTests" */;
 			buildPhases = (
 				D6F820FD2F1FCBC1004B4174 /* Sources */,
 				D6F820FE2F1FCBC1004B4174 /* Frameworks */,
@@ -183,12 +183,12 @@
 			fileSystemSynchronizedGroups = (
 				D6F821022F1FCBC1004B4174 /* supacodeTests */,
 			);
-			name = supacodeTests;
+			name = supacoolTests;
 			packageProductDependencies = (
 				D63D00F62F2A5EEE00018D05 /* DependenciesTestSupport */,
 			);
-			productName = supacodeTests;
-			productReference = D6F821012F1FCBC1004B4174 /* supacodeTests.xctest */;
+			productName = supacoolTests;
+			productReference = D6F821012F1FCBC1004B4174 /* supacoolTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 /* End PBXNativeTarget section */
@@ -210,7 +210,7 @@
 					};
 				};
 			};
-			buildConfigurationList = D69CE0452F1F378200584C57 /* Build configuration list for PBXProject "supacode" */;
+			buildConfigurationList = D69CE0452F1F378200584C57 /* Build configuration list for PBXProject "supacool" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -233,8 +233,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				D69CE0492F1F378200584C57 /* supacode */,
-				D6F821002F1FCBC1004B4174 /* supacodeTests */,
+				D69CE0492F1F378200584C57 /* supacool */,
+				D6F821002F1FCBC1004B4174 /* supacoolTests */,
 			);
 		};
 /* End PBXProject section */
@@ -301,7 +301,7 @@
 /* Begin PBXTargetDependency section */
 		D6F821062F1FCBC1004B4174 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = D69CE0492F1F378200584C57 /* supacode */;
+			target = D69CE0492F1F378200584C57 /* supacool */;
 			targetProxy = D6F821052F1FCBC1004B4174 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -443,7 +443,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
-				CODE_SIGN_ENTITLEMENTS = supacode/supacodeDebug.entitlements;
+				CODE_SIGN_ENTITLEMENTS = supacode/supacoolDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COMPILATION_CACHE_ENABLE_CACHING = YES;
@@ -501,7 +501,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				AUTOMATION_APPLE_EVENTS = YES;
-				CODE_SIGN_ENTITLEMENTS = supacode/supacode.entitlements;
+				CODE_SIGN_ENTITLEMENTS = supacode/supacool.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COMPILATION_CACHE_ENABLE_CACHING = NO;
@@ -600,7 +600,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		D69CE0452F1F378200584C57 /* Build configuration list for PBXProject "supacode" */ = {
+		D69CE0452F1F378200584C57 /* Build configuration list for PBXProject "supacool" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				D69CE0532F1F378200584C57 /* Debug */,
@@ -609,7 +609,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		D69CE0552F1F378200584C57 /* Build configuration list for PBXNativeTarget "supacode" */ = {
+		D69CE0552F1F378200584C57 /* Build configuration list for PBXNativeTarget "supacool" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				D69CE0562F1F378200584C57 /* Debug */,
@@ -618,7 +618,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		D6F821072F1FCBC1004B4174 /* Build configuration list for PBXNativeTarget "supacodeTests" */ = {
+		D6F821072F1FCBC1004B4174 /* Build configuration list for PBXNativeTarget "supacoolTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				D6F821082F1FCBC1004B4174 /* Debug */,
