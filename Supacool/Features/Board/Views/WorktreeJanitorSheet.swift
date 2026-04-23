@@ -2,7 +2,7 @@ import ComposableArchitecture
 import Foundation
 import SwiftUI
 
-/// Read-only inspector for every worktree registered against a repo.
+/// Inspector + janitor for every worktree registered against a repo.
 ///
 /// Renders one row per worktree with classification badge, disk size,
 /// last-commit summary, and dirty-file count. Rows fill in progressively
@@ -10,8 +10,9 @@ import SwiftUI
 /// sheet is immediately interactive even on a 47-worktree repo where a
 /// full `du -sk` sweep takes 30+ seconds.
 ///
-/// PR2 of the janitor ladder: no multi-select, no delete, no diff
-/// expansion. PR3 adds those on top of this same sheet.
+/// PR3 adds a leading checkbox column on candidate rows (orphan /
+/// orphan-dirty). Selecting rows lights up a destructive Delete action
+/// in the footer that surfaces a confirmation dialog before firing.
 struct WorktreeJanitorSheet: View {
   @Bindable var store: StoreOf<WorktreeJanitorFeature>
 
@@ -23,9 +24,26 @@ struct WorktreeJanitorSheet: View {
       Divider()
       footer
     }
-    .frame(minWidth: 720, minHeight: 420)
+    .frame(minWidth: 780, minHeight: 460)
     .task {
       store.send(.scanRequested)
+    }
+    .confirmationDialog(
+      confirmationTitle,
+      isPresented: Binding(
+        get: { store.deleteConfirmation != nil },
+        set: { if !$0 { store.send(.deleteConfirmationCancelled) } }
+      ),
+      presenting: store.deleteConfirmation
+    ) { confirmation in
+      Button("Delete \(confirmation.targets.count) worktree\(confirmation.targets.count == 1 ? "" : "s")", role: .destructive) {
+        store.send(.deleteConfirmed)
+      }
+      Button("Cancel", role: .cancel) {
+        store.send(.deleteConfirmationCancelled)
+      }
+    } message: { confirmation in
+      Text(confirmationMessage(confirmation))
     }
   }
 
@@ -91,6 +109,16 @@ struct WorktreeJanitorSheet: View {
 
   private var table: some View {
     Table(Array(store.rows)) {
+      TableColumn("") { row in
+        SelectionToggle(
+          row: row,
+          isSelected: store.selectedIDs.contains(row.id),
+          isDeleting: store.deletingIDs.contains(row.id),
+          onToggle: { store.send(.toggleSelection(id: row.id)) }
+        )
+      }
+      .width(24)
+
       TableColumn("Name") { row in
         VStack(alignment: .leading, spacing: 2) {
           Text(row.name)
@@ -101,6 +129,7 @@ struct WorktreeJanitorSheet: View {
               .foregroundStyle(.secondary)
           }
         }
+        .opacity(store.deletingIDs.contains(row.id) ? 0.4 : 1.0)
       }
       .width(min: 140, ideal: 200)
 
@@ -143,35 +172,118 @@ struct WorktreeJanitorSheet: View {
     .tableStyle(.inset)
   }
 
+  @ViewBuilder
   private var footer: some View {
-    HStack {
-      if store.isScanning {
-        ProgressView()
-          .controlSize(.small)
-        Text("Measuring \(store.rows.count) worktrees…")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      } else if !store.rows.isEmpty {
-        Text(summaryLine)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
+    HStack(alignment: .center, spacing: 12) {
+      footerLeading
       Spacer()
-      Button("Done") {
-        store.send(.closeRequested)
-      }
-      .keyboardShortcut(.defaultAction)
+      footerTrailing
     }
     .padding(.horizontal, 20)
     .padding(.vertical, 12)
   }
 
-  private var summaryLine: String {
-    let orphanCount = store.rows.filter { $0.isDeletionCandidate }.count
+  @ViewBuilder
+  private var footerLeading: some View {
+    if !store.deleteErrors.isEmpty {
+      deleteErrorLabel
+    } else if store.isScanning {
+      HStack(spacing: 8) {
+        ProgressView().controlSize(.small)
+        Text("Measuring \(store.rows.count) worktrees…")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+    } else if !store.selectedIDs.isEmpty {
+      selectionSummary
+    } else if !store.rows.isEmpty {
+      Text(idleSummary)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var deleteErrorLabel: some View {
+    HStack(alignment: .top, spacing: 6) {
+      Image(systemName: "exclamationmark.triangle.fill")
+        .foregroundStyle(.orange)
+      VStack(alignment: .leading, spacing: 2) {
+        Text("\(store.deleteErrors.count) delete\(store.deleteErrors.count == 1 ? "" : "s") failed")
+          .font(.caption.weight(.semibold))
+        // Show the first failure message inline; the rest are logged.
+        if let first = store.deleteErrors.first {
+          Text(first)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .textSelection(.enabled)
+        }
+      }
+    }
+  }
+
+  private var selectionSummary: some View {
+    Text(
+      "\(store.selectedIDs.count) selected · reclaim ~\(formatSize(store.selectedReclaimBytes))"
+    )
+    .font(.caption.weight(.medium))
+    .foregroundStyle(.primary)
+  }
+
+  @ViewBuilder
+  private var footerTrailing: some View {
+    if !store.selectedIDs.isEmpty {
+      Button("Clear") {
+        store.send(.clearSelection)
+      }
+      .buttonStyle(.bordered)
+      Button(role: .destructive) {
+        store.send(.deleteSelectedRequested)
+      } label: {
+        Text("Delete \(store.selectedIDs.count)…")
+      }
+      .buttonStyle(.borderedProminent)
+      .tint(.red)
+      .disabled(!store.deletingIDs.isEmpty)
+    }
+    Button("Done") {
+      store.send(.closeRequested)
+    }
+    .keyboardShortcut(.defaultAction)
+  }
+
+  private var idleSummary: String {
+    let candidateCount = store.rows.filter(\.isDeletionCandidate).count
     let totalBytes = store.rows.reduce(UInt64(0)) { acc, row in
       acc + (row.sizeBytes ?? 0)
     }
-    return "\(store.rows.count) worktrees · \(orphanCount) candidates · \(formatSize(totalBytes)) on disk"
+    return "\(store.rows.count) worktrees · \(candidateCount) candidates · \(formatSize(totalBytes)) on disk"
+  }
+
+  // MARK: - Confirmation dialog
+
+  private var confirmationTitle: String {
+    guard let confirmation = store.deleteConfirmation else {
+      return "Delete worktrees?"
+    }
+    let count = confirmation.targets.count
+    return count == 1
+      ? "Delete \"\(confirmation.targets[0].name)\"?"
+      : "Delete \(count) worktrees?"
+  }
+
+  private func confirmationMessage(
+    _ confirmation: WorktreeJanitorFeature.DeleteConfirmation
+  ) -> String {
+    var lines: [String] = []
+    lines.append(
+      "Removing \(confirmation.targets.count) worktree\(confirmation.targets.count == 1 ? "" : "s") will reclaim about \(formatSize(confirmation.totalBytes))."
+    )
+    if confirmation.hasDirty {
+      lines.append("⚠️ One or more selected worktrees have uncommitted changes.")
+    }
+    lines.append("Branches are kept — only the worktree directories are removed.")
+    return lines.joined(separator: "\n\n")
   }
 
   // MARK: - Formatting
@@ -195,6 +307,42 @@ struct WorktreeJanitorSheet: View {
     let formatter = RelativeDateTimeFormatter()
     formatter.unitsStyle = .abbreviated
     return formatter.localizedString(for: date, relativeTo: Date())
+  }
+}
+
+// MARK: - Selection toggle
+
+/// Leading checkbox. Renders nothing for non-candidate rows so the repo
+/// root + owned sessions visually can't be picked. Dimmed spinner
+/// replaces the checkbox for rows currently mid-delete.
+private struct SelectionToggle: View {
+  let row: WorktreeInventoryEntry
+  let isSelected: Bool
+  let isDeleting: Bool
+  let onToggle: () -> Void
+
+  var body: some View {
+    if isDeleting {
+      ProgressView()
+        .controlSize(.small)
+        .help("Deleting…")
+    } else if row.isDeletionCandidate {
+      Button {
+        onToggle()
+      } label: {
+        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+          .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+          .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(isSelected ? "Deselect" : "Select for deletion")
+    } else {
+      // Non-candidate rows (owned / repo root) render a disabled
+      // placeholder so the column width stays stable.
+      Image(systemName: "square")
+        .foregroundStyle(.tertiary)
+        .opacity(0.35)
+    }
   }
 }
 

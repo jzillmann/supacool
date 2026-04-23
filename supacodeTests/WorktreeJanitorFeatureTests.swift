@@ -189,6 +189,231 @@ struct WorktreeJanitorFeatureTests {
     await store.send(.closeRequested)
     await store.receive(\.delegate.dismissed)
   }
+
+  // MARK: - Selection
+
+  @Test func toggleSelectionOnOrphanRow() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/wt", name: "wt", branch: "feat", head: "a", status: .orphan)
+    ]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.toggleSelection(id: "/r/wt")) {
+      $0.selectedIDs = ["/r/wt"]
+    }
+    await store.send(.toggleSelection(id: "/r/wt")) {
+      $0.selectedIDs = []
+    }
+  }
+
+  @Test func toggleSelectionIgnoresNonCandidateRows() async {
+    // Row is `.owned` — user taps its checkbox (shouldn't be
+    // rendered, but a stale tap path shouldn't add it either).
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(
+        id: "/r/wt", name: "wt", branch: "feat", head: "a",
+        status: .owned(sessionID: UUID(), displayName: "Live session")
+      )
+    ]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.toggleSelection(id: "/r/wt"))
+    #expect(store.state.selectedIDs.isEmpty)
+  }
+
+  @Test func selectAllCandidatesOnlyPicksOrphans() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r", name: "r", branch: "main", head: "a", status: .repoRoot),
+      .init(
+        id: "/r/live", name: "live", branch: "b1", head: "b",
+        status: .owned(sessionID: UUID(), displayName: "Live")
+      ),
+      .init(id: "/r/orphan", name: "orphan", branch: "b2", head: "c", status: .orphan),
+      .init(id: "/r/dirty", name: "dirty", branch: "b3", head: "d", status: .orphanDirty),
+    ]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.selectAllCandidates) {
+      $0.selectedIDs = ["/r/orphan", "/r/dirty"]
+    }
+  }
+
+  @Test func clearSelectionDropsAllIDs() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/wt", name: "wt", branch: "x", head: "a", status: .orphan)
+    ]
+    state.selectedIDs = ["/r/wt"]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.clearSelection) {
+      $0.selectedIDs = []
+    }
+  }
+
+  // MARK: - Reclaim accounting
+
+  @Test func selectedReclaimBytesSumsOverPickedRows() {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(
+        id: "/r/a", name: "a", branch: nil, head: "a",
+        status: .orphan, sizeBytes: UInt64(1_000)
+      ),
+      .init(
+        id: "/r/b", name: "b", branch: nil, head: "b",
+        status: .orphan, sizeBytes: UInt64(2_000)
+      ),
+      .init(
+        id: "/r/c", name: "c", branch: nil, head: "c",
+        status: .orphan, sizeBytes: UInt64(4_000)
+      ),
+    ]
+    state.selectedIDs = ["/r/a", "/r/c"]
+    #expect(state.selectedReclaimBytes == 5_000)
+  }
+
+  // MARK: - Delete flow
+
+  @Test func deleteSelectedRequestedPopulatesConfirmation() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(
+        id: "/r/wt", name: "wt", branch: "feat", head: "a",
+        status: .orphanDirty, sizeBytes: UInt64(1_024 * 1_024)
+      )
+    ]
+    state.selectedIDs = ["/r/wt"]
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteSelectedRequested)
+    guard let confirmation = store.state.deleteConfirmation else {
+      Issue.record("Expected confirmation to be populated")
+      return
+    }
+    #expect(confirmation.targets.count == 1)
+    #expect(confirmation.targets[0].name == "wt")
+    #expect(confirmation.targets[0].isDirty)
+    #expect(confirmation.totalBytes == 1_024 * 1_024)
+    #expect(confirmation.hasDirty)
+  }
+
+  @Test func deleteSelectedRequestedNoopsWhenSelectionEmpty() async {
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.deleteSelectedRequested)
+    #expect(store.state.deleteConfirmation == nil)
+  }
+
+  @Test func deleteConfirmedRemovesRowsAndClearsSelection() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/a", name: "a", branch: "b1", head: "a", status: .orphan),
+      .init(id: "/r/b", name: "b", branch: "b2", head: "b", status: .orphan),
+    ]
+    state.selectedIDs = ["/r/a", "/r/b"]
+    state.deleteConfirmation = .init(
+      id: UUID(),
+      targets: [
+        .init(id: "/r/a", name: "a", branch: "b1", sizeBytes: nil, isDirty: false),
+        .init(id: "/r/b", name: "b", branch: "b2", sizeBytes: nil, isDirty: false),
+      ]
+    )
+
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.gitClient.removeWorktree = { _, _ in URL(fileURLWithPath: "/ok") }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteConfirmed) {
+      $0.deleteConfirmation = nil
+      $0.deletingIDs = ["/r/a", "/r/b"]
+    }
+    await store.receive(\._deleteCompleted)
+    await store.receive(\._deleteCompleted)
+
+    #expect(store.state.rows.isEmpty)
+    #expect(store.state.selectedIDs.isEmpty)
+    #expect(store.state.deletingIDs.isEmpty)
+    #expect(store.state.deleteErrors.isEmpty)
+  }
+
+  @Test func deleteFailureLeavesRowVisibleAndAppendsError() async {
+    struct RemoveKaboom: LocalizedError {
+      var errorDescription: String? { "rm failed" }
+    }
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/a", name: "a", branch: "b1", head: "a", status: .orphan)
+    ]
+    state.selectedIDs = ["/r/a"]
+    state.deleteConfirmation = .init(
+      id: UUID(),
+      targets: [.init(id: "/r/a", name: "a", branch: "b1", sizeBytes: nil, isDirty: false)]
+    )
+
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.gitClient.removeWorktree = { _, _ in throw RemoveKaboom() }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteConfirmed)
+    await store.receive(\._deleteCompleted)
+
+    #expect(store.state.rows.count == 1)
+    #expect(store.state.selectedIDs == ["/r/a"])
+    #expect(store.state.deletingIDs.isEmpty)
+    #expect(store.state.deleteErrors.count == 1)
+    #expect(store.state.deleteErrors[0].contains("rm failed"))
+  }
+
+  @Test func deleteConfirmationCancelledClearsPendingState() async {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.deleteConfirmation = .init(id: UUID(), targets: [])
+    let store = TestStore(initialState: state) {
+      WorktreeJanitorFeature()
+    }
+    await store.send(.deleteConfirmationCancelled) {
+      $0.deleteConfirmation = nil
+    }
+  }
 }
 
 // MARK: - BoardFeature integration
