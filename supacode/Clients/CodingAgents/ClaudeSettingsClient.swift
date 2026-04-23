@@ -3,6 +3,7 @@ import Foundation
 
 struct ClaudeSettingsClient: Sendable {
   var checkInstalled: @Sendable (Bool) async -> Bool
+  var checkInstallState: @Sendable (Bool) async -> AgentHookSettingsFileInstaller.InstallState
   var installProgress: @Sendable () async throws -> Void
   var installNotifications: @Sendable () async throws -> Void
   var uninstallProgress: @Sendable () async throws -> Void
@@ -13,6 +14,9 @@ extension ClaudeSettingsClient: DependencyKey {
   static let liveValue = Self(
     checkInstalled: { progress in
       ClaudeSettingsInstaller().isInstalled(progress: progress)
+    },
+    checkInstallState: { progress in
+      ClaudeSettingsInstaller().installState(progress: progress)
     },
     installProgress: {
       try ClaudeSettingsInstaller().installProgressHooks()
@@ -29,6 +33,7 @@ extension ClaudeSettingsClient: DependencyKey {
   )
   static let testValue = Self(
     checkInstalled: { _ in false },
+    checkInstallState: { _ in .missing },
     installProgress: {},
     installNotifications: {},
     uninstallProgress: {},

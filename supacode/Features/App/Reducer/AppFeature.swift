@@ -90,6 +90,9 @@ struct AppFeature {
   @Dependency(SystemNotificationClient.self) private var systemNotificationClient
   @Dependency(TerminalClient.self) private var terminalClient
   @Dependency(WorktreeInfoWatcherClient.self) private var worktreeInfoWatcher
+  @Dependency(ClaudeSettingsClient.self) private var claudeSettingsClient
+  @Dependency(CodexSettingsClient.self) private var codexSettingsClient
+  @Dependency(\.uuid) private var uuid
 
   var body: some Reducer<State, Action> {
     let core = Reduce<State, Action> { state, action in
@@ -112,7 +115,8 @@ struct AppFeature {
             for await event in await worktreeInfoWatcher.events() {
               await send(.repositories(.worktreeInfoEvent(event)))
             }
-          }
+          },
+          checkStaleHooksEffect()
         )
 
       case .scenePhaseChanged(let phase):
@@ -253,6 +257,9 @@ struct AppFeature {
         return .run { _ in
           await systemNotificationClient.send(title, body)
         }
+
+      case .board(.delegate(.openSettingsRequested(let section))):
+        return .send(.settings(.setSelection(section)))
 
       case .board(
         .delegate(
@@ -1254,6 +1261,37 @@ struct AppFeature {
     let alternate = rawID + "/"
     guard state.repositories.worktree(for: alternate) != nil else { return rawID }
     return alternate
+  }
+
+  // MARK: Stale hook check.
+
+  /// On every app launch, verify that the on-disk hook payload matches what
+  /// this build expects. If any of the four slots (Claude/Codex × progress
+  /// /notifications) is `.stale`, push one tray card so the user can
+  /// reinstall. `.missing` is intentionally ignored — it means the user
+  /// never installed that hook, not that something drifted.
+  private func checkStaleHooksEffect() -> Effect<Action> {
+    let claude = claudeSettingsClient
+    let codex = codexSettingsClient
+    let uuid = uuid
+    return .run { send in
+      async let claudeProgress = claude.checkInstallState(true)
+      async let claudeNotifications = claude.checkInstallState(false)
+      async let codexProgress = codex.checkInstallState(true)
+      async let codexNotifications = codex.checkInstallState(false)
+      let results: [(AgentHookSlot, AgentHookSettingsFileInstaller.InstallState)] = await [
+        (.claudeProgress, claudeProgress),
+        (.claudeNotifications, claudeNotifications),
+        (.codexProgress, codexProgress),
+        (.codexNotifications, codexNotifications),
+      ]
+      let staleSlots = results.compactMap { slot, state in
+        state == .stale ? slot : nil
+      }
+      guard !staleSlots.isEmpty else { return }
+      let card = TrayCard(id: uuid(), kind: .staleHooks(slots: staleSlots))
+      await send(.board(.trayCardPushed(card)))
+    }
   }
 
   // MARK: Settings deeplink.

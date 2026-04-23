@@ -972,6 +972,57 @@ struct BoardFeatureTests {
     #expect(parsePrunedRefs(from: "nothing pruned") == [])
   }
 
+  // MARK: - Tray cards
+
+  @Test(.dependencies) func trayCardPushedAppendsCard() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+    let card = TrayCard(kind: .staleHooks(slots: [.claudeProgress]))
+    await store.send(.trayCardPushed(card)) {
+      $0.trayCards = [card]
+    }
+  }
+
+  @Test(.dependencies) func trayCardPushedDedupesByKind() async {
+    // A second push with an identical kind — even if the id differs —
+    // should be dropped so repeated launches don't stack duplicates.
+    var state = BoardFeature.State()
+    let existing = TrayCard(kind: .staleHooks(slots: [.claudeProgress]))
+    state.trayCards = [existing]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    let duplicate = TrayCard(kind: .staleHooks(slots: [.claudeProgress]))
+    await store.send(.trayCardPushed(duplicate))
+    // No state change expected; exhaustive store would fail if one occurred.
+  }
+
+  @Test(.dependencies) func trayCardDismissedRemovesCard() async {
+    var state = BoardFeature.State()
+    let card = TrayCard(kind: .staleHooks(slots: [.claudeProgress]))
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    await store.send(.trayCardDismissed(id: card.id)) {
+      $0.trayCards = []
+    }
+  }
+
+  @Test(.dependencies) func trayCardPrimaryTappedStaleHooksRoutesToSettings() async {
+    var state = BoardFeature.State()
+    let card = TrayCard(kind: .staleHooks(slots: [.codexNotifications]))
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    await store.send(.trayCardPrimaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+    await store.receive(\.delegate.openSettingsRequested)
+  }
+
   // MARK: - Helpers
 
   private static func sampleSession(

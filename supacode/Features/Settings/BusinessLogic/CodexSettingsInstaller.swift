@@ -49,6 +49,23 @@ nonisolated struct CodexSettingsInstaller {
     )
   }
 
+  func installState(progress: Bool) -> AgentHookSettingsFileInstaller.InstallState {
+    let groups: [String: [JSONValue]]
+    do {
+      groups =
+        try progress
+        ? CodexHookSettings.progressHookGroupsByEvent()
+        : CodexHookSettings.notificationHookGroupsByEvent()
+    } catch {
+      Self.reportInvalidHookConfiguration(error, progress: progress)
+      return .missing
+    }
+    return fileInstaller.installState(
+      settingsURL: settingsURL,
+      hookGroupsByEvent: groups
+    )
+  }
+
   func installProgressHooks() async throws {
     try await enableHooksFeature()
     try fileInstaller.install(
