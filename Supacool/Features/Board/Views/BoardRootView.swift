@@ -155,13 +155,10 @@ struct BoardRootView: View {
       autoZoomBackArmedSessionID = nil
       schedulePendingExit(for: focusedID)
     }
-    // Sheet lives at the root so it's reachable whether you're looking at
-    // the board or at a full-screen terminal.
-    .sheet(
-      store: store.scope(state: \.$newTerminalSheet, action: \.newTerminalSheet)
-    ) { sheetStore in
-      NewTerminalSheet(store: sheetStore)
-    }
+    // The New-Terminal form now lives in the floating tray (bottom-right)
+    // as a draft card + popover; see `BoardTrayView.draftCard`. The card is
+    // rendered whenever `store.newTerminalSheet != nil`, so the previous
+    // root-level `.sheet(store:)` is gone.
     .alert(
       "Rename session",
       isPresented: Binding(
@@ -185,6 +182,14 @@ struct BoardRootView: View {
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
+    // Read-only "Manage Worktrees…" inspector (PR2 of the janitor
+    // ladder). Dismissed via the sheet's Done button → delegate →
+    // parent clears `state.worktreeJanitor`.
+    .sheet(
+      store: store.scope(state: \.$worktreeJanitor, action: \.worktreeJanitor)
+    ) { janitorStore in
+      WorktreeJanitorSheet(store: janitorStore)
+    }
   }
 
   @ViewBuilder
@@ -427,6 +432,11 @@ struct BoardRootView: View {
           onPruneWorktrees: { repo in
             store.send(
               .pruneWorktreesRequested(repositoryID: repo.id, repositoryName: repo.name)
+            )
+          },
+          onManageWorktrees: { repo in
+            store.send(
+              .openWorktreeJanitor(repositoryID: repo.id, repositoryName: repo.name)
             )
           }
         )
