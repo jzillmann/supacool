@@ -69,7 +69,7 @@ struct AppFeatureDefaultEditorTests {
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     try localStorage.save(
       encoder.encode(localRepositorySettings),
-      at: SupacodePaths.repositorySettingsURL(for: worktree.repositoryRootURL)
+      at: SupacoolPaths.repositorySettingsURL(for: worktree.repositoryRootURL)
     )
 
     let store = TestStore(

@@ -79,10 +79,10 @@ install-dev-build: build-app # install dev build to /Applications
 	echo "installed $$dst"
 
 archive: build-ghostty-xcframework # Archive Release build for distribution
-	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Release -archivePath build/supacode.xcarchive archive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$$APPLE_TEAM_ID" CODE_SIGN_IDENTITY="$$DEVELOPER_ID_IDENTITY_SHA" OTHER_CODE_SIGN_FLAGS="--timestamp" -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" $(XCODEBUILD_FLAGS) 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild -project supacode.xcodeproj -scheme supacode -configuration Release -archivePath build/supacool.xcarchive archive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$$APPLE_TEAM_ID" CODE_SIGN_IDENTITY="$$DEVELOPER_ID_IDENTITY_SHA" OTHER_CODE_SIGN_FLAGS="--timestamp" -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" $(XCODEBUILD_FLAGS) 2>&1 $(FORMATTER)'
 
 export-archive: # Export xarchive
-	bash -o pipefail -c 'xcodebuild -exportArchive -archivePath build/supacode.xcarchive -exportPath build/export -exportOptionsPlist build/ExportOptions.plist 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild -exportArchive -archivePath build/supacool.xcarchive -exportPath build/export -exportOptionsPlist build/ExportOptions.plist 2>&1 $(FORMATTER)'
 
 test: build-ghostty-xcframework # Run all tests
 	bash -o pipefail -c 'xcodebuild test -project supacode.xcodeproj -scheme supacode -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -parallel-testing-enabled NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'

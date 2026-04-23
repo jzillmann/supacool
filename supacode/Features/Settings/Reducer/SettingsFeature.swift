@@ -73,7 +73,7 @@ struct SettingsFeature {
       autoDeleteArchivedWorktreesAfterDays = settings.autoDeleteArchivedWorktreesAfterDays
       shortcutOverrides = settings.shortcutOverrides
       defaultWorktreeBaseDirectoryPath =
-        SupacodePaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
+        SupacoolPaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
     }
 
     var globalSettings: GlobalSettings {
@@ -102,7 +102,7 @@ struct SettingsFeature {
         restoreTerminalLayoutEnabled: restoreTerminalLayoutEnabled,
         hideSingleTabBar: hideSingleTabBar,
         allowArbitraryDeeplinkInput: allowArbitraryDeeplinkInput,
-        defaultWorktreeBaseDirectoryPath: SupacodePaths.normalizedWorktreeBaseDirectoryPath(
+        defaultWorktreeBaseDirectoryPath: SupacoolPaths.normalizedWorktreeBaseDirectoryPath(
           defaultWorktreeBaseDirectoryPath
         ),
         autoDeleteArchivedWorktreesAfterDays: autoDeleteArchivedWorktreesAfterDays,
@@ -186,7 +186,7 @@ struct SettingsFeature {
       case .settingsLoaded(let settings):
         let normalizedDefaultEditorID = OpenWorktreeAction.normalizedDefaultEditorID(settings.defaultEditorID)
         let normalizedWorktreeBaseDirPath =
-          SupacodePaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath)
+          SupacoolPaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath)
         let normalizedSettings: GlobalSettings
         if normalizedDefaultEditorID == settings.defaultEditorID,
           normalizedWorktreeBaseDirPath == settings.defaultWorktreeBaseDirectoryPath
@@ -247,10 +247,10 @@ struct SettingsFeature {
         let message: String
         if let errorMessage, !errorMessage.isEmpty {
           message =
-            "Supacode cannot send system notifications.\n\n"
+            "Supacool cannot send system notifications.\n\n"
             + "Error: \(errorMessage)"
         } else {
-          message = "Supacode cannot send system notifications while permission is denied."
+          message = "Supacool cannot send system notifications while permission is denied."
         }
         state.alert = AlertState {
           TextState("Enable Notifications in System Settings")

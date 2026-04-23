@@ -7,14 +7,14 @@ struct TerminalSplitTreeView: View {
   // Single source of truth for which pane is active in this tab. Any surface
   // whose id does not match this gets the unfocused-split dim overlay.
   let activeSurfaceID: UUID?
-  // Supacode renders surfaces directly (no Ghostty SurfaceWrapper), so the
+  // Supacool renders surfaces directly (no Ghostty SurfaceWrapper), so the
   // unfocused-pane dim overlay is applied here from the `unfocused-split-fill`
   // and `unfocused-split-opacity` config values. Fill is nil when the config
   // is unreadable; callers must skip the overlay in that case.
   let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
   let action: (Operation) -> Void
 
-  private static let dragType = UTType(exportedAs: "sh.supacode.ghosttySurfaceId")
+  private static let dragType = UTType(exportedAs: "app.morethan.supacool.ghosttySurfaceId")
   private static func dragProvider(for surfaceView: GhosttySurfaceView) -> NSItemProvider {
     let provider = NSItemProvider()
     let data = surfaceView.id.uuidString.data(using: .utf8) ?? Data()

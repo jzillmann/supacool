@@ -20,7 +20,7 @@ struct RemoteSpawnClientTests {
     #expect(remoteSpawnShellQuote("simple") == "simple")
     #expect(remoteSpawnShellQuote("a/b/c") == "a/b/c")
     #expect(remoteSpawnShellQuote("name-with_dots.1") == "name-with_dots.1")
-    #expect(remoteSpawnShellQuote("SUPACODE_TAB_ID=abc") == "SUPACODE_TAB_ID=abc")
+    #expect(remoteSpawnShellQuote("SUPACOOL_TAB_ID=abc") == "SUPACOOL_TAB_ID=abc")
   }
 
   @Test func remoteSpawnShellQuoteWrapsUnsafeStrings() {
@@ -34,7 +34,7 @@ struct RemoteSpawnClientTests {
   @Test func bootstrapIncludesTmuxAttachOrCreate() {
     let script = renderBootstrapScript(agentCommand: "claude code")
     #expect(script.contains("tmux new-session -A -s"))
-    #expect(script.contains("-c \"$SUPACODE_WORKTREE_PATH\""))
+    #expect(script.contains("-c \"$SUPACOOL_WORKTREE_PATH\""))
     #expect(script.contains("-- claude code"))
   }
 
@@ -47,7 +47,7 @@ struct RemoteSpawnClientTests {
 
   @Test func bootstrapClearsStaleSocket() {
     let script = renderBootstrapScript(agentCommand: nil)
-    #expect(script.contains(#"rm -f "$SUPACODE_SOCKET_PATH""#))
+    #expect(script.contains(#"rm -f "$SUPACOOL_SOCKET_PATH""#))
   }
 
   @Test func bootstrapCreatesSupacoolDirectories() {
@@ -91,17 +91,17 @@ struct RemoteSpawnClientTests {
     #expect(rendered.contains("-R /tmp/supacool-hook-xyz.sock:/tmp/supacool-local.sock"))
   }
 
-  @Test func invocationIncludesAllSupacodeEnvVars() {
+  @Test func invocationIncludesAllSupacoolEnvVars() {
     let inv = sampleInvocation()
     let rendered = renderSSHInvocation(inv)
     // The SetEnv block combines pairs with spaces inside one arg; we
     // should see them shell-quoted together.
-    #expect(rendered.contains("SUPACODE_WORKTREE_ID=remote:dev:/home/jz"))
-    #expect(rendered.contains("SUPACODE_TAB_ID=\(inv.tabID.uuidString.lowercased())"))
-    #expect(rendered.contains("SUPACODE_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())"))
-    #expect(rendered.contains("SUPACODE_SOCKET_PATH=/tmp/supacool-hook-xyz.sock"))
-    #expect(rendered.contains("SUPACODE_WORKTREE_PATH=/home/jz/code/api"))
-    #expect(rendered.contains("SUPACODE_ROOT_PATH=/home/jz/code/api"))
+    #expect(rendered.contains("SUPACOOL_WORKTREE_ID=remote:dev:/home/jz"))
+    #expect(rendered.contains("SUPACOOL_TAB_ID=\(inv.tabID.uuidString.lowercased())"))
+    #expect(rendered.contains("SUPACOOL_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())"))
+    #expect(rendered.contains("SUPACOOL_SOCKET_PATH=/tmp/supacool-hook-xyz.sock"))
+    #expect(rendered.contains("SUPACOOL_WORKTREE_PATH=/home/jz/code/api"))
+    #expect(rendered.contains("SUPACOOL_ROOT_PATH=/home/jz/code/api"))
     #expect(rendered.contains("TMUX_SESSION=supacool-abc123"))
   }
 
@@ -191,8 +191,8 @@ struct RemoteSpawnClientTests {
       surfaceID: UUID(uuidString: "DEADBEEF-4321-4321-4321-CBA987654321")!
     )
     let rendered = renderSSHInvocation(inv)
-    #expect(rendered.contains("SUPACODE_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
-    #expect(rendered.contains("SUPACODE_SURFACE_ID=deadbeef-4321-4321-4321-cba987654321"))
+    #expect(rendered.contains("SUPACOOL_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
+    #expect(rendered.contains("SUPACOOL_SURFACE_ID=deadbeef-4321-4321-4321-cba987654321"))
   }
 
   // MARK: expandTilde

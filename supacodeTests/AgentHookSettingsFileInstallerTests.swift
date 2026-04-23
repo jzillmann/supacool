@@ -111,7 +111,7 @@ struct AgentHookSettingsFileInstallerTests {
             "hooks": .array([
               .object([
                 "type": "command",
-                "command": "SUPACODE_CLI_PATH agent-hook --stop",
+                "command": "SUPACOOL_CLI_PATH agent-hook --stop",
               ]),
             ]),
           ]),
@@ -136,7 +136,7 @@ struct AgentHookSettingsFileInstallerTests {
       guard let hooks = group.objectValue?["hooks"]?.arrayValue else { continue }
       for hook in hooks {
         let cmd = hook.objectValue?["command"]?.stringValue ?? ""
-        #expect(!cmd.contains("SUPACODE_CLI_PATH"))
+        #expect(!cmd.contains("SUPACOOL_CLI_PATH"))
       }
     }
   }
@@ -289,7 +289,7 @@ struct AgentHookSettingsFileInstallerTests {
     let url = makeTempURL()
     defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
 
-    // Legacy pre-upgrade settings: a Supacode-owned legacy command lives in
+    // Legacy pre-upgrade settings: a Supacool-owned legacy command lives in
     // the file, but none of the current expected commands. The installer
     // should report `.stale` (not `.missing`) so we can prompt a reinstall.
     let legacy: JSONValue = .object([
@@ -299,7 +299,7 @@ struct AgentHookSettingsFileInstallerTests {
             "hooks": .array([
               .object([
                 "type": "command",
-                "command": "SUPACODE_CLI_PATH agent-hook --stop",
+                "command": "SUPACOOL_CLI_PATH agent-hook --stop",
               ]),
             ]),
           ]),
@@ -320,7 +320,7 @@ struct AgentHookSettingsFileInstallerTests {
     let url = makeTempURL()
     defer { try? fileManager.removeItem(at: url.deletingLastPathComponent()) }
 
-    // Third-party (non-Supacode) hooks only — this is "you never installed
+    // Third-party (non-Supacool) hooks only — this is "you never installed
     // anything of ours", not "you have drift."
     let foreign: JSONValue = .object([
       "hooks": .object([

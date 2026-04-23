@@ -2,7 +2,7 @@
 
 Native terminal coding agents command center.
 
-![screenshot](https://www.supacode.sh/screenshot.png)
+<!-- TODO: add a local screenshot, e.g. `![screenshot](assets/screenshot.png)`. The old `supacode.sh` image is gone. -->
 
 ## Features
 
@@ -31,7 +31,7 @@ Supacool started life as a fork of [supacode](https://github.com/supabitapp/supa
 - **Auto-Observer** — per-session idle watcher that uses a small LLM to auto-respond to obvious prompts, so overnight runs don't stall on a yes/no dialog
 - **Ticket & PR chips** — Linear ticket ids and GitHub PR URLs are parsed from the session transcript and surfaced on the card as clickable chips
 - **Pre-worktree fetch** so fresh branches are based on the actually-latest upstream, not your local cache
-- **Setup-script env vars** (`SUPACODE_REPO_ROOT`, `SUPACODE_WORKTREE_ROOT`) let your repo's own CLIs orient themselves from inside a freshly-created worktree
+- **Setup-script env vars** (`SUPACOOL_REPO_ROOT`, `SUPACOOL_WORKTREE_ROOT`) let your repo's own CLIs orient themselves from inside a freshly-created worktree
 
 ## Technical Stack
 

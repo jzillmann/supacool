@@ -16,7 +16,7 @@ nonisolated struct LayoutsKey: SharedKey {
     @Dependency(\.settingsFileStorage) var storage
     let data: Data
     do {
-      data = try storage.load(SupacodePaths.layoutsURL)
+      data = try storage.load(SupacoolPaths.layoutsURL)
     } catch {
       // File does not exist yet — expected on first run.
       continuation.resumeReturningInitialValue()
@@ -27,7 +27,7 @@ nonisolated struct LayoutsKey: SharedKey {
       continuation.resume(returning: layouts)
     } catch {
       Self.logger.warning(
-        "Failed to decode layouts from \(SupacodePaths.layoutsURL.path(percentEncoded: false)): \(error)"
+        "Failed to decode layouts from \(SupacoolPaths.layoutsURL.path(percentEncoded: false)): \(error)"
       )
       continuation.resumeReturningInitialValue()
     }
@@ -50,7 +50,7 @@ nonisolated struct LayoutsKey: SharedKey {
       let encoder = JSONEncoder()
       encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
       let data = try encoder.encode(value)
-      try storage.save(data, SupacodePaths.layoutsURL)
+      try storage.save(data, SupacoolPaths.layoutsURL)
       continuation.resume()
     } catch {
       continuation.resume(throwing: error)

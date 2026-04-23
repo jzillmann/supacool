@@ -18,7 +18,7 @@ struct RepositorySettingsFeature {
     var isBranchDataLoaded = false
 
     var exampleWorktreePath: String {
-      SupacodePaths.exampleWorktreePath(
+      SupacoolPaths.exampleWorktreePath(
         for: rootURL,
         globalDefaultPath: globalDefaultWorktreeBaseDirectoryPath,
         repositoryOverridePath: settings.worktreeBaseDirectoryPath,
@@ -107,7 +107,7 @@ struct RepositorySettingsFeature {
         let globalPullRequestMergeStrategy
       ):
         var updatedSettings = settings
-        updatedSettings.worktreeBaseDirectoryPath = SupacodePaths.normalizedWorktreeBaseDirectoryPath(
+        updatedSettings.worktreeBaseDirectoryPath = SupacoolPaths.normalizedWorktreeBaseDirectoryPath(
           updatedSettings.worktreeBaseDirectoryPath,
           repositoryRootURL: state.rootURL
         )
@@ -117,7 +117,7 @@ struct RepositorySettingsFeature {
         }
         state.settings = updatedSettings
         state.globalDefaultWorktreeBaseDirectoryPath =
-          SupacodePaths.normalizedWorktreeBaseDirectoryPath(globalDefaultWorktreeBaseDirectoryPath)
+          SupacoolPaths.normalizedWorktreeBaseDirectoryPath(globalDefaultWorktreeBaseDirectoryPath)
         state.globalCopyIgnoredOnWorktreeCreate = globalCopyIgnoredOnWorktreeCreate
         state.globalCopyUntrackedOnWorktreeCreate = globalCopyUntrackedOnWorktreeCreate
         state.globalPullRequestMergeStrategy = globalPullRequestMergeStrategy
@@ -173,7 +173,7 @@ struct RepositorySettingsFeature {
   private func persistSettingsAndNotify(state: inout State) -> Effect<Action> {
     let rootURL = state.rootURL
     var normalizedSettings = state.settings
-    normalizedSettings.worktreeBaseDirectoryPath = SupacodePaths.normalizedWorktreeBaseDirectoryPath(
+    normalizedSettings.worktreeBaseDirectoryPath = SupacoolPaths.normalizedWorktreeBaseDirectoryPath(
       normalizedSettings.worktreeBaseDirectoryPath,
       repositoryRootURL: rootURL
     )

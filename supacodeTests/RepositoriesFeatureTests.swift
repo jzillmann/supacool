@@ -1259,7 +1259,7 @@ struct RepositoriesFeatureTests {
     await store.receive(\.createRandomWorktreeSucceeded)
     await store.finish()
 
-    let expectedBaseDirectory = SupacodePaths.worktreeBaseDirectory(
+    let expectedBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
       for: repository.rootURL,
       globalDefaultPath: "/tmp/global-worktrees",
       repositoryOverridePath: "/tmp/repo-override"
@@ -1310,7 +1310,7 @@ struct RepositoriesFeatureTests {
     await store.receive(\.createRandomWorktreeSucceeded)
     await store.finish()
 
-    let expectedBaseDirectory = SupacodePaths.worktreeBaseDirectory(
+    let expectedBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
       for: repository.rootURL,
       globalDefaultPath: "/tmp/global-worktrees",
       repositoryOverridePath: nil
@@ -1366,12 +1366,12 @@ struct RepositoriesFeatureTests {
     let repoRoot = "/tmp/repo"
     let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
     let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree])
-    let createTimeBaseDirectory = SupacodePaths.worktreeBaseDirectory(
+    let createTimeBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
       for: repository.rootURL,
       globalDefaultPath: "/tmp/worktrees-original",
       repositoryOverridePath: nil
     )
-    let changedBaseDirectory = SupacodePaths.worktreeBaseDirectory(
+    let changedBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
       for: repository.rootURL,
       globalDefaultPath: "/tmp/worktrees-changed",
       repositoryOverridePath: nil

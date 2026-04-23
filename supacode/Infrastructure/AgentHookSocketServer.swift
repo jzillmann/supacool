@@ -27,7 +27,7 @@ final class AgentHookSocketServer {
   init() {
     let uid = getuid()
     let pid = ProcessInfo.processInfo.processIdentifier
-    let directory = "/tmp/supacode-\(uid)"
+    let directory = "/tmp/supacool-\(uid)"
     let path = "\(directory)/pid-\(pid)"
 
     do {

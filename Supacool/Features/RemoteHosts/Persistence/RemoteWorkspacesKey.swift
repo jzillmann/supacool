@@ -13,7 +13,7 @@ nonisolated struct RemoteWorkspacesKey: SharedKey {
   var id: RemoteWorkspacesKeyID { RemoteWorkspacesKeyID() }
 
   static var fileURL: URL {
-    SupacodePaths.baseDirectory.appending(
+    SupacoolPaths.baseDirectory.appending(
       path: "remote-workspaces.json",
       directoryHint: .notDirectory
     )

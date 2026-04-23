@@ -6,7 +6,7 @@ private nonisolated let remoteHookLogger = SupaLogger("Supacool.RemoteHooks")
 /// idempotently merges Supacool's agent hooks into the remote's
 /// claude / codex config. Without this, the reverse socket tunnel has
 /// nothing firing into it — the agent never invokes
-/// `nc -U $SUPACODE_SOCKET_PATH` because its own config doesn't know
+/// `nc -U $SUPACOOL_SOCKET_PATH` because its own config doesn't know
 /// about the hooks.
 ///
 /// Design choices:

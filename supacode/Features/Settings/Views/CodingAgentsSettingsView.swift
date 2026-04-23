@@ -7,7 +7,7 @@ struct CodingAgentsSettingsView: View {
   var body: some View {
     Form {
       Section(
-        footer: Text("Hooks are optional and designed to extend Supacode without affecting core functionality.")
+        footer: Text("Hooks are optional and designed to extend Supacool without affecting core functionality.")
       ) {}
       AIAssistSettingsSection()
       ReferencesSettingsSection()
@@ -24,7 +24,7 @@ struct CodingAgentsSettingsView: View {
           uninstallAction: { store.send(.agentHookUninstallTapped(.claudeNotifications)) },
           installState: store.claudeNotificationsState,
           title: "Notifications",
-          subtitle: "Forward richer notifications to Supacode."
+          subtitle: "Forward richer notifications to Supacool."
         )
       } header: {
         Label("Claude Code", image: "claude-code-mark")
@@ -44,7 +44,7 @@ struct CodingAgentsSettingsView: View {
           uninstallAction: { store.send(.agentHookUninstallTapped(.codexNotifications)) },
           installState: store.codexNotificationsState,
           title: "Notifications",
-          subtitle: "Forward richer notifications to Supacode."
+          subtitle: "Forward richer notifications to Supacool."
         )
       } header: {
         Label("Codex", image: "codex-mark")

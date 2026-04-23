@@ -10,12 +10,12 @@ struct DeeplinkClientTests {
   // MARK: - Open.
 
   @Test func emptyURLReturnsOpen() {
-    let url = URL(string: "supacode://")!
+    let url = URL(string: "supacool://")!
     #expect(parse(url) == .open)
   }
 
   @Test func helpURLReturnsHelp() {
-    let url = URL(string: "supacode://help")!
+    let url = URL(string: "supacool://help")!
     #expect(parse(url) == .help)
   }
 
@@ -28,49 +28,49 @@ struct DeeplinkClientTests {
 
   @Test func worktreeRun() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/run")!
+    let url = URL(string: "supacool://worktree/\(encoded)/run")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .run))
   }
 
   @Test func worktreeArchive() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/archive")!
+    let url = URL(string: "supacool://worktree/\(encoded)/archive")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .archive))
   }
 
   @Test func worktreeUnarchive() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/unarchive")!
+    let url = URL(string: "supacool://worktree/\(encoded)/unarchive")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .unarchive))
   }
 
   @Test func worktreeDelete() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/delete")!
+    let url = URL(string: "supacool://worktree/\(encoded)/delete")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .delete))
   }
 
   @Test func worktreePin() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/pin")!
+    let url = URL(string: "supacool://worktree/\(encoded)/pin")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .pin))
   }
 
   @Test func worktreeUnpin() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/unpin")!
+    let url = URL(string: "supacool://worktree/\(encoded)/unpin")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .unpin))
   }
 
   @Test func worktreeMissingActionDefaultsToSelect() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)")!
+    let url = URL(string: "supacool://worktree/\(encoded)")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .select))
   }
 
   @Test func worktreeUnknownActionReturnsNil() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/explode")!
+    let url = URL(string: "supacool://worktree/\(encoded)/explode")!
     #expect(parse(url) == nil)
   }
 
@@ -79,38 +79,38 @@ struct DeeplinkClientTests {
   @Test func worktreeTabWithValidUUID() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/550E8400-E29B-41D4-A716-446655440000")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/550E8400-E29B-41D4-A716-446655440000")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .tab(tabID: tabUUID)))
   }
 
   @Test func worktreeTabWithInvalidUUIDReturnsNil() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/not-a-uuid")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/not-a-uuid")!
     #expect(parse(url) == nil)
   }
 
   @Test func worktreeTabWithoutTabIDReturnsNil() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/tab")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab")!
     #expect(parse(url) == nil)
   }
 
   @Test func worktreeTabNewWithoutInput() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/new")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/new")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .tabNew(input: nil, id: nil)))
   }
 
   @Test func worktreeTabNewWithInput() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/new?input=echo%20hello")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/new?input=echo%20hello")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .tabNew(input: "echo hello", id: nil)))
   }
 
   @Test func worktreeTabDestroy() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)/destroy")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)/destroy")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .tabDestroy(tabID: tabUUID)))
   }
 
@@ -121,7 +121,7 @@ struct DeeplinkClientTests {
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
     let url = URL(
-      string: "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)"
+      string: "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)"
     )!
     #expect(
       parse(url)
@@ -134,7 +134,7 @@ struct DeeplinkClientTests {
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
     let url = URL(
-      string: "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)?input=ls"
+      string: "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)?input=ls"
     )!
     #expect(
       parse(url)
@@ -146,7 +146,7 @@ struct DeeplinkClientTests {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
-    let base = "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
+    let base = "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
     let url = URL(string: "\(base)/surface/\(surfaceUUID.uuidString)/split?direction=horizontal")!
     #expect(
       parse(url)
@@ -163,7 +163,7 @@ struct DeeplinkClientTests {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
-    let base = "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
+    let base = "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
     let url = URL(string: "\(base)/surface/\(surfaceUUID.uuidString)/split?direction=vertical&input=echo%20hi")!
     #expect(
       parse(url)
@@ -181,7 +181,7 @@ struct DeeplinkClientTests {
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
     let url = URL(
       string:
-        "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)/split"
+        "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/\(surfaceUUID.uuidString)/split"
     )!
     #expect(
       parse(url)
@@ -196,7 +196,7 @@ struct DeeplinkClientTests {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let url = URL(
-      string: "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/not-a-uuid"
+      string: "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)/surface/not-a-uuid"
     )!
     #expect(parse(url) == nil)
   }
@@ -204,19 +204,19 @@ struct DeeplinkClientTests {
   // MARK: - Repo actions.
 
   @Test func repoOpen() {
-    let url = URL(string: "supacode://repo/open?path=%2Ftmp%2Fmy-repo")!
+    let url = URL(string: "supacool://repo/open?path=%2Ftmp%2Fmy-repo")!
     #expect(parse(url) == .repoOpen(path: URL(fileURLWithPath: "/tmp/my-repo")))
   }
 
   @Test func repoOpenMissingPathReturnsNil() {
-    let url = URL(string: "supacode://repo/open")!
+    let url = URL(string: "supacool://repo/open")!
     #expect(parse(url) == nil)
   }
 
   @Test func repoWorktreeNewWithBranch() {
     let repoEncoded = "%2Ftmp%2Frepo"
     let url = URL(
-      string: "supacode://repo/\(repoEncoded)/worktree/new?branch=feature-x&base=main&fetch=true"
+      string: "supacool://repo/\(repoEncoded)/worktree/new?branch=feature-x&base=main&fetch=true"
     )!
     #expect(
       parse(url)
@@ -231,7 +231,7 @@ struct DeeplinkClientTests {
 
   @Test func repoWorktreeNewWithoutBranch() {
     let repoEncoded = "%2Ftmp%2Frepo"
-    let url = URL(string: "supacode://repo/\(repoEncoded)/worktree/new")!
+    let url = URL(string: "supacool://repo/\(repoEncoded)/worktree/new")!
     #expect(
       parse(url)
         == .repoWorktreeNew(
@@ -245,34 +245,34 @@ struct DeeplinkClientTests {
 
   @Test func repoUnknownPathReturnsNil() {
     let repoEncoded = "%2Ftmp%2Frepo"
-    let url = URL(string: "supacode://repo/\(repoEncoded)/unknown")!
+    let url = URL(string: "supacool://repo/\(repoEncoded)/unknown")!
     #expect(parse(url) == nil)
   }
 
   // MARK: - Settings.
 
   @Test func settingsWithoutSection() {
-    let url = URL(string: "supacode://settings")!
+    let url = URL(string: "supacool://settings")!
     #expect(parse(url) == .settings(section: nil))
   }
 
   @Test func settingsWithUnknownSectionReturnsNilSection() {
-    let url = URL(string: "supacode://settings/nonexistent")!
+    let url = URL(string: "supacool://settings/nonexistent")!
     #expect(parse(url) == .settings(section: nil))
   }
 
   @Test func settingsWithSection() {
-    let url = URL(string: "supacode://settings/worktrees")!
+    let url = URL(string: "supacool://settings/worktrees")!
     #expect(parse(url) == .settings(section: .worktrees))
   }
 
   @Test func settingsRepoWithValidID() {
-    let url = URL(string: "supacode://settings/repo/%2Ftmp%2Frepo")!
+    let url = URL(string: "supacool://settings/repo/%2Ftmp%2Frepo")!
     #expect(parse(url) == .settingsRepo(repositoryID: "/tmp/repo"))
   }
 
   @Test func settingsRepoWithMissingIDReturnsNil() {
-    let url = URL(string: "supacode://settings/repo")!
+    let url = URL(string: "supacool://settings/repo")!
     #expect(parse(url) == nil)
   }
 
@@ -282,7 +282,7 @@ struct DeeplinkClientTests {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
-    let base = "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
+    let base = "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
     let url = URL(string: "\(base)/surface/\(surfaceUUID.uuidString)/destroy")!
     #expect(
       parse(url)
@@ -298,7 +298,7 @@ struct DeeplinkClientTests {
   @Test func worktreeTabNewWithID() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabID = UUID(uuidString: "770E8400-E29B-41D4-A716-446655440000")!
-    let url = URL(string: "supacode://worktree/\(encoded)/tab/new?id=\(tabID.uuidString)")!
+    let url = URL(string: "supacool://worktree/\(encoded)/tab/new?id=\(tabID.uuidString)")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .tabNew(input: nil, id: tabID)))
   }
 
@@ -309,7 +309,7 @@ struct DeeplinkClientTests {
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
     let newID = UUID(uuidString: "880E8400-E29B-41D4-A716-446655440000")!
-    let base = "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
+    let base = "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
     let url = URL(string: "\(base)/surface/\(surfaceUUID.uuidString)/split?id=\(newID.uuidString)")!
     #expect(
       parse(url)
@@ -326,7 +326,7 @@ struct DeeplinkClientTests {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
     let tabUUID = UUID(uuidString: "550E8400-E29B-41D4-A716-446655440000")!
     let surfaceUUID = UUID(uuidString: "660E8400-E29B-41D4-A716-446655440000")!
-    let base = "supacode://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
+    let base = "supacool://worktree/\(encoded)/tab/\(tabUUID.uuidString)"
     let url = URL(string: "\(base)/surface/\(surfaceUUID.uuidString)/split?direction=diagonal")!
     #expect(parse(url) == nil)
   }
@@ -334,12 +334,12 @@ struct DeeplinkClientTests {
   // MARK: - Repo open edge cases.
 
   @Test func repoOpenWithEmptyPathReturnsNil() {
-    let url = URL(string: "supacode://repo/open?path=")!
+    let url = URL(string: "supacool://repo/open?path=")!
     #expect(parse(url) == nil)
   }
 
   @Test func repoOpenWithRelativePathReturnsNil() {
-    let url = URL(string: "supacode://repo/open?path=relative/path")!
+    let url = URL(string: "supacool://repo/open?path=relative/path")!
     #expect(parse(url) == nil)
   }
 
@@ -347,14 +347,14 @@ struct DeeplinkClientTests {
 
   @Test func worktreeStop() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1"
-    let url = URL(string: "supacode://worktree/\(encoded)/stop")!
+    let url = URL(string: "supacool://worktree/\(encoded)/stop")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .stop))
   }
 
   // MARK: - Worktree with no ID.
 
   @Test func worktreeWithNoIDReturnsNil() {
-    let url = URL(string: "supacode://worktree")!
+    let url = URL(string: "supacool://worktree")!
     #expect(parse(url) == nil)
   }
 
@@ -362,14 +362,14 @@ struct DeeplinkClientTests {
 
   @Test func worktreeIDWithTrailingSlashIsNormalized() {
     let encoded = "%2Ftmp%2Frepo%2Fwt-1%2F"
-    let url = URL(string: "supacode://worktree/\(encoded)")!
+    let url = URL(string: "supacool://worktree/\(encoded)")!
     #expect(parse(url) == .worktree(id: "/tmp/repo/wt-1", action: .select))
   }
 
   // MARK: - Unknown host.
 
   @Test func unknownHostReturnsNil() {
-    let url = URL(string: "supacode://unknown/something")!
+    let url = URL(string: "supacool://unknown/something")!
     #expect(parse(url) == nil)
   }
 }

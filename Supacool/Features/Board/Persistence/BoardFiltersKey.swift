@@ -42,7 +42,7 @@ nonisolated struct BoardFiltersKey: SharedKey {
   var id: BoardFiltersKeyID { BoardFiltersKeyID() }
 
   static var fileURL: URL {
-    SupacodePaths.baseDirectory.appending(
+    SupacoolPaths.baseDirectory.appending(
       path: "board-filters.json",
       directoryHint: .notDirectory
     )

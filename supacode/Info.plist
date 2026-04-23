@@ -40,7 +40,14 @@
 	<key>NSSystemAdministrationUsageDescription</key>
 	<string>A program running within Supacool requires elevated privileges.</string>
 	<key>SUFeedURL</key>
-    <string>https://supacode.sh/download/latest/appcast.xml</string>
+	<string>https://github.com/jzillmann/supacool/releases/latest/download/appcast.xml</string>
+	<!--
+		TODO: regenerate the Sparkle EdDSA keypair and replace SUPublicEDKey below.
+		The current value is inherited from supabitapp/supacode and does NOT match
+		the SPARKLE_PRIVATE_KEY used to sign appcasts from this repo. Until the key
+		is replaced, auto-updates will be rejected by Sparkle with a signature error.
+		See RELEASING.md for the regeneration procedure.
+	-->
 	<key>SUPublicEDKey</key>
 	<string>eBdTbl+6sR8gxO1zyzyvdQHuJrXMLxD31oCc+JoW5jo=</string>
 	<key>SUEnableAutomaticChecks</key>
@@ -51,10 +58,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>sh.supacode.deeplink</string>
+			<string>app.morethan.supacool.deeplink</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>supacode</string>
+				<string>supacool</string>
 			</array>
 		</dict>
 	</array>
@@ -62,9 +69,9 @@
 	<array>
 		<dict>
 			<key>UTTypeIdentifier</key>
-			<string>sh.supacode.ghosttySurfaceId</string>
+			<string>app.morethan.supacool.ghosttySurfaceId</string>
 			<key>UTTypeDescription</key>
-			<string>Supacode Ghostty Surface Identifier</string>
+			<string>Supacool Ghostty Surface Identifier</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

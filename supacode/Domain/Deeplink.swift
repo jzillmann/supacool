@@ -1,6 +1,6 @@
 import Foundation
 
-/// A parsed deeplink action from a `supacode://` URL.
+/// A parsed deeplink action from a `supacool://` URL.
 enum Deeplink: Equatable, Sendable {
   case open
   case help

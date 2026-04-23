@@ -29,7 +29,7 @@ struct UpdatesSettingsView: View {
       Section("Automatic Updates") {
         Toggle(isOn: $settingsStore.updatesAutomaticallyCheckForUpdates) {
           Text("Check for updates automatically")
-          Text("Periodically checks for new versions while Supacode is running.")
+          Text("Periodically checks for new versions while Supacool is running.")
         }
         Toggle(isOn: $settingsStore.updatesAutomaticallyDownloadUpdates) {
           Text("Download and install updates automatically")

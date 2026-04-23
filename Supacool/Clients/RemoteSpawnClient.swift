@@ -14,13 +14,13 @@ import Foundation
 ///    will lean on this.
 /// 2. **Reverse Unix-socket forwarding** — `-R <remoteSock>:<localSock>`
 ///    publishes the Mac's agent-hook socket at a known path on the
-///    remote, so `nc -U $SUPACODE_SOCKET_PATH` from a remote-side hook
+///    remote, so `nc -U $SUPACOOL_SOCKET_PATH` from a remote-side hook
 ///    tunnels straight back to the Mac's `AgentHookSocketServer`. We
 ///    also pass `StreamLocalBindUnlink=yes` so a prior stale socket
 ///    doesn't block the new forward.
-/// 3. **SetEnv of the SUPACODE_* tuple** — the same env vars the local
-///    spawn path exports. Notably `SUPACODE_TAB_ID` and
-///    `SUPACODE_SURFACE_ID` match the Mac-side UUIDs, so hook payloads
+/// 3. **SetEnv of the SUPACOOL_* tuple** — the same env vars the local
+///    spawn path exports. Notably `SUPACOOL_TAB_ID` and
+///    `SUPACOOL_SURFACE_ID` match the Mac-side UUIDs, so hook payloads
 ///    are parse-identical to local ones and the existing classifier
 ///    needs no change.
 nonisolated struct RemoteSpawnClient: Sendable {
@@ -132,12 +132,12 @@ extension DependencyValues {
 /// we shell-quote every argument that might contain special chars.
 nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
   let setEnvPairs = [
-    "SUPACODE_WORKTREE_ID=\(inv.worktreeID)",
-    "SUPACODE_TAB_ID=\(inv.tabID.uuidString.lowercased())",
-    "SUPACODE_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())",
-    "SUPACODE_SOCKET_PATH=\(inv.remoteSocketPath)",
-    "SUPACODE_WORKTREE_PATH=\(inv.remoteWorkingDirectory)",
-    "SUPACODE_ROOT_PATH=\(inv.remoteWorkingDirectory)",
+    "SUPACOOL_WORKTREE_ID=\(inv.worktreeID)",
+    "SUPACOOL_TAB_ID=\(inv.tabID.uuidString.lowercased())",
+    "SUPACOOL_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())",
+    "SUPACOOL_SOCKET_PATH=\(inv.remoteSocketPath)",
+    "SUPACOOL_WORKTREE_PATH=\(inv.remoteWorkingDirectory)",
+    "SUPACOOL_ROOT_PATH=\(inv.remoteWorkingDirectory)",
     "TMUX_SESSION=\(inv.tmuxSessionName)",
   ]
 
@@ -216,10 +216,10 @@ nonisolated func renderBootstrapScript(
   if let agentCommand, !agentCommand.isEmpty {
     // Pass through tmux so the agent is the foreground process in the
     // session. `--` separates tmux flags from the user's command.
-    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACODE_WORKTREE_PATH\" -- \(agentCommand)"
+    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACOOL_WORKTREE_PATH\" -- \(agentCommand)"
   } else {
     // No agent — plain login shell inside tmux.
-    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACODE_WORKTREE_PATH\""
+    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACOOL_WORKTREE_PATH\""
   }
 
   // Hook install runs BEFORE exec — silent skip when python3 isn't on
@@ -231,7 +231,7 @@ nonisolated func renderBootstrapScript(
     mkdir -p ~/.supacool/hooks ~/.supacool/ssh
     # Stale-socket belt: if a prior ssh crashed, the reverse-forward unlink
     # may have failed; rm -f makes the bind idempotent.
-    rm -f "$SUPACODE_SOCKET_PATH" 2>/dev/null || true
+    rm -f "$SUPACOOL_SOCKET_PATH" 2>/dev/null || true
     # Fall back when the remote doesn't have the custom terminfo installed.
     if ! infocmp xterm-ghostty >/dev/null 2>&1; then
       export TERM=xterm-256color

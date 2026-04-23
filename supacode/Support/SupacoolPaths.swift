@@ -1,9 +1,9 @@
 import Foundation
 
-nonisolated enum SupacodePaths {
+nonisolated enum SupacoolPaths {
   static var baseDirectory: URL {
     FileManager.default.homeDirectoryForCurrentUser
-      .appending(path: ".supacode", directoryHint: .isDirectory)
+      .appending(path: ".supacool", directoryHint: .isDirectory)
   }
 
   static var reposDirectory: URL {
@@ -86,7 +86,7 @@ nonisolated enum SupacodePaths {
   }
 
   static func repositorySettingsURL(for rootURL: URL) -> URL {
-    rootURL.standardizedFileURL.appending(path: "supacode.json", directoryHint: .notDirectory)
+    rootURL.standardizedFileURL.appending(path: "supacool.json", directoryHint: .notDirectory)
   }
 
   private static func repositoryDirectoryName(for rootURL: URL) -> String {

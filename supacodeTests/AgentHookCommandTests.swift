@@ -8,12 +8,12 @@ struct AgentHookCommandTests {
 
   @Test func busyActiveCommandContainsFlag1() {
     let command = AgentHookSettingsCommand.busyCommand(active: true)
-    #expect(command.contains("$SUPACODE_SURFACE_ID 1 $PPID"))
+    #expect(command.contains("$SUPACOOL_SURFACE_ID 1 $PPID"))
   }
 
   @Test func busyInactiveCommandContainsFlag0() {
     let command = AgentHookSettingsCommand.busyCommand(active: false)
-    #expect(command.contains("$SUPACODE_SURFACE_ID 0 $PPID"))
+    #expect(command.contains("$SUPACOOL_SURFACE_ID 0 $PPID"))
   }
 
   @Test func busyCommandPassesPPIDAsFifthField() {
@@ -36,16 +36,16 @@ struct AgentHookCommandTests {
 
   @Test func historicalBusyCommandsAreRecognizedAsManaged() {
     for historicalCommand in AgentHookSettingsCommand.historicalBusyCommands {
-      #expect(AgentHookCommandOwnership.isSupacodeManagedCommand(historicalCommand))
+      #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(historicalCommand))
     }
   }
 
   @Test func busyCommandChecksAllFourEnvVars() {
     let command = AgentHookSettingsCommand.busyCommand(active: true)
-    #expect(command.contains("SUPACODE_SOCKET_PATH"))
-    #expect(command.contains("SUPACODE_WORKTREE_ID"))
-    #expect(command.contains("SUPACODE_TAB_ID"))
-    #expect(command.contains("SUPACODE_SURFACE_ID"))
+    #expect(command.contains("SUPACOOL_SOCKET_PATH"))
+    #expect(command.contains("SUPACOOL_WORKTREE_ID"))
+    #expect(command.contains("SUPACOOL_TAB_ID"))
+    #expect(command.contains("SUPACOOL_SURFACE_ID"))
   }
 
   @Test func busyCommandSuppressesErrors() {
@@ -60,37 +60,37 @@ struct AgentHookCommandTests {
 
   @Test func notificationCommandIncludesAllThreeIDs() {
     let command = AgentHookSettingsCommand.notificationCommand(agent: "codex")
-    #expect(command.contains("$SUPACODE_WORKTREE_ID"))
-    #expect(command.contains("$SUPACODE_TAB_ID"))
-    #expect(command.contains("$SUPACODE_SURFACE_ID"))
+    #expect(command.contains("$SUPACOOL_WORKTREE_ID"))
+    #expect(command.contains("$SUPACOOL_TAB_ID"))
+    #expect(command.contains("$SUPACOOL_SURFACE_ID"))
   }
 
   // MARK: - Command ownership.
 
   @Test func currentCommandIsRecognized() {
     let command = AgentHookSettingsCommand.busyCommand(active: true)
-    #expect(AgentHookCommandOwnership.isSupacodeManagedCommand(command))
+    #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(command))
   }
 
   @Test func notificationCommandIsRecognized() {
     let command = AgentHookSettingsCommand.notificationCommand(agent: "claude")
-    #expect(AgentHookCommandOwnership.isSupacodeManagedCommand(command))
+    #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(command))
   }
 
   @Test func legacyCommandIsRecognized() {
-    let legacy = "SUPACODE_CLI_PATH=/usr/bin/supacode agent-hook --stop"
-    #expect(AgentHookCommandOwnership.isSupacodeManagedCommand(legacy))
+    let legacy = "SUPACOOL_CLI_PATH=/usr/bin/supacode agent-hook --stop"
+    #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(legacy))
     #expect(AgentHookCommandOwnership.isLegacyCommand(legacy))
   }
 
   @Test func legacyCommandRequiresBothMarkers() {
-    #expect(!AgentHookCommandOwnership.isLegacyCommand("SUPACODE_CLI_PATH only"))
+    #expect(!AgentHookCommandOwnership.isLegacyCommand("SUPACOOL_CLI_PATH only"))
     #expect(!AgentHookCommandOwnership.isLegacyCommand("agent-hook only"))
   }
 
   @Test func unrelatedCommandIsNotRecognized() {
-    #expect(!AgentHookCommandOwnership.isSupacodeManagedCommand("echo hello"))
-    #expect(!AgentHookCommandOwnership.isSupacodeManagedCommand(nil))
+    #expect(!AgentHookCommandOwnership.isSupacoolManagedCommand("echo hello"))
+    #expect(!AgentHookCommandOwnership.isSupacoolManagedCommand(nil))
   }
 
   @Test func currentCommandIsNotLegacy() {

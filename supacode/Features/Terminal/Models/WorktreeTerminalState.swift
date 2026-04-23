@@ -1106,19 +1106,19 @@ final class WorktreeTerminalState {
     var env = worktree.scriptEnvironment
     let percentEncodingSet = CharacterSet.urlPathAllowed.subtracting(.init(charactersIn: "/"))
     let repoPath = worktree.repositoryRootURL.path(percentEncoded: false)
-    env["SUPACODE_REPO_ID"] = percentEncode(repoPath, allowedCharacters: percentEncodingSet, label: "SUPACODE_REPO_ID")
-    env["SUPACODE_WORKTREE_ID"] = percentEncode(
-      worktree.id, allowedCharacters: percentEncodingSet, label: "SUPACODE_WORKTREE_ID")
-    env["SUPACODE_TAB_ID"] = tabId.rawValue.uuidString
-    env["SUPACODE_SURFACE_ID"] = surfaceID.uuidString
+    env["SUPACOOL_REPO_ID"] = percentEncode(repoPath, allowedCharacters: percentEncodingSet, label: "SUPACOOL_REPO_ID")
+    env["SUPACOOL_WORKTREE_ID"] = percentEncode(
+      worktree.id, allowedCharacters: percentEncodingSet, label: "SUPACOOL_WORKTREE_ID")
+    env["SUPACOOL_TAB_ID"] = tabId.rawValue.uuidString
+    env["SUPACOOL_SURFACE_ID"] = surfaceID.uuidString
     // Plain (non-percent-encoded) filesystem paths. Setup scripts and
     // user tooling need the raw paths to `cd` into, not the encoded
     // socket identifiers above. Supacool addition — existing
     // `*_ID` vars are kept unchanged for downstream deeplink handlers.
-    env["SUPACODE_REPO_ROOT"] = repoPath
-    env["SUPACODE_WORKTREE_ROOT"] = worktree.workingDirectory.path(percentEncoded: false)
+    env["SUPACOOL_REPO_ROOT"] = repoPath
+    env["SUPACOOL_WORKTREE_ROOT"] = worktree.workingDirectory.path(percentEncoded: false)
     if let socketPath {
-      env["SUPACODE_SOCKET_PATH"] = socketPath
+      env["SUPACOOL_SOCKET_PATH"] = socketPath
     }
     return env
   }
@@ -1672,7 +1672,7 @@ nonisolated func makeBlockingScriptLaunch(
 
   let fileManager = FileManager.default
   let directoryURL = baseDirectoryURL.appending(
-    path: "supacode-blocking-script-\(UUID().uuidString.lowercased())",
+    path: "supacool-blocking-script-\(UUID().uuidString.lowercased())",
     directoryHint: .isDirectory
   )
   let runnerURL = directoryURL.appending(path: "run", directoryHint: .notDirectory)
@@ -1717,8 +1717,8 @@ nonisolated func blockingScriptRunnerContents(
   return """
     #!/bin/sh
     set -eu
-    IFS= read -r SUPACODE_SHELL_PATH < \(quotedShellPath)
-    "$SUPACODE_SHELL_PATH" -l \(quotedScriptPath)
+    IFS= read -r SUPACOOL_SHELL_PATH < \(quotedShellPath)
+    "$SUPACOOL_SHELL_PATH" -l \(quotedScriptPath)
     """
 }
 

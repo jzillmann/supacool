@@ -1,20 +1,20 @@
 nonisolated enum AgentHookSettingsCommand {
-  /// Marker present in all current Supacode hook commands.
+  /// Marker present in all current Supacool hook commands.
   /// `AgentHookCommandOwnership` uses this to identify managed commands.
-  static let socketPathEnvVar = "SUPACODE_SOCKET_PATH"
+  static let socketPathEnvVar = "SUPACOOL_SOCKET_PATH"
 
-  /// Markers present in legacy Supacode hook commands (pre-socket).
-  static let legacyCLIPathEnvVar = "SUPACODE_CLI_PATH"
+  /// Markers present in legacy Supacool hook commands (pre-socket).
+  static let legacyCLIPathEnvVar = "SUPACOOL_CLI_PATH"
   static let legacyAgentHookMarker = "agent-hook"
 
   private static let envCheck =
-    #"[ -n "${SUPACODE_SOCKET_PATH:-}" ]"#
-    + #" && [ -n "${SUPACODE_WORKTREE_ID:-}" ]"#
-    + #" && [ -n "${SUPACODE_TAB_ID:-}" ]"#
-    + #" && [ -n "${SUPACODE_SURFACE_ID:-}" ]"#
+    #"[ -n "${SUPACOOL_SOCKET_PATH:-}" ]"#
+    + #" && [ -n "${SUPACOOL_WORKTREE_ID:-}" ]"#
+    + #" && [ -n "${SUPACOOL_TAB_ID:-}" ]"#
+    + #" && [ -n "${SUPACOOL_SURFACE_ID:-}" ]"#
 
   private static let ids =
-    "$SUPACODE_WORKTREE_ID $SUPACODE_TAB_ID $SUPACODE_SURFACE_ID"
+    "$SUPACOOL_WORKTREE_ID $SUPACOOL_TAB_ID $SUPACOOL_SURFACE_ID"
 
   /// Sends `worktreeID tabID surfaceID 1|0 pid` over a Unix socket.
   /// `$PPID` is the PID of the shell Claude / Codex spawned to run this
@@ -25,7 +25,7 @@ nonisolated enum AgentHookSettingsCommand {
     let flag = active ? "1" : "0"
     let send =
       #"echo "\#(ids) \#(flag) $PPID""#
-      + #" | /usr/bin/nc -U -w1 "$SUPACODE_SOCKET_PATH""#
+      + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
     return "\(envCheck) && \(send) 2>/dev/null || true"
   }
 
@@ -42,7 +42,7 @@ nonisolated enum AgentHookSettingsCommand {
     let flag = active ? "1" : "0"
     let send =
       #"echo "\#(ids) \#(flag)""#
-      + #" | /usr/bin/nc -U -w1 "$SUPACODE_SOCKET_PATH""#
+      + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
     return "\(envCheck) && \(send) 2>/dev/null || true"
   }
 
@@ -51,7 +51,7 @@ nonisolated enum AgentHookSettingsCommand {
   static func notificationCommand(agent: String) -> String {
     let send =
       #"{ printf '%s \#(agent)\n' "\#(ids)"; cat; }"#
-      + #" | /usr/bin/nc -U -w1 "$SUPACODE_SOCKET_PATH""#
+      + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
     return "\(envCheck) && \(send) 2>/dev/null || true"
   }
 }

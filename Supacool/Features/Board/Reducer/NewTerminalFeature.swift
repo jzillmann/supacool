@@ -677,7 +677,7 @@ struct NewTerminalFeature {
               }
             }
           }
-          let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+          let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
             for: repository.rootURL,
             globalDefaultPath: nil,
             repositoryOverridePath: nil
@@ -755,7 +755,7 @@ struct NewTerminalFeature {
               throw NewTerminalError.branchNotFoundAfterFetch(name: branchName)
             }
           }
-          let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+          let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
             for: repository.rootURL,
             globalDefaultPath: nil,
             repositoryOverridePath: nil

@@ -474,10 +474,10 @@ final class GhosttyRuntime {
     return config
   }
 
-  /// Applies Supacode-specific config (padding values) that takes precedence over user settings.
+  /// Applies Supacool-specific config (padding values) that takes precedence over user settings.
   private static func loadBundledOverrides(into config: ghostty_config_t) {
     let defaults = "window-padding-x = 14\nwindow-padding-y = 12,0\n"
-    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacode-defaults.conf")
+    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacool-defaults.conf")
     do {
       try defaults.write(to: tempURL, atomically: true, encoding: .utf8)
     } catch {
@@ -487,20 +487,20 @@ final class GhosttyRuntime {
     tempURL.path.withCString { ghostty_config_load_file(config, $0) }
   }
 
-  /// When terminal theme sync is enabled, loads the bundled Supacode
+  /// When terminal theme sync is enabled, loads the bundled Supacool
   /// light/dark theme, overriding any user-configured theme. When disabled, the user's Ghostty theme is preserved.
   private static func loadBundledTheme(into config: ghostty_config_t, enabled: Bool) {
     guard enabled else { return }
     guard
-      let lightPath = Bundle.main.path(forResource: "Supacode Light", ofType: nil),
-      let darkPath = Bundle.main.path(forResource: "Supacode Dark", ofType: nil)
+      let lightPath = Bundle.main.path(forResource: "Supacool Light", ofType: nil),
+      let darkPath = Bundle.main.path(forResource: "Supacool Dark", ofType: nil)
     else {
-      assertionFailure("Bundled Supacode themes missing from app bundle.")
-      logger.warning("Bundled Supacode themes missing from app bundle.")
+      assertionFailure("Bundled Supacool themes missing from app bundle.")
+      logger.warning("Bundled Supacool themes missing from app bundle.")
       return
     }
     let line = "theme = light:\(lightPath),dark:\(darkPath)\n"
-    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacode-theme.conf")
+    let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacool-theme.conf")
     do {
       try line.write(to: tempURL, atomically: true, encoding: .utf8)
     } catch {

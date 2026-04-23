@@ -5,9 +5,9 @@ struct WorktreeSettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
 
   var body: some View {
-    let defaultPath = SupacodePaths.reposDirectory.path(percentEncoded: false)
+    let defaultPath = SupacoolPaths.reposDirectory.path(percentEncoded: false)
     let resolvedBase =
-      SupacodePaths.normalizedWorktreeBaseDirectoryPath(
+      SupacoolPaths.normalizedWorktreeBaseDirectoryPath(
         store.defaultWorktreeBaseDirectoryPath
       ) ?? defaultPath
     let examplePath = "\(resolvedBase)*/**/*"

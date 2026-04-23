@@ -23,7 +23,7 @@ struct AppearanceSettingsView: View {
         }
         Toggle(isOn: $store.terminalThemeSyncEnabled) {
           Text("Sync with Terminal")
-          Text("Applies the appearance-aware Supacode color palette.")
+          Text("Applies the appearance-aware Supacool color palette.")
         }
         if !store.terminalThemeSyncEnabled {
           VStack(alignment: .leading, spacing: 4) {
@@ -40,7 +40,7 @@ struct AppearanceSettingsView: View {
           "Confirm before Quitting",
           isOn: $store.confirmBeforeQuit
         )
-        .help("Ask before quitting Supacode")
+        .help("Ask before quitting Supacool")
         Toggle(isOn: $store.restoreTerminalLayoutEnabled) {
           Text("Restore Terminal Layout")
           Text("Reopen tabs, splits, and working directories from your last session.")
@@ -65,7 +65,7 @@ struct AppearanceSettingsView: View {
       Section {
         Toggle(isOn: $store.analyticsEnabled) {
           Text("Share Analytics")
-          Text("Anonymous usage data helps improve Supacode.")
+          Text("Anonymous usage data helps improve Supacool.")
         }
         Toggle(isOn: $store.crashReportsEnabled) {
           Text("Share Crash Reports")
@@ -74,7 +74,7 @@ struct AppearanceSettingsView: View {
       } header: {
         Text("Analytics")
       } footer: {
-        Text("Changes to Analytics require Supacode to restart before they take effect.")
+        Text("Changes to Analytics require Supacool to restart before they take effect.")
       }
       Section("Advanced") {
         Toggle(isOn: $store.hideSingleTabBar) {

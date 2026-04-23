@@ -13,7 +13,7 @@ nonisolated struct RemoteHostsKey: SharedKey {
   var id: RemoteHostsKeyID { RemoteHostsKeyID() }
 
   static var fileURL: URL {
-    SupacodePaths.baseDirectory.appending(
+    SupacoolPaths.baseDirectory.appending(
       path: "remote-hosts.json",
       directoryHint: .notDirectory
     )

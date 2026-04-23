@@ -716,7 +716,7 @@ struct AppFeatureDeeplinkTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.deeplinkReceived(URL(string: "supacode://worktree/x")!)) {
+    await store.send(.deeplinkReceived(URL(string: "supacool://worktree/x")!)) {
       $0.pendingDeeplinks = [.worktree(id: worktree.id, action: .select)]
     }
 
@@ -758,11 +758,11 @@ struct AppFeatureDeeplinkTests {
     store.exhaustivity = .off
 
     // First deeplink queued.
-    await store.send(.deeplinkReceived(URL(string: "supacode://first")!)) {
+    await store.send(.deeplinkReceived(URL(string: "supacool://first")!)) {
       $0.pendingDeeplinks = [.worktree(id: worktree.id, action: .pin)]
     }
     // Second deeplink appended.
-    await store.send(.deeplinkReceived(URL(string: "supacode://second")!)) {
+    await store.send(.deeplinkReceived(URL(string: "supacool://second")!)) {
       $0.pendingDeeplinks = [
         .worktree(id: worktree.id, action: .pin),
         .worktree(id: worktree.id, action: .select),
@@ -797,7 +797,7 @@ struct AppFeatureDeeplinkTests {
     store.exhaustivity = .off
 
     let encoded = worktree.id.addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
-    let url = URL(string: "supacode://worktree/\(encoded)")!
+    let url = URL(string: "supacool://worktree/\(encoded)")!
     await store.send(.deeplinkReceived(url))
     await store.receive(\.deeplink)
     await store.receive(\.repositories.selectWorktree)
@@ -836,7 +836,7 @@ struct AppFeatureDeeplinkTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.deeplinkReceived(URL(string: "supacode://unknown-host")!))
+    await store.send(.deeplinkReceived(URL(string: "supacool://unknown-host")!))
     #expect(store.state.alert != nil)
   }
 
@@ -862,7 +862,7 @@ struct AppFeatureDeeplinkTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.deeplinkReceived(URL(string: "supacode://worktree/x")!)) {
+    await store.send(.deeplinkReceived(URL(string: "supacool://worktree/x")!)) {
       $0.pendingDeeplinks = [.worktree(id: worktree.id, action: .select)]
     }
 
@@ -896,7 +896,7 @@ struct AppFeatureDeeplinkTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.deeplinkReceived(URL(string: "supacode://worktree/x")!)) {
+    await store.send(.deeplinkReceived(URL(string: "supacool://worktree/x")!)) {
       $0.pendingDeeplinks = [.worktree(id: worktree.id, action: .select)]
     }
 

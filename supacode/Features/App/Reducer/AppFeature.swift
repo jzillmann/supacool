@@ -468,7 +468,7 @@ struct AppFeature {
             }
           }
           state.alert = AlertState {
-            TextState("Quit Supacode?")
+            TextState("Quit Supacool?")
           } actions: {
             ButtonState(action: .confirmQuit) {
               TextState("Quit")
@@ -643,7 +643,7 @@ struct AppFeature {
         let deeplinkClient = deeplinkClient
         guard let parsed = deeplinkClient.parse(url) else {
           deeplinkLogger.warning("Failed to parse deeplink URL: \(url)")
-          if url.scheme == "supacode" {
+          if url.scheme == "supacool" {
             state.alert = AlertState {
               TextState("Invalid deeplink")
             } actions: {

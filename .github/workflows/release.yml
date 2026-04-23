@@ -92,7 +92,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: dsyms
-          path: build/supacode.xcarchive/dSYMs
+          path: build/supacool.xcarchive/dSYMs
       - run: |
           cat > build/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -141,12 +141,12 @@ jobs:
 
           mise exec -- create-dmg "$APP_PATH" build/ \
             --overwrite \
-            --dmg-title="Supacode" \
+            --dmg-title="Supacool" \
             --identity="$DEVELOPER_ID_IDENTITY_SHA"
 
           DMG_OUTPUT=$(find build -name "*.dmg" -maxdepth 1 | head -1)
-          if [ "$DMG_OUTPUT" != "build/supacode.dmg" ]; then
-            mv "$DMG_OUTPUT" build/supacode.dmg
+          if [ "$DMG_OUTPUT" != "build/supacool.dmg" ]; then
+            mv "$DMG_OUTPUT" build/supacool.dmg
           fi
       - name: Notarize and staple
         run: |
@@ -154,14 +154,14 @@ jobs:
 
           for attempt in 1 2 3; do
             echo "Notarization attempt $attempt..."
-            xcrun notarytool submit build/supacode.dmg --keychain-profile "notarytool-profile" --wait && break
+            xcrun notarytool submit build/supacool.dmg --keychain-profile "notarytool-profile" --wait && break
             echo "Attempt $attempt failed, retrying in 30s..."
             sleep 30
           done
 
-          xcrun stapler staple build/supacode.dmg
+          xcrun stapler staple build/supacool.dmg
           xcrun stapler staple "$APP_PATH"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/supacode.app.zip
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/supacool.app.zip
           VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist")
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
       - name: Fetch release notes
@@ -177,43 +177,46 @@ jobs:
           MAX_DELTAS=10
           NOTES_FILE=build/release-notes.md
           STAGING=$(mktemp -d)
-          ARCHIVE=build/supacode.app.zip
+          ARCHIVE=build/supacool.app.zip
           ARCHIVE_BASE=$(basename "$ARCHIVE")
           ARCHIVE_BASE="${ARCHIVE_BASE%.zip}"
           cp "$ARCHIVE" "$STAGING/"
           cp "$NOTES_FILE" "$STAGING/$ARCHIVE_BASE.md"
 
-          curl -fsSL "https://supacode.sh/download/latest/appcast.xml" -o "$STAGING/appcast.xml" || true
+          # Seed the staging appcast with the previous published one so generate_appcast
+          # can emit deltas against prior versions. Ignore failure on the first-ever
+          # release when no prior appcast exists.
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/latest/download/appcast.xml" -o "$STAGING/appcast.xml" || true
 
-          RELEASE_REPO="supabitapp/supacode"
+          RELEASE_REPO="${{ github.repository }}"
           SEEN_VERSIONS=""
           for i in $(seq 1 $MAX_DELTAS); do
             PREV_TAG=$(gh release list --limit $i --exclude-drafts --exclude-pre-releases -R "$RELEASE_REPO" --json tagName --jq ".[$((i-1))].tagName" 2>/dev/null || true)
             if [ -n "$PREV_TAG" ] && [ "$PREV_TAG" != "$TAG" ]; then
               echo "Downloading $PREV_TAG for delta generation..."
-              gh release download "$PREV_TAG" -p "supacode.app.zip" -O "$STAGING/supacode-$PREV_TAG.app.zip" -R "$RELEASE_REPO" 2>/dev/null || true
-              if [ -f "$STAGING/supacode-$PREV_TAG.app.zip" ]; then
-                BUNDLE_VERSION=$(unzip -p "$STAGING/supacode-$PREV_TAG.app.zip" "supacode.app/Contents/Info.plist" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /dev/stdin 2>/dev/null || echo "")
+              gh release download "$PREV_TAG" -p "supacool.app.zip" -O "$STAGING/supacool-$PREV_TAG.app.zip" -R "$RELEASE_REPO" 2>/dev/null || true
+              if [ -f "$STAGING/supacool-$PREV_TAG.app.zip" ]; then
+                BUNDLE_VERSION=$(unzip -p "$STAGING/supacool-$PREV_TAG.app.zip" "supacode.app/Contents/Info.plist" 2>/dev/null | /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" /dev/stdin 2>/dev/null || echo "")
                 if [ -n "$BUNDLE_VERSION" ] && echo "$SEEN_VERSIONS" | grep -q "^$BUNDLE_VERSION$"; then
                   echo "Skipping $PREV_TAG (duplicate bundle version $BUNDLE_VERSION)"
-                  rm -f "$STAGING/supacode-$PREV_TAG.app.zip"
+                  rm -f "$STAGING/supacool-$PREV_TAG.app.zip"
                 else
                   [ -n "$BUNDLE_VERSION" ] && SEEN_VERSIONS="$SEEN_VERSIONS$BUNDLE_VERSION"$'\n'
-                  gh release view "$PREV_TAG" -R "$RELEASE_REPO" --json body --jq '.body' > "$STAGING/supacode-$PREV_TAG.app.md" 2>/dev/null || true
+                  gh release view "$PREV_TAG" -R "$RELEASE_REPO" --json body --jq '.body' > "$STAGING/supacool-$PREV_TAG.app.md" 2>/dev/null || true
                 fi
               fi
             fi
           done
 
-          printf "%s" "$SPARKLE_PRIVATE_KEY" | tr -d '\r\n\t ' | ./bins/generate_appcast --download-url-prefix "https://supacode.sh/download/$TAG/" --full-release-notes-url "https://github.com/supabitapp/supacode/releases" --embed-release-notes --maximum-versions $MAX_DELTAS --maximum-deltas $MAX_DELTAS --delta-compression lzma --ed-key-file - "$STAGING"
+          printf "%s" "$SPARKLE_PRIVATE_KEY" | tr -d '\r\n\t ' | ./bins/generate_appcast --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/$TAG/" --full-release-notes-url "https://github.com/${{ github.repository }}/releases" --embed-release-notes --maximum-versions $MAX_DELTAS --maximum-deltas $MAX_DELTAS --delta-compression lzma --ed-key-file - "$STAGING"
           cp "$STAGING/appcast.xml" build/appcast.xml
           find "$STAGING" -name "*.delta" -exec cp {} build/ \; 2>/dev/null || true
       - uses: actions/upload-artifact@v6
         with:
           name: build-artifacts
           path: |
-            build/supacode.app.zip
-            build/supacode.dmg
+            build/supacool.app.zip
+            build/supacool.dmg
             build/appcast.xml
             build/*.delta
 
@@ -232,7 +235,7 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: supabit
-          SENTRY_PROJECT: supacode
+          SENTRY_PROJECT: supacool
         run: sentry-cli debug-files upload --include-sources dsyms
 
   publish:
@@ -242,7 +245,7 @@ jobs:
     permissions:
       contents: write
     env:
-      RELEASE_REPO: supabitapp/supacode
+      RELEASE_REPO: ${{ github.repository }}
     steps:
       - run: echo "TAG=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
       - uses: actions/download-artifact@v7
@@ -251,10 +254,10 @@ jobs:
           path: build
       - run: |
           DELTA_FILES=$(find build -name "*.delta" -type f 2>/dev/null | tr '\n' ' ' || true)
-          gh release upload "$TAG" build/supacode.app.zip build/supacode.dmg build/appcast.xml $DELTA_FILES --clobber -R "$RELEASE_REPO"
+          gh release upload "$TAG" build/supacool.app.zip build/supacool.dmg build/appcast.xml $DELTA_FILES --clobber -R "$RELEASE_REPO"
         env:
           GH_TOKEN: ${{ github.token }}
       - run: |
           set -euo pipefail
-          curl -fsSL "https://supacode.sh/download/$TAG/supacode.app.zip" -o /dev/null
-          curl -fsSL "https://supacode.sh/download/$TAG/supacode.dmg" -o /dev/null
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$TAG/supacool.app.zip" -o /dev/null
+          curl -fsSL "https://github.com/${{ github.repository }}/releases/download/$TAG/supacool.dmg" -o /dev/null

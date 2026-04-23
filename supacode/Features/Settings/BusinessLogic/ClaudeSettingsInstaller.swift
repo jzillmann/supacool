@@ -118,9 +118,9 @@ nonisolated enum ClaudeSettingsInstallerError: Error, Equatable, LocalizedError 
     case .invalidHooksObject:
       "Claude settings use an unsupported hooks shape."
     case .invalidJSON(let detail):
-      "Claude settings must be valid JSON before Supacode can install hooks (\(detail))."
+      "Claude settings must be valid JSON before Supacool can install hooks (\(detail))."
     case .invalidRootObject:
-      "Claude settings must be a JSON object before Supacode can install hooks."
+      "Claude settings must be a JSON object before Supacool can install hooks."
     }
   }
 }

@@ -946,7 +946,7 @@ struct RepositoriesFeature {
         @Shared(.settingsFile) var settingsFile
         @Shared(.repositorySettings(repository.rootURL)) var repositorySettings
         let globalDefaultWorktreeBaseDirectoryPath = settingsFile.global.defaultWorktreeBaseDirectoryPath
-        let worktreeBaseDirectory = SupacodePaths.worktreeBaseDirectory(
+        let worktreeBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
           for: repository.rootURL,
           globalDefaultPath: globalDefaultWorktreeBaseDirectoryPath,
           repositoryOverridePath: repositorySettings.worktreeBaseDirectoryPath
@@ -2432,7 +2432,7 @@ struct RepositoriesFeature {
           return .send(
             .presentAlert(
               title: "Pull request not available",
-              message: "Supacode could not find a pull request for this worktree."
+              message: "Supacool could not find a pull request for this worktree."
             )
           )
         }
@@ -2452,7 +2452,7 @@ struct RepositoriesFeature {
             return .send(
               .presentAlert(
                 title: "Invalid pull request URL",
-                message: "Supacode could not open the pull request URL."
+                message: "Supacool could not open the pull request URL."
               )
             )
           }
@@ -2465,7 +2465,7 @@ struct RepositoriesFeature {
             return .send(
               .presentAlert(
                 title: "Failing check not found",
-                message: "Supacode could not find a failing check URL."
+                message: "Supacool could not find a failing check URL."
               )
             )
           }
@@ -2482,7 +2482,7 @@ struct RepositoriesFeature {
             return .send(
               .presentAlert(
                 title: "Failing check not found",
-                message: "Supacode could not find a failing check with details."
+                message: "Supacool could not find a failing check with details."
               )
             )
           }
@@ -2600,7 +2600,7 @@ struct RepositoriesFeature {
               await send(
                 .presentAlert(
                   title: "Branch name unavailable",
-                  message: "Supacode could not determine the pull request branch."
+                  message: "Supacool could not determine the pull request branch."
                 )
               )
               return
@@ -2612,7 +2612,7 @@ struct RepositoriesFeature {
                 await send(
                   .presentAlert(
                     title: "No workflow runs found",
-                    message: "Supacode could not find any workflow runs for this branch."
+                    message: "Supacool could not find any workflow runs for this branch."
                   )
                 )
                 return
@@ -2622,7 +2622,7 @@ struct RepositoriesFeature {
                 await send(
                   .presentAlert(
                     title: "No failing workflow run",
-                    message: "Supacode could not find a failing workflow run to copy logs from."
+                    message: "Supacool could not find a failing workflow run to copy logs from."
                   )
                 )
                 return
@@ -2677,7 +2677,7 @@ struct RepositoriesFeature {
               await send(
                 .presentAlert(
                   title: "Branch name unavailable",
-                  message: "Supacode could not determine the pull request branch."
+                  message: "Supacool could not determine the pull request branch."
                 )
               )
               return
@@ -2689,7 +2689,7 @@ struct RepositoriesFeature {
                 await send(
                   .presentAlert(
                     title: "No workflow runs found",
-                    message: "Supacode could not find any workflow runs for this branch."
+                    message: "Supacool could not find any workflow runs for this branch."
                   )
                 )
                 return
@@ -2699,7 +2699,7 @@ struct RepositoriesFeature {
                 await send(
                   .presentAlert(
                     title: "No failing workflow run",
-                    message: "Supacode could not find a failing workflow run to re-run."
+                    message: "Supacool could not find a failing workflow run to re-run."
                   )
                 )
                 return
@@ -3100,7 +3100,7 @@ struct RepositoriesFeature {
       }
     } message: {
       TextState(
-        "This removes the repository from Supacode. "
+        "This removes the repository from Supacool. "
           + "Worktrees and the main repository folder stay on disk."
       )
     }

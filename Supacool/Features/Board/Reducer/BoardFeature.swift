@@ -525,7 +525,7 @@ struct BoardFeature {
         // CRITICAL: the worktree object we pass to the terminal client MUST
         // have `id == session.worktreeID`. `WorktreeTerminalManager` keys its
         // `states` dictionary by `worktree.id`, and `FullScreenTerminalView`
-        // probes that dictionary with `session.worktreeID` verbatim. Supacode
+        // probes that dictionary with `session.worktreeID` verbatim. Supacool
         // may discover a worktree record with a slightly different id (e.g.
         // trailing-slash normalization), so if we picked up that record here
         // the tab would land under a different key and the detached view
@@ -656,7 +656,7 @@ struct BoardFeature {
         let tabID = TerminalTabID(rawValue: session.id)
         return .run { [gitClient, terminalClient] send in
           do {
-            let baseDirectory = SupacodePaths.worktreeBaseDirectory(
+            let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
               for: repoRoot,
               globalDefaultPath: nil,
               repositoryOverridePath: nil

@@ -100,7 +100,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: dsyms
-          path: build/supacode.xcarchive/dSYMs
+          path: build/supacool.xcarchive/dSYMs
       - run: |
           cat > build/ExportOptions.plist <<EOF
           <?xml version="1.0" encoding="UTF-8"?>
@@ -142,12 +142,12 @@ jobs:
 
           mise exec -- create-dmg "$APP_PATH" build/ \
             --overwrite \
-            --dmg-title="Supacode" \
+            --dmg-title="Supacool" \
             --identity="$DEVELOPER_ID_IDENTITY_SHA"
 
           DMG_OUTPUT=$(find build -name "*.dmg" -maxdepth 1 | head -1)
-          if [ "$DMG_OUTPUT" != "build/supacode.dmg" ]; then
-            mv "$DMG_OUTPUT" build/supacode.dmg
+          if [ "$DMG_OUTPUT" != "build/supacool.dmg" ]; then
+            mv "$DMG_OUTPUT" build/supacool.dmg
           fi
       - name: Notarize and staple
         run: |
@@ -155,17 +155,17 @@ jobs:
 
           for attempt in 1 2 3; do
             echo "Notarization attempt $attempt..."
-            xcrun notarytool submit build/supacode.dmg --keychain-profile "notarytool-profile" --wait && break
+            xcrun notarytool submit build/supacool.dmg --keychain-profile "notarytool-profile" --wait && break
             echo "Attempt $attempt failed, retrying in 30s..."
             sleep 30
           done
 
-          xcrun stapler staple build/supacode.dmg
+          xcrun stapler staple build/supacool.dmg
           xcrun stapler staple "$APP_PATH"
       - name: Create app zip for Sparkle
         run: |
           APP_PATH="$(find build/export -name "supacode.app" -maxdepth 3 -print -quit)"
-          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/supacode.app.zip
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" build/supacool.app.zip
       - name: Generate tip appcast
         env:
           GH_TOKEN: ${{ github.token }}
@@ -173,20 +173,20 @@ jobs:
           set -euo pipefail
           MAX_DELTAS=10
           STAGING=$(mktemp -d)
-          cp build/supacode.app.zip "$STAGING/"
+          cp build/supacool.app.zip "$STAGING/"
 
           # Download previous tip builds stored as history assets
           ASSETS=$(gh release view tip -R "${{ github.repository }}" --json assets --jq '.assets[].name' 2>/dev/null || true)
           for asset in $ASSETS; do
             case "$asset" in
-              supacode-history-*.app.zip)
+              supacool-history-*.app.zip)
                 gh release download tip -p "$asset" -O "$STAGING/$asset" -R "${{ github.repository }}" 2>/dev/null || true
                 ;;
             esac
           done
 
           printf "%s" "$SPARKLE_PRIVATE_KEY" | tr -d '\r\n\t ' | ./bins/generate_appcast \
-            --download-url-prefix "https://supacode.sh/download/tip/" \
+            --download-url-prefix "https://github.com/${{ github.repository }}/releases/download/tip/" \
             --maximum-versions $((MAX_DELTAS + 1)) \
             --maximum-deltas $MAX_DELTAS \
             --delta-compression lzma \
@@ -199,8 +199,8 @@ jobs:
         with:
           name: build-artifacts
           path: |
-            build/supacode.dmg
-            build/supacode.app.zip
+            build/supacool.dmg
+            build/supacool.app.zip
             build/appcast.xml
             build/*.delta
 
@@ -236,7 +236,7 @@ jobs:
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: supabit
-          SENTRY_PROJECT: supacode
+          SENTRY_PROJECT: supacool
         run: sentry-cli debug-files upload --include-sources dsyms
 
   publish:
@@ -254,8 +254,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create tip --prerelease --title 'Supacode Tip ("Nightly")' --target "${{ github.sha }}" --notes "" -R "${{ github.repository }}" 2>/dev/null ||
-          gh release edit tip --prerelease --title 'Supacode Tip ("Nightly")' --target "${{ github.sha }}" -R "${{ github.repository }}"
+          gh release create tip --prerelease --title 'Supacool Tip ("Nightly")' --target "${{ github.sha }}" --notes "" -R "${{ github.repository }}" 2>/dev/null ||
+          gh release edit tip --prerelease --title 'Supacool Tip ("Nightly")' --target "${{ github.sha }}" -R "${{ github.repository }}"
 
           # Delete stale delta files from previous tip
           STALE_DELTAS=$(gh release view tip -R "${{ github.repository }}" --json assets --jq '.assets[].name | select(endswith(".delta"))' 2>/dev/null || true)
@@ -264,15 +264,15 @@ jobs:
           done
 
           DELTA_FILES=$(find build -name "*.delta" -type f 2>/dev/null | tr '\n' ' ' || true)
-          gh release upload tip build/supacode.dmg build/supacode.app.zip build/appcast.xml $DELTA_FILES --clobber -R "${{ github.repository }}"
+          gh release upload tip build/supacool.dmg build/supacool.app.zip build/appcast.xml $DELTA_FILES --clobber -R "${{ github.repository }}"
 
           # Store current build as history asset for future delta generation
           MAX_DELTAS=10
-          cp build/supacode.app.zip "build/supacode-history-${{ github.run_number }}.app.zip"
-          gh release upload tip "build/supacode-history-${{ github.run_number }}.app.zip" --clobber -R "${{ github.repository }}"
+          cp build/supacool.app.zip "build/supacool-history-${{ github.run_number }}.app.zip"
+          gh release upload tip "build/supacool-history-${{ github.run_number }}.app.zip" --clobber -R "${{ github.repository }}"
 
           # Prune oldest history assets beyond MAX_DELTAS
-          HISTORY=$(gh release view tip -R "${{ github.repository }}" --json assets --jq '[.assets[].name | select(startswith("supacode-history-"))] | sort | reverse' 2>/dev/null || echo "[]")
+          HISTORY=$(gh release view tip -R "${{ github.repository }}" --json assets --jq '[.assets[].name | select(startswith("supacool-history-"))] | sort | reverse' 2>/dev/null || echo "[]")
           PRUNE=$(echo "$HISTORY" | jq -r ".[$MAX_DELTAS:][]" 2>/dev/null || true)
           for old in $PRUNE; do
             gh release delete-asset tip "$old" -R "${{ github.repository }}" -y 2>/dev/null || true

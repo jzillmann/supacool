@@ -14,10 +14,10 @@ nonisolated struct AgentHookSettingsFileInstaller {
   /// the expected hook payload for a given feature.
   ///
   /// - `.current`: every expected command is installed. Safe.
-  /// - `.stale`: some Supacode-owned commands are present but the expected
+  /// - `.stale`: some Supacool-owned commands are present but the expected
   ///   set is not a subset — typically the app has added or renamed a hook
   ///   since the user last clicked Install. A reinstall is required.
-  /// - `.missing`: nothing Supacode-owned is present for this feature.
+  /// - `.missing`: nothing Supacool-owned is present for this feature.
   enum InstallState: Equatable, Sendable {
     case current
     case stale
@@ -103,10 +103,10 @@ nonisolated struct AgentHookSettingsFileInstaller {
       return .current
     }
     let hasSomeExpected = !expectedCommands.isDisjoint(with: installedCommands)
-    let hasSupacodeCommand = installedCommands.contains { command in
-      AgentHookCommandOwnership.isSupacodeManagedCommand(command)
+    let hasSupacoolCommand = installedCommands.contains { command in
+      AgentHookCommandOwnership.isSupacoolManagedCommand(command)
     }
-    return (hasSomeExpected || hasSupacodeCommand) ? .stale : .missing
+    return (hasSomeExpected || hasSupacoolCommand) ? .stale : .missing
   }
 
   private func loadInstalledCommands(at settingsURL: URL) throws -> Set<String> {
@@ -150,7 +150,7 @@ nonisolated struct AgentHookSettingsFileInstaller {
     return commands
   }
 
-  /// Removes matching hooks and any legacy Supacode-owned commands.
+  /// Removes matching hooks and any legacy Supacool-owned commands.
   /// `additionalHistoricalCommands` covers pre-upgrade command strings
   /// that should also be pruned even though they don't match the current
   /// payload (e.g. pre-PID `busyCommand`).
@@ -285,7 +285,7 @@ nonisolated struct AgentHookSettingsFileInstaller {
         let command = hookObject["command"]?.stringValue
       else { return true }
       // Remove if it matches the specific feature being installed,
-      // or if it's a legacy Supacode command.
+      // or if it's a legacy Supacool command.
       if commandsToPrune.contains(command) { return false }
       if AgentHookCommandOwnership.isLegacyCommand(command) { return false }
       return true

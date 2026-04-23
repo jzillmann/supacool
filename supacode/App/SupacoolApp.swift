@@ -1,5 +1,5 @@
 //
-//  supacodeApp.swift
+//  SupacoolApp.swift
 //  supacode
 //
 //  Created by khoi on 20/1/26.
@@ -19,7 +19,7 @@ private enum GhosttyCLI {
     @Shared(.settingsFile) var settingsFile
     let overrides = settingsFile.global.shortcutOverrides
     var args: [UnsafeMutablePointer<CChar>?] = []
-    let executable = CommandLine.arguments.first ?? "supacode"
+    let executable = CommandLine.arguments.first ?? "supacool"
     args.append(strdup(executable))
     for keybindArgument in AppShortcuts.ghosttyCLIKeybindArguments(from: overrides) {
       args.append(strdup(keybindArgument))
@@ -30,7 +30,7 @@ private enum GhosttyCLI {
 }
 
 @MainActor
-final class SupacodeAppDelegate: NSObject, NSApplicationDelegate {
+final class SupacoolAppDelegate: NSObject, NSApplicationDelegate {
   var appStore: StoreOf<AppFeature>? {
     didSet {
       guard let appStore else { return }
@@ -110,8 +110,8 @@ final class SupacodeAppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 @MainActor
-struct SupacodeApp: App {
-  @NSApplicationDelegateAdaptor(SupacodeAppDelegate.self) private var appDelegate
+struct SupacoolApp: App {
+  @NSApplicationDelegateAdaptor(SupacoolAppDelegate.self) private var appDelegate
   @State private var ghostty: GhosttyRuntime
   @State private var ghosttyShortcuts: GhosttyShortcutManager
   @State private var terminalManager: WorktreeTerminalManager
@@ -267,7 +267,7 @@ struct SupacodeApp: App {
       Group {
         CommandGroup(replacing: .windowList) {}
         CommandGroup(replacing: .singleWindowList) {
-          Button("Supacode") {
+          Button("Supacool") {
             if let window = NSApp.windows.first(where: { $0.identifier?.rawValue == WindowID.main }) {
               window.makeKeyAndOrderFront(nil)
               NSApp.activate(ignoringOtherApps: true)
@@ -286,17 +286,17 @@ struct SupacodeApp: App {
         DeeplinkCheatsheetMenuButton()
         Divider()
         Button("Submit GitHub Issue") {
-          guard let url = URL(string: "https://github.com/supabitapp/supacode/issues/new") else { return }
+          guard let url = URL(string: "https://github.com/jzillmann/supacool/issues/new") else { return }
           NSWorkspace.shared.open(url)
         }
         .help("Submit GitHub Issue")
       }
       CommandGroup(replacing: .appTermination) {
-        Button("Quit Supacode") {
+        Button("Quit Supacool") {
           store.send(.requestQuit)
         }
         .keyboardShortcut("q")
-        .help("Quit Supacode (⌘Q)")
+        .help("Quit Supacool (⌘Q)")
       }
     }
     Window("Settings", id: WindowID.settings) {

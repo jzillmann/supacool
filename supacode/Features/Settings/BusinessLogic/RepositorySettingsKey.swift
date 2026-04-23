@@ -24,7 +24,7 @@ nonisolated struct RepositorySettingsKey: SharedKey {
     continuation: LoadContinuation<RepositorySettings>
   ) {
     @Dependency(\.repositoryLocalSettingsStorage) var repositoryLocalSettingsStorage
-    let repositorySettingsURL = SupacodePaths.repositorySettingsURL(for: rootURL)
+    let repositorySettingsURL = SupacoolPaths.repositorySettingsURL(for: rootURL)
     if let localData = try? repositoryLocalSettingsStorage.load(repositorySettingsURL) {
       let decoder = JSONDecoder()
       if let settings = try? decoder.decode(RepositorySettings.self, from: localData) {
@@ -62,7 +62,7 @@ nonisolated struct RepositorySettingsKey: SharedKey {
     continuation: SaveContinuation
   ) {
     @Dependency(\.repositoryLocalSettingsStorage) var repositoryLocalSettingsStorage
-    let repositorySettingsURL = SupacodePaths.repositorySettingsURL(for: rootURL)
+    let repositorySettingsURL = SupacoolPaths.repositorySettingsURL(for: rootURL)
     if (try? repositoryLocalSettingsStorage.load(repositorySettingsURL)) != nil {
       do {
         let encoder = JSONEncoder()

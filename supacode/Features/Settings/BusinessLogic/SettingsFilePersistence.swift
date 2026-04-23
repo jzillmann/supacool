@@ -23,9 +23,9 @@ nonisolated enum SettingsFileStorageKey: DependencyKey {
 }
 
 nonisolated enum SettingsFileURLKey: DependencyKey {
-  static var liveValue: URL { SupacodePaths.settingsURL }
-  static var previewValue: URL { SupacodePaths.settingsURL }
-  static var testValue: URL { SupacodePaths.settingsURL }
+  static var liveValue: URL { SupacoolPaths.settingsURL }
+  static var previewValue: URL { SupacoolPaths.settingsURL }
+  static var testValue: URL { SupacoolPaths.settingsURL }
 }
 
 extension DependencyValues {

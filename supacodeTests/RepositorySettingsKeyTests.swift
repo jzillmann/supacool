@@ -138,7 +138,7 @@ struct RepositorySettingsKeyTests {
     #expect(settings.archiveScript.isEmpty)
   }
 
-  @Test(.dependencies) func loadPrefersLocalSupacodeJSONOverGlobalEntry() throws {
+  @Test(.dependencies) func loadPrefersLocalSupacoolJSONOverGlobalEntry() throws {
     let globalStorage = SettingsTestStorage()
     let localStorage = RepositoryLocalSettingsTestStorage()
     let rootURL = URL(fileURLWithPath: "/tmp/repo")
@@ -162,7 +162,7 @@ struct RepositorySettingsKeyTests {
 
     try localStorage.save(
       encode(localSettings),
-      at: SupacodePaths.repositorySettingsURL(for: rootURL)
+      at: SupacoolPaths.repositorySettingsURL(for: rootURL)
     )
 
     let loaded = withDependencies {
@@ -215,7 +215,7 @@ struct RepositorySettingsKeyTests {
     let rootURL = URL(fileURLWithPath: "/tmp/repo")
     let settingsFileURL = URL(fileURLWithPath: "/tmp/supacode-settings-\(UUID().uuidString).json")
     let repositoryID = rootURL.standardizedFileURL.path(percentEncoded: false)
-    let localURL = SupacodePaths.repositorySettingsURL(for: rootURL)
+    let localURL = SupacoolPaths.repositorySettingsURL(for: rootURL)
     var globalSettings = RepositorySettings.default
     globalSettings.runScript = "echo global"
 
@@ -250,7 +250,7 @@ struct RepositorySettingsKeyTests {
     let rootURL = URL(fileURLWithPath: "/tmp/repo")
     let settingsFileURL = URL(fileURLWithPath: "/tmp/supacode-settings-\(UUID().uuidString).json")
     let repositoryID = rootURL.standardizedFileURL.path(percentEncoded: false)
-    let localURL = SupacodePaths.repositorySettingsURL(for: rootURL)
+    let localURL = SupacoolPaths.repositorySettingsURL(for: rootURL)
 
     try localStorage.save(encode(.default), at: localURL)
 
@@ -290,7 +290,7 @@ struct RepositorySettingsKeyTests {
     let rootURL = URL(fileURLWithPath: "/tmp/repo")
     let settingsFileURL = URL(fileURLWithPath: "/tmp/supacode-settings-\(UUID().uuidString).json")
     let repositoryID = rootURL.standardizedFileURL.path(percentEncoded: false)
-    let localURL = SupacodePaths.repositorySettingsURL(for: rootURL)
+    let localURL = SupacoolPaths.repositorySettingsURL(for: rootURL)
 
     var updated = RepositorySettings.default
     updated.runScript = "echo global"

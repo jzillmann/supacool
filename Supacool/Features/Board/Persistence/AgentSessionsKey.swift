@@ -12,7 +12,7 @@ nonisolated struct AgentSessionsKey: SharedKey {
   var id: AgentSessionsKeyID { AgentSessionsKeyID() }
 
   static var fileURL: URL {
-    SupacodePaths.baseDirectory.appending(
+    SupacoolPaths.baseDirectory.appending(
       path: "agent-sessions.json",
       directoryHint: .notDirectory
     )

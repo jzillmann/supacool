@@ -68,7 +68,7 @@ struct RepositorySettingsView: View {
         TextField(
           text: worktreeBaseDirectoryPath,
           prompt: Text(
-            SupacodePaths.worktreeBaseDirectory(
+            SupacoolPaths.worktreeBaseDirectory(
               for: store.rootURL,
               globalDefaultPath: store.globalDefaultWorktreeBaseDirectoryPath,
               repositoryOverridePath: nil
@@ -167,11 +167,11 @@ struct RepositorySettingsView: View {
       }
       Section("Environment Variables") {
         ScriptEnvironmentRow(
-          name: "SUPACODE_WORKTREE_PATH",
+          name: "SUPACOOL_WORKTREE_PATH",
           description: "Path to the active worktree."
         )
         ScriptEnvironmentRow(
-          name: "SUPACODE_ROOT_PATH",
+          name: "SUPACOOL_ROOT_PATH",
           description: "Path to the repository root."
         )
       }

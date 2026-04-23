@@ -14,8 +14,8 @@ struct WorktreeEnvironmentTests {
       repositoryRootURL: URL(fileURLWithPath: "/tmp/repo"),
     )
     let env = worktree.scriptEnvironment
-    #expect(env["SUPACODE_WORKTREE_PATH"] == "/tmp/repo/wt-1")
-    #expect(env["SUPACODE_ROOT_PATH"] == "/tmp/repo")
+    #expect(env["SUPACOOL_WORKTREE_PATH"] == "/tmp/repo/wt-1")
+    #expect(env["SUPACOOL_ROOT_PATH"] == "/tmp/repo")
     #expect(env.count == 2)
   }
 
@@ -46,13 +46,13 @@ struct WorktreeEnvironmentTests {
     #expect(shellPathContents == "/opt/homebrew/bin/fish\n")
     #expect(
       runnerContents.contains(
-        "IFS= read -r SUPACODE_SHELL_PATH < \(shellSingleQuoted(launch.shellPathURL.path(percentEncoded: false)))"
+        "IFS= read -r SUPACOOL_SHELL_PATH < \(shellSingleQuoted(launch.shellPathURL.path(percentEncoded: false)))"
       )
         == true
     )
     #expect(
       runnerContents.contains(
-        "\"$SUPACODE_SHELL_PATH\" -l \(shellSingleQuoted(launch.scriptURL.path(percentEncoded: false)))"
+        "\"$SUPACOOL_SHELL_PATH\" -l \(shellSingleQuoted(launch.scriptURL.path(percentEncoded: false)))"
       )
         == true
     )
