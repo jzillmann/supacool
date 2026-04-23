@@ -14,6 +14,9 @@ struct RemoteHostsSettingsView: View {
     RemoteHostsFeature()
   }
   @State private var manualSSHAliasDraft: String = ""
+  @State private var historyExpanded: Bool = false
+  @State private var historySelection: Set<SSHHistoryCandidate.ID> = []
+  @State private var historyScanTriggered: Bool = false
 
   var body: some View {
     Form {
@@ -61,10 +64,142 @@ struct RemoteHostsSettingsView: View {
             .foregroundStyle(.red)
         }
       }
+      historySection
     }
     .formStyle(.grouped)
     .navigationTitle("Remote Hosts")
     .task { store.send(.appeared) }
+  }
+
+  @ViewBuilder
+  private var historySection: some View {
+    Section {
+      DisclosureGroup(isExpanded: $historyExpanded) {
+        historyContents
+      } label: {
+        HStack(spacing: 8) {
+          Image(systemName: "clock.arrow.circlepath")
+            .foregroundStyle(.secondary)
+          Text("Found in shell history")
+            .font(.body.weight(.medium))
+          if !store.historyCandidates.isEmpty {
+            Text("\(store.historyCandidates.count)")
+              .font(.caption.monospaced())
+              .foregroundStyle(.secondary)
+          }
+          Spacer()
+          if store.isScanningHistory {
+            ProgressView().controlSize(.small)
+          }
+        }
+      }
+      .onChange(of: historyExpanded) { _, expanded in
+        if expanded, !historyScanTriggered {
+          historyScanTriggered = true
+          store.send(.scanShellHistory)
+        }
+      }
+    } footer: {
+      Text(
+        "Supacool scans ~/.zsh_history and ~/.bash_history for `ssh user@host` "
+          + "commands you've already run, so you can import them without editing ssh_config."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+    }
+  }
+
+  @ViewBuilder
+  private var historyContents: some View {
+    if store.isScanningHistory {
+      Text("Scanning…")
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+    } else if store.historyCandidates.isEmpty {
+      VStack(alignment: .leading, spacing: 4) {
+        Text("No new hosts found in your shell history.")
+          .font(.callout)
+        Button("Scan again") {
+          historySelection.removeAll()
+          store.send(.scanShellHistory)
+        }
+        .controlSize(.small)
+      }
+      .padding(.vertical, 4)
+    } else {
+      ForEach(store.historyCandidates) { candidate in
+        historyCandidateRow(candidate)
+      }
+      HStack {
+        Button("Import selected (\(historySelection.count))") {
+          let selected = store.historyCandidates.filter { historySelection.contains($0.id) }
+          store.send(.importHistoryCandidates(selected))
+          historySelection.removeAll()
+        }
+        .disabled(historySelection.isEmpty)
+        Spacer()
+        Button("Select all") {
+          historySelection = Set(store.historyCandidates.map(\.id))
+        }
+        .controlSize(.small)
+      }
+      .padding(.top, 4)
+    }
+  }
+
+  private func historyCandidateRow(_ candidate: SSHHistoryCandidate) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Toggle(
+        "",
+        isOn: Binding(
+          get: { historySelection.contains(candidate.id) },
+          set: { isOn in
+            if isOn {
+              historySelection.insert(candidate.id)
+            } else {
+              historySelection.remove(candidate.id)
+            }
+          }
+        )
+      )
+      .labelsHidden()
+      VStack(alignment: .leading, spacing: 2) {
+        Text(candidateDisplay(candidate))
+          .font(.body.monospaced())
+        Text(candidateMetadata(candidate))
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      Spacer()
+    }
+    .padding(.vertical, 2)
+  }
+
+  private func candidateDisplay(_ candidate: SSHHistoryCandidate) -> String {
+    var target = ""
+    if let user = candidate.user { target += "\(user)@" }
+    target += candidate.hostname
+    if let port = candidate.port { target += ":\(port)" }
+    return target
+  }
+
+  private func candidateMetadata(_ candidate: SSHHistoryCandidate) -> String {
+    var bits = ["\(candidate.timesSeen) use\(candidate.timesSeen == 1 ? "" : "s")"]
+    if let lastSeen = candidate.lastSeenAt {
+      let days = Int(-lastSeen.timeIntervalSinceNow / 86400)
+      if days == 0 {
+        bits.append("today")
+      } else if days == 1 {
+        bits.append("1 day ago")
+      } else {
+        bits.append("\(days) days ago")
+      }
+    }
+    if let identity = candidate.identityFile {
+      bits.append(identity)
+    }
+    return bits.joined(separator: " · ")
   }
 
   private var header: some View {

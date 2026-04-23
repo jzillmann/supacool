@@ -415,6 +415,130 @@ struct RemoteHostsFeatureTests {
     )
   }
 
+  // MARK: Shell-history import
+
+  @Test func scanShellHistoryPopulatesCandidates() async throws {
+    let candidates = [
+      SSHHistoryCandidate(
+        raw: "ssh jz@jack.local",
+        user: "jz",
+        hostname: "jack.local",
+        port: nil,
+        identityFile: nil,
+        timesSeen: 3,
+        lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000)
+      )
+    ]
+    let store = TestStore(initialState: RemoteHostsFeature.State()) {
+      RemoteHostsFeature()
+    } withDependencies: {
+      $0.sshHistoryClient = SSHHistoryClient(
+        listCandidates: { candidates }
+      )
+      $0.date = .constant(Date(timeIntervalSince1970: 1_700_000_000))
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.scanShellHistory) { $0.isScanningHistory = true }
+    await store.receive(\._historyCandidatesLoaded) { $0.isScanningHistory = false }
+
+    #expect(store.state.historyCandidates.count == 1)
+    #expect(store.state.historyCandidates.first?.hostname == "jack.local")
+  }
+
+  @Test func scanShellHistoryFiltersCandidatesMatchingExistingHosts() async throws {
+    let existing = RemoteHost(
+      sshAlias: "jack.local",
+      connection: RemoteHost.Connection(user: "jz", hostname: "jack.local"),
+      importSource: .shellHistory
+    )
+    var state = RemoteHostsFeature.State()
+    state.$hosts.withLock { $0 = [existing] }
+    let candidates = [
+      SSHHistoryCandidate(
+        raw: "ssh jz@jack.local",
+        user: "jz",
+        hostname: "jack.local",
+        port: nil,
+        identityFile: nil,
+        timesSeen: 1,
+        lastSeenAt: nil
+      ),
+      SSHHistoryCandidate(
+        raw: "ssh other@other.box",
+        user: "other",
+        hostname: "other.box",
+        port: nil,
+        identityFile: nil,
+        timesSeen: 1,
+        lastSeenAt: nil
+      ),
+    ]
+    let store = TestStore(initialState: state) {
+      RemoteHostsFeature()
+    } withDependencies: {
+      $0.sshHistoryClient = SSHHistoryClient(listCandidates: { candidates })
+      $0.date = .constant(Date(timeIntervalSince1970: 1_700_000_000))
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.scanShellHistory)
+    await store.receive(\._historyCandidatesLoaded)
+
+    // Only the non-matching candidate is surfaced.
+    #expect(store.state.historyCandidates.map(\.hostname) == ["other.box"])
+  }
+
+  @Test func importHistoryCandidatesCreatesRows() async throws {
+    let candidate = SSHHistoryCandidate(
+      raw: "ssh -p 2222 -i ~/id jz@jack.local",
+      user: "jz",
+      hostname: "jack.local",
+      port: 2222,
+      identityFile: "~/id",
+      timesSeen: 5,
+      lastSeenAt: nil
+    )
+    var state = RemoteHostsFeature.State()
+    state.historyCandidates = [candidate]
+    let store = TestStore(initialState: state) {
+      RemoteHostsFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_700_000_000))
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.importHistoryCandidates([candidate]))
+
+    let host = try #require(store.state.hosts.first)
+    #expect(host.sshAlias == "jack.local")
+    #expect(host.connection.user == "jz")
+    #expect(host.connection.port == 2222)
+    #expect(host.connection.identityFile == "~/id")
+    #expect(host.importSource == .shellHistory)
+    #expect(host.deferToSSHConfig == false)
+    // Imported candidate drops out of the pending list.
+    #expect(store.state.historyCandidates.isEmpty)
+  }
+
+  @Test func historyScanFailureSurfacesError() async throws {
+    struct Boom: Error, LocalizedError {
+      var errorDescription: String? { "permission denied" }
+    }
+    let store = TestStore(initialState: RemoteHostsFeature.State()) {
+      RemoteHostsFeature()
+    } withDependencies: {
+      $0.sshHistoryClient = SSHHistoryClient(listCandidates: { throw Boom() })
+    }
+    store.exhaustivity = .off(showSkippedAssertions: false)
+
+    await store.send(.scanShellHistory) { $0.isScanningHistory = true }
+    await store.receive(\._historyScanFailed) {
+      $0.isScanningHistory = false
+      $0.inlineError = "permission denied"
+    }
+  }
+
   @Test func forgetAliasRemovesAndMarksSticky() async throws {
     let host = RemoteHost(sshAlias: "staging", importedFromSSHConfig: true)
     var state = RemoteHostsFeature.State()

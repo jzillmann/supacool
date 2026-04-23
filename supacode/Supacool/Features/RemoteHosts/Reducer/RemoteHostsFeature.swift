@@ -41,6 +41,14 @@ struct RemoteHostsFeature {
     /// `ssh -G` output. Keyed by host id; populated during reloads;
     /// cleared when the user clicks Re-import.
     var drift: [RemoteHost.ID: DriftReport] = [:]
+    /// Dedup'd `ssh` invocations observed in the user's shell history
+    /// that aren't already represented in `hosts`. Populated by
+    /// `.scanShellHistory`; cleared after `.importHistoryCandidates` as
+    /// matching targets drop out of the filter.
+    var historyCandidates: [SSHHistoryCandidate] = []
+    /// `true` while a history scan is in flight; hides the "Scan again"
+    /// affordance so it can't be retriggered concurrently.
+    var isScanningHistory: Bool = false
   }
 
   /// Captures which flat connection fields diverged during a reload so
@@ -78,6 +86,12 @@ struct RemoteHostsFeature {
     case reimportAll
     case removeHost(id: RemoteHost.ID)
     case forgetAlias(sshAlias: String)
+
+    // Shell-history bootstrap
+    case scanShellHistory
+    case _historyCandidatesLoaded([SSHHistoryCandidate])
+    case _historyScanFailed(String)
+    case importHistoryCandidates([SSHHistoryCandidate])
   }
 
   /// Intermediate result from the fan-out — `ssh -G` either succeeded
@@ -89,6 +103,7 @@ struct RemoteHostsFeature {
   }
 
   @Dependency(SSHConfigClient.self) var sshConfigClient
+  @Dependency(SSHHistoryClient.self) var sshHistoryClient
   @Dependency(\.date.now) var now
 
   var body: some Reducer<State, Action> {
@@ -246,11 +261,78 @@ struct RemoteHostsFeature {
           })
         }
         return .none
+
+      case .scanShellHistory:
+        guard !state.isScanningHistory else { return .none }
+        state.isScanningHistory = true
+        return .run { [sshHistoryClient] send in
+          do {
+            let candidates = try await sshHistoryClient.listCandidates()
+            await send(._historyCandidatesLoaded(candidates))
+          } catch {
+            remoteHostsLogger.warning(
+              "Shell-history scan failed: \(error.localizedDescription)"
+            )
+            await send(._historyScanFailed(error.localizedDescription))
+          }
+        }
+        .cancellable(id: CancelID.historyScan, cancelInFlight: true)
+
+      case ._historyCandidatesLoaded(let candidates):
+        state.isScanningHistory = false
+        // Filter out candidates whose (user, hostname, port) already
+        // matches a stored host's `connection` — re-imports should be
+        // explicit (Reload button), not accidental.
+        state.historyCandidates = candidates.filter { candidate in
+          !state.hosts.contains { host in
+            let hostname = host.connection.hostname ?? host.sshAlias
+            return host.connection.user == candidate.user
+              && hostname == candidate.hostname
+              && host.connection.port == candidate.port
+          }
+        }
+        return .none
+
+      case ._historyScanFailed(let message):
+        state.isScanningHistory = false
+        state.inlineError = message
+        return .none
+
+      case .importHistoryCandidates(let selected):
+        let stamp = now
+        var newHosts: [RemoteHost] = []
+        for candidate in selected {
+          // sshAlias defaults to the raw hostname so existing "find by
+          // alias" lookups (including in spawn flows) still work. User
+          // can rename in-place afterwards.
+          let connection = RemoteHost.Connection(
+            user: candidate.user,
+            hostname: candidate.hostname,
+            port: candidate.port,
+            identityFile: candidate.identityFile
+          )
+          newHosts.append(
+            RemoteHost(
+              sshAlias: candidate.hostname,
+              connection: connection,
+              importSource: .shellHistory,
+              importedAt: stamp,
+              deferToSSHConfig: false
+            )
+          )
+        }
+        if !newHosts.isEmpty {
+          state.$hosts.withLock { $0.append(contentsOf: newHosts) }
+        }
+        // Drop imported candidates from the pending list.
+        let importedKeys = Set(selected.map(\.id))
+        state.historyCandidates.removeAll { importedKeys.contains($0.id) }
+        return .none
       }
     }
   }
 
-  private nonisolated enum CancelID: Hashable { case reload }
+  private nonisolated enum CancelID: Hashable { case reload, historyScan }
 
   // MARK: - Helpers
 
