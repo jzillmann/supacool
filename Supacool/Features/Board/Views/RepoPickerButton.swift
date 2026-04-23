@@ -22,6 +22,11 @@ struct RepoPickerButton: View {
   /// `git worktree prune` for that repo + reconciles any orphan session
   /// cards. Wired up in BoardRootView.
   let onPruneWorktrees: (Repository) -> Void
+  /// Opens the read-only "Manage Worktrees…" inspector for the chosen
+  /// repo. Lives next to (not replacing) the prune entry in PR2; PR3
+  /// will fold the prune action into the janitor's scan and remove the
+  /// dedicated prune item.
+  let onManageWorktrees: (Repository) -> Void
 
   @State private var isPresented: Bool = false
 
@@ -162,6 +167,11 @@ struct RepoPickerButton: View {
         // one) so the user doesn't have to guess which tiny icon cleans
         // up worktrees.
         pruneFooter
+        // Read-only janitor inspector. Placed below prune in PR2 so
+        // the existing affordance keeps working untouched; PR3 will
+        // fold prune into the janitor's scan and remove this section's
+        // sibling above.
+        manageFooter
       }
     }
     .frame(minWidth: 240)
@@ -199,6 +209,47 @@ struct RepoPickerButton: View {
   private func pruneFooterLabel(text: String) -> some View {
     HStack {
       Image(systemName: "wand.and.sparkles")
+        .foregroundStyle(.secondary)
+      Text(text)
+        .font(.callout.weight(.medium))
+      Spacer()
+    }
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+    .contentShape(Rectangle())
+  }
+
+  @ViewBuilder
+  private var manageFooter: some View {
+    if repositories.count == 1, let only = repositories.first {
+      Button {
+        isPresented = false
+        onManageWorktrees(only)
+      } label: {
+        manageFooterLabel(text: "Manage Worktrees…")
+      }
+      .buttonStyle(.plain)
+      .help("Inspect every worktree on disk for this repo (size, status, git metadata)")
+    } else {
+      Menu {
+        ForEach(repositories) { repo in
+          Button(repo.name) {
+            isPresented = false
+            onManageWorktrees(repo)
+          }
+        }
+      } label: {
+        manageFooterLabel(text: "Manage Worktrees…")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .help("Pick a repository to inspect its worktrees")
+    }
+  }
+
+  private func manageFooterLabel(text: String) -> some View {
+    HStack {
+      Image(systemName: "list.bullet.rectangle")
         .foregroundStyle(.secondary)
       Text(text)
         .font(.callout.weight(.medium))

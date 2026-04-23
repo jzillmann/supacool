@@ -32,6 +32,12 @@ struct BoardFeature {
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
 
+    /// "Manage Worktrees…" inspector sheet state. Presented from the
+    /// repo picker; lets the user see every worktree on disk for a
+    /// given repo with classification + size + git metadata. Read-only
+    /// in PR2 — multi-select + delete lands in PR3.
+    @Presents var worktreeJanitor: WorktreeJanitorFeature.State?
+
     /// Sessions whose Auto-Observer is currently reading/deciding.
     /// Guards against re-entrant triggers on the same session.
     var autoObserverInFlight: Set<AgentSession.ID> = []
@@ -224,6 +230,13 @@ struct BoardFeature {
     case confirmPruneOrphans(sessionIDs: [AgentSession.ID])
     /// Alert was dismissed (OK / Keep / swipe-away).
     case dismissPruneAlert
+
+    // MARK: Worktree janitor
+    /// User chose "Manage Worktrees…" in the repo picker. Opens the
+    /// inspector sheet seeded with the current sessions snapshot so
+    /// classification doesn't race with concurrent session edits.
+    case openWorktreeJanitor(repositoryID: Repository.ID, repositoryName: String)
+    case worktreeJanitor(PresentationAction<WorktreeJanitorFeature.Action>)
 
     case delegate(Delegate)
   }
@@ -898,6 +911,21 @@ struct BoardFeature {
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
         }
 
+      case .openWorktreeJanitor(let repositoryID, let repositoryName):
+        state.worktreeJanitor = WorktreeJanitorFeature.State(
+          repositoryID: repositoryID,
+          repositoryName: repositoryName,
+          sessionsSnapshot: state.sessions
+        )
+        return .none
+
+      case .worktreeJanitor(.presented(.delegate(.dismissed))):
+        state.worktreeJanitor = nil
+        return .none
+
+      case .worktreeJanitor:
+        return .none
+
       case .delegate:
         return .none
 
@@ -907,6 +935,9 @@ struct BoardFeature {
     }
     .ifLet(\.$newTerminalSheet, action: \.newTerminalSheet) {
       NewTerminalFeature()
+    }
+    .ifLet(\.$worktreeJanitor, action: \.worktreeJanitor) {
+      WorktreeJanitorFeature()
     }
   }
 
