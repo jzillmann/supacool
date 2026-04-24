@@ -86,7 +86,10 @@ struct SettingsView: View {
     } detail: {
       switch selection {
       case .general:
-        AppearanceSettingsView(store: settingsStore)
+        AppearanceSettingsView(
+          store: settingsStore,
+          onShowGettingStartedAgain: { store.send(.board(.gettingStartedShowAgain)) }
+        )
       case .notifications:
         NotificationsSettingsView(store: settingsStore)
       case .worktree:

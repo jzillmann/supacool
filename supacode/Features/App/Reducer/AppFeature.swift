@@ -116,7 +116,8 @@ struct AppFeature {
               await send(.repositories(.worktreeInfoEvent(event)))
             }
           },
-          checkStaleHooksEffect()
+          checkStaleHooksEffect(),
+          evaluateGettingStartedEffect(state: state)
         )
 
       case .scenePhaseChanged(let phase):
@@ -126,6 +127,10 @@ struct AppFeature {
           analyticsClient.capture("app_activated", nil)
           return .merge(
             .send(.repositories(.refreshWorktrees)),
+            // Re-check Getting Started predicates on every activation —
+            // covers the "user added a remote host in Settings and came
+            // back" path without coupling to RemoteHostsFeature.
+            evaluateGettingStartedEffect(state: state),
             .run { send in
               while !Task.isCancelled {
                 try? await ContinuousClock().sleep(for: .seconds(30))
@@ -231,6 +236,9 @@ struct AppFeature {
             effects.append(.send(.deeplink(deeplink)))
           }
         }
+        // Re-check the Getting Started carousel: if the user just added a
+        // repo, the "Setup repo" card needs to disappear.
+        effects.append(evaluateGettingStartedEffect(state: state))
         return .merge(effects)
 
       case .repositories(.delegate(.openRepositorySettings(let repositoryID))):
@@ -268,8 +276,28 @@ struct AppFeature {
           }
         }
 
+      case .board(.delegate(.gettingStartedSetupRequested(let task))):
+        // `.settings(.setSelection(...))` on its own is enough to pop the
+        // settings window open — `OpenSettingsOnSelection` (see
+        // SettingsOpenBridge.swift) watches the selection and triggers
+        // `openWindow(id: WindowID.settings)` for us.
+        switch task {
+        case .setupRepo:
+          return .send(.repositories(.setOpenPanelPresented(true)))
+        case .installHooks:
+          return .send(.settings(.setSelection(.codingAgents)))
+        case .setupRemoteHost:
+          return .send(.settings(.setSelection(.remoteHosts)))
+        }
+
+      case .board(.delegate(.gettingStartedReevaluateRequested)):
+        return evaluateGettingStartedEffect(state: state)
+
       case .settings(.delegate(.hookInstallSucceeded(let slot))):
-        return .send(.board(.trayNoteHookInstalled(slot: slot)))
+        return .merge(
+          .send(.board(.trayNoteHookInstalled(slot: slot))),
+          evaluateGettingStartedEffect(state: state)
+        )
 
       case .settings(.delegate(.hookInstallFailed(let slot, let message))):
         let card = TrayCard(
@@ -1307,6 +1335,37 @@ struct AppFeature {
       guard !staleSlots.isEmpty else { return }
       let card = TrayCard(id: uuid(), kind: .staleHooks(slots: staleSlots))
       await send(.board(.trayCardPushed(card)))
+    }
+  }
+
+  // MARK: Getting Started evaluation.
+
+  /// Collect live "is the user done with task X?" signals for every
+  /// Getting Started card, filter out anything the user has parked via
+  /// Skip, and dispatch the result to BoardFeature. Cheap enough to run
+  /// on launch, scene activation, and after each relevant state change
+  /// (repo add, hook install success). The board's reducer shoulders
+  /// the presentation decision.
+  private func evaluateGettingStartedEffect(state: State) -> Effect<Action> {
+    let hasRepositories = !state.repositories.repositories.isEmpty
+    let hasRemoteHosts = !state.board.remoteHosts.isEmpty
+    let skipped = Set(state.board.skippedGettingStartedTasks)
+    let claude = claudeSettingsClient
+    let codex = codexSettingsClient
+    return .run { send in
+      async let cp = claude.checkInstalled(true)
+      async let cn = claude.checkInstalled(false)
+      async let xp = codex.checkInstalled(true)
+      async let xn = codex.checkInstalled(false)
+      let hooks = await [cp, cn, xp, xn]
+      let hasAllHooksInstalled = hooks.allSatisfy { $0 }
+      let pending = GettingStartedEvaluator.pending(
+        hasRepositories: hasRepositories,
+        hasAllHooksInstalled: hasAllHooksInstalled,
+        hasRemoteHosts: hasRemoteHosts,
+        skipped: skipped
+      )
+      await send(.board(.gettingStartedEvaluated(pending: pending)))
     }
   }
 

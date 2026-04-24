@@ -3,6 +3,11 @@ import SwiftUI
 
 struct AppearanceSettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
+  /// Clears the persisted Getting Started skip set and asks the app to
+  /// re-evaluate. Wired from the parent `SettingsView` which holds the
+  /// top-level `StoreOf<AppFeature>` (the one that routes to
+  /// `BoardFeature`).
+  var onShowGettingStartedAgain: (() -> Void)? = nil
 
   var body: some View {
     let openActionOptions = OpenWorktreeAction.availableCases
@@ -84,6 +89,14 @@ struct AppearanceSettingsView: View {
         Toggle(isOn: $store.allowArbitraryDeeplinkInput) {
           Text("Allow Arbitrary Deeplink Actions")
           Text("Skip the confirmation dialog when a deeplink runs a command or performs a destructive action.")
+        }
+      }
+      if let onShowGettingStartedAgain {
+        Section {
+          Button("Show Getting Started Again", action: onShowGettingStartedAgain)
+            .help("Un-park skipped onboarding tasks. The carousel reappears on the board with every task still incomplete.")
+        } header: {
+          Text("Onboarding")
         }
       }
     }

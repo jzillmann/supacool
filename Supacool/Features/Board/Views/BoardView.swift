@@ -152,7 +152,11 @@ struct BoardView: View {
   private var bodyContent: some View {
     let visible = store.visibleSessions
     if visible.isEmpty {
-      emptyState
+      if store.gettingStarted.isPresented && !store.gettingStarted.tasks.isEmpty {
+        GettingStartedCarouselView(store: store)
+      } else {
+        emptyState
+      }
     } else {
       let live = visible.filter { classify($0) != .parked }
       let waiting = live.filter { isWaitingStatus(classify($0)) }

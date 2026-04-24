@@ -64,6 +64,22 @@ struct BoardFeature {
     /// Not persisted — refilled on each app launch by whichever subsystem
     /// owns the signal (stale hooks check, New Terminal drafts, etc.).
     var trayCards: IdentifiedArrayOf<TrayCard> = []
+
+    /// First-launch Getting Started carousel state. `isPresented` is
+    /// session-only; it flips true the first time app-launch evaluation
+    /// finds any incomplete, non-skipped tasks, and flips false as soon
+    /// as the list empties (all completed or skipped) or the user
+    /// dismisses the panel. See `GettingStartedState`.
+    var gettingStarted: GettingStartedState = GettingStartedState()
+
+    /// Raw values of tasks the user has explicitly parked via Skip.
+    /// Persisted so the carousel doesn't nag on every relaunch. Cleared
+    /// by `gettingStartedShowAgain` (wired to a Settings button) so the
+    /// user can bring the panel back on demand. Stored as `[String]`
+    /// because `@Shared(.appStorage(...))` plays nicer with arrays than
+    /// sets — the reducer treats it as a set via conversion.
+    @Shared(.appStorage("gettingStartedSkippedTasks"))
+    var skippedGettingStartedTasks: [String] = []
   }
 
   /// One-shot summary shown after a prune attempt. Identifiable so we
@@ -230,6 +246,31 @@ struct BoardFeature {
     /// the last slot is handled.
     case trayNoteHookInstalled(slot: AgentHookSlot)
 
+    // MARK: Getting Started
+    /// Fired by AppFeature after it's re-computed the pending tasks.
+    /// Replaces the carousel's task list; presents the panel if the
+    /// list is non-empty AND the panel hasn't been dismissed yet this
+    /// session.
+    case gettingStartedEvaluated(pending: [GettingStartedTask])
+    /// View-binding path for the carousel's `scrollPosition(id:)`.
+    case gettingStartedSetCurrentIndex(Int)
+    /// User tapped the primary Setup button on a card. Routes via
+    /// delegate to AppFeature, which knows how to open Settings / the
+    /// open-panel / etc.
+    case gettingStartedSetupTapped(GettingStartedTask)
+    /// User tapped Skip. Parks the task (persisted) and removes it from
+    /// the visible list. Advances the page if needed; hides the panel
+    /// if this was the last task.
+    case gettingStartedSkipTapped(GettingStartedTask)
+    /// User tapped ×. Hides the panel for the rest of this session but
+    /// leaves the persisted skip set untouched — relaunching brings
+    /// untouched tasks back.
+    case gettingStartedDismiss
+    /// "Show Getting Started Again" button in Settings → General.
+    /// Clears the persisted skip set and re-requests evaluation from
+    /// AppFeature so the carousel comes back with every incomplete task.
+    case gettingStartedShowAgain
+
     // MARK: Worktree prune
     /// User clicked the broom button next to a repo in the picker.
     /// Kicks off `git worktree prune --verbose` and surfaces a summary.
@@ -275,6 +316,15 @@ struct BoardFeature {
       deleteBackingWorktree: Bool,
       additionalWorktreeIDsToDelete: [Worktree.ID]
     )
+    /// User tapped Setup on a Getting Started card. AppFeature routes
+    /// each task to the right action (NSOpenPanel, Settings section,
+    /// etc.) — the board itself doesn't know about those concerns.
+    case gettingStartedSetupRequested(GettingStartedTask)
+    /// Something changed (skip set cleared, task count may have shifted)
+    /// and the carousel contents need re-computing from live predicates.
+    /// AppFeature runs the evaluation and sends back
+    /// `.gettingStartedEvaluated`.
+    case gettingStartedReevaluateRequested
   }
 
   @Dependency(TerminalClient.self) var terminalClient
@@ -995,6 +1045,67 @@ struct BoardFeature {
           }
         }
         return .none
+
+      case .gettingStartedEvaluated(let pending):
+        state.gettingStarted.tasks = pending
+        if pending.isEmpty {
+          state.gettingStarted.isPresented = false
+          state.gettingStarted.currentIndex = 0
+        } else {
+          // Keep the user's current page when possible — if the current
+          // task was just completed/skipped, clamp to the nearest valid
+          // index so the view doesn't jump to the start on every
+          // re-evaluation.
+          state.gettingStarted.currentIndex = min(
+            state.gettingStarted.currentIndex,
+            max(pending.count - 1, 0)
+          )
+          // Present on first evaluation that finds work. We gate on the
+          // persisted skip set rather than a session flag so a brand-new
+          // launch with no skips auto-opens, but a relaunch after
+          // skipping all three only surfaces the panel if the user hits
+          // "Show Again".
+          state.gettingStarted.isPresented = true
+        }
+        return .none
+
+      case .gettingStartedSetCurrentIndex(let index):
+        guard !state.gettingStarted.tasks.isEmpty else { return .none }
+        state.gettingStarted.currentIndex = max(
+          0, min(index, state.gettingStarted.tasks.count - 1)
+        )
+        return .none
+
+      case .gettingStartedSetupTapped(let task):
+        return .send(.delegate(.gettingStartedSetupRequested(task)))
+
+      case .gettingStartedSkipTapped(let task):
+        state.$skippedGettingStartedTasks.withLock { raw in
+          if !raw.contains(task.rawValue) {
+            raw.append(task.rawValue)
+          }
+        }
+        var remaining = state.gettingStarted.tasks
+        remaining.removeAll { $0 == task }
+        state.gettingStarted.tasks = remaining
+        if remaining.isEmpty {
+          state.gettingStarted.isPresented = false
+          state.gettingStarted.currentIndex = 0
+        } else {
+          state.gettingStarted.currentIndex = min(
+            state.gettingStarted.currentIndex,
+            remaining.count - 1
+          )
+        }
+        return .none
+
+      case .gettingStartedDismiss:
+        state.gettingStarted.isPresented = false
+        return .none
+
+      case .gettingStartedShowAgain:
+        state.$skippedGettingStartedTasks.withLock { $0.removeAll() }
+        return .send(.delegate(.gettingStartedReevaluateRequested))
 
       case .openWorktreeJanitor(let repositoryID, let repositoryName):
         state.worktreeJanitor = WorktreeJanitorFeature.State(
