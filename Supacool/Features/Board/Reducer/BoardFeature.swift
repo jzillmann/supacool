@@ -381,6 +381,14 @@ struct BoardFeature {
           kind: .sessionCreating(sessionID: session.id, displayName: session.displayName)
         )
         state.trayCards.append(creatingCard)
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(
+            kind: "created",
+            context: "agent=\(session.agent?.rawValue ?? "shell")",
+            at: Date()
+          ),
+          tabID: TerminalTabID(rawValue: session.id)
+        )
         // Intentionally do NOT focus the new session. Spawning an agent
         // is background work; the user stays on the board and sees the
         // new card appear in "In Progress." They can tap in when ready.
@@ -431,6 +439,14 @@ struct BoardFeature {
           )
         let additionalDeletes: [Worktree.ID] =
           deleteConvertedWorkspace ? [convertedPath] : []
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(
+            kind: "removed",
+            context: deleteBackingWorktree ? "deleted-worktree" : "kept-worktree",
+            at: Date()
+          ),
+          tabID: TerminalTabID(rawValue: id)
+        )
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
@@ -527,6 +543,10 @@ struct BoardFeature {
           sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = Date()
         }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "parked", context: nil, at: Date()),
+          tabID: TerminalTabID(rawValue: id)
+        )
         // Drop focus if we're parking the focused session.
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
@@ -683,6 +703,10 @@ struct BoardFeature {
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "resumed", context: "captured-id", at: Date()),
+          tabID: TerminalTabID(rawValue: id)
+        )
         state.focusedSessionID = id
         let command =
           agent.resumeCommand(sessionID: sessionID, bypassPermissions: Self.readBypassPermissions())
@@ -716,6 +740,10 @@ struct BoardFeature {
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "resumed", context: "picker", at: Date()),
+          tabID: TerminalTabID(rawValue: id)
+        )
         state.focusedSessionID = id
         let command =
           agent.resumePickerCommand(bypassPermissions: Self.readBypassPermissions()) + "\r"
