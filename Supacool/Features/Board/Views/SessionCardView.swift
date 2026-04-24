@@ -87,6 +87,11 @@ struct SessionCardView: View {
         .strokeBorder(cardBorderColor, lineWidth: cardBorderWidth)
         .allowsHitTesting(false)
     }
+    .overlay {
+      if isDormant {
+        CrackedGlassOverlay(seed: crackSeed, intensity: crackIntensity)
+      }
+    }
     .shadow(
       color: session.isPriority ? priorityColor.opacity(isHovered ? 0.24 : 0.16) : .clear,
       radius: session.isPriority ? 10 : 0,
@@ -288,6 +293,32 @@ struct SessionCardView: View {
 
   private var cardShape: some InsettableShape {
     RoundedRectangle(cornerRadius: 10, style: .continuous)
+  }
+
+  /// Cards whose underlying PTY/tab isn't alive right now. Renders
+  /// with a frosted "cracked glass" overlay so the board communicates
+  /// dormancy at a glance. Covers everything the Board treats as
+  /// "tab is gone" — the four states the reducer already groups
+  /// together for Rerun / Resume / Reconnect affordances.
+  private var isDormant: Bool {
+    switch status {
+    case .detached, .interrupted, .parked, .disconnected: true
+    default: false
+    }
+  }
+
+  /// Parked is explicit user intent — full strength. The three
+  /// involuntary "tab died" states get a slightly lighter touch so
+  /// they feel accidental rather than deliberate.
+  private var crackIntensity: Double {
+    status == .parked ? 1.0 : 0.85
+  }
+
+  /// Derive a stable 64-bit seed from the session UUID so each card's
+  /// fracture pattern is pinned for its lifetime.
+  private var crackSeed: UInt64 {
+    var uuid = session.id.uuid
+    return withUnsafeBytes(of: &uuid) { $0.load(as: UInt64.self) }
   }
 
   private var cardBorderColor: Color {
