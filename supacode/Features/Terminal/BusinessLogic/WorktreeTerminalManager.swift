@@ -165,9 +165,18 @@ final class WorktreeTerminalManager {
     }
     server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
-      terminalLogger.debug(
-        "Hook notification: worktree=\(decoded) tab=\(tabID) agent=\(notification.agent) "
-          + "event=\(notification.event) body=\(notification.body ?? "<nil>")"
+      let awaiting = Self.isAwaitingInputSignal(notification)
+      // hook-trace: grep-friendly audit of every hook payload so we can
+      // see what Claude Code / Codex actually send for prompt variants
+      // the fallback classifier hasn't learned yet (e.g. sensitive-file
+      // permission prompts). Logs title + sessionID in addition to the
+      // fields the pre-existing debug line carried.
+      terminalLogger.info(
+        "hook-trace worktree=\(decoded) tab=\(tabID) agent=\(notification.agent) "
+          + "event=\(notification.event) awaiting=\(awaiting) "
+          + "title=\(notification.title ?? "<nil>") "
+          + "session=\(notification.sessionID ?? "<nil>") "
+          + "body=\(notification.body ?? "<nil>")"
       )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
@@ -177,7 +186,7 @@ final class WorktreeTerminalManager {
       let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
-      if Self.isAwaitingInputSignal(notification) {
+      if awaiting {
         self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID)
       }
     }
@@ -234,6 +243,8 @@ final class WorktreeTerminalManager {
       || normalized.contains("claude needs your permission")
       || normalized.contains("do you want to allow claude")
       || normalized.contains("allow claude to edit its own settings")
+      || normalized.contains("claude requested permissions")
+      || normalized.contains("do you want to proceed")
     let hasApprovalOptions =
       lines.contains { $0 == "1. yes" || $0.hasPrefix("1. yes,") || $0.hasPrefix("1. allow") }
       && lines.contains {

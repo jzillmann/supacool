@@ -120,4 +120,34 @@ struct AwaitingInputSignalTests {
       """
     #expect(!WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
   }
+
+  /// Sensitive-file permission prompt variant observed in the wild
+  /// (Claude Code 1.x). The lead reads "Claude requested permissions
+  /// to edit <path> which is a sensitive file." + "Do you want to
+  /// proceed?" rather than the inline edit prompt's "Do you want to
+  /// make this edit…".
+  @Test func sensitiveFilePromptMatchesFallbackClassifier() {
+    let screen = """
+      Claude requested permissions to edit /Users/jz/Projects/centrumAI/centrum_backend/.claude/rules/ci which is a sensitive file.
+
+      Do you want to proceed?
+      1. Yes
+      2. Yes, and always allow access to ci/ from this project
+      3. No
+
+      Esc to cancel  Enter to confirm
+      """
+    #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
+
+  /// Even looser "do you want to proceed" leads must still be gated
+  /// by the 1/2/3 options + footer — a bare "do you want to proceed"
+  /// line with no approval UI should NOT flip the card.
+  @Test func bareProceedLineWithoutApprovalUIIsNotAwaitingInput() {
+    let screen = """
+      Do you want to proceed with the plan?
+      Waiting for more output...
+      """
+    #expect(!WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
 }
