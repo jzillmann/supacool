@@ -554,7 +554,7 @@ struct NewTerminalFeatureTests {
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
     } withDependencies: {
-      $0.backgroundInferenceClient.infer = { _ in "add-ssh-connection-pooling" }
+      $0.backgroundInferenceClient.infer = { _, _ in "add-ssh-connection-pooling" }
     }
 
     await store.send(.suggestBranchNameTapped) {
@@ -575,7 +575,7 @@ struct NewTerminalFeatureTests {
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
     } withDependencies: {
-      $0.backgroundInferenceClient.infer = { _ in throw InferenceError() }
+      $0.backgroundInferenceClient.infer = { _, _ in throw InferenceError() }
     }
 
     await store.send(.suggestBranchNameTapped) {
@@ -596,7 +596,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       // Model returns messy output
-      $0.backgroundInferenceClient.infer = { _ in "  Fix Mario's Bug!!  \nextra line" }
+      $0.backgroundInferenceClient.infer = { _, _ in "  Fix Mario's Bug!!  \nextra line" }
     }
 
     await store.send(.suggestBranchNameTapped) {

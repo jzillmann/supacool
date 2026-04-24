@@ -18,7 +18,7 @@ struct BoardFeatureTests {
       // display name; stub it out here so the effect terminates without
       // dispatching a follow-up action that would fail the exhaustivity
       // check.
-      $0.backgroundInferenceClient.infer = { _ in throw NoInference() }
+      $0.backgroundInferenceClient.infer = { _, _ in throw NoInference() }
     }
     let session = Self.sampleSession()
 
@@ -34,7 +34,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: BoardFeature.State()) {
       BoardFeature()
     } withDependencies: {
-      $0.backgroundInferenceClient.infer = { _ in "Fix Failing Unit Tests" }
+      $0.backgroundInferenceClient.infer = { _, _ in "Fix Failing Unit Tests" }
     }
     let session = Self.sampleSession()  // prompt: "Fix the failing tests" → derived "Fix the failing tests"
     let sessionID = session.id
@@ -55,7 +55,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: BoardFeature.State()) {
       BoardFeature()
     } withDependencies: {
-      $0.backgroundInferenceClient.infer = { _ in "LLM Generated Name" }
+      $0.backgroundInferenceClient.infer = { _, _ in "LLM Generated Name" }
     }
     // Pin a custom displayName up front (simulates the PR-URL flow
     // setting "PR #42: Fix the widget"). The inference result must NOT
@@ -518,7 +518,7 @@ struct BoardFeatureTests {
     } withDependencies: {
       $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
       $0.terminalClient.send = { _ in }
-      $0.autoObserverClient.decide = { _, _ in "y" }
+      $0.autoObserverClient.decide = { _, _, _ in "y" }
     }
 
     await store.send(.toggleAutoObserver(id: sessionID)) {
@@ -573,7 +573,7 @@ struct BoardFeatureTests {
     } withDependencies: {
       $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
       $0.terminalClient.send = { _ in }
-      $0.autoObserverClient.decide = { _, _ in "y" }
+      $0.autoObserverClient.decide = { _, _, _ in "y" }
     }
 
     await store.send(.autoObserverTriggered(id: sessionID)) {
@@ -595,7 +595,7 @@ struct BoardFeatureTests {
       BoardFeature()
     } withDependencies: {
       $0.terminalClient.readScreenContents = { _, _ in "Some ambiguous output" }
-      $0.autoObserverClient.decide = { _, _ in nil }
+      $0.autoObserverClient.decide = { _, _, _ in nil }
     }
 
     await store.send(.autoObserverTriggered(id: sessionID)) {
@@ -808,7 +808,7 @@ struct BoardFeatureTests {
     } withDependencies: {
       // createSession kicks off background inference; stub it out.
       struct NoInference: Error {}
-      $0.backgroundInferenceClient.infer = { _ in throw NoInference() }
+      $0.backgroundInferenceClient.infer = { _, _ in throw NoInference() }
     }
     store.exhaustivity = .off
 

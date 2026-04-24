@@ -532,7 +532,10 @@ struct NewTerminalFeature {
           + "Reply with ONLY the branch name, nothing else."
         return .run { [backgroundInferenceClient] send in
           do {
-            let raw = try await backgroundInferenceClient.infer(inferencePrompt)
+            // No session context: branch-name generation happens before
+            // the session exists, so there's no transcript file to
+            // append to. Skipped in v1.
+            let raw = try await backgroundInferenceClient.infer(inferencePrompt, nil)
             let name = sanitizeBranchName(raw)
             await send(.branchNameSuggested(name.isEmpty ? raw : name))
           } catch {

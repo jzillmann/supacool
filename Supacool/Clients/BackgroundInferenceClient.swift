@@ -13,19 +13,35 @@ import Foundation
 ///   - `supacool.inference.cliModel`  String: model name, or empty for claude default
 ///   - `supacool.inference.apiModel`  String: model name (default: "claude-sonnet-4-6")
 ///   - `supacool.inference.apiKey`    String: Anthropic API key (required for API mode)
+///
+/// When the caller passes a `TraceContext`, the call is appended to the
+/// session's transcript JSONL as a `.backgroundInference` entry, including
+/// truncated prompt / result previews, wall-clock duration, and any error.
+/// Call-sites with no session (branch-name generation in the New Terminal
+/// sheet) pass `nil` and are not traced in v1.
 struct BackgroundInferenceClient: Sendable {
-  var infer: @Sendable (_ prompt: String) async throws -> String
+  var infer: @Sendable (_ prompt: String, _ trace: InferenceTraceContext?) async throws -> String
+}
+
+/// Labels a `BackgroundInferenceClient.infer` call for the session-trace
+/// JSONL. The call is recorded against `tabID`'s file with `purpose`
+/// describing what Supacool asked for (e.g. `"auto-observer"`,
+/// `"session-title"`). Callers with no session (branch-name generation
+/// before a session exists) pass `nil` and the call is not traced.
+nonisolated struct InferenceTraceContext: Sendable {
+  let tabID: TerminalTabID
+  let purpose: String
 }
 
 extension BackgroundInferenceClient: DependencyKey {
   static let liveValue = Self(
-    infer: { prompt in
-      try await BackgroundInferenceLive.run(prompt: prompt)
+    infer: { prompt, trace in
+      try await BackgroundInferenceLive.run(prompt: prompt, trace: trace)
     }
   )
 
   static let testValue = Self(
-    infer: { _ in "mock-branch-name" }
+    infer: { _, _ in "mock-branch-name" }
   )
 }
 
@@ -66,19 +82,68 @@ nonisolated enum BackgroundInferenceError: LocalizedError {
 
 private nonisolated let inferenceLogger = SupaLogger("Supacool.BackgroundInference")
 
+/// Max chars of prompt / result recorded in the trace. Long prompts can
+/// push a single trace entry to tens of kilobytes; we only need enough
+/// to disambiguate "what did we ask?" and "what came back?" at a glance.
+private nonisolated let inferenceTracePreviewLimit = 500
+
 private nonisolated enum BackgroundInferenceLive {
-  static func run(prompt: String) async throws -> String {
+  static func run(prompt: String, trace: InferenceTraceContext?) async throws -> String {
     let defaults = UserDefaults.standard
     let modeRaw = defaults.string(forKey: "supacool.inference.mode") ?? "claudeCLI"
+    let startedAt = Date()
 
-    switch modeRaw {
-    case "anthropicAPI":
-      let apiModel = defaults.string(forKey: "supacool.inference.apiModel") ?? "claude-sonnet-4-6"
-      let apiKey = defaults.string(forKey: "supacool.inference.apiKey") ?? ""
-      return try await runAPI(prompt: prompt, model: apiModel, apiKey: apiKey)
-    default:
-      let cliModel = defaults.string(forKey: "supacool.inference.cliModel") ?? ""
-      return try await runCLI(prompt: prompt, model: cliModel.isEmpty ? nil : cliModel)
+    do {
+      let result: String
+      switch modeRaw {
+      case "anthropicAPI":
+        let apiModel = defaults.string(forKey: "supacool.inference.apiModel") ?? "claude-sonnet-4-6"
+        let apiKey = defaults.string(forKey: "supacool.inference.apiKey") ?? ""
+        result = try await runAPI(prompt: prompt, model: apiModel, apiKey: apiKey)
+      default:
+        let cliModel = defaults.string(forKey: "supacool.inference.cliModel") ?? ""
+        result = try await runCLI(prompt: prompt, model: cliModel.isEmpty ? nil : cliModel)
+      }
+      if let trace {
+        recordTrace(
+          trace: trace, mode: modeRaw, prompt: prompt, result: result,
+          error: nil, startedAt: startedAt
+        )
+      }
+      return result
+    } catch {
+      if let trace {
+        recordTrace(
+          trace: trace, mode: modeRaw, prompt: prompt, result: nil,
+          error: error, startedAt: startedAt
+        )
+      }
+      throw error
+    }
+  }
+
+  private static func recordTrace(
+    trace: InferenceTraceContext,
+    mode: String,
+    prompt: String,
+    result: String?,
+    error: Error?,
+    startedAt: Date
+  ) {
+    let now = Date()
+    let durationMs = Int((now.timeIntervalSince(startedAt) * 1000).rounded())
+    let event = TranscriptEntry.backgroundInference(
+      purpose: trace.purpose,
+      mode: mode,
+      promptPreview: String(prompt.prefix(inferenceTracePreviewLimit)),
+      resultPreview: result.map { String($0.prefix(inferenceTracePreviewLimit)) },
+      error: error.map { $0.localizedDescription },
+      durationMs: durationMs,
+      at: now
+    )
+    let tabID = trace.tabID
+    Task { @MainActor in
+      TranscriptRecorder.shared.append(event: event, tabID: tabID)
     }
   }
 

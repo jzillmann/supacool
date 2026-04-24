@@ -929,7 +929,7 @@ struct BoardFeature {
             await send(._autoObserverDecided(id: id, response: nil))
             return
           }
-          let response = await autoObserverClient.decide(screen, userInstructions)
+          let response = await autoObserverClient.decide(screen, userInstructions, tabID)
           await send(._autoObserverDecided(id: id, response: response))
         }
 
@@ -1434,9 +1434,13 @@ struct BoardFeature {
       """
 
     let sessionID = session.id
+    let trace = InferenceTraceContext(
+      tabID: TerminalTabID(rawValue: sessionID),
+      purpose: "session-title"
+    )
     return .run { [backgroundInferenceClient] send in
       do {
-        let raw = try await backgroundInferenceClient.infer(inferencePrompt)
+        let raw = try await backgroundInferenceClient.infer(inferencePrompt, trace)
         let title = sanitizeSessionTitle(raw)
         guard !title.isEmpty else { return }
         await send(._autoDisplayNameSuggested(id: sessionID, suggested: title))
