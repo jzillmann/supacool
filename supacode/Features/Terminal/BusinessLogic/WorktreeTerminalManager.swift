@@ -539,14 +539,39 @@ final class WorktreeTerminalManager {
   ) {
     let state = state(for: worktree) { runSetupScriptIfNew }
     let setupScript: String?
-    if state.needsSetupScript() {
+    if state.needsSetupScript(), !Self.isMainRepoWorktree(worktree) {
       @SharedReader(.repositorySettings(worktree.repositoryRootURL))
       var settings = RepositorySettings.default
       setupScript = settings.setupScript
     } else {
+      // Bugfix @claude [-] 2026-04-24: Setup scripts are
+      // worktree-scoped by contract — they assume cwd is a freshly-
+      // created worktree directory. When the user opens a tab in
+      // directory mode (NewTerminalFeature `.repoRoot`), the
+      // synthesized Worktree has workingDirectory == repositoryRootURL
+      // and the script would otherwise run inside the main repo. A
+      // user with `dev worktree --init-only` configured here had
+      // pnpm wipe the main repo's node_modules before any guard
+      // existed. Refuse and log so the user knows why.
+      if state.needsSetupScript(), Self.isMainRepoWorktree(worktree) {
+        terminalLogger.warning(
+          "Skipping setup script for tab in main repo cwd "
+            + "\(worktree.workingDirectory.path(percentEncoded: false)): "
+            + "setup scripts only run inside linked worktrees, not the repo root."
+        )
+      }
       setupScript = nil
     }
     _ = state.createTab(setupScript: setupScript, initialInput: initialInput, tabID: tabID)
+  }
+
+  /// True when the worktree's working directory is actually the repo
+  /// root (directory-mode session) rather than a linked worktree dir.
+  /// `standardizedFileURL` on both sides handles trailing-slash and
+  /// `/private/tmp` symlink differences.
+  nonisolated private static func isMainRepoWorktree(_ worktree: Worktree) -> Bool {
+    worktree.workingDirectory.standardizedFileURL
+      == worktree.repositoryRootURL.standardizedFileURL
   }
 
   @discardableResult

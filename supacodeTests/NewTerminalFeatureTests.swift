@@ -100,13 +100,26 @@ struct NewTerminalFeatureTests {
 
   // MARK: - Setup script
 
-  /// Regression: agent sessions created from the board must run the repo's
-  /// configured setup script (Settings → Repository Settings → Setup Script)
-  /// before the agent command, so hooks like pre-commit have the env/files
-  /// they expect. A previous revision passed `runSetupScriptIfNew: false`
-  /// unconditionally, which meant fresh worktrees landed un-initialized.
-  @Test(.dependencies) func createRunsSetupScriptForNewWorktree() async {
-    var state = Self.makeState()
+  /// Regression: agent sessions created in **worktree mode** must run
+  /// the repo's configured setup script (Settings → Repository
+  /// Settings → Setup Script) before the agent command, so hooks like
+  /// pre-commit have the env/files they expect. A previous revision
+  /// passed `runSetupScriptIfNew: false` unconditionally, which meant
+  /// fresh worktrees landed un-initialized.
+  @Test(.dependencies) func createRunsSetupScriptForWorktreeMode() async {
+    let worktree = Worktree(
+      id: "/tmp/repo/wt-x",
+      name: "wt-x",
+      detail: "wt-x",
+      workingDirectory: URL(fileURLWithPath: "/tmp/repo/wt-x"),
+      repositoryRootURL: URL(fileURLWithPath: "/tmp/repo")
+    )
+    let repo = Self.makeRepository(id: "/tmp/repo", name: "test-repo", worktrees: [worktree])
+    var state = NewTerminalFeature.State(
+      availableRepositories: IdentifiedArray(uniqueElements: [repo])
+    )
+    state.selectedRepositoryID = repo.id
+    state.selectedWorkspace = .existingWorktree(id: worktree.id)
     state.prompt = "Do the thing"
 
     let runSetupScript = LockIsolated<Bool?>(nil)
@@ -126,6 +139,38 @@ struct NewTerminalFeatureTests {
     await store.receive(\.delegate.created)
 
     #expect(runSetupScript.value == true)
+  }
+
+  /// Bugfix regression: directory-mode (`.repoRoot`) sessions must
+  /// NOT run the per-repo setup script. The synthesized `Worktree`
+  /// for repo-root mode has `workingDirectory == repositoryRootURL`,
+  /// and a setup script (typically a worktree-init script like
+  /// `dev worktree --init-only`) would run inside the main repo —
+  /// historically pnpm wiped the main repo's `node_modules` this
+  /// way. The call site in `NewTerminalFeature` and the chokepoint
+  /// in `WorktreeTerminalManager` both guard against this; this
+  /// asserts the call-site half.
+  @Test(.dependencies) func createSkipsSetupScriptForRepoRootMode() async {
+    var state = Self.makeState()  // selectedWorkspace defaults to .repoRoot
+    state.prompt = "Do the thing"
+
+    let runSetupScript = LockIsolated<Bool?>(nil)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput(_, _, let runSetup, _) = command {
+          runSetupScript.setValue(runSetup)
+        }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped)
+    await store.receive(\.sessionReady)
+    await store.receive(\.delegate.created)
+
+    #expect(runSetupScript.value == false)
   }
 
   // MARK: - Codex agent

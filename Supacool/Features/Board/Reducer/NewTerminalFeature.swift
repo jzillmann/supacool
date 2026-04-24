@@ -846,9 +846,18 @@ struct NewTerminalFeature {
           .createTabWithInput(
             worktree,
             input: input,
-            // Run the repo's setup script (Settings → Repository Settings →
-            // Setup Script) before the agent command.
-            runSetupScriptIfNew: true,
+            // Run the repo's setup script (Settings → Repository
+            // Settings → Setup Script) before the agent command —
+            // but only when we're actually in a linked worktree.
+            // Setup scripts are worktree-scoped by contract; running
+            // them inside the main repo (directory-mode session,
+            // where `worktree.workingDirectory == repositoryRootURL`)
+            // historically blew away node_modules in repos whose
+            // setup script was pnpm/yarn-based. WorktreeTerminalManager
+            // has the same guard, but expressing it here keeps the
+            // call site honest.
+            runSetupScriptIfNew: worktree.workingDirectory.standardizedFileURL
+              != worktree.repositoryRootURL.standardizedFileURL,
             id: sessionID
           )
         )
