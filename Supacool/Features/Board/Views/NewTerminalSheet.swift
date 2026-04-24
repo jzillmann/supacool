@@ -60,21 +60,29 @@ struct NewTerminalSheet: View {
           } else {
             worktreeModePicker
               .disabled(isWorkspaceLockedByPR)
-            if isUsingWorktree, !isWorkspaceLockedByPR {
+            if isUsingWorktree {
+              // Keep the field visible even when PR-locked — otherwise the
+              // user has no in-form readout of the branch that will be
+              // checked out. Disabled (not hidden) so the binding still
+              // reflects `workspaceQuery`, which the PR flow populates
+              // with `context.metadata.headRefName`.
               workspaceField
-              ForEach(workspaceSuggestions, id: \.id) { suggestion in
-                WorkspaceSuggestionRow(
-                  suggestion: suggestion,
-                  isSelected: suggestion.selection == store.selectedWorkspace
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                  store.send(.workspaceSelected(suggestion.selection))
+                .disabled(isWorkspaceLockedByPR)
+              if !isWorkspaceLockedByPR {
+                ForEach(workspaceSuggestions, id: \.id) { suggestion in
+                  WorkspaceSuggestionRow(
+                    suggestion: suggestion,
+                    isSelected: suggestion.selection == store.selectedWorkspace
+                  )
+                  .contentShape(Rectangle())
+                  .onTapGesture {
+                    store.send(.workspaceSelected(suggestion.selection))
+                  }
+                  // The suggestion list is part of the Workspace row, not its
+                  // own section — drop the auto-rendered divider above so the
+                  // field + matches read as one unit.
+                  .listRowSeparator(.hidden, edges: .top)
                 }
-                // The suggestion list is part of the Workspace row, not its
-                // own section — drop the auto-rendered divider above so the
-                // field + matches read as one unit.
-                .listRowSeparator(.hidden, edges: .top)
               }
             }
           }
@@ -495,6 +503,9 @@ struct NewTerminalSheet: View {
   }
 
   private var workspaceFieldFooter: String {
+    if isWorkspaceLockedByPR {
+      return "Locked to the PR's branch. Remove the PR URL from the prompt to edit."
+    }
     switch store.selectedWorkspace {
     case .repoRoot: return ""  // unreachable when the field is rendered
     case .existingWorktree: return "Attach to an existing worktree."
