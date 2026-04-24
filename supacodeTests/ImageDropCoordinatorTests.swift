@@ -135,7 +135,7 @@ struct ImageDropCoordinatorTests {
   final class TransportRecorder: @unchecked Sendable {
     var lastContext: ImageDropContext?
 
-    func capture(url: URL, context: ImageDropContext) async throws -> String {
+    func capture(url: URL, context: ImageDropContext) throws -> String {
       lastContext = context
       return url.path(percentEncoded: false) + "-PASTED"
     }

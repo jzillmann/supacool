@@ -68,7 +68,7 @@ struct RemoteHostsFeatureTests {
         port: 2222,
         identityFiles: ["/Users/jz/.ssh/id_ed25519"],
         hasComplexDirectives: false
-      )
+      ),
     ]
     let store = TestStore(initialState: RemoteHostsFeature.State()) {
       RemoteHostsFeature()
@@ -98,7 +98,7 @@ struct RemoteHostsFeatureTests {
         port: nil,
         identityFiles: [],
         hasComplexDirectives: true
-      )
+      ),
     ]
     let store = TestStore(initialState: RemoteHostsFeature.State()) {
       RemoteHostsFeature()
@@ -427,7 +427,7 @@ struct RemoteHostsFeatureTests {
         identityFile: nil,
         timesSeen: 3,
         lastSeenAt: Date(timeIntervalSince1970: 1_700_000_000)
-      )
+      ),
     ]
     let store = TestStore(initialState: RemoteHostsFeature.State()) {
       RemoteHostsFeature()

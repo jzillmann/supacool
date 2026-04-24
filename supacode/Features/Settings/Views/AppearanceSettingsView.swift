@@ -7,7 +7,7 @@ struct AppearanceSettingsView: View {
   /// re-evaluate. Wired from the parent `SettingsView` which holds the
   /// top-level `StoreOf<AppFeature>` (the one that routes to
   /// `BoardFeature`).
-  var onShowGettingStartedAgain: (() -> Void)? = nil
+  var onShowGettingStartedAgain: (() -> Void)?
 
   var body: some View {
     let openActionOptions = OpenWorktreeAction.availableCases

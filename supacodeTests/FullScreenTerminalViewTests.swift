@@ -53,7 +53,7 @@ struct FullScreenTerminalViewTests {
           addedLines: nil,
           removedLines: nil,
           pullRequest: pullRequest
-        )
+        ),
       ]
     )
 
@@ -100,7 +100,7 @@ struct FullScreenTerminalViewTests {
           addedLines: nil,
           removedLines: nil,
           pullRequest: pullRequest
-        )
+        ),
       ]
     )
 
@@ -154,7 +154,7 @@ struct FullScreenTerminalViewTests {
           addedLines: nil,
           removedLines: nil,
           pullRequest: pullRequest
-        )
+        ),
       ]
     )
 
