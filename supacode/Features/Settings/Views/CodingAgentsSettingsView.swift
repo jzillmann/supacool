@@ -6,9 +6,6 @@ struct CodingAgentsSettingsView: View {
 
   var body: some View {
     Form {
-      Section(
-        footer: Text("Hooks are optional and designed to extend Supacool without affecting core functionality.")
-      ) {}
       AIAssistSettingsSection()
       ReferencesSettingsSection()
       Section {
