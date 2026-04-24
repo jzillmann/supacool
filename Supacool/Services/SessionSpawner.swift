@@ -15,7 +15,7 @@ private nonisolated let sessionSpawnerLogger = SupaLogger("Supacool.SessionSpawn
 ///
 /// Validation stays at the call site. This helper trusts its request.
 enum SessionSpawner {
-  struct LocalRequest: Sendable {
+  struct LocalRequest: Equatable, Sendable {
     let sessionID: UUID
     let repository: Repository
     let selection: WorkspaceSelection

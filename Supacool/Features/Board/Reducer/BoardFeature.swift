@@ -193,6 +193,11 @@ struct BoardFeature {
     case _convertSessionToWorktreeSucceeded(id: AgentSession.ID, newWorkspacePath: String)
     case _convertSessionToWorktreeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
+    /// Internal: local spawn finished. Replaces the placeholder tray
+    /// card and triggers the normal `createSession` flow.
+    case _sessionSpawnCompleted(session: AgentSession)
+    /// Internal: local spawn failed. Drops the placeholder tray card.
+    case _sessionSpawnFailed(sessionID: AgentSession.ID, message: String)
 
     // MARK: Bookmarks
     /// One-click launch: resolves a bookmark into a SessionSpawner
@@ -956,6 +961,57 @@ struct BoardFeature {
           state.pendingRerunSessionID = nil
         }
         return .send(.createSession(session))
+
+      case .newTerminalSheet(.presented(.delegate(.spawnRequested(let request, let displayName)))):
+        // Local-path submit: dismiss the sheet immediately so the user
+        // doesn't sit through worktree creation. A placeholder tray
+        // card stands in until the real session card is created — its
+        // ID is anchored to the pre-allocated session UUID, so when
+        // `.createSession` runs, `IdentifiedArrayOf.append` no-ops on
+        // the duplicate ID and the same card transitions seamlessly
+        // into the post-spawn lifecycle.
+        state.newTerminalSheet = nil
+        let placeholder = TrayCard(
+          id: request.sessionID,
+          kind: .sessionCreating(sessionID: request.sessionID, displayName: displayName)
+        )
+        state.trayCards.append(placeholder)
+        return .run { send in
+          do {
+            let session = try await SessionSpawner.spawnLocal(request)
+            await send(._sessionSpawnCompleted(session: session))
+          } catch {
+            await send(
+              ._sessionSpawnFailed(
+                sessionID: request.sessionID,
+                message: error.localizedDescription
+              )
+            )
+          }
+        }
+
+      case ._sessionSpawnCompleted(let session):
+        // Refresh the placeholder's displayName in case it was refined
+        // (e.g. PR-context displayName is set on the AgentSession).
+        if let index = state.trayCards.firstIndex(where: { $0.id == session.id }) {
+          state.trayCards[index].kind = .sessionCreating(
+            sessionID: session.id,
+            displayName: session.displayName
+          )
+        }
+        if let pendingID = state.pendingRerunSessionID {
+          state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
+          state.pendingRerunSessionID = nil
+        }
+        return .send(.createSession(session))
+
+      case ._sessionSpawnFailed(let sessionID, let message):
+        boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
+        // Drop the placeholder; v1 has no error tray-card variant.
+        state.trayCards.removeAll(where: { $0.id == sessionID })
+        // Keep `pendingRerunSessionID` set so the user's original
+        // session card stays put — they can retry.
+        return .none
 
       case .newTerminalSheet(.presented(.delegate(.bookmarkSaved(let bookmark)))):
         // Fires BEFORE `.created` in the sheet's `.sessionReady`

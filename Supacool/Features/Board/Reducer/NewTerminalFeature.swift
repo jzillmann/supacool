@@ -378,6 +378,14 @@ struct NewTerminalFeature {
     @CasePathable
     enum Delegate: Equatable {
       case cancel
+      /// Local-path submit. Sheet dismisses immediately; BoardFeature
+      /// owns the spawn so the long-running git/terminal work doesn't
+      /// hold the sheet open. `displayName` seeds the placeholder tray
+      /// card while the worktree is being created.
+      case spawnRequested(SessionSpawner.LocalRequest, displayName: String)
+      /// Remote-path completion: spawn happens inside the sheet's
+      /// reducer (no worktree creation, fast). Kept for the remote
+      /// flow only.
       case created(AgentSession)
       /// Emitted when `saveAsBookmark` was ticked at submit-time.
       /// BoardFeature appends to `$bookmarks` (or replaces in-place
@@ -711,7 +719,10 @@ struct NewTerminalFeature {
       }
     }
     state.validationMessage = nil
-    state.isCreating = true
+    // Sheet dismisses immediately on Create (parent flips
+    // `state.newTerminalSheet = nil` upon receiving `.spawnRequested`),
+    // so we don't bother flipping `isCreating` — the spinner would
+    // never be visible.
 
     // When the sheet was pre-configured from a pasted PR URL, we
     // already have a high-quality human title ready. Pass it through
@@ -738,9 +749,6 @@ struct NewTerminalFeature {
       selection: selection,
       rerunOwnedWorktreeID: rerunOwnedWorktreeID
     )
-    // Snapshot at submit-time so the create effect can distinguish a
-    // PR-armed existing-branch selection (the banner pinned this branch)
-    // from a user-typed one.
     let prLookupAtSubmit = state.pullRequestLookup
 
     let request = SessionSpawner.LocalRequest(
@@ -758,14 +766,41 @@ struct NewTerminalFeature {
       removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
     )
 
-    return .run { send in
-      do {
-        let session = try await SessionSpawner.spawnLocal(request)
-        await send(.sessionReady(session))
-      } catch {
-        await send(.creationFailed(message: error.localizedDescription))
-      }
+    // Seed for the placeholder tray card the parent shows during the
+    // worktree-creation window. The parent overwrites this with the
+    // real session displayName once the spawn succeeds.
+    let placeholderDisplayName =
+      suggestedDisplayName
+      ?? AgentSession.deriveDisplayName(from: trimmedPrompt, fallbackID: sessionID)
+
+    let bookmarkToSave: Bookmark? = {
+      guard state.saveAsBookmark else { return nil }
+      let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedName.isEmpty else { return nil }
+      let worktreeMode: Bookmark.WorktreeMode = {
+        switch selection {
+        case .repoRoot: return .repoRoot
+        case .newBranch, .existingBranch, .existingWorktree: return .newWorktree
+        }
+      }()
+      return Bookmark(
+        id: state.editingBookmarkID ?? UUID(),
+        repositoryID: repoID,
+        name: trimmedName,
+        prompt: trimmedPrompt,
+        agent: agent,
+        worktreeMode: worktreeMode,
+        planMode: planMode
+      )
+    }()
+
+    if let bookmark = bookmarkToSave {
+      return .merge(
+        .send(.delegate(.bookmarkSaved(bookmark))),
+        .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
+      )
     }
+    return .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
   }
 
   // MARK: - Remote create
