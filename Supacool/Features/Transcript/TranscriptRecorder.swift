@@ -92,6 +92,18 @@ final class TranscriptRecorder {
     lastOutputByTab.removeValue(forKey: tabID)
   }
 
+  /// Append a structured event (hook payload, state transition, session
+  /// lifecycle, auto-observer decision, background inference call). Thin
+  /// wrapper over the shared serial-queue writer so every caller with a
+  /// `TerminalTabID` can record into the same per-session JSONL.
+  ///
+  /// Input and output turns have their own typed entry points
+  /// (`appendInput`, `snapshotOutput`) because they carry bookkeeping
+  /// beyond a plain write. Everything else comes through here.
+  func append(event: TranscriptEntry, tabID: TerminalTabID) {
+    enqueueWrite(tabID: tabID, entry: event)
+  }
+
   /// Absolute path to the transcript file for a given tab. Exposed so a
   /// future "Open transcript" UI affordance can reveal it in Finder.
   func transcriptURL(tabID: TerminalTabID) -> URL? {

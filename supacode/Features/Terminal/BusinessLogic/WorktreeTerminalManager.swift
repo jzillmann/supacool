@@ -120,9 +120,14 @@ final class WorktreeTerminalManager {
   private func configureSocketServer(_ server: AgentHookSocketServer) {
     server.onBusy = { [weak self] worktreeID, tabID, surfaceID, active, pid in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
+      let wrappedTabID = TerminalTabID(rawValue: tabID)
       terminalLogger.debug(
         "Hook busy: worktree=\(decoded) tab=\(tabID) surface=\(surfaceID) "
           + "active=\(active) pid=\(pid.map(String.init) ?? "nil")"
+      )
+      TranscriptRecorder.shared.append(
+        event: .hookBusy(active: active, pid: pid, surfaceID: surfaceID, at: Date()),
+        tabID: wrappedTabID
       )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
@@ -144,10 +149,10 @@ final class WorktreeTerminalManager {
       }
       // Any busy transition (resumed or finished) supersedes a prior
       // "awaiting input" signal for this tab.
-      self?.clearAwaitingInput(tabID: tabID)
+      self?.clearAwaitingInput(tabID: tabID, reason: "busy-changed")
       state.setAgentBusy(
         surfaceID: surfaceID,
-        tabID: TerminalTabID(rawValue: tabID),
+        tabID: wrappedTabID,
         active: active
       )
       // Supacool transcript: when the agent reports going idle, snapshot
@@ -155,7 +160,6 @@ final class WorktreeTerminalManager {
       // transcript file. The recorder dedupes against its last snapshot,
       // so this is safe to call on every idle hook.
       if !active {
-        let wrappedTabID = TerminalTabID(rawValue: tabID)
         if let fullText = state.readScreenContents(tabID: wrappedTabID, scope: .surface),
           !fullText.isEmpty
         {
@@ -166,17 +170,29 @@ final class WorktreeTerminalManager {
     server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
       let awaiting = Self.isAwaitingInputSignal(notification)
-      // hook-trace: grep-friendly audit of every hook payload so we can
-      // see what Claude Code / Codex actually send for prompt variants
-      // the fallback classifier hasn't learned yet (e.g. sensitive-file
-      // permission prompts). Logs title + sessionID in addition to the
-      // fields the pre-existing debug line carried.
-      terminalLogger.info(
-        "hook-trace worktree=\(decoded) tab=\(tabID) agent=\(notification.agent) "
+      let wrappedTabID = TerminalTabID(rawValue: tabID)
+      // Debug-level tail for live `make run-app` inspection — the
+      // structured `.hookEvent` entry written to the session JSONL below
+      // is the authoritative record for post-hoc analysis.
+      terminalLogger.debug(
+        "hook worktree=\(decoded) tab=\(tabID) agent=\(notification.agent) "
           + "event=\(notification.event) awaiting=\(awaiting) "
           + "title=\(notification.title ?? "<nil>") "
           + "session=\(notification.sessionID ?? "<nil>") "
           + "body=\(notification.body ?? "<nil>")"
+      )
+      TranscriptRecorder.shared.append(
+        event: .hookEvent(
+          agent: notification.agent,
+          event: notification.event,
+          title: notification.title,
+          body: notification.body,
+          sessionID: notification.sessionID,
+          awaitingClassifierVerdict: awaiting,
+          surfaceID: surfaceID,
+          at: Date()
+        ),
+        tabID: wrappedTabID
       )
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
@@ -187,7 +203,7 @@ final class WorktreeTerminalManager {
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
       if awaiting {
-        self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID)
+        self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID, source: "hook")
       }
     }
   }
@@ -674,36 +690,64 @@ final class WorktreeTerminalManager {
     (runtime.unfocusedSplitFill(), runtime.unfocusedSplitOverlayOpacity())
   }
 
-  private func markAwaitingInputSignal(worktreeID: Worktree.ID, tabID: UUID) {
+  private func markAwaitingInputSignal(
+    worktreeID: Worktree.ID,
+    tabID: UUID,
+    source: String
+  ) {
     markAwaitingInputSignal(
       worktreeID: worktreeID,
       tabID: tabID,
-      fingerprint: screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID))
+      fingerprint: screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID)),
+      source: source
     )
   }
 
   private func markAwaitingInputSignal(
     worktreeID: Worktree.ID,
     tabID: UUID,
-    fingerprint: String?
+    fingerprint: String?,
+    source: String
   ) {
     var tracker = awaitingInputByTab[tabID] ?? AwaitingInputTracker(worktreeID: worktreeID)
+    let wasActive = tracker.rawActive
     tracker.rawActive = true
     tracker.lastScreenFingerprint = fingerprint
     awaitingInputByTab[tabID] = tracker
+    // Edge-triggered: don't spam the trace on every 1s screen-scan tick
+    // that merely re-confirms an already-active awaiting state.
+    if !wasActive {
+      TranscriptRecorder.shared.append(
+        event: .awaitingInputChanged(
+          active: true, source: source, surfaceID: nil, at: Date()
+        ),
+        tabID: TerminalTabID(rawValue: tabID)
+      )
+    }
     scheduleAwaitingInputExpiry(for: tabID)
     scheduleAwaitingInputActivityPolling(for: tabID)
     scheduleAwaitingInputPresentationReconciliation(for: tabID, desiredState: true)
   }
 
-  private func clearAwaitingInput(tabID: UUID) {
+  private func clearAwaitingInput(tabID: UUID, reason: String) {
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
     awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
     awaitingInputPromptCandidates.removeValue(forKey: tabID)
 
     guard var tracker = awaitingInputByTab[tabID] else { return }
+    let wasActive = tracker.rawActive
     tracker.rawActive = false
     tracker.lastScreenFingerprint = nil
+
+    // Edge-triggered: only emit on true → false transitions.
+    if wasActive {
+      TranscriptRecorder.shared.append(
+        event: .awaitingInputChanged(
+          active: false, source: reason, surfaceID: nil, at: Date()
+        ),
+        tabID: TerminalTabID(rawValue: tabID)
+      )
+    }
 
     if tracker.presented {
       awaitingInputByTab[tabID] = tracker
@@ -731,7 +775,7 @@ final class WorktreeTerminalManager {
 
   private func expireAwaitingInput(tabID: UUID) {
     awaitingInputExpiryTasks[tabID] = nil
-    clearAwaitingInput(tabID: tabID)
+    clearAwaitingInput(tabID: tabID, reason: "ttl-expired")
   }
 
   private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
@@ -770,7 +814,7 @@ final class WorktreeTerminalManager {
     {
       tracker.lastScreenFingerprint = newFingerprint
       awaitingInputByTab[tabID] = tracker
-      clearAwaitingInput(tabID: tabID)
+      clearAwaitingInput(tabID: tabID, reason: "activity-resumed")
       return
     }
 
@@ -847,7 +891,12 @@ final class WorktreeTerminalManager {
         awaitingInputPromptCandidates[tabID] = candidate
 
         guard candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples else { continue }
-        markAwaitingInputSignal(worktreeID: candidate.worktreeID, tabID: tabID, fingerprint: fingerprint)
+        markAwaitingInputSignal(
+          worktreeID: candidate.worktreeID,
+          tabID: tabID,
+          fingerprint: fingerprint,
+          source: "screen-fallback"
+        )
       }
     }
 
@@ -862,6 +911,17 @@ final class WorktreeTerminalManager {
       awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputPromptCandidates.removeValue(forKey: tabID)
+      // Trace: if the tab is being cleaned up while raw-active, record
+      // the implicit clear so the session file shows the true→false
+      // edge with a meaningful reason rather than a phantom stuck-on.
+      if let tracker = awaitingInputByTab[tabID], tracker.rawActive {
+        TranscriptRecorder.shared.append(
+          event: .awaitingInputChanged(
+            active: false, source: "tab-closed", surfaceID: nil, at: Date()
+          ),
+          tabID: TerminalTabID(rawValue: tabID)
+        )
+      }
       awaitingInputByTab.removeValue(forKey: tabID)
       agentPIDByTab.removeValue(forKey: tabID)
     }
@@ -898,7 +958,7 @@ final class WorktreeTerminalManager {
         "Agent PID \(registration.pid) gone; clearing tab \(tabID) busy/awaiting state"
       )
       agentPIDByTab.removeValue(forKey: tabID)
-      clearAwaitingInput(tabID: tabID)
+      clearAwaitingInput(tabID: tabID, reason: "pid-gone")
       guard let state = states[registration.worktreeID] else { continue }
       state.setAgentBusy(
         surfaceID: registration.surfaceID,
