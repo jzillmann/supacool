@@ -114,6 +114,22 @@ struct NewTerminalSheet: View {
           Text(message).foregroundStyle(.red)
         }
       }
+
+      if !store.destination.isManualRemote {
+        Section {
+          Toggle("Save as bookmark", isOn: $store.saveAsBookmark)
+            .help("Pin this launch as a one-click pill above Waiting on Me.")
+          if store.saveAsBookmark {
+            TextField("Bookmark name", text: $store.bookmarkName)
+          }
+        } footer: {
+          if store.saveAsBookmark {
+            Text("Bookmarks are scoped to the selected repository.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
     }
     .formStyle(.grouped)
     .scrollBounceBehavior(.basedOnSize)

@@ -23,6 +23,7 @@ struct BoardFeature {
     @Shared(.boardFilters) var filters: BoardFilters = .empty
     @Shared(.remoteHosts) var remoteHosts: [RemoteHost] = []
     @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace] = []
+    @Shared(.bookmarks) var bookmarks: [Bookmark] = []
 
     /// When non-nil, the root view shows this session's terminal full-screen
     /// instead of the board. Not persisted — fresh launches always land on
@@ -193,6 +194,22 @@ struct BoardFeature {
     case _convertSessionToWorktreeFailed(id: AgentSession.ID, message: String)
     case newTerminalSheet(PresentationAction<NewTerminalFeature.Action>)
 
+    // MARK: Bookmarks
+    /// One-click launch: resolves a bookmark into a SessionSpawner
+    /// request and runs it directly — no sheet.
+    case bookmarkTapped(id: Bookmark.ID, repositories: [Repository])
+    /// Right-click → Edit. Opens the NewTerminalSheet pre-filled from
+    /// the bookmark with `editingBookmarkID` set so submit replaces the
+    /// bookmark in-place (and also spawns a session).
+    case bookmarkEditRequested(id: Bookmark.ID, repositories: [Repository])
+    /// Right-click → Delete. No confirmation dialog for v1 — a
+    /// bookmark is cheap to re-create.
+    case bookmarkDeleteRequested(id: Bookmark.ID)
+    /// Internal success callback from `bookmarkTapped`.
+    case _bookmarkSpawnCompleted(session: AgentSession)
+    /// Internal failure callback — surfaces as a transient tray card.
+    case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, message: String)
+
     // MARK: Remote reconnect
     /// User clicked Reconnect on a `.disconnected` remote session card.
     /// Re-spawns ssh; `tmux new-session -A` re-attaches the surviving
@@ -336,6 +353,7 @@ struct BoardFeature {
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(\.uuid) var uuid
+  @Dependency(\.date) var date
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -557,6 +575,82 @@ struct BoardFeature {
         } else {
           state.newTerminalSheet = NewTerminalFeature.State(availableRepositories: available)
         }
+        return .none
+
+      case .bookmarkTapped(let id, let repositories):
+        guard let bookmark = state.bookmarks.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard let repository = repositories.first(where: { $0.id == bookmark.repositoryID }) else {
+          boardLogger.warning(
+            "bookmarkTapped: no matching repository \(bookmark.repositoryID) in \(repositories.count) repos"
+          )
+          return .none
+        }
+        let now = date.now
+        let selection: WorkspaceSelection = {
+          switch bookmark.worktreeMode {
+          case .repoRoot:
+            return .repoRoot
+          case .newWorktree:
+            return .newBranch(name: bookmark.generateWorktreeName(now: now))
+          }
+        }()
+        let planMode = bookmark.agent?.supportsPlanMode == true && bookmark.planMode
+        let bypassPermissions =
+          UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+        @Shared(.settingsFile) var settingsFile
+        let fetchOrigin = settingsFile.global.fetchOriginBeforeWorktreeCreation
+        let sessionID = uuid()
+        let request = SessionSpawner.LocalRequest(
+          sessionID: sessionID,
+          repository: repository,
+          selection: selection,
+          agent: bookmark.agent,
+          prompt: bookmark.prompt,
+          planMode: planMode,
+          bypassPermissions: bypassPermissions,
+          fetchOriginBeforeCreation: fetchOrigin,
+          rerunOwnedWorktreeID: nil,
+          pullRequestLookup: .idle,
+          suggestedDisplayName: nil,
+          removeBackingWorktreeOnDelete: bookmark.worktreeMode == .newWorktree
+        )
+        let bookmarkID = bookmark.id
+        return .run { send in
+          do {
+            let session = try await SessionSpawner.spawnLocal(request)
+            await send(._bookmarkSpawnCompleted(session: session))
+          } catch {
+            await send(
+              ._bookmarkSpawnFailed(
+                bookmarkID: bookmarkID,
+                message: error.localizedDescription
+              )
+            )
+          }
+        }
+
+      case .bookmarkEditRequested(let id, let repositories):
+        guard let bookmark = state.bookmarks.first(where: { $0.id == id }) else {
+          return .none
+        }
+        let available = IdentifiedArray(uniqueElements: repositories)
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: available,
+          editing: bookmark
+        )
+        return .none
+
+      case .bookmarkDeleteRequested(let id):
+        state.$bookmarks.withLock { $0.removeAll { $0.id == id } }
+        return .none
+
+      case ._bookmarkSpawnCompleted(let session):
+        return .send(.createSession(session))
+
+      case ._bookmarkSpawnFailed(let bookmarkID, let message):
+        boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
 
       case .resumeDetachedSession(let id, let repositories):
@@ -834,6 +928,19 @@ struct BoardFeature {
           state.pendingRerunSessionID = nil
         }
         return .send(.createSession(session))
+
+      case .newTerminalSheet(.presented(.delegate(.bookmarkSaved(let bookmark)))):
+        // Fires BEFORE `.created` in the sheet's `.sessionReady`
+        // ordering, so the bookmark pill is in state the moment the
+        // session card appears.
+        state.$bookmarks.withLock { bookmarks in
+          if let index = bookmarks.firstIndex(where: { $0.id == bookmark.id }) {
+            bookmarks[index] = bookmark
+          } else {
+            bookmarks.append(bookmark)
+          }
+        }
+        return .none
 
       case .newTerminalSheet(.presented(.delegate(.cancel))):
         state.newTerminalSheet = nil

@@ -164,6 +164,35 @@ struct BoardView: View {
       let parked = visible.filter { classify($0) == .parked }
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
+          // Bookmark pills render above "Waiting on Me" when a specific
+          // repo is selected (not "All repos") and that repo has at
+          // least one saved bookmark. Off-filter → hidden entirely so
+          // the attention-zone stays tight.
+          let relevantBookmarks = visibleBookmarks
+          if !relevantBookmarks.isEmpty {
+            BookmarkPillRow(
+              bookmarks: relevantBookmarks,
+              onTap: { bookmark in
+                store.send(
+                  .bookmarkTapped(
+                    id: bookmark.id,
+                    repositories: Array(repositories)
+                  )
+                )
+              },
+              onEdit: { bookmark in
+                store.send(
+                  .bookmarkEditRequested(
+                    id: bookmark.id,
+                    repositories: Array(repositories)
+                  )
+                )
+              },
+              onDelete: { bookmark in
+                store.send(.bookmarkDeleteRequested(id: bookmark.id))
+              }
+            )
+          }
           // "Waiting on Me" always renders — when empty it shows a subtle
           // "Nothing waiting on you" message so the bucket stays visible and
           // the board never looks like the attention-zone just vanished.
@@ -204,6 +233,16 @@ struct BoardView: View {
       }
       .animation(boardReorderAnimation, value: boardLayoutSignature(visible: visible))
     }
+  }
+
+  /// Bookmarks to render above "Waiting on Me". Hidden when the repo
+  /// filter is "All repos" so the pills only appear in an intentional
+  /// single-repo context — preserves board density for the zero-filter
+  /// default view.
+  private var visibleBookmarks: [Bookmark] {
+    guard !store.filters.showsAllRepositories else { return [] }
+    let selected = store.filters.selectedRepositoryIDs
+    return store.bookmarks.filter { selected.contains($0.repositoryID) }
   }
 
   private var emptyState: some View {

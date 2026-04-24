@@ -132,6 +132,20 @@ struct NewTerminalFeature {
     /// when the user keeps targeting that same worktree.
     var rerunOwnedWorktreeID: String?
 
+    // MARK: - Bookmarks
+
+    /// True when the user has ticked "Save as bookmark" in the sheet.
+    /// On create, the delegate emits `.bookmarkSaved` in addition to
+    /// `.created` so BoardFeature can persist the bookmark.
+    var saveAsBookmark: Bool = false
+    /// User-provided name for the bookmark. Required (trimmed-non-empty)
+    /// when `saveAsBookmark` is on.
+    var bookmarkName: String = ""
+    /// Non-nil when the sheet was opened to edit an existing bookmark.
+    /// `bookmarkSaved` preserves this ID so BoardFeature replaces
+    /// in-place rather than appending a duplicate.
+    var editingBookmarkID: Bookmark.ID?
+
     // MARK: - PR URL flow
 
     /// State of the "paste a PR URL into the prompt to pre-configure the
@@ -275,6 +289,61 @@ struct NewTerminalFeature {
       selectedWorkspace = .newBranch(name: "")
       workspaceQuery = ""
     }
+
+    /// Constructor for "edit an existing bookmark": pre-fills the sheet
+    /// from the bookmark and pre-arms the save toggle so submitting
+    /// replaces the bookmark in-place (same ID) and also spawns a
+    /// session — i.e. "save edits + run once".
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      editing bookmark: Bookmark
+    ) {
+      self.availableRepositories = availableRepositories
+      selectedRepositoryID = availableRepositories[id: bookmark.repositoryID]?.id
+        ?? availableRepositories.first?.id
+      prompt = bookmark.prompt
+      agent = bookmark.agent
+      planMode = bookmark.planMode
+      saveAsBookmark = true
+      bookmarkName = bookmark.name
+      editingBookmarkID = bookmark.id
+      switch bookmark.worktreeMode {
+      case .repoRoot:
+        selectedWorkspace = .repoRoot
+        workspaceQuery = ""
+      case .newWorktree:
+        // User will pick a fresh name / branch when they submit; the
+        // auto-generated bookmark worktree names aren't meaningful
+        // here.
+        selectedWorkspace = .newBranch(name: "")
+        workspaceQuery = ""
+      }
+    }
+
+    /// Build the Bookmark to persist if the user opted in. Returns nil
+    /// when the toggle is off, the name is blank, or there's no repo.
+    /// Called from the `.sessionReady` handler so we only persist on
+    /// successful session creation.
+    func pendingBookmarkToSave(for session: AgentSession) -> Bookmark? {
+      guard saveAsBookmark else { return nil }
+      let trimmedName = bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedName.isEmpty else { return nil }
+      let worktreeMode: Bookmark.WorktreeMode = {
+        switch selectedWorkspace {
+        case .repoRoot: return .repoRoot
+        case .newBranch, .existingBranch, .existingWorktree: return .newWorktree
+        }
+      }()
+      return Bookmark(
+        id: editingBookmarkID ?? UUID(),
+        repositoryID: session.repositoryID,
+        name: trimmedName,
+        prompt: session.initialPrompt,
+        agent: session.agent,
+        worktreeMode: worktreeMode,
+        planMode: session.planMode
+      )
+    }
   }
 
   enum Action: BindableAction, Equatable {
@@ -310,6 +379,10 @@ struct NewTerminalFeature {
     enum Delegate: Equatable {
       case cancel
       case created(AgentSession)
+      /// Emitted when `saveAsBookmark` was ticked at submit-time.
+      /// BoardFeature appends to `$bookmarks` (or replaces in-place
+      /// when `editingBookmarkID` is set on the bookmark).
+      case bookmarkSaved(Bookmark)
     }
   }
 
@@ -530,6 +603,17 @@ struct NewTerminalFeature {
 
       case .sessionReady(let session):
         state.isCreating = false
+        // Emit `.bookmarkSaved` alongside `.created` when the user
+        // opted into saving. Ordering matters — BoardFeature persists
+        // the bookmark before (or independent of) spawning session
+        // follow-up work, so the bookmark pill is already in state
+        // when the new session card appears.
+        if let bookmark = state.pendingBookmarkToSave(for: session) {
+          return .merge(
+            .send(.delegate(.bookmarkSaved(bookmark))),
+            .send(.delegate(.created(session)))
+          )
+        }
         return .send(.delegate(.created(session)))
 
       case .creationFailed(let message):
@@ -616,6 +700,13 @@ struct NewTerminalFeature {
       state.validationMessage = "Prompt required."
       return .none
     }
+    if state.saveAsBookmark {
+      let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedName.isEmpty else {
+        state.validationMessage = "Bookmark name required."
+        return .none
+      }
+    }
     state.validationMessage = nil
     state.isCreating = true
 
@@ -638,240 +729,35 @@ struct NewTerminalFeature {
     let fetchOriginBeforeCreation = settingsFile.global.fetchOriginBeforeWorktreeCreation
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
-    let repoSyncClient = self.repoSyncClient
     let sessionID = UUID()
-    let repositoryID = repository.id
     let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
     let removeBackingWorktreeOnDelete = Self.shouldRemoveBackingWorktreeOnDelete(
       selection: selection,
       rerunOwnedWorktreeID: rerunOwnedWorktreeID
     )
-    let gitClient = self.gitClient
-    let terminalClient = self.terminalClient
     // Snapshot at submit-time so the create effect can distinguish a
     // PR-armed existing-branch selection (the banner pinned this branch)
     // from a user-typed one.
     let prLookupAtSubmit = state.pullRequestLookup
 
+    let request = SessionSpawner.LocalRequest(
+      sessionID: sessionID,
+      repository: repository,
+      selection: selection,
+      agent: agent,
+      prompt: trimmedPrompt,
+      planMode: planMode,
+      bypassPermissions: bypassPermissions,
+      fetchOriginBeforeCreation: fetchOriginBeforeCreation,
+      rerunOwnedWorktreeID: rerunOwnedWorktreeID,
+      pullRequestLookup: prLookupAtSubmit,
+      suggestedDisplayName: suggestedDisplayName,
+      removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete
+    )
+
     return .run { send in
       do {
-        let worktree: Worktree
-        switch selection {
-        case .newBranch(let rawName):
-          let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-          let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? "HEAD"
-          // Pre-worktree fetch so the new branch is based on the
-          // *actually* latest upstream, not the local cache. Failures
-          // log but don't block — an offline/auth-broken fetch
-          // shouldn't lose the user their prompt.
-          if fetchOriginBeforeCreation {
-            let remotes = (try? await gitClient.remoteNames(repository.rootURL)) ?? []
-            if let matchedRemote = baseRef.supacoolMatchingRemote(from: remotes) {
-              do {
-                try await gitClient.fetchRemote(matchedRemote, repository.rootURL)
-              } catch {
-                newTerminalLogger.warning(
-                  "Pre-worktree fetch \(matchedRemote) failed for "
-                    + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-                )
-              }
-            }
-          }
-          let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
-            for: repository.rootURL,
-            globalDefaultPath: nil,
-            repositoryOverridePath: nil
-          )
-          worktree = try await gitClient.createWorktree(
-            branchName,
-            repository.rootURL,
-            baseDirectory,
-            false,
-            false,
-            baseRef
-          )
-
-        case .existingBranch(let rawName):
-          let branchName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-          // PR-armed create: the PR banner pinned this branch name, so
-          // we *know* it lives on the remote. Force the fetch even if
-          // the user has the global setting disabled — without it,
-          // `git worktree add` would fail with "invalid reference" on a
-          // branch that's never been fetched into this clone.
-          let isPRArmed = Self.isPRArmedExistingBranch(
-            pullRequestLookup: prLookupAtSubmit,
-            branchName: branchName
-          )
-          let shouldFetchRemote = fetchOriginBeforeCreation || isPRArmed
-          let remotes = shouldFetchRemote
-            ? ((try? await gitClient.remoteNames(repository.rootURL)) ?? [])
-            : []
-          if shouldFetchRemote, let firstRemote = remotes.first {
-            do {
-              try await gitClient.fetchRemote(firstRemote, repository.rootURL)
-            } catch {
-              newTerminalLogger.warning(
-                "Pre-worktree fetch \(firstRemote) failed for "
-                  + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-              )
-            }
-          }
-          // The first fetch may have failed silently (offline / auth),
-          // and modern git's `worktree add` DWIM only triggers once the
-          // remote-tracking ref is already in .git/refs/remotes. If the
-          // local branch still doesn't resolve, do a targeted refspec
-          // fetch that creates the local branch directly — one-shot,
-          // so the next step always sees a resolvable ref.
-          let localBranchPresent =
-            (try? await gitClient.branchExists(branchName, repository.rootURL)) ?? false
-          if !localBranchPresent {
-            // Reuse `remotes` if we already populated it above; if not
-            // (general setting off and not PR-armed — this branch), probe
-            // remotes now for the refspec-fetch fallback.
-            let resolvedRemotes: [String]
-            if remotes.isEmpty {
-              resolvedRemotes =
-                (try? await gitClient.remoteNames(repository.rootURL)) ?? []
-            } else {
-              resolvedRemotes = remotes
-            }
-            guard let firstRemote = resolvedRemotes.first else {
-              throw NewTerminalError.branchNotFoundAfterFetch(name: branchName)
-            }
-            do {
-              try await gitClient.fetchBranchRefspec(
-                branchName,
-                firstRemote,
-                repository.rootURL
-              )
-            } catch {
-              newTerminalLogger.warning(
-                "Refspec fetch \(firstRemote) \(branchName):\(branchName) failed for "
-                  + "\(repository.rootURL.path(percentEncoded: false)): \(error)"
-              )
-              // If the branch doesn't exist locally and the refspec
-              // fetch couldn't create it, fail now with a clear
-              // message rather than handing git an invalid reference.
-              throw NewTerminalError.branchNotFoundAfterFetch(name: branchName)
-            }
-          }
-          let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
-            for: repository.rootURL,
-            globalDefaultPath: nil,
-            repositoryOverridePath: nil
-          )
-          // Common rerun gotcha: the previous session's worktree
-          // directory is still on disk (git's record was dropped, or
-          // supacode's repo cache hasn't refreshed yet) — `worktree
-          // add` then fails with "already exists". If the path looks
-          // like a live git worktree, adopt it instead of failing.
-          if let adopted = Self.adoptExistingWorktreeDirectory(
-            branchName: branchName,
-            baseDirectory: baseDirectory,
-            repoRootURL: repository.rootURL
-          ) {
-            worktree = adopted
-          } else {
-            worktree = try await gitClient.createWorktreeForExistingBranch(
-              branchName,
-              repository.rootURL,
-              baseDirectory
-            )
-          }
-
-        case .existingWorktree(let id):
-          // Pinned by the sheet's picker. If the record vanished
-          // between picker-time and submit we bail. `Identifiable`
-          // on Worktree is @MainActor-isolated, so do the lookup there.
-          let picked: Worktree? = await MainActor.run {
-            repository.worktrees.first { $0.id == id }
-          }
-          guard let picked else { throw NewTerminalError.worktreeMissing }
-          worktree = picked
-
-        case .repoRoot:
-          // Pre-flight: try to fast-forward the repo root to
-          // origin/<default> before we hand the terminal to the user.
-          // Supacool's model is that users don't modify the root
-          // directly — worktrees are where work happens — so "on
-          // investigate, put me on latest main" is the expected
-          // behavior. The client has conservative guards built in;
-          // dirty trees, non-default branches, fetch errors, and
-          // diverged histories all cause it to skip silently without
-          // mutating anything. Failure never blocks the spawn.
-          let syncOutcome = await repoSyncClient.syncIfSafe(repository.rootURL)
-          newTerminalLogger.info(
-            "Repo-root pre-flight sync for "
-              + "\(repository.rootURL.path(percentEncoded: false)): \(syncOutcome)"
-          )
-          // Directory mode: resolve the repo-root worktree, or
-          // synthesize one if discovery hasn't caught up yet.
-          let rootURL = repository.rootURL.standardizedFileURL
-          worktree = await MainActor.run {
-            let existing = repository.worktrees.first { wt in
-              wt.workingDirectory == rootURL
-            }
-            return existing
-              ?? Worktree(
-                id: rootURL.path(percentEncoded: false),
-                name: repository.name,
-                detail: "",
-                workingDirectory: rootURL,
-                repositoryRootURL: rootURL
-              )
-          }
-        }
-
-        // Spawn the tab, using sessionID as the tab ID so the
-        // AgentSession can reference it later.
-        let input: String
-        switch (agent, trimmedPrompt.isEmpty) {
-        case (let agent?, false):
-          input = agent.command(
-            prompt: trimmedPrompt,
-            bypassPermissions: bypassPermissions,
-            planMode: planMode
-          ) + "\r"
-        case (let agent?, true):
-          input = agent.commandWithoutPrompt(
-            bypassPermissions: bypassPermissions,
-            planMode: planMode
-          ) + "\r"
-        case (nil, false):
-          input = trimmedPrompt + "\r"
-        case (nil, true):
-          input = ""
-        }
-        await terminalClient.send(
-          .createTabWithInput(
-            worktree,
-            input: input,
-            // Run the repo's setup script (Settings → Repository
-            // Settings → Setup Script) before the agent command —
-            // but only when we're actually in a linked worktree.
-            // Setup scripts are worktree-scoped by contract; running
-            // them inside the main repo (directory-mode session,
-            // where `worktree.workingDirectory == repositoryRootURL`)
-            // historically blew away node_modules in repos whose
-            // setup script was pnpm/yarn-based. WorktreeTerminalManager
-            // has the same guard, but expressing it here keeps the
-            // call site honest.
-            runSetupScriptIfNew: worktree.workingDirectory.standardizedFileURL
-              != worktree.repositoryRootURL.standardizedFileURL,
-            id: sessionID
-          )
-        )
-
-        let session = AgentSession(
-          id: sessionID,
-          repositoryID: repositoryID,
-          worktreeID: worktree.id,
-          agent: agent,
-          initialPrompt: trimmedPrompt,
-          displayName: suggestedDisplayName,
-          removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
-          planMode: planMode
-        )
+        let session = try await SessionSpawner.spawnLocal(request)
         await send(.sessionReady(session))
       } catch {
         await send(.creationFailed(message: error.localizedDescription))
@@ -1310,7 +1196,7 @@ extension String {
   /// prefixes (e.g. `origin` vs `origin-mirror`). Named distinctly from
   /// upstream supacode's `matchingRemote` to avoid collisions on future
   /// upstream syncs.
-  fileprivate nonisolated func supacoolMatchingRemote(from remotes: [String]) -> String? {
+  nonisolated func supacoolMatchingRemote(from remotes: [String]) -> String? {
     remotes.sorted { $0.count > $1.count }.first { hasPrefix("\($0)/") }
   }
 }
