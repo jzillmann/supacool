@@ -454,13 +454,13 @@ struct BoardRootView: View {
           }
         )
       }
-      // Memory footprint sits next to the repo picker as a passive
-      // status pill — leading padding gives it visual breathing room
-      // from the picker so the two read as separate units.
+      // A fixed spacer breaks the navigation group so the memory
+      // footprint chip renders as its own toolbar pill rather than
+      // getting absorbed into the repo picker's capsule.
+      ToolbarSpacer(.fixed)
       ToolbarItem(placement: .navigation) {
         if let footprintStore {
           FootprintChip(store: footprintStore)
-            .padding(.leading, 12)
         }
       }
       // Push the + button to the far right so there's breathing room

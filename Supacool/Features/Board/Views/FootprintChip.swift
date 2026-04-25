@@ -37,10 +37,6 @@ struct FootprintChip: View {
           .font(.caption.monospacedDigit())
       }
       .foregroundStyle(tint)
-      .padding(.horizontal, 7)
-      .padding(.vertical, 3)
-      .background(tint.opacity(0.12))
-      .clipShape(Capsule())
     }
     .buttonStyle(.plain)
     .help(helpText)
