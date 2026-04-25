@@ -773,8 +773,7 @@ struct NewTerminalFeature {
     let sessionID = UUID()
     let rerunOwnedWorktreeID = state.rerunOwnedWorktreeID
     let removeBackingWorktreeOnDelete = Self.shouldRemoveBackingWorktreeOnDelete(
-      selection: selection,
-      rerunOwnedWorktreeID: rerunOwnedWorktreeID
+      selection: selection
     )
     let prLookupAtSubmit = state.pullRequestLookup
 
@@ -1224,16 +1223,21 @@ struct NewTerminalFeature {
     )
   }
 
+  /// Policy: any session that points at a worktree (= anything except
+  /// `.repoRoot`) cleans up that worktree when the card is removed.
+  /// The earlier "only own what we created" carve-out gave us
+  /// orphaned directories whenever a user picked an existing worktree
+  /// from the picker — too easy to forget the cleanup. The
+  /// `sessionsUsingWorkspace` ref-count guard in `BoardFeature
+  /// .removeSession` still prevents removal of a worktree that
+  /// another card is using.
   static func shouldRemoveBackingWorktreeOnDelete(
-    selection: WorkspaceSelection,
-    rerunOwnedWorktreeID: String?
+    selection: WorkspaceSelection
   ) -> Bool {
     switch selection {
     case .repoRoot:
       return false
-    case .existingWorktree(let id):
-      return rerunOwnedWorktreeID == id
-    case .existingBranch, .newBranch:
+    case .existingWorktree, .existingBranch, .newBranch:
       return true
     }
   }

@@ -59,8 +59,9 @@ enum SessionSpawner {
   /// because the caller (BoardFeature.worktreeConflictReuseTapped) has
   /// already picked the conflicting worktree from the alert state, and
   /// the request's original selection (`.existingBranch(name)`) no
-  /// longer points at the right place. Forces
-  /// `removeBackingWorktreeOnDelete=false` since we didn't create it.
+  /// longer points at the right place. Inherits the request's
+  /// `removeBackingWorktreeOnDelete` so the global "any worktree-
+  /// backed card cleans up on remove" policy applies here too.
   @MainActor
   static func spawnLocalAdopting(
     request: LocalRequest,
@@ -69,7 +70,7 @@ enum SessionSpawner {
     try await spawnInto(
       worktree: existingWorktree,
       request: request,
-      removeBackingWorktreeOnDelete: false
+      removeBackingWorktreeOnDelete: request.removeBackingWorktreeOnDelete
     )
   }
 
