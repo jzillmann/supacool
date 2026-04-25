@@ -60,17 +60,18 @@ nonisolated enum AgentRegistry {
     uniqueKeysWithValues: builtins.map { ($0.id, $0) }
   )
 
-  // Icons: SF Symbols for now. A follow-up commit replaces these with
-  // bundled vendor logos (Anthropic burst, OpenAI mark, pi.dev/logo.svg)
-  // in an AgentIcons.xcassets catalog — registry stays the same shape,
-  // the entries flip from `.symbol` to `.asset` when assets land.
+  // Icons: vendor logos bundled in supacode/Assets.xcassets. Claude and
+  // Codex marks render in their native brand colors (template-rendering-
+  // intent: original); the pi mark is monochrome so it template-renders
+  // and picks up the agent's tintColor. Tints set below also drive chip
+  // backgrounds (e.g. agentColor.opacity(0.12) in FullScreenTerminalView).
   private static let claudeBuiltin = AgentType(
     id: "claude",
     displayName: "Claude Code",
     binary: "claude",
     bypassPermissionsFlag: "--dangerously-skip-permissions",
     supportsPlanMode: true,
-    icon: .symbol("brain"),
+    icon: .asset("claude-code-mark"),
     tintColorName: "purple",
     launchTemplate: "{binary}{flags} {prompt}",
     resumeTemplate: "{binary} --resume {id}{flags}",
@@ -85,7 +86,7 @@ nonisolated enum AgentRegistry {
     binary: "codex",
     bypassPermissionsFlag: "--dangerously-bypass-approvals-and-sandbox",
     supportsPlanMode: false,
-    icon: .symbol("terminal.fill"),
+    icon: .asset("codex-mark"),
     tintColorName: "cyan",
     launchTemplate: "{binary}{flags} {prompt}",
     resumeTemplate: "{binary} resume {id}{flags}",
@@ -108,7 +109,7 @@ nonisolated enum AgentRegistry {
     binary: "pi",
     bypassPermissionsFlag: nil,
     supportsPlanMode: false,
-    icon: .symbol("circle.hexagongrid.fill"),
+    icon: .asset("pi-mark"),
     tintColorName: "orange",
     launchTemplate: "{binary}{flags} {prompt}",
     resumeTemplate: "{binary} --session {id}{flags}",
