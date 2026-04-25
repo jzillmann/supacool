@@ -159,9 +159,14 @@ struct NewTerminalFeature {
     /// input. Resets to `.idle` when the URL is removed from the prompt.
     var pullRequestLookup: PullRequestLookupState = .idle
 
-    init(availableRepositories: IdentifiedArrayOf<Repository>) {
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      preferredRepositoryID: Repository.ID? = nil
+    ) {
       self.availableRepositories = availableRepositories
-      selectedRepositoryID = availableRepositories.first?.id
+      selectedRepositoryID =
+        preferredRepositoryID.flatMap { availableRepositories[id: $0]?.id }
+        ?? availableRepositories.first?.id
     }
 
     /// Constructor for "rerun": pre-fills the sheet with values from an

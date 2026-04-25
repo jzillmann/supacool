@@ -212,10 +212,15 @@ struct AppFeature {
       case .repositories(.delegate(.repositoriesChanged(let repositories))):
         let archivedIDs = state.repositories.archivedWorktreeIDSet
         let deleteScriptIDs = state.repositories.deleteScriptWorktreeIDs
+        // Supacool: `Repository.worktrees` only carries the repo-root entry
+        // (mainOnly filter), so worktree-backed and remote agent sessions
+        // are invisible here. Union the live session worktreeIDs into the
+        // keep set so adding a repo doesn't wipe their terminal state.
+        let sessionWorktreeIDs = Set(state.board.sessions.map(\.worktreeID))
         let ids = Set(
           repositories.flatMap { $0.worktrees.map(\.id) }
             .filter { !archivedIDs.contains($0) || deleteScriptIDs.contains($0) }
-        )
+        ).union(sessionWorktreeIDs)
         state.repositories.runScriptWorktreeIDs.formIntersection(ids)
         let recencyIDs = CommandPaletteFeature.recencyRetentionIDs(from: repositories)
         let worktrees = state.repositories.worktreesForInfoWatcher()

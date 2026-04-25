@@ -765,7 +765,11 @@ struct BoardFeature {
 
       case .openNewTerminalSheet(let repositories):
         state.newTerminalSheet = NewTerminalFeature.State(
-          availableRepositories: IdentifiedArray(uniqueElements: repositories)
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          preferredRepositoryID: filteredPreferredRepositoryID(
+            in: repositories,
+            filters: state.filters
+          )
         )
         return .none
 
@@ -777,7 +781,13 @@ struct BoardFeature {
             inheritingFrom: session
           )
         } else {
-          state.newTerminalSheet = NewTerminalFeature.State(availableRepositories: available)
+          state.newTerminalSheet = NewTerminalFeature.State(
+            availableRepositories: available,
+            preferredRepositoryID: filteredPreferredRepositoryID(
+              in: repositories,
+              filters: state.filters
+            )
+          )
         }
         return .none
 
@@ -1970,6 +1980,20 @@ nonisolated func sanitizeSessionTitle(_ raw: String) -> String {
   result = result.trimmingCharacters(in: .whitespaces)
   while result.hasSuffix(".") { result.removeLast() }
   return String(result.prefix(60))
+}
+
+/// When the toolbar filter is narrowed to exactly one repo, prefer that
+/// repo as the New Terminal sheet's default selection. Returns nil for
+/// "All" or multi-selected filters so the sheet falls back to its usual
+/// `availableRepositories.first` default.
+private func filteredPreferredRepositoryID(
+  in repositories: [Repository],
+  filters: BoardFilters
+) -> Repository.ID? {
+  guard !filters.showsAllRepositories else { return nil }
+  let selected = repositories.filter { filters.selectedRepositoryIDs.contains($0.id) }
+  guard selected.count == 1 else { return nil }
+  return selected.first?.id
 }
 
 // MARK: - Derived queries

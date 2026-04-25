@@ -63,11 +63,14 @@ struct RepoPickerButton: View {
       if filters.showsAllRepositories {
         return "All repositories"
       }
-      let visible = repositories.filter { filters.includes(repositoryID: $0.id) }.count
-      if visible == repositories.count {
+      let visibleRepos = repositories.filter { filters.includes(repositoryID: $0.id) }
+      if visibleRepos.count == repositories.count {
         return "All repositories"
       }
-      return "\(visible) of \(repositories.count)"
+      if visibleRepos.count == 1, let only = visibleRepos.first {
+        return only.name
+      }
+      return "\(visibleRepos.count) of \(repositories.count)"
     }
   }
 
