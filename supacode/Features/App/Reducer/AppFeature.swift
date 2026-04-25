@@ -117,7 +117,12 @@ struct AppFeature {
             }
           },
           checkStaleHooksEffect(),
-          evaluateGettingStartedEffect(state: state)
+          evaluateGettingStartedEffect(state: state),
+          // Permanent-delete any trashed sessions past their 3-day
+          // retention window. Routes back through `deleteFromTrash` →
+          // `.delegate(.sessionRemoved)` so the same git cleanup path
+          // runs as for an explicit "Delete now" tap.
+          .send(.board(._sweepExpiredTrash))
         )
 
       case .scenePhaseChanged(let phase):

@@ -6,6 +6,10 @@ import Testing
 @testable import Supacool
 
 @MainActor
+// `@Shared(.trashedSessions)` is process-global; the trash + removeSession
+// tests both mutate it and would race when Swift Testing parallelizes them.
+// Serialize the whole suite — precedent: `AppFeatureDeeplinkTests`.
+@Suite(.serialized)
 struct BoardFeatureTests {
   // MARK: - Session CRUD
 
@@ -121,15 +125,29 @@ struct BoardFeatureTests {
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     state.focusedSessionID = session.id
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
     }
 
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: session.repositoryID,
+      worktreeID: session.worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
     await store.send(.removeSession(id: session.id)) {
       $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
       $0.focusedSessionID = nil
     }
+    // Trash-push always defers worktree cleanup to permanent-delete /
+    // sweep — delegate flags reflect that (false / empty).
     await store.receive(
       .delegate(
         .sessionRemoved(
@@ -143,7 +161,7 @@ struct BoardFeatureTests {
     )
   }
 
-  @Test(.dependencies) func removeSessionDelegatesOwnedWorktreeDeletion() async {
+  @Test(.dependencies) func removeSessionCapturesOwnedWorktreeForTrash() async {
     let session = Self.sampleSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo/wt-1",
@@ -151,13 +169,25 @@ struct BoardFeatureTests {
     )
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
     }
 
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      deleteBackingWorktree: true,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
     await store.send(.removeSession(id: session.id)) {
       $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
     }
     await store.receive(
       .delegate(
@@ -165,7 +195,7 @@ struct BoardFeatureTests {
           sessionID: session.id,
           repositoryID: "/tmp/repo",
           worktreeID: "/tmp/repo/wt-1",
-          deleteBackingWorktree: true,
+          deleteBackingWorktree: false,
           additionalWorktreeIDsToDelete: []
         )
       )
@@ -186,15 +216,29 @@ struct BoardFeatureTests {
     )
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [removed, sibling] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
     }
 
+    // Captured `deleteBackingWorktree=false` in trash because the
+    // sibling session still references the same worktree at trash time.
+    let expectedEntry = TrashedSession(
+      session: removed,
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
     await store.send(.removeSession(id: removed.id)) {
       $0.$sessions.withLock { sessions in
         sessions = [sibling]
       }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
     }
     await store.receive(
       .delegate(
@@ -209,12 +253,12 @@ struct BoardFeatureTests {
     )
   }
 
-  @Test(.dependencies) func removeSessionCleansUpConvertedWorktree() async {
+  @Test(.dependencies) func removeSessionCapturesConvertedWorktreeForTrash() async {
     // A repo-root session that used the "convert to worktree" popover
     // has `worktreeID == repositoryID` but a divergent
-    // `currentWorkspacePath`. Removing the card should delete the
-    // converted worktree on disk so we don't leak directories every
-    // time the user trashes a converted session.
+    // `currentWorkspacePath`. The trash entry must remember the
+    // converted path so the eventual sweep / "Delete now" cleans it up
+    // rather than leaving a dangling directory.
     let session = AgentSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo",
@@ -224,13 +268,25 @@ struct BoardFeatureTests {
     )
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
     }
 
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: ["/tmp/repo/worktrees/feature-x"],
+      trashedAt: trashedAt
+    )
     await store.send(.removeSession(id: session.id)) {
       $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
     }
     await store.receive(
       .delegate(
@@ -239,17 +295,13 @@ struct BoardFeatureTests {
           repositoryID: "/tmp/repo",
           worktreeID: "/tmp/repo",
           deleteBackingWorktree: false,
-          additionalWorktreeIDsToDelete: ["/tmp/repo/worktrees/feature-x"]
+          additionalWorktreeIDsToDelete: []
         )
       )
     )
   }
 
   @Test(.dependencies) func removeSessionKeepsConvertedWorktreeIfSharedWithOtherSession() async {
-    // If another live session points at the same converted worktree
-    // (e.g. a sibling session created via "new terminal inheriting from
-    // focused session"), deleting the original must NOT remove the
-    // worktree out from under the sibling.
     let convertedPath = "/tmp/repo/worktrees/shared-x"
     let converter = AgentSession(
       repositoryID: "/tmp/repo",
@@ -260,19 +312,31 @@ struct BoardFeatureTests {
     )
     let sibling = AgentSession(
       repositoryID: "/tmp/repo",
-      worktreeID: convertedPath, // sibling was spawned directly in the worktree
+      worktreeID: convertedPath,
       agent: .claude,
       initialPrompt: "Sibling"
     )
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [converter, sibling] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
     }
 
+    let expectedEntry = TrashedSession(
+      session: converter,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
     await store.send(.removeSession(id: converter.id)) {
       $0.$sessions.withLock { $0 = [sibling] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
     }
     await store.receive(
       .delegate(
@@ -285,6 +349,111 @@ struct BoardFeatureTests {
         )
       )
     )
+  }
+
+  // MARK: - Trash flow
+
+  @Test(.dependencies) func restoreFromTrashBringsSessionBack() async {
+    let session = Self.sampleSession()
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let entry = TrashedSession(
+      session: session,
+      repositoryID: session.repositoryID,
+      worktreeID: session.worktreeID,
+      deleteBackingWorktree: true,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
+    var state = BoardFeature.State()
+    state.$trashedSessions.withLock { $0 = [entry] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.restoreFromTrash(id: session.id)) {
+      $0.$trashedSessions.withLock { $0 = [] }
+      $0.$sessions.withLock { $0 = [session] }
+    }
+  }
+
+  @Test(.dependencies) func deleteFromTrashFiresCapturedCleanup() async {
+    let session = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      removeBackingWorktreeOnDelete: true
+    )
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let entry = TrashedSession(
+      session: session,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      deleteBackingWorktree: true,
+      additionalWorktreeIDsToDelete: ["/tmp/repo/extra"],
+      trashedAt: trashedAt
+    )
+    var state = BoardFeature.State()
+    state.$trashedSessions.withLock { $0 = [entry] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.deleteFromTrash(id: session.id)) {
+      $0.$trashedSessions.withLock { $0 = [] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/wt-1",
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: ["/tmp/repo/extra"]
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func sweepExpiredTrashRemovesEntriesPastWindow() async {
+    let now = Date(timeIntervalSince1970: 1_750_000_000)
+    let fresh = Self.sampleSession()
+    let stale = Self.sampleSession()
+    let staleEntry = TrashedSession(
+      session: stale,
+      repositoryID: stale.repositoryID,
+      worktreeID: stale.worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      // Trashed 4 days ago — past the 3-day window.
+      trashedAt: now.addingTimeInterval(-4 * 24 * 60 * 60)
+    )
+    let freshEntry = TrashedSession(
+      session: fresh,
+      repositoryID: fresh.repositoryID,
+      worktreeID: fresh.worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: now.addingTimeInterval(-1 * 24 * 60 * 60)
+    )
+    var state = BoardFeature.State()
+    state.$trashedSessions.withLock { $0 = [staleEntry, freshEntry] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    // Off-exhaustivity: sweep dispatches one .deleteFromTrash → one
+    // .delegate.sessionRemoved → state mutations on @Shared trash.
+    // Asserting the final state is enough; the precise interleaving
+    // varies by .merge ordering.
+    store.exhaustivity = .off
+
+    await store.send(._sweepExpiredTrash)
+    await store.receive(\.deleteFromTrash)
+    await store.receive(\.delegate.sessionRemoved)
+    #expect(store.state.trashedSessions.map(\.id) == [freshEntry.id])
   }
 
   @Test(.dependencies) func markCompletedOnceSetsFlag() async {
@@ -900,6 +1069,9 @@ struct BoardFeatureTests {
 
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      // .removeSession now reads `\.date` to stamp the trash entry.
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
     }
     store.exhaustivity = .off
 
@@ -1091,13 +1263,19 @@ struct BoardFeatureTests {
     let session = Self.sampleSession()
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
+    state.$trashedSessions.withLock { $0 = [] }
     state.trayCards = [Self.sessionCreatingCard(for: session)]
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      // .removeSession reads `\.date` to stamp the trash entry.
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
     }
+    // Reducer writes to $trashedSessions; this test only cares about
+    // tray-card cleanup, so the rest of the state is non-exhaustive.
+    store.exhaustivity = .off
 
     await store.send(.removeSession(id: session.id)) {
-      $0.$sessions.withLock { $0 = [] }
       $0.trayCards = []
     }
     await store.receive(\.delegate.sessionRemoved)

@@ -199,6 +199,14 @@ struct BoardRootView: View {
     ) { janitorStore in
       WorktreeJanitorSheet(store: janitorStore)
     }
+    .sheet(
+      isPresented: Binding(
+        get: { store.isTrashSheetPresented },
+        set: { if !$0 { store.send(.dismissTrashSheet) } }
+      )
+    ) {
+      TrashSheet(store: store)
+    }
   }
 
   @ViewBuilder
@@ -473,6 +481,24 @@ struct BoardRootView: View {
             ? "Auto-return to board after submitting a prompt (on) — click to disable"
             : "Auto-return to board after submitting a prompt (off) — click to enable"
         )
+      }
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          store.send(.openTrashSheet)
+        } label: {
+          let count = store.trashedSessions.count
+          if count > 0 {
+            Label("Trash (\(count))", systemImage: "trash")
+          } else {
+            Label("Trash", systemImage: "trash")
+          }
+        }
+        .help(
+          store.trashedSessions.isEmpty
+            ? "Trash is empty"
+            : "Open trash — \(store.trashedSessions.count) recoverable card(s)"
+        )
+        .disabled(store.trashedSessions.isEmpty)
       }
       ToolbarItem(placement: .primaryAction) {
         Button {
