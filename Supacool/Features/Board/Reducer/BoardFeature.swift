@@ -1378,6 +1378,9 @@ struct BoardFeature {
         case .hookInstallFailed:
           state.trayCards.remove(id: id)
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
+        case .worktreeDeleteFailed:
+          state.trayCards.remove(id: id)
+          return .none
         }
 
       case .trayCardSecondaryTapped(let id):
@@ -1389,7 +1392,7 @@ struct BoardFeature {
           // `.hookInstallFailed` card describing the failure.
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
-        case .sessionCreating, .hookInstallFailed:
+        case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed:
           return .none
         }
 

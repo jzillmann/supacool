@@ -33,12 +33,18 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// Settings so they can diagnose; × dismisses.
   case hookInstallFailed(slot: AgentHookSlot, message: String)
 
+  /// `git worktree remove` failed during card-removal cleanup. Without
+  /// this surface the directory would silently linger on disk — the
+  /// only feedback was a `.debug` log. Primary tap dismisses (nothing
+  /// to navigate to); user can rerun the cleanup via Manage Worktrees…
+  case worktreeDeleteFailed(path: String, message: String)
+
   /// Whether this kind offers a secondary call-to-action button next to
   /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
   var hasSecondaryAction: Bool {
     switch self {
     case .staleHooks: true
-    case .sessionCreating, .hookInstallFailed: false
+    case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed: false
     }
   }
 }

@@ -150,6 +150,15 @@ private struct TrayCardView: View {
         subtitle: message,
         helpText: "Open Settings → Coding Agents to retry."
       )
+    case .worktreeDeleteFailed(let path, let message):
+      let folder = URL(fileURLWithPath: path).lastPathComponent
+      return TrayCardPresentation(
+        icon: "exclamationmark.triangle.fill",
+        tint: .orange,
+        title: "Couldn't remove worktree",
+        subtitle: "\(folder) — \(message)",
+        helpText: "The directory may still be on disk. Dismiss to clear."
+      )
     }
   }
 

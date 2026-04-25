@@ -258,6 +258,14 @@ struct AppFeature {
           await terminalClient.send(.selectTab(worktree, tabID: tabId))
         }
 
+      case .repositories(.delegate(.worktreeDeleteFailed(let worktreeID, let message))):
+        // Surface the failure to the user — RepositoriesFeature also
+        // sets `state.alert`, but that alert renders in the dead
+        // sidebar UI which Supacool doesn't show. The tray card is the
+        // only place a Matrix Board user will actually notice this.
+        let card = TrayCard(kind: .worktreeDeleteFailed(path: worktreeID, message: message))
+        return .send(.board(.trayCardPushed(card)))
+
       case .board(.delegate(.prioritySessionTerminated(let title, let body))):
         guard state.scenePhase != .active, state.settings.systemNotificationsEnabled else {
           return .none

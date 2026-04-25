@@ -1,5 +1,6 @@
 import Clocks
 import ComposableArchitecture
+import ConcurrencyExtras
 import CustomDump
 import DependenciesTestSupport
 import Foundation
@@ -2367,6 +2368,63 @@ struct RepositoriesFeatureTests {
       $0.deleteScriptWorktreeIDs = []
       $0.alert = expectedAlert
     }
+  }
+
+  @Test(.dependencies)
+  func deleteWorktreeConfirmedFallsBackToShimWhenWorktreeAbsent() async {
+    // SessionSpawner creates the on-disk worktree before RepositoriesFeature
+    // has reloaded, so state.repositories doesn't contain it yet. Before
+    // the fix, `deleteWorktreeConfirmed` would silently no-op and leave
+    // the directory on disk. With the shim fallback it reaches
+    // `gitClient.removeWorktree` against a path-derived Worktree.
+    let repoRoot = "/tmp/repo"
+    let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
+    let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree])
+    let state = makeState(repositories: [repository])
+    @Shared(.repositorySettings(repository.rootURL)) var repositorySettings
+    $repositorySettings.withLock {
+      $0.deleteScript = "   \n  "
+    }
+    let phantomWorktreeID = "\(repoRoot)/just-spawned"
+    let removedPath = LockIsolated<String?>(nil)
+    let store = TestStore(initialState: state) {
+      RepositoriesFeature()
+    } withDependencies: {
+      $0.gitClient.removeWorktree = { worktree, _ in
+        let url = await MainActor.run { worktree.workingDirectory }
+        removedPath.setValue(url.path(percentEncoded: false))
+        return url
+      }
+      $0.gitClient.worktrees = { _ in [mainWorktree] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteWorktreeConfirmed(phantomWorktreeID, repository.id))
+    await store.receive(\.worktreeDeleted)
+    #expect(removedPath.value == phantomWorktreeID)
+  }
+
+  @Test(.dependencies) func deleteWorktreeFailedEmitsDelegate() async {
+    let repoRoot = "/tmp/repo"
+    let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
+    let featureWorktree = makeWorktree(
+      id: "\(repoRoot)/feature",
+      name: "feature",
+      repoRoot: repoRoot
+    )
+    let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree, featureWorktree])
+    var state = makeState(repositories: [repository])
+    state.deletingWorktreeIDs = [featureWorktree.id]
+    let store = TestStore(initialState: state) {
+      RepositoriesFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteWorktreeFailed("permission denied", worktreeID: featureWorktree.id))
+    await store.receive(
+      \.delegate.worktreeDeleteFailed,
+      timeout: .seconds(1)
+    )
   }
 
   @Test func deleteWorktreeConfirmedNoopsWhenAlreadyArchiving() async {

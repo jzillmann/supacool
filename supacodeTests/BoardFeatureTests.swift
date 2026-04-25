@@ -1184,6 +1184,21 @@ struct BoardFeatureTests {
     await store.receive(\.delegate.openSettingsRequested)
   }
 
+  @Test(.dependencies) func trayCardPrimaryTappedWorktreeDeleteFailedJustDismisses() async {
+    let card = TrayCard(
+      kind: .worktreeDeleteFailed(path: "/tmp/repo/feat-x", message: "permission denied")
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardPrimaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+  }
+
   // MARK: - Worktree-conflict alert
 
   @Test(.dependencies) func sessionSpawnConflictPresentsAlertAndKeepsPlaceholder() async {

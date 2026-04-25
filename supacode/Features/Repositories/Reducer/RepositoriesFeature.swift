@@ -312,6 +312,10 @@ struct RepositoriesFeature {
     case worktreeCreated(Worktree)
     case runBlockingScript(Worktree, repositoryID: Repository.ID, kind: BlockingScriptKind, script: String)
     case selectTerminalTab(Worktree.ID, tabId: TerminalTabID)
+    /// `git worktree remove` failed for this worktree. Emitted from
+    /// `deleteWorktreeFailed` so AppFeature/Supacool can surface the
+    /// error (the legacy alert path is invisible on the Matrix Board).
+    case worktreeDeleteFailed(worktreeID: Worktree.ID, message: String)
   }
 
   @Dependency(AnalyticsClient.self) private var analyticsClient
@@ -1716,13 +1720,25 @@ struct RepositoriesFeature {
         )
 
       case .deleteWorktreeConfirmed(let worktreeID, let repositoryID):
-        guard let repository = state.repositories[id: repositoryID],
-          let worktree = repository.worktrees[id: worktreeID]
-        else {
-          repositoriesLogger.debug(
-            "deleteWorktreeConfirmed: worktree \(worktreeID) not found in repository \(repositoryID)."
+        guard let repository = state.repositories[id: repositoryID] else {
+          repositoriesLogger.warning(
+            "deleteWorktreeConfirmed: repository \(repositoryID) not found"
           )
           return .none
+        }
+        // Fall back to a shim when state hasn't yet absorbed this
+        // worktree — happens when SessionSpawner created the directory
+        // on disk and `reloadRepositories` hasn't fired since. Without
+        // this, session-removal cleanup silently no-ops and leaves the
+        // worktree on disk forever (only a `.debug` log to record it).
+        let worktree =
+          repository.worktrees[id: worktreeID]
+          ?? Self.shimWorktree(worktreeID: worktreeID, repository: repository)
+        if repository.worktrees[id: worktreeID] == nil {
+          repositoriesLogger.info(
+            "deleteWorktreeConfirmed: \(worktreeID) not in state — using shim "
+              + "(\(worktree.workingDirectory.path(percentEncoded: false)))"
+          )
         }
         if state.archivingWorktreeIDs.contains(worktree.id) {
           return .none
@@ -1774,18 +1790,22 @@ struct RepositoriesFeature {
         }
 
       case .deleteWorktreeApply(let worktreeID, let repositoryID):
-        guard let repository = state.repositories[id: repositoryID],
-          let worktree = repository.worktrees[id: worktreeID]
-        else {
+        guard let repository = state.repositories[id: repositoryID] else {
           repositoriesLogger.warning(
-            "deleteWorktreeApply: worktree \(worktreeID) not found in repository \(repositoryID)"
+            "deleteWorktreeApply: repository \(repositoryID) not found"
           )
           state.alert = messageAlert(
             title: "Delete failed",
-            message: "The worktree could not be found. It may have already been removed."
+            message: "The worktree's repository is no longer registered."
           )
           return .none
         }
+        // Same fallback as `.deleteWorktreeConfirmed` — keeps the apply
+        // path useful when the state lookup misses (SessionSpawner-
+        // created worktrees, race with a concurrent reload).
+        let worktree =
+          repository.worktrees[id: worktreeID]
+          ?? Self.shimWorktree(worktreeID: worktreeID, repository: repository)
         state.deletingWorktreeIDs.insert(worktree.id)
         let selectionWasRemoved = state.selectedWorktreeID == worktree.id
         let nextSelection =
@@ -1943,7 +1963,7 @@ struct RepositoriesFeature {
       case .deleteWorktreeFailed(let message, let worktreeID):
         state.deletingWorktreeIDs.remove(worktreeID)
         state.alert = messageAlert(title: "Unable to delete worktree", message: message)
-        return .none
+        return .send(.delegate(.worktreeDeleteFailed(worktreeID: worktreeID, message: message)))
 
       case .requestRemoveRepository(let repositoryID):
         state.alert = confirmationAlertForRepositoryRemoval(repositoryID: repositoryID, state: state)
@@ -3592,6 +3612,32 @@ private func insertWorktree(
     name: repository.name,
     worktrees: worktrees
   )
+}
+
+extension RepositoriesFeature {
+  /// Builds a minimal `Worktree` from a path-as-id when the live state
+  /// hasn't picked up the directory yet. The Supacool worktree ID is
+  /// the absolute path on disk by convention (see `GitClient.worktrees`),
+  /// so we have everything `gitClient.removeWorktree` needs:
+  /// `repositoryRootURL` for the `git -C` invocation and
+  /// `workingDirectory` for the `worktree remove <path>` argument.
+  /// `name`/`detail`/`createdAt`/`branch` aren't used by the removal
+  /// path — leave them as best-effort defaults.
+  fileprivate static func shimWorktree(
+    worktreeID: Worktree.ID,
+    repository: Repository
+  ) -> Worktree {
+    let url = URL(fileURLWithPath: worktreeID).standardizedFileURL
+    return Worktree(
+      id: worktreeID,
+      name: url.lastPathComponent,
+      detail: "",
+      workingDirectory: url,
+      repositoryRootURL: repository.rootURL,
+      createdAt: nil,
+      branch: nil
+    )
+  }
 }
 
 @discardableResult
