@@ -440,27 +440,23 @@ struct BoardRootView: View {
     .toolbar(removing: .title)
     .toolbar {
       ToolbarItem(placement: .navigation) {
-        RepoPickerButton(
-          repositories: repositories,
-          filters: store.filters,
-          onToggleRepository: { store.send(.toggleRepository(id: $0)) },
-          onShowAll: { store.send(.showAllRepositories) },
-          onAddRepository: onAddRepository,
-          onConfigureRepositories: onConfigureRepositories,
-          onManageWorktrees: { repo in
-            store.send(
-              .openWorktreeJanitor(repositoryID: repo.id, repositoryName: repo.name)
-            )
+        HStack(spacing: 8) {
+          RepoPickerButton(
+            repositories: repositories,
+            filters: store.filters,
+            onToggleRepository: { store.send(.toggleRepository(id: $0)) },
+            onShowAll: { store.send(.showAllRepositories) },
+            onAddRepository: onAddRepository,
+            onConfigureRepositories: onConfigureRepositories,
+            onManageWorktrees: { repo in
+              store.send(
+                .openWorktreeJanitor(repositoryID: repo.id, repositoryName: repo.name)
+              )
+            }
+          )
+          if let footprintStore {
+            FootprintChip(store: footprintStore)
           }
-        )
-      }
-      // A fixed spacer breaks the navigation group so the memory
-      // footprint chip renders as its own toolbar pill rather than
-      // getting absorbed into the repo picker's capsule.
-      ToolbarSpacer(.fixed)
-      ToolbarItem(placement: .navigation) {
-        if let footprintStore {
-          FootprintChip(store: footprintStore)
         }
       }
       // Push the + button to the far right so there's breathing room

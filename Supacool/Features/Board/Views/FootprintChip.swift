@@ -36,9 +36,10 @@ struct FootprintChip: View {
         Text(displayTotal)
           .font(.caption.monospacedDigit())
       }
+      .padding(.horizontal, 2)
       .foregroundStyle(tint)
     }
-    .buttonStyle(.plain)
+    .buttonStyle(.bordered)
     .help(helpText)
     .task { await pollLoop() }
     .sheet(isPresented: $isSheetPresented) {
