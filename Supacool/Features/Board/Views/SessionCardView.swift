@@ -19,6 +19,10 @@ struct SessionCardView: View {
   var onUnpark: (() -> Void)?
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
+  /// Right-click → "Debug session…" — opens the debug sheet that spawns
+  /// a fresh agent in the supacool repo primed with this session's
+  /// trace JSONL.
+  var onDebug: (() -> Void)?
   /// Fires once on first appearance so the board reducer can run the
   /// reference scanner (Linear ticket ids, GitHub PR URLs in the
   /// session's transcript).
@@ -143,6 +147,10 @@ struct SessionCardView: View {
       if onResume != nil || onResumePicker != nil || onRerun != nil
         || onPark != nil || onUnpark != nil
       {
+        Divider()
+      }
+      if let onDebug {
+        Button("Debug session…", systemImage: "ladybug", action: onDebug)
         Divider()
       }
       Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)

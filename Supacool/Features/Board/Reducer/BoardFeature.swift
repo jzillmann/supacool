@@ -33,6 +33,16 @@ struct BoardFeature {
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
 
+    /// "Debug this session…" sheet, if open. Captures a free-text
+    /// observation from the user before BoardFeature spawns a debug
+    /// agent in the supacool repo primed with the source trace.
+    @Presents var debugSheet: DebugSessionFeature.State?
+
+    /// Repositories snapshot captured at sheet-open time so the spawn
+    /// handler can look up the supacool repo without the parent having
+    /// to re-pass them. Cleared when the sheet closes.
+    var pendingDebugRepositories: [Repository] = []
+
     /// "Manage Worktrees…" inspector sheet state. Presented from the
     /// repo picker; lets the user see every worktree on disk for a
     /// given repo with classification + size + git metadata. Read-only
@@ -214,6 +224,18 @@ struct BoardFeature {
     case _bookmarkSpawnCompleted(session: AgentSession)
     /// Internal failure callback — surfaces as a transient tray card.
     case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, message: String)
+
+    // MARK: Debug session
+    /// Right-click → "Debug session…" on a card. Opens the debug sheet
+    /// with the source session captured. `repositories` is forwarded from
+    /// the parent so the spawn handler can look up the supacool repo.
+    case debugSessionRequested(id: AgentSession.ID, repositories: [Repository])
+    /// Sheet child reducer feedback.
+    case debugSheet(PresentationAction<DebugSessionFeature.Action>)
+    /// Internal: debug session spawn finished.
+    case _debugSpawnCompleted(session: AgentSession)
+    /// Internal: debug session spawn failed.
+    case _debugSpawnFailed(message: String)
 
     // MARK: Remote reconnect
     /// User clicked Reconnect on a `.disconnected` remote session card.
@@ -1329,10 +1351,99 @@ struct BoardFeature {
 
       case .newTerminalSheet:
         return .none
+
+      case .debugSessionRequested(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        // Pre-flight: surface the missing-supacool case as an error
+        // inside the sheet rather than refusing to open it. Lets the
+        // user see the prompt, write their observation, then bounce off
+        // the validation when they hit Spawn — which is more discoverable
+        // than a hidden / disabled menu item.
+        var sheetState = DebugSessionFeature.State(sourceSession: session)
+        if SupacoolDebugSupport.findSupacoolRepository(in: repositories) == nil {
+          sheetState.errorMessage =
+            "Register the supacool repo in Settings → Repositories before "
+            + "spawning a debug session — the agent runs there."
+        }
+        // Stash repositories so the spawn handler can re-run the lookup
+        // at submit time; the user may have registered supacool while
+        // the sheet was open.
+        state.pendingDebugRepositories = repositories
+        state.debugSheet = sheetState
+        return .none
+
+      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let source)))):
+        let repositories = state.pendingDebugRepositories
+        guard let supacoolRepo = SupacoolDebugSupport.findSupacoolRepository(in: repositories) else {
+          state.debugSheet?.errorMessage =
+            "Couldn't find the supacool repo — register it under Settings "
+            + "→ Repositories first."
+          return .none
+        }
+        state.debugSheet = nil
+        state.pendingDebugRepositories = []
+
+        let tracePath = TranscriptRecorder.shared.transcriptURL(
+          tabID: TerminalTabID(rawValue: source.id)
+        )?.path(percentEncoded: false) ?? "(trace file not yet written)"
+        let prompt = SupacoolDebugSupport.buildDebugPrompt(
+          observation: observation,
+          sourceSession: source,
+          tracePath: tracePath
+        )
+        let worktreeName = SupacoolDebugSupport.debugWorktreeName(
+          sourceDisplayName: source.displayName
+        )
+        let bypass =
+          UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+        @Shared(.settingsFile) var settingsFile
+        let fetchOrigin = settingsFile.global.fetchOriginBeforeWorktreeCreation
+        let request = SessionSpawner.LocalRequest(
+          sessionID: uuid(),
+          repository: supacoolRepo,
+          selection: .newBranch(name: worktreeName),
+          agent: .claude,
+          prompt: prompt,
+          planMode: false,
+          bypassPermissions: bypass,
+          fetchOriginBeforeCreation: fetchOrigin,
+          rerunOwnedWorktreeID: nil,
+          pullRequestLookup: .idle,
+          suggestedDisplayName: "Debug: \(source.displayName)",
+          removeBackingWorktreeOnDelete: true
+        )
+        return .run { send in
+          do {
+            let session = try await SessionSpawner.spawnLocal(request)
+            await send(._debugSpawnCompleted(session: session))
+          } catch {
+            await send(._debugSpawnFailed(message: error.localizedDescription))
+          }
+        }
+
+      case .debugSheet(.presented(.delegate(.cancelled))):
+        state.debugSheet = nil
+        state.pendingDebugRepositories = []
+        return .none
+
+      case .debugSheet:
+        return .none
+
+      case ._debugSpawnCompleted(let session):
+        return .send(.createSession(session))
+
+      case ._debugSpawnFailed(let message):
+        boardLogger.warning("Debug session spawn failed: \(message)")
+        return .none
       }
     }
     .ifLet(\.$newTerminalSheet, action: \.newTerminalSheet) {
       NewTerminalFeature()
+    }
+    .ifLet(\.$debugSheet, action: \.debugSheet) {
+      DebugSessionFeature()
     }
     .ifLet(\.$worktreeJanitor, action: \.worktreeJanitor) {
       WorktreeJanitorFeature()

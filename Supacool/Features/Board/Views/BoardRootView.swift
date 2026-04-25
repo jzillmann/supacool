@@ -162,6 +162,11 @@ struct BoardRootView: View {
     ) { sheetStore in
       NewTerminalSheet(store: sheetStore)
     }
+    .sheet(
+      store: store.scope(state: \.$debugSheet, action: \.debugSheet)
+    ) { sheetStore in
+      DebugSessionSheetView(store: sheetStore)
+    }
     .alert(
       "Rename session",
       isPresented: Binding(
