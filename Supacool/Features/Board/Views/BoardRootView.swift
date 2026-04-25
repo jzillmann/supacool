@@ -445,14 +445,18 @@ struct BoardRootView: View {
           }
         )
       }
+      // Memory footprint sits next to the repo picker as a passive
+      // status pill — leading padding gives it visual breathing room
+      // from the picker so the two read as separate units.
+      ToolbarItem(placement: .navigation) {
+        if let footprintStore {
+          FootprintChip(store: footprintStore)
+            .padding(.leading, 12)
+        }
+      }
       // Push the + button to the far right so there's breathing room
       // between the title/repo block and the action.
       ToolbarSpacer(.flexible)
-      ToolbarItem(placement: .primaryAction) {
-        if let footprintStore {
-          FootprintChip(store: footprintStore)
-        }
-      }
       ToolbarItem(placement: .primaryAction) {
         Button {
           autoZoomBackOnPrompt.toggle()
