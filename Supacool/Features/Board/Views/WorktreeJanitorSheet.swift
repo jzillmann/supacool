@@ -374,7 +374,9 @@ struct WorktreeJanitorSheet: View {
 
   @ViewBuilder
   private var footerLeading: some View {
-    if !store.deleteErrors.isEmpty {
+    if !store.deletingIDs.isEmpty {
+      deleteProgressLabel
+    } else if !store.deleteErrors.isEmpty {
       deleteErrorLabel
     } else if store.isScanning {
       HStack(spacing: 8) {
@@ -388,6 +390,18 @@ struct WorktreeJanitorSheet: View {
     } else if !store.rows.isEmpty {
       Text(idleSummary)
         .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  private var deleteProgressLabel: some View {
+    let total = store.deleteScheduledTotal
+    let remaining = store.deletingIDs.count
+    let completed = max(0, total - remaining)
+    return HStack(spacing: 8) {
+      ProgressView().controlSize(.small)
+      Text("Deleting \(completed) of \(total)…")
+        .font(.caption.weight(.medium))
         .foregroundStyle(.secondary)
     }
   }

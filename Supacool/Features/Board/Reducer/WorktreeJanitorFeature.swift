@@ -62,6 +62,11 @@ struct WorktreeJanitorFeature {
     var deletingIDs: Set<WorktreeInventoryEntry.ID> = []
     var deleteConfirmation: DeleteConfirmation?
     var deleteErrors: [String] = []
+    /// Size of the current delete batch (set on `.deleteConfirmed`,
+    /// cleared once `deletingIDs` drains). Drives the footer's
+    /// "Deleting X of N…" progress label so the user sees forward
+    /// motion instead of a stale "8 selected · reclaim Y" string.
+    var deleteScheduledTotal: Int = 0
 
     // MARK: Row expansion
 
@@ -398,6 +403,7 @@ struct WorktreeJanitorFeature {
         for target in targets {
           state.deletingIDs.insert(target.id)
         }
+        state.deleteScheduledTotal = targets.count
         return .run { [gitClient] send in
           for target in targets {
             let result = await removeOrphanWorktree(
@@ -416,12 +422,18 @@ struct WorktreeJanitorFeature {
           state.expandedRowID = nil
         }
         state.rows.remove(id: id)
+        if state.deletingIDs.isEmpty {
+          state.deleteScheduledTotal = 0
+        }
         return .none
 
       case ._deleteCompleted(let id, .failure(let message)):
         state.deletingIDs.remove(id)
         let name = state.rows[id: id]?.name ?? id
         state.deleteErrors.append("\(name): \(message)")
+        if state.deletingIDs.isEmpty {
+          state.deleteScheduledTotal = 0
+        }
         return .none
 
       // MARK: - Row expansion
