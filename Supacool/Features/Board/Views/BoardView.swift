@@ -235,14 +235,14 @@ struct BoardView: View {
     }
   }
 
-  /// Bookmarks to render above "Waiting on Me". Hidden when the repo
-  /// filter is "All repos" so the pills only appear in an intentional
-  /// single-repo context — preserves board density for the zero-filter
-  /// default view.
+  /// Bookmarks to render above "Waiting on Me". Honors the repo filter
+  /// (so a single-repo selection scopes pills to that repo) and skips
+  /// orphaned bookmarks whose owning repo is no longer registered.
   private var visibleBookmarks: [Bookmark] {
-    guard !store.filters.showsAllRepositories else { return [] }
-    let selected = store.filters.selectedRepositoryIDs
-    return store.bookmarks.filter { selected.contains($0.repositoryID) }
+    store.bookmarks.filter {
+      repositories[id: $0.repositoryID] != nil
+        && store.filters.includes(repositoryID: $0.repositoryID)
+    }
   }
 
   private var emptyState: some View {
