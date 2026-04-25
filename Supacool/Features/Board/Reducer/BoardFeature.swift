@@ -24,6 +24,14 @@ struct BoardFeature {
     @Shared(.remoteHosts) var remoteHosts: [RemoteHost] = []
     @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace] = []
     @Shared(.bookmarks) var bookmarks: [Bookmark] = []
+    /// Cards the user removed in the last 3 days. The sweeper at app
+    /// launch nukes everything older; restore moves an entry back to
+    /// `sessions`. Persisted so quitting + relaunching doesn't lose
+    /// the recovery window.
+    @Shared(.trashedSessions) var trashedSessions: [TrashedSession] = []
+
+    /// Whether the trash sheet is open (browse + restore + permanent delete).
+    var isTrashSheetPresented: Bool = false
 
     /// When non-nil, the root view shows this session's terminal full-screen
     /// instead of the board. Not persisted — fresh launches always land on
@@ -193,6 +201,23 @@ struct BoardFeature {
     case createSession(AgentSession)
     case renameSession(id: AgentSession.ID, newName: String)
     case removeSession(id: AgentSession.ID)
+    /// Browse / manage trashed sessions. Opens the trash sheet.
+    case openTrashSheet
+    case dismissTrashSheet
+    /// User picked Restore on a trashed entry. Re-adds the AgentSession
+    /// to `state.sessions` (no live PTY — user picks Rerun/Resume to
+    /// reanimate) and removes it from trash.
+    case restoreFromTrash(id: AgentSession.ID)
+    /// User picked Delete now. Removes from trash and emits
+    /// `.sessionRemoved` so AppFeature/RepositoriesFeature do the
+    /// worktree cleanup. (PTY tab was destroyed at trash-push time;
+    /// destroyTab is idempotent so the redundant call is harmless.)
+    case deleteFromTrash(id: AgentSession.ID)
+    /// Convenience action: permanent-delete every trashed session.
+    case emptyTrash
+    /// Internal: fired on app launch. Iterates `trashedSessions`,
+    /// permanent-deletes anything past `retentionWindow`.
+    case _sweepExpiredTrash
     case togglePriority(id: AgentSession.ID)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
@@ -505,20 +530,16 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
-        // Primary backing-worktree cleanup: applies to sessions that own
-        // their original worktree (created via the New Terminal sheet's
-        // `.newBranch` flow, which sets `removeBackingWorktreeOnDelete`).
+        // Compute cleanup metadata at trash-time so the eventual
+        // permanent-delete (sweep / "Delete now") can fan out
+        // verbatim — even after `state.sessions` no longer contains
+        // this session and ref-count checks would silently flip.
         let deleteBackingWorktree =
           session.removeBackingWorktreeOnDelete
           && session.worktreeID != session.repositoryID
           && !Self.sessionsUsingWorkspace(
             session.worktreeID, excluding: id, sessions: state.sessions
           )
-        // Converted-worktree cleanup: the convert-to-worktree popover
-        // creates a fresh branch+worktree on disk while leaving the
-        // session's immutable `worktreeID` anchored at the repo root.
-        // Clean that up on delete so we don't leave a dangling worktree
-        // whenever the user trashes a converted repo-root session.
         let convertedPath = session.currentWorkspacePath
         let hasConvertedWorkspace =
           convertedPath != session.worktreeID
@@ -532,36 +553,108 @@ struct BoardFeature {
           deleteConvertedWorkspace ? [convertedPath] : []
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(
-            kind: "removed",
-            context: deleteBackingWorktree ? "deleted-worktree" : "kept-worktree",
+            kind: "trashed",
+            context: deleteBackingWorktree ? "owns-worktree" : "shares-worktree",
             at: Date()
           ),
           tabID: TerminalTabID(rawValue: id)
         )
+        let entry = TrashedSession(
+          session: session,
+          repositoryID: session.repositoryID,
+          worktreeID: session.worktreeID,
+          deleteBackingWorktree: deleteBackingWorktree,
+          additionalWorktreeIDsToDelete: additionalDeletes,
+          trashedAt: date.now
+        )
+        state.$trashedSessions.withLock { trash in
+          trash.removeAll { $0.id == id }
+          trash.append(entry)
+        }
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
         }
-        // A session removed before its first busy transition leaves a
-        // "Starting session" card behind — clean it up so the tray
-        // doesn't accumulate stale progress indicators.
         state.trayCards.removeAll { card in
           if case .sessionCreating(let sessionID, _) = card.kind {
             return sessionID == id
           }
           return false
         }
+        // Tab destroy still fires; worktree cleanup is deferred to
+        // either explicit "Delete now" or the 3-day sweeper.
         return .send(
           .delegate(
             .sessionRemoved(
               sessionID: session.id,
               repositoryID: session.repositoryID,
               worktreeID: session.worktreeID,
-              deleteBackingWorktree: deleteBackingWorktree,
-              additionalWorktreeIDsToDelete: additionalDeletes
+              deleteBackingWorktree: false,
+              additionalWorktreeIDsToDelete: []
             )
           )
         )
+
+      case .openTrashSheet:
+        state.isTrashSheetPresented = true
+        return .none
+
+      case .dismissTrashSheet:
+        state.isTrashSheetPresented = false
+        return .none
+
+      case .restoreFromTrash(let id):
+        guard let entry = state.trashedSessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        state.$trashedSessions.withLock { $0.removeAll { $0.id == id } }
+        // Re-insert at the current position (sessions ordering is
+        // append-on-create elsewhere; matching that keeps the card
+        // appearing at the bottom rather than sneaking back in front).
+        state.$sessions.withLock { sessions in
+          guard !sessions.contains(where: { $0.id == id }) else { return }
+          sessions.append(entry.session)
+        }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "restored", context: nil, at: Date()),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        return .none
+
+      case .deleteFromTrash(let id):
+        guard let entry = state.trashedSessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        state.$trashedSessions.withLock { $0.removeAll { $0.id == id } }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "purged", context: nil, at: Date()),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        return .send(
+          .delegate(
+            .sessionRemoved(
+              sessionID: entry.session.id,
+              repositoryID: entry.repositoryID,
+              worktreeID: entry.worktreeID,
+              deleteBackingWorktree: entry.deleteBackingWorktree,
+              additionalWorktreeIDsToDelete: entry.additionalWorktreeIDsToDelete
+            )
+          )
+        )
+
+      case .emptyTrash:
+        let ids = state.trashedSessions.map(\.id)
+        guard !ids.isEmpty else { return .none }
+        return .merge(ids.map { .send(.deleteFromTrash(id: $0)) })
+
+      case ._sweepExpiredTrash:
+        let now = date.now
+        let expiredIDs = state.trashedSessions
+          .filter { $0.isExpired(now: now) }
+          .map(\.id)
+        guard !expiredIDs.isEmpty else { return .none }
+        boardLogger.info("Trash sweep: nuking \(expiredIDs.count) expired entries")
+        return .merge(expiredIDs.map { .send(.deleteFromTrash(id: $0)) })
 
       case .markSessionActivity(let id):
         state.$sessions.withLock { sessions in
@@ -1515,20 +1608,15 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
-        // Pre-flight: surface the missing-supacool case as an error
-        // inside the sheet rather than refusing to open it. Lets the
-        // user see the prompt, write their observation, then bounce off
-        // the validation when they hit Spawn — which is more discoverable
-        // than a hidden / disabled menu item.
+        // Two structurally different sheet states. When supacool isn't
+        // registered the sheet drops the editor and Spawn button and
+        // shows a "register supacool first" panel — there's no useful
+        // text to capture before the agent has somewhere to run.
         var sheetState = DebugSessionFeature.State(sourceSession: session)
-        if SupacoolDebugSupport.findSupacoolRepository(in: repositories) == nil {
-          sheetState.errorMessage =
-            "Register the supacool repo in Settings → Repositories before "
-            + "spawning a debug session — the agent runs there."
-        }
+        sheetState.isSupacoolRepoRegistered =
+          SupacoolDebugSupport.findSupacoolRepository(in: repositories) != nil
         // Stash repositories so the spawn handler can re-run the lookup
-        // at submit time; the user may have registered supacool while
-        // the sheet was open.
+        // at submit time; cleared on close.
         state.pendingDebugRepositories = repositories
         state.debugSheet = sheetState
         return .none
@@ -1536,9 +1624,9 @@ struct BoardFeature {
       case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let source)))):
         let repositories = state.pendingDebugRepositories
         guard let supacoolRepo = SupacoolDebugSupport.findSupacoolRepository(in: repositories) else {
-          state.debugSheet?.errorMessage =
-            "Couldn't find the supacool repo — register it under Settings "
-            + "→ Repositories first."
+          // Race-guard: user dismissed the picker without registering,
+          // then hit Spawn. Re-flip the sheet to the missing-repo mode.
+          state.debugSheet?.isSupacoolRepoRegistered = false
           return .none
         }
         state.debugSheet = nil
@@ -1586,6 +1674,15 @@ struct BoardFeature {
         state.debugSheet = nil
         state.pendingDebugRepositories = []
         return .none
+
+      case .debugSheet(.presented(.delegate(.registerSupacoolRequested))):
+        // Close the sheet and reuse the same path the Getting Started
+        // "Set up your first repo" task uses — AppFeature catches this
+        // delegate and triggers the macOS folder picker. The user can
+        // re-open Debug session… afterward.
+        state.debugSheet = nil
+        state.pendingDebugRepositories = []
+        return .send(.delegate(.gettingStartedSetupRequested(.setupRepo)))
 
       case .debugSheet:
         return .none
