@@ -235,7 +235,7 @@ struct NewTerminalSheet: View {
   private var agentPicker: some View {
     Picker(selection: $store.agent) {
       Text("Shell").tag(Optional<AgentType>.none)
-      ForEach(AgentType.allCases) { agent in
+      ForEach(AgentRegistry.allAgents) { agent in
         Text(agent.displayName).tag(Optional(agent))
       }
     } label: {
@@ -675,28 +675,21 @@ struct NewTerminalSheet: View {
   }
 
   private var skillAutocompleteAgent: AgentType? {
-    switch store.agent {
-    case .claude?, .codex?:
-      return store.agent
-    case .none:
-      return nil
-    }
+    // An agent only participates in skill autocomplete if it has declared
+    // a skill syntax. Pi (no syntax wired up) and Shell sessions return
+    // nil so the popover stays dormant.
+    guard let agent = store.agent, agent.skillSyntax != nil else { return nil }
+    return agent
   }
 
   private var skillAutocompleteConfig: SkillAutocompleteConfig? {
-    switch skillAutocompleteAgent {
-    case .claude?:
-      return SkillAutocompleteConfig(triggerCharacter: "/")
-    case .codex?:
-      return SkillAutocompleteConfig(triggerCharacter: "$")
-    case .none:
-      return nil
-    }
+    guard let syntax = skillAutocompleteAgent?.skillSyntax else { return nil }
+    return SkillAutocompleteConfig(triggerCharacter: syntax.triggerCharacter)
   }
 
   private var skillDiscoveryKey: String {
     let repoKey = selectedProjectRoot?.path(percentEncoded: false) ?? "<none>"
-    let agentKey = store.agent?.rawValue ?? "shell"
+    let agentKey = store.agent?.id ?? "shell"
     return "\(agentKey)::\(repoKey)"
   }
 
@@ -715,13 +708,13 @@ struct NewTerminalSheet: View {
   /// Codex's `$<name>` matches against everything in the catalog.
   private var skillNameValidator: ((String) -> Bool)? {
     guard let agent = skillAutocompleteAgent else { return nil }
-    let validNames: Set<String>
-    switch agent {
-    case .claude:
-      validNames = Set(skillCatalog.filter(\.isUserInvocable).map(\.name))
-    case .codex:
-      validNames = Set(skillCatalog.map(\.name))
-    }
+    // Claude treats only `isUserInvocable` skills as slash-commands;
+    // Codex (and any other non-split-syntax agent) accepts every skill
+    // in the catalog.
+    let validNames: Set<String> =
+      agent.skillSyntax?.separatesUserInvocable == true
+      ? Set(skillCatalog.filter(\.isUserInvocable).map(\.name))
+      : Set(skillCatalog.map(\.name))
     guard !validNames.isEmpty else { return nil }
     return { validNames.contains($0) }
   }
@@ -787,20 +780,10 @@ struct NewTerminalSheet: View {
   }
 
   private func commitSkill(_ skill: Skill) {
-    let replacement: String
-    switch skillAutocompleteAgent {
-    case .claude?:
-      // Always preserve the leading `/` the user typed. The
-      // `isUserInvocable` flag drives section grouping in the popover,
-      // not what we commit — Claude treats `/<name>` as an explicit
-      // invocation regardless of bucket.
-      replacement = "/\(skill.name)"
-    case .codex?:
-      replacement = "$\(skill.name)"
-    case .none:
-      replacement = skill.name
-    }
-    promptEditorHandle.commitSkill(replacement)
+    // Always preserve the leading trigger the user typed; for Shell or
+    // a syntax-less agent we just commit the bare skill name.
+    let trigger = skillAutocompleteAgent?.skillSyntax?.triggerString ?? ""
+    promptEditorHandle.commitSkill("\(trigger)\(skill.name)")
     skillQuery = nil
     selectedSkillID = nil
   }

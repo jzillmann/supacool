@@ -500,7 +500,7 @@ struct BoardFeature {
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(
             kind: "created",
-            context: "agent=\(session.agent?.rawValue ?? "shell")",
+            context: "agent=\(session.agent?.id ?? "shell")",
             at: Date()
           ),
           tabID: TerminalTabID(rawValue: session.id)
@@ -901,10 +901,18 @@ struct BoardFeature {
           event: .sessionLifecycle(kind: "resumed", context: "captured-id", at: Date()),
           tabID: TerminalTabID(rawValue: id)
         )
+        guard
+          let resumeCommand = agent.resumeCommand(
+            sessionID: sessionID,
+            bypassPermissions: Self.readBypassPermissions()
+          )
+        else {
+          return .send(
+            .resumeFailed(id: id, message: "\(agent.displayName) doesn't support resume by id.")
+          )
+        }
         state.focusedSessionID = id
-        let command =
-          agent.resumeCommand(sessionID: sessionID, bypassPermissions: Self.readBypassPermissions())
-          + "\r"
+        let command = resumeCommand + "\r"
         return .run { _ in
           await terminalClient.send(
             .createTabWithInput(
@@ -938,9 +946,16 @@ struct BoardFeature {
           event: .sessionLifecycle(kind: "resumed", context: "picker", at: Date()),
           tabID: TerminalTabID(rawValue: id)
         )
+        guard
+          let pickerCommand =
+            agent.resumePickerCommand(bypassPermissions: Self.readBypassPermissions())
+        else {
+          return .send(
+            .resumeFailed(id: id, message: "\(agent.displayName) has no resume picker.")
+          )
+        }
         state.focusedSessionID = id
-        let command =
-          agent.resumePickerCommand(bypassPermissions: Self.readBypassPermissions()) + "\r"
+        let command = pickerCommand + "\r"
         return .run { _ in
           await terminalClient.send(
             .createTabWithInput(
@@ -1812,8 +1827,10 @@ struct BoardFeature {
     session: AgentSession
   ) -> String {
     let bypass = readBypassPermissions()
-    if let resumeID = session.agentNativeSessionID, !resumeID.isEmpty {
-      return agent.resumeCommand(sessionID: resumeID, bypassPermissions: bypass)
+    if let resumeID = session.agentNativeSessionID, !resumeID.isEmpty,
+      let resumeCommand = agent.resumeCommand(sessionID: resumeID, bypassPermissions: bypass)
+    {
+      return resumeCommand
     }
     return agent.command(prompt: session.initialPrompt, bypassPermissions: bypass)
   }

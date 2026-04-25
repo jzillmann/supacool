@@ -50,7 +50,7 @@ enum SupacoolDebugSupport {
     tracePath: String
   ) -> String {
     let trimmedObservation = observation.trimmingCharacters(in: .whitespacesAndNewlines)
-    let agentLabel = sourceSession.agent?.rawValue ?? "shell"
+    let agentLabel = sourceSession.agent?.id ?? "shell"
     let initialPrompt = sourceSession.initialPrompt.isEmpty
       ? "(no initial prompt recorded)"
       : sourceSession.initialPrompt

@@ -2,6 +2,14 @@ import Foundation
 
 private nonisolated let remoteHookLogger = SupaLogger("Supacool.RemoteHooks")
 
+nonisolated enum RemoteHookInstallerError: Error {
+  /// Agent has no Supacool-known hook protocol — pi today, plus any
+  /// user-defined custom agent. The bootstrap snippet is silently
+  /// omitted; the remote session still spawns and falls back to the
+  /// screen-fingerprint poll for busy/idle.
+  case noHookProtocol(agentID: String)
+}
+
 /// Builds the shell snippet embedded into `renderBootstrapScript` that
 /// idempotently merges Supacool's agent hooks into the remote's
 /// claude / codex config. Without this, the reverse socket tunnel has
@@ -24,12 +32,17 @@ private nonisolated let remoteHookLogger = SupaLogger("Supacool.RemoteHooks")
 nonisolated enum RemoteHookInstaller {
   /// Serializes Supacool's hook groups for `agent` into a single JSON
   /// blob keyed by event, then returns a shell snippet that merges it
-  /// into the remote agent's config file. `nil` for shell sessions.
+  /// into the remote agent's config file. Returns `nil` for agents with
+  /// no hook protocol Supacool installs (pi, user-defined entries) — the
+  /// session still bootstraps without the hook merge step.
   static func bootstrapSnippet(for agent: AgentType) -> String? {
     do {
       let hooks = try allHookGroups(for: agent)
-      let configPath = remoteConfigPath(for: agent)
+      guard let configPath = remoteConfigPath(for: agent) else { return nil }
       return try renderSnippet(hooks: hooks, configPath: configPath)
+    } catch RemoteHookInstallerError.noHookProtocol(let id) {
+      remoteHookLogger.info("No remote hook protocol for agent id=\(id); skipping install.")
+      return nil
     } catch {
       remoteHookLogger.warning("Failed to build remote hook snippet: \(error)")
       return nil
@@ -39,22 +52,25 @@ nonisolated enum RemoteHookInstaller {
   /// Combines progress + notification hook groups for the agent. Events
   /// that appear in both (e.g. Claude's `Stop` fires both busy-off and
   /// the notification forwarder) are concatenated into a single array so
-  /// the merge is a flat append per event.
+  /// the merge is a flat append per event. Throws `noHookProtocol` for
+  /// agents Supacool has no hook installer for.
   fileprivate static func allHookGroups(for agent: AgentType) throws -> [String: [JSONValue]] {
-    var result: [String: [JSONValue]] = [:]
     let sources: [[String: [JSONValue]]]
-    switch agent {
-    case .claude:
+    switch agent.id {
+    case "claude":
       sources = [
         try ClaudeHookSettings.progressHookGroupsByEvent(),
         try ClaudeHookSettings.notificationHookGroupsByEvent(),
       ]
-    case .codex:
+    case "codex":
       sources = [
         try CodexHookSettings.progressHookGroupsByEvent(),
         try CodexHookSettings.notificationHookGroupsByEvent(),
       ]
+    default:
+      throw RemoteHookInstallerError.noHookProtocol(agentID: agent.id)
     }
+    var result: [String: [JSONValue]] = [:]
     for source in sources {
       for (event, groups) in source {
         result[event, default: []].append(contentsOf: groups)
@@ -63,10 +79,11 @@ nonisolated enum RemoteHookInstaller {
     return result
   }
 
-  fileprivate static func remoteConfigPath(for agent: AgentType) -> String {
-    switch agent {
-    case .claude: "$HOME/.claude/settings.json"
-    case .codex: "$HOME/.codex/hooks.json"
+  fileprivate static func remoteConfigPath(for agent: AgentType) -> String? {
+    switch agent.id {
+    case "claude": "$HOME/.claude/settings.json"
+    case "codex": "$HOME/.codex/hooks.json"
+    default: nil
     }
   }
 

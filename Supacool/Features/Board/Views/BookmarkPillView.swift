@@ -14,9 +14,7 @@ struct BookmarkPillView: View {
   var body: some View {
     Button(action: onTap) {
       HStack(spacing: 6) {
-        Image(systemName: agentIcon)
-          .font(.system(size: 11, weight: .medium))
-          .foregroundStyle(agentColor)
+        AgentIconView(agent: bookmark.agent, size: 11, weight: .medium)
         Text(bookmark.name)
           .font(.caption)
           .monospaced()
@@ -53,22 +51,6 @@ struct BookmarkPillView: View {
 
   private var pillShape: RoundedRectangle {
     RoundedRectangle(cornerRadius: 8, style: .continuous)
-  }
-
-  private var agentIcon: String {
-    switch bookmark.agent {
-    case .claude: "brain"
-    case .codex: "terminal.fill"
-    case .none: "apple.terminal"
-    }
-  }
-
-  private var agentColor: Color {
-    switch bookmark.agent {
-    case .claude: .purple
-    case .codex: .cyan
-    case .none: .secondary
-    }
   }
 
   private var helpText: String {

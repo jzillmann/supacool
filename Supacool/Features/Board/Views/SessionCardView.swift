@@ -37,9 +37,7 @@ struct SessionCardView: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       HStack(spacing: 6) {
-        Image(systemName: agentIcon)
-          .font(.caption)
-          .foregroundStyle(agentColor)
+        AgentIconView(agent: session.agent, size: 12)
           .help(AgentType.displayName(for: session.agent))
         if session.agent != nil {
           sessionIDIndicator
@@ -350,22 +348,6 @@ struct SessionCardView: View {
   }
 
   private var priorityColor: Color { .pink }
-
-  private var agentIcon: String {
-    switch session.agent {
-    case .claude: "brain"
-    case .codex: "terminal.fill"
-    case .none: "apple.terminal"
-    }
-  }
-
-  private var agentColor: Color {
-    switch session.agent {
-    case .claude: .purple
-    case .codex: .cyan
-    case .none: .secondary
-    }
-  }
 
   private var relativeTimestamp: String {
     let formatter = RelativeDateTimeFormatter()

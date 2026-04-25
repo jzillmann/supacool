@@ -186,32 +186,19 @@ struct FullScreenTerminalView: View {
 
   private var agentChip: some View {
     HStack(spacing: 4) {
-      Image(systemName: agentIcon)
-        .font(.caption)
+      AgentIconView(agent: session.agent, size: 12)
       Text(AgentType.displayName(for: session.agent))
         .font(.caption.weight(.medium))
+        .foregroundStyle(agentColor)
     }
-    .foregroundStyle(agentColor)
     .padding(.horizontal, 8)
     .padding(.vertical, 3)
     .background(agentColor.opacity(0.12))
     .clipShape(Capsule())
   }
 
-  private var agentIcon: String {
-    switch session.agent {
-    case .claude: "brain"
-    case .codex: "terminal.fill"
-    case .none: "apple.terminal"
-    }
-  }
-
   private var agentColor: Color {
-    switch session.agent {
-    case .claude: .purple
-    case .codex: .cyan
-    case .none: .secondary
-    }
+    AgentType.tintColor(for: session.agent)
   }
 
   @ViewBuilder

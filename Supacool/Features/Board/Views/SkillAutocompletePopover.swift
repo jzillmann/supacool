@@ -15,28 +15,25 @@ struct SkillAutocompletePopover: View {
           .foregroundStyle(.secondary)
           .padding(.horizontal, 12)
           .padding(.vertical, 10)
-      } else {
-        switch agent {
-        case .claude:
-          let userInvocable = Self.matchingSkills(
-            in: skills,
-            queryText: queryText,
-            userInvocable: true
-          )
-          let agentOnly = Self.matchingSkills(
-            in: skills,
-            queryText: queryText,
-            userInvocable: false
-          )
-          if !userInvocable.isEmpty {
-            section(title: "Slash Commands", skills: userInvocable)
-          }
-          if !agentOnly.isEmpty {
-            section(title: "Agent Skills", skills: agentOnly)
-          }
-        case .codex:
-          section(title: "Mention Skills", skills: matchingSkills)
+      } else if agent.skillSyntax?.separatesUserInvocable == true {
+        let userInvocable = Self.matchingSkills(
+          in: skills,
+          queryText: queryText,
+          userInvocable: true
+        )
+        let agentOnly = Self.matchingSkills(
+          in: skills,
+          queryText: queryText,
+          userInvocable: false
+        )
+        if !userInvocable.isEmpty {
+          section(title: "Slash Commands", skills: userInvocable)
         }
+        if !agentOnly.isEmpty {
+          section(title: "Agent Skills", skills: agentOnly)
+        }
+      } else {
+        section(title: "Mention Skills", skills: matchingSkills)
       }
     }
     .padding(.vertical, 10)
@@ -51,13 +48,11 @@ struct SkillAutocompletePopover: View {
   }
 
   static func orderedMatchingSkills(in skills: [Skill], queryText: String, for agent: AgentType) -> [Skill] {
-    switch agent {
-    case .claude:
+    if agent.skillSyntax?.separatesUserInvocable == true {
       return matchingSkills(in: skills, queryText: queryText, userInvocable: true)
         + matchingSkills(in: skills, queryText: queryText, userInvocable: false)
-    case .codex:
-      return matchingSkills(in: skills, queryText: queryText)
     }
+    return matchingSkills(in: skills, queryText: queryText)
   }
 
   private var matchingSkills: [Skill] {
@@ -125,15 +120,11 @@ struct SkillAutocompletePopover: View {
   }
 
   private func displayName(for skill: Skill) -> String {
-    switch agent {
-    case .claude:
-      // Always show the slash so the row matches what we'll actually
-      // commit — the section header (Slash Commands / Agent Skills)
-      // already conveys the bucket distinction.
-      return "/\(skill.name)"
-    case .codex:
-      return "$\(skill.name)"
-    }
+    // Always show the trigger so the row matches what we'll actually
+    // commit — the section header (Slash Commands / Agent Skills)
+    // already conveys the bucket distinction for split-syntax agents.
+    let trigger = agent.skillSyntax?.triggerString ?? ""
+    return "\(trigger)\(skill.name)"
   }
 
   private func firstDescriptionLine(for skill: Skill) -> String {

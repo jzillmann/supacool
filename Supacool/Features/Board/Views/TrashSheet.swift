@@ -77,9 +77,7 @@ private struct TrashRow: View {
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
-      Image(systemName: agentIcon)
-        .font(.title3)
-        .foregroundStyle(.secondary)
+      AgentIconView(agent: entry.session.agent, size: 18)
         .frame(width: 22, alignment: .center)
         .padding(.top, 2)
 
@@ -117,14 +115,6 @@ private struct TrashRow: View {
     }
     .padding(10)
     .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-  }
-
-  private var agentIcon: String {
-    switch entry.session.agent {
-    case .claude: return "sparkles"
-    case .codex: return "chevron.left.forwardslash.chevron.right"
-    case .none: return "terminal"
-    }
   }
 
   private var expiryText: String {

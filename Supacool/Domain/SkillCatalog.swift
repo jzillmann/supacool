@@ -19,13 +19,14 @@ struct Skill: Identifiable, Hashable, Sendable {
 
 enum SkillCatalog {
   static func discover(for agent: AgentType?, projectRoot: URL?) async -> [Skill] {
-    switch agent {
-    case .claude?:
-      return await discoverClaude(projectRoot: projectRoot)
-    case .codex?:
-      return await discoverCodex(projectRoot: projectRoot)
-    case .none:
-      return []
+    // Skill discovery is per-vendor file-system layout, not derivable
+    // from the registry struct. Agents without a Supacool-known layout
+    // (currently pi and any user-defined entry) return [] and the
+    // autocomplete popover gracefully sits empty.
+    switch agent?.id {
+    case "claude": await discoverClaude(projectRoot: projectRoot)
+    case "codex": await discoverCodex(projectRoot: projectRoot)
+    default: []
     }
   }
 
