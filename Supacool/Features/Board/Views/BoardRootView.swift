@@ -190,6 +190,7 @@ struct BoardRootView: View {
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
+    .modifier(WorktreeConflictAlertModifier(store: store))
     // Read-only "Manage Worktrees…" inspector (PR2 of the janitor
     // ladder). Dismissed via the sheet's Done button → delegate →
     // parent clears `state.worktreeJanitor`.
@@ -668,6 +669,37 @@ private struct PruneAlertModifier: ViewModifier {
         "Pruned \(n) stale worktree \(n == 1 ? "ref" : "refs"). "
         + "Found \(m) orphan session \(m == 1 ? "card" : "cards") "
         + "(worktree is gone from disk). Remove them?"
+    }
+  }
+}
+
+/// Surfaces `BoardFeature.worktreeConflictAlert` — the recovery UI for
+/// "branch is already used by worktree at <other path>". Three buttons:
+/// Reuse the existing checkout, Delete it and recreate at the new
+/// path, or Cancel.
+private struct WorktreeConflictAlertModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+
+  func body(content: Content) -> some View {
+    content.alert(
+      store.worktreeConflictAlert?.title ?? "Branch already checked out",
+      isPresented: Binding(
+        get: { store.worktreeConflictAlert != nil },
+        set: { if !$0 { store.send(.dismissWorktreeConflictAlert) } }
+      ),
+      presenting: store.worktreeConflictAlert
+    ) { _ in
+      Button("Reuse existing") {
+        store.send(.worktreeConflictReuseTapped)
+      }
+      Button("Delete & recreate", role: .destructive) {
+        store.send(.worktreeConflictDeleteAndRecreateTapped)
+      }
+      Button("Cancel", role: .cancel) {
+        store.send(.dismissWorktreeConflictAlert)
+      }
+    } message: { alert in
+      Text(alert.message)
     }
   }
 }

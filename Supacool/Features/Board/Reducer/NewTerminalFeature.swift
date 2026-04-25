@@ -1218,12 +1218,19 @@ nonisolated enum NewTerminalError: LocalizedError {
   /// a resolvable ref, `git worktree add` would emit its cryptic
   /// "invalid reference" — this surfaces something the user can act on.
   case branchNotFoundAfterFetch(name: String)
+  /// `git worktree add <path> <branch>` would fail because the branch is
+  /// already checked out at a *different* path. Carries the conflicting
+  /// `Worktree` so the BoardFeature can offer Reuse / Delete & recreate.
+  case branchAlreadyCheckedOut(branch: String, existing: Worktree)
 
   var errorDescription: String? {
     switch self {
     case .worktreeMissing: "Picked worktree is no longer available."
     case .branchNotFoundAfterFetch(let name):
       "Branch '\(name)' not found locally or on any configured remote."
+    case .branchAlreadyCheckedOut(let branch, let existing):
+      "Branch '\(branch)' is already checked out at "
+        + "\(existing.workingDirectory.path(percentEncoded: false))."
     }
   }
 }

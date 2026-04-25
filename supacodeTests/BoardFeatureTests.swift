@@ -1184,6 +1184,84 @@ struct BoardFeatureTests {
     await store.receive(\.delegate.openSettingsRequested)
   }
 
+  // MARK: - Worktree-conflict alert
+
+  @Test(.dependencies) func sessionSpawnConflictPresentsAlertAndKeepsPlaceholder() async {
+    let sessionID = UUID()
+    let displayName = "Continue work"
+    let alertID = UUID(uuidString: "AAAAAAAA-1234-1234-1234-AAAAAAAAAAAA")!
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(sessionID: sessionID, displayName: displayName)
+    )
+    let request = Self.sampleSpawnRequest(sessionID: sessionID)
+    let existing = Self.sampleConflictingWorktree(branch: "feat/x")
+    var state = BoardFeature.State()
+    state.trayCards = [placeholder]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .constant(alertID)
+    }
+
+    await store.send(
+      ._sessionSpawnConflict(
+        sessionID: sessionID,
+        placeholderDisplayName: displayName,
+        request: request,
+        branch: "feat/x",
+        existing: existing
+      )
+    ) {
+      $0.worktreeConflictAlert = BoardFeature.WorktreeConflictAlertState(
+        id: alertID,
+        sessionID: sessionID,
+        placeholderDisplayName: displayName,
+        request: request,
+        branch: "feat/x",
+        existingWorktree: existing
+      )
+    }
+    // Placeholder stays — user gets a visual anchor while they pick.
+    #expect(store.state.trayCards.contains(where: { $0.id == sessionID }))
+  }
+
+  @Test(.dependencies) func dismissWorktreeConflictAlertClearsAlertAndDropsPlaceholder() async {
+    let sessionID = UUID()
+    let displayName = "Continue work"
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(sessionID: sessionID, displayName: displayName)
+    )
+    let request = Self.sampleSpawnRequest(sessionID: sessionID)
+    let alert = BoardFeature.WorktreeConflictAlertState(
+      sessionID: sessionID,
+      placeholderDisplayName: displayName,
+      request: request,
+      branch: "feat/x",
+      existingWorktree: Self.sampleConflictingWorktree(branch: "feat/x")
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [placeholder]
+    state.worktreeConflictAlert = alert
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.dismissWorktreeConflictAlert) {
+      $0.worktreeConflictAlert = nil
+      $0.trayCards = []
+    }
+  }
+
+  @Test(.dependencies)
+  func dismissWorktreeConflictAlertWithNoAlertIsNoOp() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+    await store.send(.dismissWorktreeConflictAlert)
+  }
+
   // MARK: - Helpers
 
   private static func sessionCreatingCard(for session: AgentSession) -> TrayCard {
@@ -1210,6 +1288,46 @@ struct BoardFeatureTests {
       displayName: displayName,
       removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
       isPriority: isPriority
+    )
+  }
+
+  private static func sampleSpawnRequest(
+    sessionID: UUID,
+    branch: String = "feat/x"
+  ) -> SessionSpawner.LocalRequest {
+    SessionSpawner.LocalRequest(
+      sessionID: sessionID,
+      repository: Repository(
+        id: "/tmp/repo",
+        rootURL: URL(fileURLWithPath: "/tmp/repo"),
+        name: "test-repo",
+        worktrees: []
+      ),
+      selection: .existingBranch(name: branch),
+      agent: .claude,
+      prompt: "Continue work",
+      planMode: false,
+      bypassPermissions: true,
+      fetchOriginBeforeCreation: false,
+      rerunOwnedWorktreeID: nil,
+      pullRequestLookup: .idle,
+      suggestedDisplayName: nil,
+      removeBackingWorktreeOnDelete: true
+    )
+  }
+
+  private static func sampleConflictingWorktree(
+    branch: String,
+    repoRoot: URL = URL(fileURLWithPath: "/tmp/repo")
+  ) -> Worktree {
+    let url = URL(fileURLWithPath: "/tmp/conflict/elsewhere/\(branch)").standardizedFileURL
+    return Worktree(
+      id: url.path(percentEncoded: false),
+      name: branch,
+      detail: "",
+      workingDirectory: url,
+      repositoryRootURL: repoRoot,
+      branch: branch
     )
   }
 }

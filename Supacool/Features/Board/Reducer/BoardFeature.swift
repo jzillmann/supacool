@@ -71,6 +71,13 @@ struct BoardFeature {
     /// detached card and decide whether to resume, rerun, or remove it.
     var priorityTerminationAlert: PriorityTerminationAlertState?
 
+    /// Presented when the New Terminal create flow detected that the
+    /// requested branch is already checked out at a *different* path —
+    /// `git worktree add` would otherwise fail. The alert lets the user
+    /// reuse the existing checkout, delete it and recreate at the
+    /// original target, or cancel.
+    var worktreeConflictAlert: WorktreeConflictAlertState?
+
     /// Transient cards floating in the bottom-right tray over the board.
     /// Not persisted — refilled on each app launch by whichever subsystem
     /// owns the signal (stale hooks check, New Terminal drafts, etc.).
@@ -106,6 +113,44 @@ struct BoardFeature {
     enum Outcome: Equatable, Sendable {
       case success(prunedCount: Int, orphanSessionIDs: [AgentSession.ID])
       case failure(message: String)
+    }
+  }
+
+  /// Captured at the moment SessionSpawner reports the
+  /// `branchAlreadyCheckedOut` error so the alert can offer Reuse /
+  /// Delete & recreate / Cancel without re-running git work to find
+  /// the conflicting worktree. Carries the original `LocalRequest` so
+  /// "Delete & recreate" can resubmit unchanged.
+  struct WorktreeConflictAlertState: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let sessionID: AgentSession.ID
+    let placeholderDisplayName: String
+    let request: SessionSpawner.LocalRequest
+    let branch: String
+    let existingWorktree: Worktree
+
+    init(
+      id: UUID = UUID(),
+      sessionID: AgentSession.ID,
+      placeholderDisplayName: String,
+      request: SessionSpawner.LocalRequest,
+      branch: String,
+      existingWorktree: Worktree
+    ) {
+      self.id = id
+      self.sessionID = sessionID
+      self.placeholderDisplayName = placeholderDisplayName
+      self.request = request
+      self.branch = branch
+      self.existingWorktree = existingWorktree
+    }
+
+    var title: String { "Branch already checked out" }
+
+    var message: String {
+      "'\(branch)' is already used by a worktree at "
+        + "\(existingWorktree.workingDirectory.path(percentEncoded: false)).\n\n"
+        + "Reuse the existing worktree, or delete it and create a fresh one?"
     }
   }
 
@@ -208,6 +253,25 @@ struct BoardFeature {
     case _sessionSpawnCompleted(session: AgentSession)
     /// Internal: local spawn failed. Drops the placeholder tray card.
     case _sessionSpawnFailed(sessionID: AgentSession.ID, message: String)
+    /// Internal: spawn detected that the requested branch is already
+    /// checked out elsewhere. Presents the WorktreeConflictAlert; the
+    /// placeholder tray card stays up so the user keeps a visual anchor
+    /// while they pick a recovery path.
+    case _sessionSpawnConflict(
+      sessionID: AgentSession.ID,
+      placeholderDisplayName: String,
+      request: SessionSpawner.LocalRequest,
+      branch: String,
+      existing: Worktree
+    )
+    /// User picked Reuse on the conflict alert: spawn against the
+    /// existing worktree directly (no `git worktree add`).
+    case worktreeConflictReuseTapped
+    /// User picked Delete & recreate: remove the conflicting worktree
+    /// and resubmit the original request.
+    case worktreeConflictDeleteAndRecreateTapped
+    /// User cancelled — drop the placeholder, clear the alert.
+    case dismissWorktreeConflictAlert
 
     // MARK: Bookmarks
     /// One-click launch: resolves a bookmark into a SessionSpawner
@@ -1002,6 +1066,25 @@ struct BoardFeature {
           do {
             let session = try await SessionSpawner.spawnLocal(request)
             await send(._sessionSpawnCompleted(session: session))
+          } catch let conflict as NewTerminalError {
+            if case .branchAlreadyCheckedOut(let branch, let existing) = conflict {
+              await send(
+                ._sessionSpawnConflict(
+                  sessionID: request.sessionID,
+                  placeholderDisplayName: displayName,
+                  request: request,
+                  branch: branch,
+                  existing: existing
+                )
+              )
+            } else {
+              await send(
+                ._sessionSpawnFailed(
+                  sessionID: request.sessionID,
+                  message: conflict.localizedDescription
+                )
+              )
+            }
           } catch {
             await send(
               ._sessionSpawnFailed(
@@ -1033,6 +1116,79 @@ struct BoardFeature {
         state.trayCards.removeAll(where: { $0.id == sessionID })
         // Keep `pendingRerunSessionID` set so the user's original
         // session card stays put — they can retry.
+        return .none
+
+      case let ._sessionSpawnConflict(sessionID, placeholderDisplayName, request, branch, existing):
+        boardLogger.info(
+          "Branch '\(branch)' for session \(sessionID) is already checked out at "
+            + "\(existing.workingDirectory.path(percentEncoded: false))"
+        )
+        state.worktreeConflictAlert = WorktreeConflictAlertState(
+          id: uuid(),
+          sessionID: sessionID,
+          placeholderDisplayName: placeholderDisplayName,
+          request: request,
+          branch: branch,
+          existingWorktree: existing
+        )
+        // Placeholder tray card stays up — same `sessionCreating` kind
+        // anchored on `request.sessionID` — so when the user picks Reuse
+        // or Delete & recreate the retry slots into the same UI without
+        // flicker.
+        return .none
+
+      case .worktreeConflictReuseTapped:
+        guard let alert = state.worktreeConflictAlert else { return .none }
+        state.worktreeConflictAlert = nil
+        let request = alert.request
+        let existing = alert.existingWorktree
+        return .run { send in
+          do {
+            let session = try await SessionSpawner.spawnLocalAdopting(
+              request: request,
+              existingWorktree: existing
+            )
+            await send(._sessionSpawnCompleted(session: session))
+          } catch {
+            await send(
+              ._sessionSpawnFailed(
+                sessionID: request.sessionID,
+                message: error.localizedDescription
+              )
+            )
+          }
+        }
+
+      case .worktreeConflictDeleteAndRecreateTapped:
+        guard let alert = state.worktreeConflictAlert else { return .none }
+        state.worktreeConflictAlert = nil
+        let request = alert.request
+        let existing = alert.existingWorktree
+        return .run { [gitClient] send in
+          do {
+            // `deleteBranch: false` — we're only removing the worktree
+            // checkout, not the branch ref. The whole point of the
+            // delete-and-recreate path is keeping the branch around.
+            _ = try await gitClient.removeWorktree(existing, false)
+            let session = try await SessionSpawner.spawnLocal(request)
+            await send(._sessionSpawnCompleted(session: session))
+          } catch {
+            await send(
+              ._sessionSpawnFailed(
+                sessionID: request.sessionID,
+                message: error.localizedDescription
+              )
+            )
+          }
+        }
+
+      case .dismissWorktreeConflictAlert:
+        guard let alert = state.worktreeConflictAlert else { return .none }
+        state.worktreeConflictAlert = nil
+        // Drop the placeholder — user opted out of recovery.
+        state.trayCards.removeAll(where: { $0.id == alert.sessionID })
+        // Keep pendingRerunSessionID intact so the original session
+        // card stays put.
         return .none
 
       case .newTerminalSheet(.presented(.delegate(.bookmarkSaved(let bookmark)))):

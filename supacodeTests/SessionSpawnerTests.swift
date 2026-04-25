@@ -313,6 +313,89 @@ struct SessionSpawnerTests {
     ])
   }
 
+  // MARK: - Conflict detection
+
+  @Test(.dependencies) func existingBranchAlreadyCheckedOutThrowsConflict() async throws {
+    let branchName = "feat/already-elsewhere"
+    let request = Self.makeRequest(
+      selection: .existingBranch(name: branchName),
+      prompt: "Continue work"
+    )
+    // Path that does NOT match where SessionSpawner would compute its
+    // target — the conflict guard fires when these differ.
+    let conflictingURL = URL(fileURLWithPath: "/tmp/conflict/elsewhere/\(branchName)")
+      .standardizedFileURL
+    let conflictingWorktree = Worktree(
+      id: conflictingURL.path(percentEncoded: false),
+      name: branchName,
+      detail: "",
+      workingDirectory: conflictingURL,
+      repositoryRootURL: URL(fileURLWithPath: "/tmp/repo"),
+      branch: branchName
+    )
+    let createCalled = LockIsolated<Bool>(false)
+    do {
+      try await withDependencies {
+        $0.gitClient.branchExists = { _, _ in true }
+        $0.gitClient.worktrees = { _ in [conflictingWorktree] }
+        $0.gitClient.createWorktreeForExistingBranch = { _, _, _ in
+          createCalled.setValue(true)
+          return conflictingWorktree
+        }
+        $0.terminalClient.send = { _ in }
+      } operation: {
+        _ = try await SessionSpawner.spawnLocal(request)
+      }
+      Issue.record("Expected branchAlreadyCheckedOut conflict to throw")
+    } catch let error as NewTerminalError {
+      guard case .branchAlreadyCheckedOut(let branch, let existing) = error else {
+        Issue.record("Wrong NewTerminalError case: \(error)")
+        return
+      }
+      #expect(branch == branchName)
+      #expect(existing.workingDirectory == conflictingURL)
+    } catch {
+      Issue.record("Unexpected error: \(error)")
+    }
+    #expect(createCalled.value == false, "Conflict must short-circuit before git worktree add")
+  }
+
+  @Test(.dependencies) func existingBranchAtSamePathDoesNotConflict() async throws {
+    // When the existing worktree's path matches the path SessionSpawner
+    // would adopt anyway, no conflict — adoption already covers it. We
+    // only assert that we don't *throw*; the spawn itself flows through
+    // `createWorktreeForExistingBranch` (or adopt, depending on FS).
+    let branchName = "feat/same-path"
+    let request = Self.makeRequest(
+      selection: .existingBranch(name: branchName),
+      prompt: "Resume"
+    )
+    let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
+      for: URL(fileURLWithPath: "/tmp/repo"),
+      globalDefaultPath: nil,
+      repositoryOverridePath: nil
+    )
+    let samePathURL = baseDirectory
+      .appending(path: branchName, directoryHint: .isDirectory)
+      .standardizedFileURL
+    let sameWorktree = Worktree(
+      id: samePathURL.path(percentEncoded: false),
+      name: branchName,
+      detail: "",
+      workingDirectory: samePathURL,
+      repositoryRootURL: URL(fileURLWithPath: "/tmp/repo"),
+      branch: branchName
+    )
+    try await withDependencies {
+      $0.gitClient.branchExists = { _, _ in true }
+      $0.gitClient.worktrees = { _ in [sameWorktree] }
+      $0.gitClient.createWorktreeForExistingBranch = { _, _, _ in sameWorktree }
+      $0.terminalClient.send = { _ in }
+    } operation: {
+      _ = try await SessionSpawner.spawnLocal(request)
+    }
+  }
+
   // MARK: - Helpers
 
   private static func makeRepository(

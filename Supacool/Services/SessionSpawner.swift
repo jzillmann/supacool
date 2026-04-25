@@ -37,19 +37,49 @@ enum SessionSpawner {
   @MainActor
   static func spawnLocal(_ request: LocalRequest) async throws -> AgentSession {
     @Dependency(GitClientDependency.self) var gitClient
-    @Dependency(TerminalClient.self) var terminalClient
     @Dependency(RepoSyncClient.self) var repoSyncClient
 
-    let repository = request.repository
-    let selection = request.selection
     let worktree = try await resolveWorktree(
-      selection: selection,
-      repository: repository,
+      selection: request.selection,
+      repository: request.repository,
       fetchOriginBeforeCreation: request.fetchOriginBeforeCreation,
       pullRequestLookup: request.pullRequestLookup,
       gitClient: gitClient,
       repoSyncClient: repoSyncClient
     )
+    return try await spawnInto(
+      worktree: worktree,
+      request: request,
+      removeBackingWorktreeOnDelete: request.removeBackingWorktreeOnDelete
+    )
+  }
+
+  /// Reuse path for the worktree-conflict alert: spawn against an
+  /// existing `Worktree` already on disk. Skips `resolveWorktree`
+  /// because the caller (BoardFeature.worktreeConflictReuseTapped) has
+  /// already picked the conflicting worktree from the alert state, and
+  /// the request's original selection (`.existingBranch(name)`) no
+  /// longer points at the right place. Forces
+  /// `removeBackingWorktreeOnDelete=false` since we didn't create it.
+  @MainActor
+  static func spawnLocalAdopting(
+    request: LocalRequest,
+    existingWorktree: Worktree
+  ) async throws -> AgentSession {
+    try await spawnInto(
+      worktree: existingWorktree,
+      request: request,
+      removeBackingWorktreeOnDelete: false
+    )
+  }
+
+  @MainActor
+  private static func spawnInto(
+    worktree: Worktree,
+    request: LocalRequest,
+    removeBackingWorktreeOnDelete: Bool
+  ) async throws -> AgentSession {
+    @Dependency(TerminalClient.self) var terminalClient
 
     let input = buildInput(
       agent: request.agent,
@@ -75,12 +105,12 @@ enum SessionSpawner {
 
     return AgentSession(
       id: request.sessionID,
-      repositoryID: repository.id,
+      repositoryID: request.repository.id,
       worktreeID: worktree.id,
       agent: request.agent,
       initialPrompt: request.prompt,
       displayName: request.suggestedDisplayName,
-      removeBackingWorktreeOnDelete: request.removeBackingWorktreeOnDelete,
+      removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
       planMode: request.planMode
     )
   }
@@ -251,6 +281,27 @@ enum SessionSpawner {
       globalDefaultPath: nil,
       repositoryOverridePath: nil
     )
+    let targetURL = baseDirectory
+      .appending(path: branchName, directoryHint: .isDirectory)
+      .standardizedFileURL
+    // Preflight: `git worktree add <path> <branch>` rejects with a
+    // cryptic "already used by worktree at …" when the branch is
+    // checked out anywhere else. Surface that as a structured error so
+    // BoardFeature can offer Reuse / Delete & recreate instead of
+    // dumping the raw git stderr on the user. Best-effort — if listing
+    // fails, fall through and let the create attempt produce its own
+    // error.
+    if let existingWorktrees = try? await gitClient.worktrees(repository.rootURL),
+      let conflicting = existingWorktrees.first(where: { worktree in
+        worktree.branch == branchName
+          && worktree.workingDirectory.standardizedFileURL != targetURL
+      })
+    {
+      throw NewTerminalError.branchAlreadyCheckedOut(
+        branch: branchName,
+        existing: conflicting
+      )
+    }
     // Common rerun gotcha: the previous session's worktree directory is
     // still on disk (git's record was dropped, or supacode's repo cache
     // hasn't refreshed yet). If the path looks like a live git worktree,
