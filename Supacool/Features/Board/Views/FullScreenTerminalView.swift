@@ -74,6 +74,12 @@ struct FullScreenTerminalView: View {
   /// session and never close it by mistake.
   @State private var agentSurfaceID: UUID?
 
+  /// Last `.outputTurn` delta loaded from the persisted transcript when
+  /// the session is detached — gives the user a "where was I?" preview
+  /// without reattaching. Nil while loading or when no agent turns were
+  /// recorded (e.g. session never produced output before dying).
+  @State private var lastAgentMessage: String?
+
   var body: some View {
     VStack(spacing: 0) {
       header
@@ -765,6 +771,25 @@ struct FullScreenTerminalView: View {
       .frame(maxWidth: 460)
       .padding(.top, 6)
 
+      if let lastAgentMessage {
+        VStack(alignment: .leading, spacing: 4) {
+          Label("Last response", systemImage: "bubble.left")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          ScrollView {
+            Text(lastAgentMessage)
+              .font(.callout.monospaced())
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(maxHeight: 180)
+          .padding(10)
+          .background(Color.secondary.opacity(0.08))
+          .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxWidth: 460)
+      }
+
       HStack(spacing: 10) {
         Button(role: .destructive) {
           onRemove()
@@ -789,6 +814,37 @@ struct FullScreenTerminalView: View {
     }
     .padding(40)
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task(id: session.id) {
+      await loadLastAgentMessage()
+    }
+  }
+
+  /// Read the persisted transcript for this session and surface the most
+  /// recent `.outputTurn` delta (what the agent said last) as a preview.
+  /// Runs off-main since the file can be large; on Swift 6 the static
+  /// `loadEntries` is `nonisolated` so a detached Task is the cleanest hop.
+  private func loadLastAgentMessage() async {
+    // TerminalTabID's initializer is main-actor-isolated under Swift 6's
+    // global @MainActor — construct it here, then capture the value into
+    // the detached Task so the disk read happens off-main.
+    let tabID = TerminalTabID(rawValue: session.id)
+    let preview = await Task.detached(priority: .userInitiated) { [tabID] () -> String? in
+      let entries = TranscriptReader.loadEntries(tabID: tabID)
+      for entry in entries.reversed() {
+        guard case .outputTurn(_, let delta, _) = entry else { continue }
+        let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { continue }
+        // Cap the preview so a multi-thousand-line dump doesn't blow up the
+        // detached card. The ScrollView still lets the user scroll within.
+        let maxChars = 4_000
+        if trimmed.count > maxChars {
+          return String(trimmed.suffix(maxChars))
+        }
+        return trimmed
+      }
+      return nil
+    }.value
+    lastAgentMessage = preview
   }
 
   /// Resolve the Worktree value that backs this session — used to drive
