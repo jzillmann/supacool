@@ -9,6 +9,8 @@ struct BookmarkPillView: View {
   let onEdit: () -> Void
   let onDelete: () -> Void
 
+  @State private var isHovered: Bool = false
+
   var body: some View {
     Button(action: onTap) {
       HStack(spacing: 6) {
@@ -24,12 +26,24 @@ struct BookmarkPillView: View {
       .padding(.vertical, 5)
       .background(.background.secondary, in: pillShape)
       .overlay(
-        pillShape.strokeBorder(Color.secondary.opacity(0.2), lineWidth: 0.5)
+        pillShape.strokeBorder(
+          Color.secondary.opacity(isHovered ? 0.5 : 0.2),
+          lineWidth: isHovered ? 1 : 0.5
+        )
       )
       .contentShape(pillShape)
     }
     .buttonStyle(.plain)
     .help(helpText)
+    .animation(.easeOut(duration: 0.12), value: isHovered)
+    .onHover { hovering in
+      isHovered = hovering
+      if hovering {
+        NSCursor.pointingHand.push()
+      } else {
+        NSCursor.pop()
+      }
+    }
     .contextMenu {
       Button("Edit…", systemImage: "pencil", action: onEdit)
       Divider()
