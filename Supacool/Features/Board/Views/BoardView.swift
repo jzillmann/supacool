@@ -303,11 +303,9 @@ struct BoardView: View {
             .foregroundStyle(color)
         }
 
-        if sessions.isEmpty, let emptyMessage {
-          Text(emptyMessage)
-            .font(.callout)
-            .foregroundStyle(.tertiary)
-            .padding(.vertical, 6)
+        if sessions.isEmpty, emptyMessage != nil {
+          WaitingEmptyPlaceholder()
+            .padding(.vertical, 4)
         }
 
         LazyVGrid(
