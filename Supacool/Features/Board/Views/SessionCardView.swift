@@ -107,8 +107,13 @@ struct SessionCardView: View {
     // makes macOS click routing flaky. Keep the card tap as a gesture instead.
     .onTapGesture(perform: onTap)
     .overlay {
-      if status == .parked, isHovered, let onUnpark {
-        parkedHoverOverlay(onUnpark: onUnpark)
+      // Show the play overlay for ANY dormant card — parked, idle (detached),
+      // interrupted, or disconnected. Clicking always routes through `onTap`
+      // (i.e. focusSession → FullScreenTerminalView), which renders the
+      // detached state with the "Last response" preview, Rerun, and Resume
+      // affordances. Direct-resume / unpark stays available via right-click.
+      if isDormant, isHovered {
+        dormantHoverOverlay(onPlay: onTap)
       }
     }
     .animation(.spring(response: 0.28, dampingFraction: 0.86), value: status)
@@ -233,11 +238,12 @@ struct SessionCardView: View {
       )
   }
 
-  /// Shown on hover for parked cards — a big centered play symbol over a
-  /// translucent scrim. Clicking it unparks the session directly, so the
-  /// user doesn't have to reach for the right-click menu.
-  private func parkedHoverOverlay(onUnpark: @escaping () -> Void) -> some View {
-    Button(action: onUnpark) {
+  /// Shown on hover for any dormant card — a big centered play symbol over
+  /// a translucent scrim signalling "the tab is gone, click to open".
+  /// Clicking forwards to the regular tap handler so the user lands in the
+  /// detached session view (Rerun / Resume / Last response preview).
+  private func dormantHoverOverlay(onPlay: @escaping () -> Void) -> some View {
+    Button(action: onPlay) {
       ZStack {
         RoundedRectangle(cornerRadius: 10, style: .continuous)
           .fill(.background.opacity(0.55))
@@ -248,7 +254,7 @@ struct SessionCardView: View {
       }
     }
     .buttonStyle(.plain)
-    .help("Unpark session")
+    .help("Open session")
     .transition(.opacity)
   }
 
