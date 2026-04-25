@@ -316,15 +316,18 @@ struct AppFeature {
           )
         )
       ):
+        // Always attempt destroyTab, even when the live `Worktree`
+        // record can't be resolved — the terminal manager keys its
+        // state by `worktree.id`, so a shim is enough. Gating this
+        // lookup used to leak the PTY (and the agent process inside)
+        // whenever a session was removed after its repo went away.
         let worktree = resolveBoardSessionWorktree(
           repositoryID: repositoryID,
           worktreeID: worktreeID,
           state: state.repositories
         )
         return .run { send in
-          if let worktree {
-            await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: sessionID)))
-          }
+          await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: sessionID)))
           if deleteBackingWorktree {
             await send(.repositories(.deleteWorktreeConfirmed(worktreeID, repositoryID)))
           }
@@ -903,24 +906,41 @@ struct AppFeature {
     }
   }
 
+  /// Resolves a `Worktree` value for a session whose card is being torn
+  /// down. The terminal manager keys its `WorktreeTerminalState` map by
+  /// `worktree.id` only, so even when the live `Worktree` record has
+  /// been pruned (repo unregistered, worktree path changed mid-flight),
+  /// a shim built from `worktreeID` is enough to find and destroy the
+  /// PTY tab. Returning non-optional is deliberate: we used to gate
+  /// `destroyTab` on this lookup, which leaked claude processes
+  /// whenever a session was removed after its repo went away.
   private func resolveBoardSessionWorktree(
     repositoryID: Repository.ID,
     worktreeID: Worktree.ID,
     state: RepositoriesFeature.State
-  ) -> Worktree? {
+  ) -> Worktree {
     if let worktree = state.worktree(for: worktreeID) {
       return worktree
     }
-    guard repositoryID == worktreeID, let repository = state.repositories[id: repositoryID] else {
-      return nil
+    if repositoryID == worktreeID, let repository = state.repositories[id: repositoryID] {
+      let rootURL = repository.rootURL.standardizedFileURL
+      return Worktree(
+        id: rootURL.path(percentEncoded: false),
+        name: repository.name,
+        detail: "",
+        workingDirectory: rootURL,
+        repositoryRootURL: rootURL
+      )
     }
-    let rootURL = repository.rootURL.standardizedFileURL
+    let url = URL(fileURLWithPath: worktreeID).standardizedFileURL
+    let repositoryRootURL =
+      state.repositories[id: repositoryID]?.rootURL.standardizedFileURL ?? url
     return Worktree(
-      id: rootURL.path(percentEncoded: false),
-      name: repository.name,
+      id: worktreeID,
+      name: url.lastPathComponent,
       detail: "",
-      workingDirectory: rootURL,
-      repositoryRootURL: rootURL
+      workingDirectory: url,
+      repositoryRootURL: repositoryRootURL
     )
   }
 
