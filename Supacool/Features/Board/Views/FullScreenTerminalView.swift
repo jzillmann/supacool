@@ -49,6 +49,7 @@ struct FullScreenTerminalView: View {
   /// flip the observer on/off without going back to the board.
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
+  let onAutoObserverRunNow: () -> Void
 
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
@@ -523,7 +524,8 @@ struct FullScreenTerminalView: View {
       AutoObserverPopover(
         session: session,
         onToggle: onAutoObserverToggle,
-        onPromptChanged: onAutoObserverPromptChanged
+        onPromptChanged: onAutoObserverPromptChanged,
+        onRunNow: onAutoObserverRunNow
       )
     }
   }

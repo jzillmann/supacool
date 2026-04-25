@@ -397,6 +397,9 @@ struct BoardView: View {
               onAutoObserverPromptChanged: { prompt in
                 store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
               },
+              onAutoObserverRunNow: {
+                store.send(.autoObserverTriggered(id: session.id))
+              },
               onDebug: {
                 store.send(
                   .debugSessionRequested(
@@ -498,6 +501,7 @@ private struct SessionCardContainer: View {
   let onUnpark: (() -> Void)?
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
+  let onAutoObserverRunNow: () -> Void
   let onDebug: () -> Void
   let onAppear: (() -> Void)?
 
@@ -519,6 +523,7 @@ private struct SessionCardContainer: View {
       onUnpark: onUnpark,
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
+      onAutoObserverRunNow: onAutoObserverRunNow,
       onDebug: onDebug,
       onAppear: onAppear
     )

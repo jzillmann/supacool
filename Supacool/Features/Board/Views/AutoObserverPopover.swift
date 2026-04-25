@@ -7,17 +7,20 @@ struct AutoObserverPopover: View {
   let session: AgentSession
   let onToggle: () -> Void
   let onPromptChanged: (String) -> Void
+  let onRunNow: () -> Void
 
   @State private var promptDraft: String
 
   init(
     session: AgentSession,
     onToggle: @escaping () -> Void,
-    onPromptChanged: @escaping (String) -> Void
+    onPromptChanged: @escaping (String) -> Void,
+    onRunNow: @escaping () -> Void
   ) {
     self.session = session
     self.onToggle = onToggle
     self.onPromptChanged = onPromptChanged
+    self.onRunNow = onRunNow
     self._promptDraft = State(initialValue: session.autoObserverPrompt)
   }
 
@@ -49,6 +52,15 @@ struct AutoObserverPopover: View {
           .onChange(of: promptDraft) { _, newValue in
             onPromptChanged(newValue)
           }
+      }
+
+      HStack {
+        Spacer()
+        Button("Run now", action: onRunNow)
+          .buttonStyle(.borderedProminent)
+          .controlSize(.small)
+          .disabled(!session.autoObserver)
+          .help("Evaluate the current screen and respond once with the instructions above")
       }
     }
     .padding(14)

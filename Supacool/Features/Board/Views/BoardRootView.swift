@@ -278,7 +278,8 @@ struct BoardRootView: View {
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
-        }
+        },
+        onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) }
       )
       .overlay {
         if isSessionSwitcherPresented {

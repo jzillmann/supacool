@@ -19,6 +19,7 @@ struct SessionCardView: View {
   var onUnpark: (() -> Void)?
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
+  var onAutoObserverRunNow: (() -> Void)?
   /// Right-click → "Debug session…" — opens the debug sheet that spawns
   /// a fresh agent in the supacool repo primed with this session's
   /// trace JSONL.
@@ -216,7 +217,8 @@ struct SessionCardView: View {
       AutoObserverPopover(
         session: session,
         onToggle: { onAutoObserverToggle?() },
-        onPromptChanged: { onAutoObserverPromptChanged?($0) }
+        onPromptChanged: { onAutoObserverPromptChanged?($0) },
+        onRunNow: { onAutoObserverRunNow?() }
       )
     }
   }
