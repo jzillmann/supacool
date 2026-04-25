@@ -59,13 +59,20 @@ struct WorktreeJanitorSheet: View {
     VStack(alignment: .leading, spacing: 4) {
       Text("Manage Worktrees")
         .font(.title2.weight(.semibold))
-      Text(store.repositoryName)
+      Text(headerSubtitle)
         .font(.callout)
         .foregroundStyle(.secondary)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(.horizontal, 20)
     .padding(.vertical, 16)
+  }
+
+  private var headerSubtitle: String {
+    let count = store.rows.count
+    guard count > 0 else { return store.repositoryName }
+    let suffix = count == 1 ? "1 worktree" : "\(count) worktrees"
+    return "\(store.repositoryName) · \(suffix)"
   }
 
   // MARK: - Orphan banner
@@ -166,7 +173,7 @@ struct WorktreeJanitorSheet: View {
       LazyVStack(alignment: .leading, spacing: 0) {
         rowHeader
         Divider()
-        ForEach(store.rows) { row in
+        ForEach(store.sortedRows) { row in
           rowView(row)
           Divider()
         }
@@ -178,17 +185,17 @@ struct WorktreeJanitorSheet: View {
     HStack(spacing: 12) {
       Text("")
         .frame(width: 24)
-      Text("Name")
+      sortableHeader("Name", column: .name)
         .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
-      Text("Status")
+      sortableHeader("Status", column: .status)
         .frame(width: 120, alignment: .leading)
-      Text("Size")
+      sortableHeader("Size", column: .size, alignment: .trailing)
         .frame(width: 80, alignment: .trailing)
-      Text("Last Commit")
+      sortableHeader("Last Commit", column: .lastCommit)
         .frame(minWidth: 200, maxWidth: .infinity, alignment: .leading)
-      Text("± base")
+      sortableHeader("± base", column: .aheadBehind, alignment: .trailing)
         .frame(width: 80, alignment: .trailing)
-      Text("Dirty")
+      sortableHeader("Dirty", column: .dirty, alignment: .trailing)
         .frame(width: 64, alignment: .trailing)
       Text("")
         .frame(width: 24)
@@ -198,6 +205,45 @@ struct WorktreeJanitorSheet: View {
     .padding(.horizontal, 16)
     .padding(.vertical, 8)
     .background(Color.secondary.opacity(0.06))
+  }
+
+  /// Column-header button that toggles sort direction on the same
+  /// column or selects a new one. Shows an inline ↑/↓ chevron when its
+  /// column is the active sort key.
+  private func sortableHeader(
+    _ title: String,
+    column: WorktreeJanitorFeature.SortColumn,
+    alignment: HorizontalAlignment = .leading
+  ) -> some View {
+    let isActive = store.sortColumn == column
+    return Button {
+      store.send(.sortColumnTapped(column))
+    } label: {
+      HStack(spacing: 4) {
+        if alignment == .trailing { Spacer(minLength: 0) }
+        Text(title)
+        if isActive {
+          Image(systemName: store.sortAscending ? "chevron.up" : "chevron.down")
+            .font(.caption2.weight(.bold))
+            .accessibilityHidden(true)
+        }
+        if alignment == .leading { Spacer(minLength: 0) }
+      }
+      .foregroundStyle(isActive ? Color.primary : Color.secondary)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .help(sortHelp(for: column, isActive: isActive))
+  }
+
+  private func sortHelp(
+    for column: WorktreeJanitorFeature.SortColumn,
+    isActive: Bool
+  ) -> String {
+    guard isActive else { return "Sort by \(column.displayName)" }
+    return store.sortAscending
+      ? "Sorted \(column.displayName) ascending — click for descending"
+      : "Sorted \(column.displayName) descending — click for ascending"
   }
 
   private func rowView(_ row: WorktreeInventoryEntry) -> some View {

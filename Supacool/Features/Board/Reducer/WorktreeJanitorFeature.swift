@@ -68,6 +68,13 @@ struct WorktreeJanitorFeature {
     /// motion instead of a stale "8 selected · reclaim Y" string.
     var deleteScheduledTotal: Int = 0
 
+    // MARK: Sort
+
+    /// Currently sorted column, or `nil` for natural (scanner) order.
+    var sortColumn: SortColumn?
+    /// True for ascending (A→Z, smallest first, oldest first).
+    var sortAscending: Bool = true
+
     // MARK: Row expansion
 
     /// Row whose disclosure chevron is open. Only one at a time so the
@@ -97,6 +104,26 @@ struct WorktreeJanitorFeature {
     /// there are no orphans *or* the user dismissed it.
     var showsOrphanBanner: Bool {
       !orphanSessionIDs.isEmpty && !orphanBannerDismissed
+    }
+
+    /// Rows in display order — natural scanner order when no column is
+    /// selected, otherwise sorted by `sortColumn` + `sortAscending`.
+    /// Repo-root entries always pin to the top so the user keeps a
+    /// stable anchor regardless of sort.
+    var sortedRows: [WorktreeInventoryEntry] {
+      let materialized = Array(rows)
+      guard let column = sortColumn else { return materialized }
+      let comparator = column.comparator
+      let sorted = materialized.sorted { lhs, rhs in
+        // Repo root always wins (pinned top in both directions).
+        if case .repoRoot = lhs.status, case .repoRoot = rhs.status {
+          return false
+        }
+        if case .repoRoot = lhs.status { return true }
+        if case .repoRoot = rhs.status { return false }
+        return comparator(lhs, rhs)
+      }
+      return sortAscending ? sorted : sorted.reversed()
     }
 
     init(
@@ -130,6 +157,70 @@ struct WorktreeJanitorFeature {
     var hasDirty: Bool { targets.contains(where: \.isDirty) }
   }
 
+  /// Sortable columns in the inventory list. `comparator` returns a
+  /// stable ascending ordering — the reducer flips it when the user
+  /// asks for descending so we don't have to write each comparison
+  /// twice.
+  nonisolated enum SortColumn: Equatable, Sendable, CaseIterable {
+    case name, status, size, lastCommit, aheadBehind, dirty
+
+    var displayName: String {
+      switch self {
+      case .name: "name"
+      case .status: "status"
+      case .size: "size"
+      case .lastCommit: "last commit"
+      case .aheadBehind: "± base"
+      case .dirty: "dirty"
+      }
+    }
+
+    /// True for columns whose intuitive default direction is descending
+    /// (largest size, most-dirty, most-recent commit). Name + status
+    /// remain ascending — alphabetical / category order reads
+    /// naturally that way.
+    var defaultsDescending: Bool {
+      switch self {
+      case .name, .status: return false
+      case .size, .lastCommit, .aheadBehind, .dirty: return true
+      }
+    }
+
+    var comparator: (WorktreeInventoryEntry, WorktreeInventoryEntry) -> Bool {
+      switch self {
+      case .name:
+        return { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+      case .status:
+        return { Self.statusRank($0.status) < Self.statusRank($1.status) }
+      case .size:
+        // Nil sizes sort to the bottom in ascending order.
+        return { ($0.sizeBytes ?? UInt64.max) < ($1.sizeBytes ?? UInt64.max) }
+      case .lastCommit:
+        return {
+          ($0.lastCommit?.date ?? .distantPast) < ($1.lastCommit?.date ?? .distantPast)
+        }
+      case .aheadBehind:
+        return { Self.aheadBehindMagnitude($0.aheadBehind) < Self.aheadBehindMagnitude($1.aheadBehind) }
+      case .dirty:
+        return { ($0.uncommittedCount ?? 0) < ($1.uncommittedCount ?? 0) }
+      }
+    }
+
+    private static func statusRank(_ status: WorktreeInventoryEntry.Status) -> Int {
+      switch status {
+      case .repoRoot: return 0
+      case .owned: return 1
+      case .orphanDirty: return 2
+      case .orphan: return 3
+      }
+    }
+
+    private static func aheadBehindMagnitude(_ value: WorktreeInventoryEntry.AheadBehind?) -> Int {
+      guard let value else { return 0 }
+      return value.ahead + value.behind
+    }
+  }
+
   enum Action: Equatable {
     // MARK: Scan
     case scanRequested
@@ -159,6 +250,14 @@ struct WorktreeJanitorFeature {
     case toggleSelection(id: WorktreeInventoryEntry.ID)
     case selectAllCandidates
     case clearSelection
+
+    // MARK: Sort
+    /// Click on a column header. Toggles direction if the same column
+    /// is tapped again; otherwise sets the new column with a sensible
+    /// default direction (alphabetical/text → ascending; size, dirty,
+    /// commit recency → descending so the heaviest / most-recent
+    /// entries land at the top).
+    case sortColumnTapped(SortColumn)
 
     // MARK: Delete
     case deleteSelectedRequested
@@ -369,6 +468,17 @@ struct WorktreeJanitorFeature {
 
       case .clearSelection:
         state.selectedIDs.removeAll()
+        return .none
+
+      // MARK: - Sort
+
+      case .sortColumnTapped(let column):
+        if state.sortColumn == column {
+          state.sortAscending.toggle()
+        } else {
+          state.sortColumn = column
+          state.sortAscending = !column.defaultsDescending
+        }
         return .none
 
       // MARK: - Delete
