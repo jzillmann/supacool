@@ -33,7 +33,13 @@ nonisolated enum PullRequestLookupState: Equatable, Sendable {
   case resolved(PullRequestContext)
   /// Lookup failed, no configured repo matches, or the PR was from a fork.
   /// Sheet falls back to manual entry; message shown inline.
-  case failed(url: String, message: String)
+  case failed(parsed: ParsedPullRequestURL, message: String)
+  /// User explicitly dismissed the PR association (via the banner's close
+  /// button). The URL is still in the prompt, but we suppress re-fetching
+  /// until the user edits it to something different. This lets users paste
+  /// logs containing stray PR links without the sheet hijacking their repo
+  /// and workspace selection.
+  case dismissed(ParsedPullRequestURL)
 }
 
 nonisolated struct PullRequestContext: Equatable, Sendable {
@@ -363,6 +369,11 @@ struct NewTerminalFeature {
     case pullRequestLookupResolved(PullRequestContext)
     case pullRequestLookupNotMatched(parsed: ParsedPullRequestURL, reason: String)
     case pullRequestLookupFailed(parsed: ParsedPullRequestURL, message: String)
+    /// User tapped the banner's close button to drop the PR association
+    /// without editing the prompt. Transitions the lookup to `.dismissed`
+    /// so subsequent prompt edits that keep the same URL don't re-trigger
+    /// the lookup.
+    case pullRequestDismissTapped
 
     /// User flipped the destination segmented picker. `.local` reverts
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
@@ -642,7 +653,7 @@ struct NewTerminalFeature {
         guard Self.shouldAcceptLookupOutcome(for: parsed, state: state) else {
           return .none
         }
-        state.pullRequestLookup = .failed(url: parsed.url, message: reason)
+        state.pullRequestLookup = .failed(parsed: parsed, message: reason)
         state.validationMessage = nil
         return .none
 
@@ -650,9 +661,25 @@ struct NewTerminalFeature {
         guard Self.shouldAcceptLookupOutcome(for: parsed, state: state) else {
           return .none
         }
-        state.pullRequestLookup = .failed(url: parsed.url, message: message)
+        state.pullRequestLookup = .failed(parsed: parsed, message: message)
         state.validationMessage = nil
         return .none
+
+      case .pullRequestDismissTapped:
+        let parsed: ParsedPullRequestURL
+        switch state.pullRequestLookup {
+        case .idle, .dismissed:
+          return .none
+        case .fetching(let p):
+          parsed = p
+        case .resolved(let context):
+          parsed = context.parsed
+        case .failed(let p, _):
+          parsed = p
+        }
+        state.pullRequestLookup = .dismissed(parsed)
+        state.validationMessage = nil
+        return .cancel(id: CancelID.pullRequestLookup)
 
       case .delegate:
         return .none
@@ -959,8 +986,12 @@ struct NewTerminalFeature {
       return .none
     case (let parsed?, .resolved(let context)) where context.parsed == parsed:
       return .none
-    case (let parsed?, .failed(let url, _)) where url == parsed.url:
+    case (let parsed?, .failed(let failed, _)) where failed == parsed:
       // Same URL already failed once — don't thrash the API.
+      return .none
+    case (let parsed?, .dismissed(let dismissed)) where dismissed == parsed:
+      // User dismissed this exact URL — stay dismissed until they edit
+      // it to something different.
       return .none
     case (let parsed?, _):
       return startPullRequestLookup(state: &state, parsed: parsed)
@@ -1083,7 +1114,7 @@ struct NewTerminalFeature {
   ) -> Bool {
     switch state.pullRequestLookup {
     case .fetching(let pending): return pending == parsed
-    case .idle, .resolved, .failed: return false
+    case .idle, .resolved, .failed, .dismissed: return false
     }
   }
 

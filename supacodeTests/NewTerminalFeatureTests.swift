@@ -397,6 +397,66 @@ struct NewTerminalFeatureTests {
     #expect(store.state.pullRequestLookup == .idle)
   }
 
+  /// Dismissing the PR banner drops the association without touching the
+  /// prompt. Subsequent prompt edits that still contain the same URL must
+  /// NOT re-trigger the lookup — the whole point of dismiss is surviving
+  /// incidental PR URLs in pasted logs. Editing to a different PR URL
+  /// starts a fresh lookup.
+  @Test(.dependencies) func prURLDismissKeepsAssociationDroppedEvenIfURLLingers() async {
+    let state = Self.makeState()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.supacoolGithubPR.fetchMetadata = { owner, _, number in
+        SupacoolPRMetadata(
+          title: "PR #\(number)",
+          headRefName: "feat/pr-\(number)",
+          baseRefName: "main",
+          headRepositoryOwner: owner,
+          state: "OPEN",
+          isDraft: false
+        )
+      }
+      $0.gitClient.remoteInfo = { _ in
+        GithubRemoteInfo(host: "github.com", owner: "acme", repo: "widgets")
+      }
+      $0.gitClient.localBranchNames = { _ in [] }
+      $0.gitClient.remoteBranchRefs = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    // Paste a log that embeds a PR URL.
+    let pastedLog = "Cyclenerd manager logs: https://github.com/acme/widgets/pull/2419 broke the build"
+    await store.send(\.binding.prompt, pastedLog)
+    await store.receive(\.pullRequestLookupResolved)
+    #expect({ if case .resolved = store.state.pullRequestLookup { return true } else { return false } }())
+
+    // User dismisses the banner.
+    await store.send(.pullRequestDismissTapped)
+    if case .dismissed(let parsed) = store.state.pullRequestLookup {
+      #expect(parsed.number == 2419)
+    } else {
+      Issue.record("Expected .dismissed after pullRequestDismissTapped, got \(store.state.pullRequestLookup)")
+    }
+
+    // User keeps typing — the same URL is still in the prompt. No re-fetch.
+    await store.send(\.binding.prompt, pastedLog + " and also something else")
+    if case .dismissed = store.state.pullRequestLookup {
+      // Expected.
+    } else {
+      Issue.record("Expected .dismissed to survive a same-URL prompt edit, got \(store.state.pullRequestLookup)")
+    }
+
+    // A different PR URL should re-arm the lookup.
+    await store.send(\.binding.prompt, "try https://github.com/acme/widgets/pull/99 instead")
+    await store.receive(\.pullRequestLookupResolved)
+    if case .resolved(let context) = store.state.pullRequestLookup {
+      #expect(context.parsed.number == 99)
+    } else {
+      Issue.record("Expected .resolved for new URL, got \(store.state.pullRequestLookup)")
+    }
+  }
+
   // MARK: - PR URL parsing
 
   @Test func parsedPRURLFindsFirstMatchInText() {

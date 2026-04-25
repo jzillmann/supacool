@@ -38,7 +38,10 @@ struct NewTerminalSheet: View {
       Section {
         promptEditor
         if shouldShowPullRequestBanner {
-          PullRequestBannerView(state: store.pullRequestLookup)
+          PullRequestBannerView(
+            state: store.pullRequestLookup,
+            onDismiss: { store.send(.pullRequestDismissTapped) }
+          )
         }
       } header: {
         Text("New Terminal")
@@ -249,22 +252,23 @@ struct NewTerminalSheet: View {
     return "Start a raw terminal session. The prompt (if any) runs as a shell command."
   }
 
-  /// Hide the banner entirely when no PR is being tracked; otherwise the
-  /// prompt section stays uncluttered during normal use.
+  /// Hide the banner entirely when no PR is being tracked or the user
+  /// explicitly dismissed it; otherwise the prompt section stays
+  /// uncluttered during normal use.
   private var shouldShowPullRequestBanner: Bool {
     switch store.pullRequestLookup {
-    case .idle: return false
+    case .idle, .dismissed: return false
     case .fetching, .resolved, .failed: return true
     }
   }
 
   /// Lock repo + workspace fields when a PR has resolved — the PR context
-  /// has already pinned them. `.failed` stays unlocked so the user can
-  /// fall back to manual selection.
+  /// has already pinned them. `.failed` and `.dismissed` stay unlocked so
+  /// the user can fall back to manual selection.
   private var isWorkspaceLockedByPR: Bool {
     switch store.pullRequestLookup {
     case .resolved: return true
-    case .idle, .fetching, .failed: return false
+    case .idle, .fetching, .failed, .dismissed: return false
     }
   }
 
@@ -520,7 +524,7 @@ struct NewTerminalSheet: View {
 
   private var workspaceFieldFooter: String {
     if isWorkspaceLockedByPR {
-      return "Locked to the PR's branch. Remove the PR URL from the prompt to edit."
+      return "Locked to the PR's branch. Dismiss the PR banner or remove the URL to edit."
     }
     switch store.selectedWorkspace {
     case .repoRoot: return ""  // unreachable when the field is rendered
@@ -870,6 +874,7 @@ private struct WorkspaceSuggestionRow: View {
 /// interaction happens elsewhere.
 private struct PullRequestBannerView: View {
   let state: PullRequestLookupState
+  let onDismiss: () -> Void
 
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
@@ -892,6 +897,18 @@ private struct PullRequestBannerView: View {
       if case .fetching = state {
         ProgressView().controlSize(.small)
       }
+      // Always offer a close button on any non-idle state so users who
+      // pasted a log containing an incidental PR URL can drop the
+      // association without editing the prompt.
+      Button {
+        onDismiss()
+      } label: {
+        Image(systemName: "xmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help("Drop the PR association — keeps the prompt text unchanged")
     }
     .padding(.vertical, 6)
     .padding(.horizontal, 10)
@@ -903,7 +920,7 @@ private struct PullRequestBannerView: View {
 
   private var iconName: String {
     switch state {
-    case .idle: return "link"
+    case .idle, .dismissed: return "link"
     case .fetching: return "link"
     case .resolved: return "checkmark.circle.fill"
     case .failed: return "exclamationmark.triangle.fill"
@@ -914,7 +931,7 @@ private struct PullRequestBannerView: View {
     switch state {
     case .resolved: return .accentColor
     case .failed: return .orange
-    case .idle, .fetching: return .secondary
+    case .idle, .fetching, .dismissed: return .secondary
     }
   }
 
@@ -922,13 +939,13 @@ private struct PullRequestBannerView: View {
     switch state {
     case .failed: return Color.orange.opacity(0.08)
     case .resolved: return Color.accentColor.opacity(0.08)
-    case .idle, .fetching: return Color.secondary.opacity(0.06)
+    case .idle, .fetching, .dismissed: return Color.secondary.opacity(0.06)
     }
   }
 
   private var headline: String {
     switch state {
-    case .idle: return ""
+    case .idle, .dismissed: return ""
     case .fetching(let parsed):
       return "Fetching PR #\(parsed.number) from \(parsed.owner)/\(parsed.repo)…"
     case .resolved(let context):
@@ -940,7 +957,7 @@ private struct PullRequestBannerView: View {
 
   private var detail: String? {
     switch state {
-    case .idle, .fetching: return nil
+    case .idle, .fetching, .dismissed: return nil
     case .resolved(let context):
       return
         "\(context.metadata.baseRefName) ← \(context.metadata.headRefName) · "
