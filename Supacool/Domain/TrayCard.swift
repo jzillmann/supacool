@@ -36,7 +36,7 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// `git worktree remove` failed during card-removal cleanup. Without
   /// this surface the directory would silently linger on disk — the
   /// only feedback was a `.debug` log. Primary tap dismisses (nothing
-  /// to navigate to); user can rerun the cleanup via Manage Worktrees…
+  /// to navigate to); user can rerun cleanup from Trash → Worktrees.
   case worktreeDeleteFailed(path: String, message: String)
 
   /// Whether this kind offers a secondary call-to-action button next to

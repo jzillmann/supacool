@@ -800,4 +800,53 @@ struct BoardFeatureJanitorIntegrationTests {
       $0.worktreeJanitor = nil
     }
   }
+
+  @Test func dismissTrashSheetAlsoClearsJanitorState() async {
+    var state = BoardFeature.State()
+    state.isTrashSheetPresented = true
+    state.worktreeJanitor = WorktreeJanitorFeature.State(
+      repositoryID: "/repos/foo",
+      repositoryName: "foo",
+      sessionsSnapshot: []
+    )
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.dismissTrashSheet) {
+      $0.isTrashSheetPresented = false
+      $0.worktreeJanitor = nil
+    }
+  }
+
+  @Test func switchingWorktreeRepoForcesNilTransitionBeforePresentingNewRepo() async {
+    var state = BoardFeature.State()
+    state.worktreeJanitor = WorktreeJanitorFeature.State(
+      repositoryID: "/repos/foo",
+      repositoryName: "foo",
+      sessionsSnapshot: []
+    )
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .openWorktreeJanitor(repositoryID: "/repos/bar", repositoryName: "bar")
+    ) {
+      $0.worktreeJanitor = nil
+    }
+    await store.receive(
+      ._presentWorktreeJanitor(repositoryID: "/repos/bar", repositoryName: "bar")
+    ) {
+      $0.worktreeJanitor = WorktreeJanitorFeature.State(
+        repositoryID: "/repos/bar",
+        repositoryName: "bar",
+        sessionsSnapshot: []
+      )
+    }
+  }
 }

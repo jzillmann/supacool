@@ -51,10 +51,8 @@ struct BoardFeature {
     /// to re-pass them. Cleared when the sheet closes.
     var pendingDebugRepositories: [Repository] = []
 
-    /// "Manage Worktrees…" inspector sheet state. Presented from the
-    /// repo picker; lets the user see every worktree on disk for a
-    /// given repo with classification + size + git metadata. Read-only
-    /// in PR2 — multi-select + delete lands in PR3.
+    /// Worktree janitor state embedded in the trash dialog's
+    /// "Worktrees" tab. Holds the currently selected repository scan.
     @Presents var worktreeJanitor: WorktreeJanitorFeature.State?
 
     /// Sessions whose Auto-Observer is currently reading/deciding.
@@ -405,7 +403,7 @@ struct BoardFeature {
     case gettingStartedShowAgain
 
     // MARK: Worktree prune
-    /// User clicked the broom button next to a repo in the picker.
+    /// User triggered a manual prune for a repository.
     /// Kicks off `git worktree prune --verbose` and surfaces a summary.
     case pruneWorktreesRequested(repositoryID: Repository.ID, repositoryName: String)
     /// Result from the prune effect — populates the summary alert.
@@ -416,10 +414,13 @@ struct BoardFeature {
     case dismissPruneAlert
 
     // MARK: Worktree janitor
-    /// User chose "Manage Worktrees…" in the repo picker. Opens the
-    /// inspector sheet seeded with the current sessions snapshot so
-    /// classification doesn't race with concurrent session edits.
+    /// Open/refresh the janitor for a repository from the trash
+    /// dialog's Worktrees tab.
     case openWorktreeJanitor(repositoryID: Repository.ID, repositoryName: String)
+    /// Internal follow-up used when switching repositories while an
+    /// existing janitor is mounted. Forces a nil transition so child
+    /// scan effects are torn down before presenting the new repo.
+    case _presentWorktreeJanitor(repositoryID: Repository.ID, repositoryName: String)
     case worktreeJanitor(PresentationAction<WorktreeJanitorFeature.Action>)
 
     case delegate(Delegate)
@@ -601,6 +602,7 @@ struct BoardFeature {
 
       case .dismissTrashSheet:
         state.isTrashSheetPresented = false
+        state.worktreeJanitor = nil
         return .none
 
       case .restoreFromTrash(let id):
@@ -1598,6 +1600,28 @@ struct BoardFeature {
         return .send(.delegate(.gettingStartedReevaluateRequested))
 
       case .openWorktreeJanitor(let repositoryID, let repositoryName):
+        if let current = state.worktreeJanitor,
+          current.repositoryID != repositoryID
+        {
+          state.worktreeJanitor = nil
+          return .send(
+            ._presentWorktreeJanitor(
+              repositoryID: repositoryID,
+              repositoryName: repositoryName
+            )
+          )
+        }
+        if state.worktreeJanitor?.repositoryID == repositoryID {
+          return .none
+        }
+        state.worktreeJanitor = WorktreeJanitorFeature.State(
+          repositoryID: repositoryID,
+          repositoryName: repositoryName,
+          sessionsSnapshot: state.sessions
+        )
+        return .none
+
+      case ._presentWorktreeJanitor(let repositoryID, let repositoryName):
         state.worktreeJanitor = WorktreeJanitorFeature.State(
           repositoryID: repositoryID,
           repositoryName: repositoryName,

@@ -16,6 +16,15 @@ import SwiftUI
 ///   whose backing dir is gone
 struct WorktreeJanitorSheet: View {
   @Bindable var store: StoreOf<WorktreeJanitorFeature>
+  let showsDoneButton: Bool
+
+  init(
+    store: StoreOf<WorktreeJanitorFeature>,
+    showsDoneButton: Bool = true
+  ) {
+    self.store = store
+    self.showsDoneButton = showsDoneButton
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -494,10 +503,12 @@ struct WorktreeJanitorSheet: View {
       .tint(.red)
       .disabled(!store.deletingIDs.isEmpty)
     }
-    Button("Done") {
-      store.send(.closeRequested)
+    if showsDoneButton {
+      Button("Done") {
+        store.send(.closeRequested)
+      }
+      .keyboardShortcut(.defaultAction)
     }
-    .keyboardShortcut(.defaultAction)
   }
 
   private var idleSummary: String {

@@ -18,12 +18,6 @@ struct RepoPickerButton: View {
   let onShowAll: () -> Void
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
-  /// Opens the "Manage Worktrees…" inspector for the chosen repo.
-  /// This is the single entry point for worktree hygiene — the
-  /// janitor's scan runs `git worktree prune` internally and also
-  /// reconciles orphan session cards, subsuming the old standalone
-  /// prune affordance.
-  let onManageWorktrees: (Repository) -> Void
 
   @State private var isPresented: Bool = false
 
@@ -161,56 +155,10 @@ struct RepoPickerButton: View {
           .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-
-        // Unified entry point for worktree hygiene. The janitor's
-        // scan runs `git worktree prune` internally and reconciles
-        // orphan session cards, replacing the old broom footer.
-        manageFooter
       }
     }
     .frame(minWidth: 240)
     .padding(.vertical, 4)
-  }
-
-  @ViewBuilder
-  private var manageFooter: some View {
-    if repositories.count == 1, let only = repositories.first {
-      Button {
-        isPresented = false
-        onManageWorktrees(only)
-      } label: {
-        manageFooterLabel(text: "Manage Worktrees…")
-      }
-      .buttonStyle(.plain)
-      .help("Inspect every worktree on disk for this repo (size, status, git metadata)")
-    } else {
-      Menu {
-        ForEach(repositories) { repo in
-          Button(repo.name) {
-            isPresented = false
-            onManageWorktrees(repo)
-          }
-        }
-      } label: {
-        manageFooterLabel(text: "Manage Worktrees…")
-      }
-      .menuStyle(.borderlessButton)
-      .menuIndicator(.hidden)
-      .help("Pick a repository to inspect its worktrees")
-    }
-  }
-
-  private func manageFooterLabel(text: String) -> some View {
-    HStack {
-      Image(systemName: "list.bullet.rectangle")
-        .foregroundStyle(.secondary)
-      Text(text)
-        .font(.callout.weight(.medium))
-      Spacer()
-    }
-    .padding(.horizontal, 12)
-    .padding(.vertical, 8)
-    .contentShape(Rectangle())
   }
 
   private func isIncluded(_ repo: Repository) -> Bool {

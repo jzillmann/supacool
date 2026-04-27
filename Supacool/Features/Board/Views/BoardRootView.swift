@@ -185,27 +185,19 @@ struct BoardRootView: View {
         renamingSessionID = nil
       }
     }
-    // Summary after `git worktree prune` runs from the repo picker.
+    // Summary after a manual `git worktree prune` run.
     // Extracted into a ViewModifier to keep the SwiftUI type-checker
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
     .modifier(WorktreeConflictAlertModifier(store: store))
-    // Read-only "Manage Worktrees…" inspector (PR2 of the janitor
-    // ladder). Dismissed via the sheet's Done button → delegate →
-    // parent clears `state.worktreeJanitor`.
-    .sheet(
-      store: store.scope(state: \.$worktreeJanitor, action: \.worktreeJanitor)
-    ) { janitorStore in
-      WorktreeJanitorSheet(store: janitorStore)
-    }
     .sheet(
       isPresented: Binding(
         get: { store.isTrashSheetPresented },
         set: { if !$0 { store.send(.dismissTrashSheet) } }
       )
     ) {
-      TrashSheet(store: store)
+      TrashSheet(store: store, repositories: repositories)
     }
   }
 
@@ -447,12 +439,7 @@ struct BoardRootView: View {
             onToggleRepository: { store.send(.toggleRepository(id: $0)) },
             onShowAll: { store.send(.showAllRepositories) },
             onAddRepository: onAddRepository,
-            onConfigureRepositories: onConfigureRepositories,
-            onManageWorktrees: { repo in
-              store.send(
-                .openWorktreeJanitor(repositoryID: repo.id, repositoryName: repo.name)
-              )
-            }
+            onConfigureRepositories: onConfigureRepositories
           )
           if let footprintStore {
             FootprintChip(store: footprintStore)
@@ -492,10 +479,9 @@ struct BoardRootView: View {
         }
         .help(
           store.trashedSessions.isEmpty
-            ? "Trash is empty"
-            : "Open trash — \(store.trashedSessions.count) recoverable card(s)"
+            ? "Open cleanup dialog (trash + worktrees)"
+            : "Open cleanup dialog — \(store.trashedSessions.count) recoverable card(s)"
         )
-        .disabled(store.trashedSessions.isEmpty)
       }
       ToolbarItem(placement: .primaryAction) {
         Button {
