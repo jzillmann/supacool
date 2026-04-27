@@ -1643,7 +1643,13 @@ nonisolated func composeSetupAndCommand(
   case (true, false): return trimmedCommand + "\n"
   case (false, true): return "bash -c \(singleQuoteShell(trimmedSetup))\n"
   case (false, false):
-    return "bash -c \(singleQuoteShell(trimmedSetup)) && \(trimmedCommand)\n"
+    // `;` (not `&&`) so a failing setup script — submodule init that
+    // can't reach a ref, a flaky bootstrap, etc. — doesn't swallow the
+    // agent launch. Setup failures are loud in the tab; the agent
+    // still gets to run so the user can investigate from inside it.
+    // Single-line dispatch is preserved (the original reason `&&` was
+    // chosen over a literal newline), so the stdin-race fix still holds.
+    return "bash -c \(singleQuoteShell(trimmedSetup)); \(trimmedCommand)\n"
   }
 }
 
