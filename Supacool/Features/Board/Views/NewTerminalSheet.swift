@@ -35,6 +35,13 @@ struct NewTerminalSheet: View {
 
   var body: some View {
     Form {
+      if shouldShowProjectSection {
+        Section {
+          repositoryRow
+            .disabled(isWorkspaceLockedByPR)
+        }
+      }
+
       Section {
         promptEditor
         if shouldShowPullRequestBanner {
@@ -56,8 +63,6 @@ struct NewTerminalSheet: View {
           remoteWorkingDirectoryField
         }
         if !store.destination.isManualRemote {
-          repositoryRow
-            .disabled(isWorkspaceLockedByPR)
           if store.destination.isRemote {
             repositoryRemoteTargetRow
           } else {
@@ -233,16 +238,25 @@ struct NewTerminalSheet: View {
   }
 
   private var agentPicker: some View {
-    Picker(selection: $store.agent) {
-      Text("Shell").tag(Optional<AgentType>.none)
-      ForEach(AgentRegistry.allAgents) { agent in
-        Text(agent.displayName).tag(Optional(agent))
+    LabeledContent {
+      HStack(spacing: 0) {
+        Picker(selection: $store.agent) {
+          Text("Shell").tag(Optional<AgentType>.none)
+          ForEach(AgentRegistry.allAgents) { agent in
+            Text(agent.displayName).tag(Optional(agent))
+          }
+        } label: {
+          EmptyView()
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+        Spacer(minLength: 0)
       }
     } label: {
       Text("Agent")
       Text("Pick a CLI to spawn, or Shell for a raw terminal.")
     }
-    .pickerStyle(.segmented)
   }
 
   private var headerSubtitle: String {
@@ -250,6 +264,13 @@ struct NewTerminalSheet: View {
       return "Start an interactive \(agent.displayName) session with this prompt."
     }
     return "Start a raw terminal session. The prompt (if any) runs as a shell command."
+  }
+
+  /// The project picker only earns top-of-sheet placement when there's
+  /// an actual choice to make (2+ repos) AND a repo is in scope (i.e.
+  /// not a manual remote SSH session, where there's no project).
+  private var shouldShowProjectSection: Bool {
+    store.availableRepositories.count > 1 && !store.destination.isManualRemote
   }
 
   /// Hide the banner entirely when no PR is being tracked or the user
@@ -396,18 +417,42 @@ struct NewTerminalSheet: View {
 
   /// Repository picker. Hidden entirely with zero or one registered repo
   /// — the single-repo case is unambiguous, and the zero-repo case is
-  /// caught by the footer validation message. Only multi-repo users see
-  /// the picker.
+  /// caught by the footer validation message. 2–4 repos render as a
+  /// trailing-anchored segmented picker (matches the Scope row); 5+
+  /// falls back to the standard menu style so the row doesn't blow out
+  /// the sheet width.
   @ViewBuilder
   private var repositoryRow: some View {
-    if store.availableRepositories.count > 1 {
-      Picker(selection: $store.selectedRepositoryID) {
-        ForEach(store.availableRepositories) { repo in
-          Text(repo.name).tag(Optional(repo.id))
+    let count = store.availableRepositories.count
+    if count > 1 {
+      if count < 5 {
+        LabeledContent {
+          HStack(spacing: 0) {
+            Picker(selection: $store.selectedRepositoryID) {
+              ForEach(store.availableRepositories) { repo in
+                Text(repo.name).tag(Optional(repo.id))
+              }
+            } label: {
+              EmptyView()
+            }
+            .labelsHidden()
+            .pickerStyle(.segmented)
+            .fixedSize()
+            Spacer(minLength: 0)
+          }
+        } label: {
+          Text("Repository")
+          Text("Terminal runs inside this repo's working directory.")
         }
-      } label: {
-        Text("Repository")
-        Text("Terminal runs inside this repo's working directory.")
+      } else {
+        Picker(selection: $store.selectedRepositoryID) {
+          ForEach(store.availableRepositories) { repo in
+            Text(repo.name).tag(Optional(repo.id))
+          }
+        } label: {
+          Text("Repository")
+          Text("Terminal runs inside this repo's working directory.")
+        }
       }
     }
   }
