@@ -426,6 +426,19 @@ struct BoardRootView: View {
     }
   }
 
+  /// Repo shown by the center toolbar status chip. We only show this
+  /// when exactly one repo is in context (single registered repo, or a
+  /// single explicit filter selection).
+  private var statusRepository: Repository? {
+    if repositories.count == 1 {
+      return repositories.first
+    }
+    guard !store.filters.showsAllRepositories else { return nil }
+    let selected = repositories.filter { store.filters.selectedRepositoryIDs.contains($0.id) }
+    guard selected.count == 1 else { return nil }
+    return selected.first
+  }
+
   private var boardContents: some View {
     BoardView(
       store: store,
@@ -454,6 +467,11 @@ struct BoardRootView: View {
           if let footprintStore {
             FootprintChip(store: footprintStore)
           }
+        }
+      }
+      ToolbarItem(placement: .principal) {
+        if let statusRepository {
+          RepoStatusChip(repository: statusRepository)
         }
       }
       // Push the + button to the far right so there's breathing room
