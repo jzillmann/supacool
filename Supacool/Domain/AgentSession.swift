@@ -67,6 +67,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// In Progress) from "agent finished, waiting on me" (moves to Waiting on Me).
   var hasCompletedAtLeastOnce: Bool
 
+  /// Becomes true when any agent hook event arrives for this tab. Before
+  /// this, the CLI may still be booting and loading its hook config, so
+  /// an idle terminal does not yet mean the agent is waiting on the user.
+  var hasObservedInitialAgentEvent: Bool
+
   /// The last busy state we observed for this session, persisted. Used on
   /// relaunch to distinguish "the session was idle when the app went away"
   /// (`.detached` — safe) from "the agent was actively working when the
@@ -167,6 +172,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     createdAt: Date = Date(),
     lastActivityAt: Date = Date(),
     hasCompletedAtLeastOnce: Bool = false,
+    hasObservedInitialAgentEvent: Bool = false,
     lastKnownBusy: Bool = false,
     lastBusyTransitionAt: Date? = nil,
     removeBackingWorktreeOnDelete: Bool = false,
@@ -196,6 +202,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.createdAt = createdAt
     self.lastActivityAt = lastActivityAt
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
+    self.hasObservedInitialAgentEvent = hasObservedInitialAgentEvent
     self.lastKnownBusy = lastKnownBusy
     self.lastBusyTransitionAt = lastBusyTransitionAt
     self.removeBackingWorktreeOnDelete = removeBackingWorktreeOnDelete
@@ -228,7 +235,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, currentWorkspacePath, agent, initialPrompt, displayName
     case sourceBookmarkID, debugSourceSessionID
-    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
+    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, hasObservedInitialAgentEvent
+    case lastKnownBusy, lastBusyTransitionAt
     case removeBackingWorktreeOnDelete, isPriority, planMode
     case agentNativeSessionID, parked
     case autoObserver, autoObserverPrompt
@@ -254,6 +262,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     lastActivityAt = try c.decodeIfPresent(Date.self, forKey: .lastActivityAt) ?? Date()
     hasCompletedAtLeastOnce =
       try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
+    hasObservedInitialAgentEvent =
+      try c.decodeIfPresent(Bool.self, forKey: .hasObservedInitialAgentEvent) ?? false
     lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
     lastBusyTransitionAt = try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
     removeBackingWorktreeOnDelete =

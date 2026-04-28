@@ -27,6 +27,7 @@ AgentSession (Codable, persisted)
 ├── displayName: String            — user-editable, defaults to deriveDisplayName(prompt)
 ├── createdAt / lastActivityAt     — Date
 ├── hasCompletedAtLeastOnce: Bool  — flips true on first busy→idle
+├── hasObservedInitialAgentEvent   — flips true on first hook event
 ├── lastKnownBusy: Bool            — persisted busy flag, used to distinguish .detached vs .interrupted on relaunch
 └── agentNativeSessionID: String?  — captured from the agent hook payload (claude's session_id); used for Resume
 ```
@@ -103,11 +104,11 @@ Tab does NOT exist in WorktreeTerminalManager:
   session.lastKnownBusy == false → .detached     (gray moon, "Idle")
 Tab exists:
   isAgentBusy == true                          → .inProgress  (green dot, "Working")
-  !hasCompletedAtLeastOnce && age < 3 seconds  → .fresh       (blue sparkle, "Starting")
+  !hasCompletedAtLeastOnce && no hook event yet → .fresh      (blue sparkle, "Starting")
   otherwise                                    → .waitingOnMe (orange exclaim, "Waiting")
 ```
 
-`.fresh` is a 3-second grace window so a just-created card doesn't immediately flip to "Waiting" before claude/codex sends its first busy signal.
+`.fresh` waits on the session's first hook event so a just-created card doesn't flip to "Waiting" while claude/codex is still initializing. A 30-second fallback prevents broken or missing hooks from leaving a card in "Starting" forever.
 
 ## Persistence paths
 

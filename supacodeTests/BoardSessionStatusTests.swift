@@ -51,6 +51,57 @@ struct BoardSessionStatusTests {
     #expect(status == .fresh)
   }
 
+  @Test func firstLaunchStillStartingWhileAgentInitializes() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    let session = sampleSession(
+      createdAt: now.addingTimeInterval(-20),
+      hasCompletedAtLeastOnce: false,
+      lastKnownBusy: false
+    )
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      now: now
+    )
+    #expect(status == .fresh)
+  }
+
+  @Test func missingInitialBusyHookEventuallyFallsBackToWaiting() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    let session = sampleSession(
+      createdAt: now.addingTimeInterval(-(BoardSessionStatus.missingInitialAgentEventGrace + 1)),
+      hasCompletedAtLeastOnce: false,
+      lastKnownBusy: false
+    )
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      now: now
+    )
+    #expect(status == .waitingOnMe)
+  }
+
+  @Test func observedInitialAgentEventCanMoveIdleSessionToWaitingImmediately() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    let session = sampleSession(
+      createdAt: now.addingTimeInterval(-2),
+      hasObservedInitialAgentEvent: true,
+      lastKnownBusy: false
+    )
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      now: now
+    )
+    #expect(status == .waitingOnMe)
+  }
+
   @Test func settledIdleSessionMovesToWaitingOnMe() {
     let now = Date(timeIntervalSinceReferenceDate: 100)
     let session = sampleSession(
@@ -145,6 +196,7 @@ struct BoardSessionStatusTests {
   private func sampleSession(
     createdAt: Date = Date(timeIntervalSinceReferenceDate: 0),
     hasCompletedAtLeastOnce: Bool = false,
+    hasObservedInitialAgentEvent: Bool = false,
     lastKnownBusy: Bool = false,
     lastBusyTransitionAt: Date? = nil
   ) -> AgentSession {
@@ -156,6 +208,7 @@ struct BoardSessionStatusTests {
       createdAt: createdAt,
       lastActivityAt: createdAt,
       hasCompletedAtLeastOnce: hasCompletedAtLeastOnce,
+      hasObservedInitialAgentEvent: hasObservedInitialAgentEvent,
       lastKnownBusy: lastKnownBusy,
       lastBusyTransitionAt: lastBusyTransitionAt
     )

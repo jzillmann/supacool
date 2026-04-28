@@ -129,6 +129,7 @@ final class WorktreeTerminalManager {
         event: .hookBusy(active: active, pid: pid, surfaceID: surfaceID, at: Date()),
         tabID: wrappedTabID
       )
+      self?.markInitialAgentEventObserved(tabID: tabID)
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
         return
@@ -194,6 +195,7 @@ final class WorktreeTerminalManager {
         ),
         tabID: wrappedTabID
       )
+      self?.markInitialAgentEventObserved(tabID: tabID)
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
         return
@@ -293,6 +295,19 @@ final class WorktreeTerminalManager {
       terminalLogger.info(
         "Captured \(notification.agent) session id \(sessionID) for tab \(tabID)"
       )
+    }
+  }
+
+  /// Persists that the tab has received at least one agent hook event.
+  /// This lets the board keep a new session in "Starting" until the CLI
+  /// has actually loaded its hook config, instead of guessing from a
+  /// fixed launch delay.
+  private func markInitialAgentEventObserved(tabID: UUID) {
+    $agentSessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == tabID }) else { return }
+      guard !sessions[index].hasObservedInitialAgentEvent else { return }
+      sessions[index].hasObservedInitialAgentEvent = true
+      sessions[index].lastActivityAt = Date()
     }
   }
 

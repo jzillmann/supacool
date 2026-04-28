@@ -14,7 +14,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
   /// Reconnect to re-spawn ssh and `tmux attach`.
   case disconnected
 
-  static let initialLaunchGrace: TimeInterval = 3
+  static let missingInitialAgentEventGrace: TimeInterval = 30
   static let idleRebucketDelay: TimeInterval = 1.2
 
   var label: String {
@@ -84,10 +84,15 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
     if shouldKeepInProgressWhileIdle(session: session, now: now) {
       return session.hasCompletedAtLeastOnce ? .inProgress : .fresh
     }
-    if !session.hasCompletedAtLeastOnce,
-      now.timeIntervalSince(session.createdAt) < initialLaunchGrace
-    {
-      return .fresh
+    if !session.hasCompletedAtLeastOnce {
+      if session.agent != nil, !session.hasObservedInitialAgentEvent {
+        return now.timeIntervalSince(session.createdAt) < missingInitialAgentEventGrace
+          ? .fresh
+          : .waitingOnMe
+      }
+      if session.agent == nil, now.timeIntervalSince(session.createdAt) < missingInitialAgentEventGrace {
+        return .fresh
+      }
     }
     return .waitingOnMe
   }
