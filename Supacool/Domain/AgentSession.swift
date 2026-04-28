@@ -46,6 +46,15 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// so "rerun" can replay it after a relaunch.
   let initialPrompt: String
 
+  /// If non-nil, this session was created by tapping the matching bookmark
+  /// pill. Used to keep that bookmark disabled while this session
+  /// incarnation still exists on the board.
+  var sourceBookmarkID: Bookmark.ID?
+
+  /// If non-nil, this session was spawned via "Debug session…" from the
+  /// referenced source session id. Used to couple source/debug cards.
+  var debugSourceSessionID: AgentSession.ID?
+
   /// Human-readable card title. Defaults to a derivation of `initialPrompt`;
   /// user can rename.
   var displayName: String
@@ -153,6 +162,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     agent: AgentType?,
     initialPrompt: String,
     displayName: String? = nil,
+    sourceBookmarkID: Bookmark.ID? = nil,
+    debugSourceSessionID: AgentSession.ID? = nil,
     createdAt: Date = Date(),
     lastActivityAt: Date = Date(),
     hasCompletedAtLeastOnce: Bool = false,
@@ -180,6 +191,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.agent = agent
     self.initialPrompt = initialPrompt
     self.displayName = displayName ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
+    self.sourceBookmarkID = sourceBookmarkID
+    self.debugSourceSessionID = debugSourceSessionID
     self.createdAt = createdAt
     self.lastActivityAt = lastActivityAt
     self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
@@ -214,6 +227,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   // synthesized init — it will break backward compat silently.
   enum CodingKeys: String, CodingKey {
     case id, repositoryID, worktreeID, currentWorkspacePath, agent, initialPrompt, displayName
+    case sourceBookmarkID, debugSourceSessionID
     case createdAt, lastActivityAt, hasCompletedAtLeastOnce, lastKnownBusy, lastBusyTransitionAt
     case removeBackingWorktreeOnDelete, isPriority, planMode
     case agentNativeSessionID, parked
@@ -234,6 +248,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     initialPrompt = try c.decode(String.self, forKey: .initialPrompt)
     displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
       ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
+    sourceBookmarkID = try c.decodeIfPresent(UUID.self, forKey: .sourceBookmarkID)
+    debugSourceSessionID = try c.decodeIfPresent(UUID.self, forKey: .debugSourceSessionID)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     lastActivityAt = try c.decodeIfPresent(Date.self, forKey: .lastActivityAt) ?? Date()
     hasCompletedAtLeastOnce =

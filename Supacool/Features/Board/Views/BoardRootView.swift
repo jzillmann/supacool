@@ -251,6 +251,16 @@ struct BoardRootView: View {
             )
           }
           : nil,
+        onPark: (classify(session) != .parked)
+          ? {
+            store.send(
+              .parkSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
         onRemove: { store.send(.removeSession(id: session.id)) },
         onReconnect: session.isRemote
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
@@ -586,6 +596,9 @@ struct BoardRootView: View {
         },
         onPriorityTermination: { status in
           store.send(.prioritySessionTerminated(id: session.id, status: status))
+        },
+        onStatusObserved: { status in
+          store.send(.sessionStatusObserved(id: session.id, status: status))
         }
       )
     }

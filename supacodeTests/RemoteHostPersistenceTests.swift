@@ -188,11 +188,13 @@ struct RemoteHostPersistenceTests {
   @Test func agentSessionRoundTripsRemoteFields() throws {
     let workspaceID = UUID()
     let hostID = UUID()
+    let debugSourceID = UUID()
     let session = AgentSession(
       repositoryID: "remote:dev:/home/jz/code/app",
       worktreeID: "remote:dev:/home/jz/code/app",
       agent: .claude,
       initialPrompt: "fix the thing",
+      debugSourceSessionID: debugSourceID,
       remoteWorkspaceID: workspaceID,
       remoteHostID: hostID,
       tmuxSessionName: "supacool-abc123",
@@ -210,6 +212,7 @@ struct RemoteHostPersistenceTests {
     #expect(decoded.remoteHostID == hostID)
     #expect(decoded.tmuxSessionName == "supacool-abc123")
     #expect(decoded.remoteConnectionLost == true)
+    #expect(decoded.debugSourceSessionID == debugSourceID)
     #expect(decoded.isRemote == true)
   }
 
@@ -232,6 +235,7 @@ struct RemoteHostPersistenceTests {
     #expect(decoded.remoteHostID == nil)
     #expect(decoded.tmuxSessionName == nil)
     #expect(decoded.remoteConnectionLost == false)
+    #expect(decoded.debugSourceSessionID == nil)
     #expect(decoded.isRemote == false)
   }
 }

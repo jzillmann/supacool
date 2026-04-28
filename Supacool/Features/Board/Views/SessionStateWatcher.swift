@@ -14,6 +14,7 @@ struct SessionStateWatcher: View {
   let onBusyToIdleTransition: () -> Void
   let onAwaitingInputEntered: () -> Void
   let onPriorityTermination: (BoardSessionStatus) -> Void
+  let onStatusObserved: (BoardSessionStatus) -> Void
 
   private var isBusyNow: Bool {
     terminalManager.isAgentBusy(
@@ -37,6 +38,7 @@ struct SessionStateWatcher: View {
         }
       }
       .onChange(of: status) { oldValue, newValue in
+        onStatusObserved(newValue)
         // Fire auto-observer when the session enters awaiting-input.
         if oldValue != .awaitingInput && newValue == .awaitingInput {
           onAwaitingInputEntered()
@@ -46,6 +48,7 @@ struct SessionStateWatcher: View {
         }
       }
       .onAppear {
+        onStatusObserved(status)
         // Reconcile: if our stored busy flag doesn't match reality at
         // mount time (e.g. freshly loaded), sync it once.
         if session.lastKnownBusy != isBusyNow {

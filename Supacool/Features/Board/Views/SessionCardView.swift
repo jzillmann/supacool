@@ -8,6 +8,8 @@ struct SessionCardView: View {
   let session: AgentSession
   let repositoryName: String?
   let status: BoardSessionStatus
+  var debugLinkTitle: String? = nil
+  var onDebugLinkTap: (() -> Void)? = nil
   let onTap: () -> Void
   let onRemove: () -> Void
   var onRename: (() -> Void)?
@@ -57,6 +59,10 @@ struct SessionCardView: View {
         .font(.headline)
         .lineLimit(2, reservesSpace: true)
         .foregroundStyle(.primary)
+
+      if let debugLinkTitle, let onDebugLinkTap {
+        debugLinkChip(title: debugLinkTitle, onTap: onDebugLinkTap)
+      }
 
       if !session.references.isEmpty {
         referenceChips
@@ -303,6 +309,25 @@ struct SessionCardView: View {
         .help("Show all references")
       }
     }
+  }
+
+  private func debugLinkChip(title: String, onTap: @escaping () -> Void) -> some View {
+    Button(action: onTap) {
+      HStack(spacing: 4) {
+        Image(systemName: "ladybug.fill")
+          .font(.caption2)
+        Text(title)
+          .font(.caption2.weight(.medium))
+          .lineLimit(1)
+      }
+      .foregroundStyle(Color.pink)
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(Color.pink.opacity(0.12))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .help("Jump to linked debug/source session")
   }
 
   private var cardShape: some InsettableShape {

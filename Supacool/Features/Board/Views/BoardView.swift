@@ -169,9 +169,11 @@ struct BoardView: View {
           // least one saved bookmark. Off-filter → hidden entirely so
           // the attention-zone stays tight.
           let relevantBookmarks = visibleBookmarks
+          let unavailableBookmarkIDs = store.unavailableBookmarkIDs
           if !relevantBookmarks.isEmpty {
             BookmarkPillRow(
               bookmarks: relevantBookmarks,
+              unavailableBookmarkIDs: unavailableBookmarkIDs,
               onTap: { bookmark in
                 store.send(
                   .bookmarkTapped(
@@ -314,10 +316,17 @@ struct BoardView: View {
         ) {
           ForEach(sessions, id: \.id) { session in
             let sessionStatus = classify(session)
+            let debugLink = debugLinkDescriptor(for: session)
+            let onDebugLinkTap: (() -> Void)? = {
+              guard let targetID = debugLink?.targetID else { return nil }
+              return { store.send(.focusSession(id: targetID)) }
+            }()
             SessionCardContainer(
               session: session,
               repositoryName: repositories[id: session.repositoryID]?.name,
               status: sessionStatus,
+              debugLinkTitle: debugLink?.title,
+              onDebugLinkTap: onDebugLinkTap,
               dimmed: dimmed,
               isHighlighted: highlightedSessionID == session.id,
               onTap: { store.send(.focusSession(id: session.id)) },
@@ -429,6 +438,32 @@ struct BoardView: View {
     }
   }
 
+  private struct SessionDebugLinkDescriptor {
+    let title: String
+    let targetID: AgentSession.ID
+  }
+
+  private func debugLinkDescriptor(for session: AgentSession) -> SessionDebugLinkDescriptor? {
+    if let sourceID = session.debugSourceSessionID,
+      let source = store.sessions.first(where: { $0.id == sourceID })
+    {
+      return SessionDebugLinkDescriptor(
+        title: "Debug of: \(source.displayName)",
+        targetID: source.id
+      )
+    }
+
+    let latestChild = store.sessions
+      .filter { $0.debugSourceSessionID == session.id }
+      .sorted { $0.createdAt > $1.createdAt }
+      .first
+    guard let latestChild else { return nil }
+    return SessionDebugLinkDescriptor(
+      title: "Debug session: \(latestChild.displayName)",
+      targetID: latestChild.id
+    )
+  }
+
   private func isWaitingStatus(_ status: BoardSessionStatus) -> Bool {
     BoardNavOrder.isWaitingStatus(status)
   }
@@ -488,6 +523,8 @@ private struct SessionCardContainer: View {
   let session: AgentSession
   let repositoryName: String?
   let status: BoardSessionStatus
+  let debugLinkTitle: String?
+  let onDebugLinkTap: (() -> Void)?
   let dimmed: Bool
   let isHighlighted: Bool
   let onTap: () -> Void
@@ -512,6 +549,8 @@ private struct SessionCardContainer: View {
       session: session,
       repositoryName: repositoryName,
       status: status,
+      debugLinkTitle: debugLinkTitle,
+      onDebugLinkTap: onDebugLinkTap,
       onTap: onTap,
       onRemove: onRemove,
       onRename: onRename,

@@ -182,6 +182,64 @@ struct BookmarkTests {
     #expect(sheet?.agent == .claude)
   }
 
+  // MARK: - Launch availability
+
+  @Test func unavailableBookmarkIDsIncludesInFlightAndLiveIncarnations() {
+    let inFlight = Self.sampleBookmark(name: "InFlight")
+    let live = Self.sampleBookmark(name: "Live")
+
+    var state = BoardFeature.State()
+    state.bookmarkSpawnInFlight.insert(inFlight.id)
+    state.$sessions.withLock {
+      $0 = [Self.sampleSession(repositoryID: live.repositoryID, sourceBookmarkID: live.id)]
+    }
+
+    #expect(state.unavailableBookmarkIDs == [inFlight.id, live.id])
+  }
+
+  @Test(.dependencies) func bookmarkTappedIgnoredWhenSessionIncarnationAlreadyActive() async {
+    let bookmark = Self.sampleBookmark()
+    let active = Self.sampleSession(
+      repositoryID: bookmark.repositoryID,
+      sourceBookmarkID: bookmark.id
+    )
+    let repo = Self.sampleRepository(id: bookmark.repositoryID)
+
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.$bookmarks.withLock { $0 = [bookmark] }
+        state.$sessions.withLock { $0 = [active] }
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+
+    await store.send(.bookmarkTapped(id: bookmark.id, repositories: [repo])) {
+      $0.$bookmarks.withLock { $0 = [bookmark] }
+      $0.$sessions.withLock { $0 = [active] }
+    }
+  }
+
+  @Test(.dependencies) func bookmarkSpawnFailedClearsInFlightMarker() async {
+    let bookmarkID = UUID()
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.bookmarkSpawnInFlight.insert(bookmarkID)
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+
+    await store.send(._bookmarkSpawnFailed(bookmarkID: bookmarkID, message: "boom")) {
+      $0.bookmarkSpawnInFlight.remove(bookmarkID)
+    }
+  }
+
+
   // MARK: - Helpers
 
   private static func sampleBookmark(
@@ -202,6 +260,21 @@ struct BookmarkTests {
       worktreeMode: worktreeMode,
       planMode: planMode,
       createdAt: Date(timeIntervalSince1970: 0)
+    )
+  }
+
+  private static func sampleSession(
+    id: UUID = UUID(),
+    repositoryID: String = "/tmp/repo",
+    sourceBookmarkID: Bookmark.ID? = nil
+  ) -> AgentSession {
+    AgentSession(
+      id: id,
+      repositoryID: repositoryID,
+      worktreeID: repositoryID,
+      agent: .claude,
+      initialPrompt: "/investigate",
+      sourceBookmarkID: sourceBookmarkID
     )
   }
 

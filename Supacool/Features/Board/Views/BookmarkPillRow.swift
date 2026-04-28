@@ -6,6 +6,7 @@ import SwiftUI
 /// this view when `bookmarks` is empty or the repo filter is "All repos".
 struct BookmarkPillRow: View {
   let bookmarks: [Bookmark]
+  let unavailableBookmarkIDs: Set<Bookmark.ID>
   let onTap: (Bookmark) -> Void
   let onEdit: (Bookmark) -> Void
   let onDelete: (Bookmark) -> Void
@@ -16,6 +17,7 @@ struct BookmarkPillRow: View {
         ForEach(bookmarks) { bookmark in
           BookmarkPillView(
             bookmark: bookmark,
+            isUnavailable: unavailableBookmarkIDs.contains(bookmark.id),
             onTap: { onTap(bookmark) },
             onEdit: { onEdit(bookmark) },
             onDelete: { onDelete(bookmark) }

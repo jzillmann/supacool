@@ -30,6 +30,11 @@ struct BoardFeature {
     /// the recovery window.
     @Shared(.trashedSessions) var trashedSessions: [TrashedSession] = []
 
+    /// Bookmark pills currently spawning a session. These stay disabled
+    /// until the spawn finishes (success or failure) so repeat-clicks
+    /// don't fan out duplicate sessions.
+    var bookmarkSpawnInFlight: Set<Bookmark.ID> = []
+
     /// Whether the trash sheet is open (browse + restore + permanent delete).
     var isTrashSheetPresented: Bool = false
 
@@ -220,6 +225,10 @@ struct BoardFeature {
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
     case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
+    /// Fired by `SessionStateWatcher` on mount + status transitions.
+    /// Used as a fallback to clear "Starting session" cards when a
+    /// session is already live but never emits busy=true (e.g. shell).
+    case sessionStatusObserved(id: AgentSession.ID, status: BoardSessionStatus)
     case prioritySessionTerminated(id: AgentSession.ID, status: BoardSessionStatus)
     case dismissPriorityTerminationAlert
     /// Park: destroy the PTY to free resources, flag the session as
@@ -487,11 +496,14 @@ struct BoardFeature {
 
       case .createSession(let session):
         state.$sessions.withLock { $0.append(session) }
+        if let bookmarkID = session.sourceBookmarkID {
+          state.bookmarkSpawnInFlight.remove(bookmarkID)
+        }
         // Surface a short-lived "Starting session" tray card so the user
         // sees the spawn is underway without having to hunt the new card
-        // on a crowded board. The card clears on the first busy transition
-        // (= agent is actually running) or via × dismiss. Card id is
-        // anchored to `session.id` so lookups are trivial and tests stay
+        // on a crowded board. The card clears on busy=true, when the
+        // session is observed live, or via × dismiss. Card id is anchored
+        // to `session.id` so lookups are trivial and tests stay
         // deterministic without injecting a `uuid` dependency.
         let creatingCard = TrayCard(
           id: session.id,
@@ -702,8 +714,8 @@ struct BoardFeature {
           sessions[index].lastBusyTransitionAt = Date()
           sessions[index].lastActivityAt = Date()
         }
-        // First observed busy=true means the PTY spawned and the agent is
-        // actually running — auto-dismiss the "Starting session" card.
+        // Fast-path auto-dismiss: busy=true means the PTY is live and the
+        // agent is actually running.
         if busy {
           state.trayCards.removeAll { card in
             if case .sessionCreating(let sessionID, _) = card.kind {
@@ -711,6 +723,20 @@ struct BoardFeature {
             }
             return false
           }
+        }
+        return .none
+
+      case .sessionStatusObserved(let id, let status):
+        switch status {
+        case .fresh, .inProgress, .waitingOnMe, .awaitingInput:
+          state.trayCards.removeAll { card in
+            if case .sessionCreating(let sessionID, _) = card.kind {
+              return sessionID == id
+            }
+            return false
+          }
+        case .detached, .interrupted, .parked, .disconnected:
+          break
         }
         return .none
 
@@ -797,12 +823,16 @@ struct BoardFeature {
         guard let bookmark = state.bookmarks.first(where: { $0.id == id }) else {
           return .none
         }
+        guard !state.unavailableBookmarkIDs.contains(id) else {
+          return .none
+        }
         guard let repository = repositories.first(where: { $0.id == bookmark.repositoryID }) else {
           boardLogger.warning(
             "bookmarkTapped: no matching repository \(bookmark.repositoryID) in \(repositories.count) repos"
           )
           return .none
         }
+        state.bookmarkSpawnInFlight.insert(id)
         let now = date.now
         let selection: WorkspaceSelection = {
           switch bookmark.worktreeMode {
@@ -835,7 +865,8 @@ struct BoardFeature {
         let bookmarkID = bookmark.id
         return .run { send in
           do {
-            let session = try await SessionSpawner.spawnLocal(request)
+            var session = try await SessionSpawner.spawnLocal(request)
+            session.sourceBookmarkID = bookmarkID
             await send(._bookmarkSpawnCompleted(session: session))
           } catch {
             await send(
@@ -863,9 +894,13 @@ struct BoardFeature {
         return .none
 
       case ._bookmarkSpawnCompleted(let session):
+        if let bookmarkID = session.sourceBookmarkID {
+          state.bookmarkSpawnInFlight.remove(bookmarkID)
+        }
         return .send(.createSession(session))
 
       case ._bookmarkSpawnFailed(let bookmarkID, let message):
+        state.bookmarkSpawnInFlight.remove(bookmarkID)
         boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
 
@@ -1161,12 +1196,25 @@ struct BoardFeature {
 
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
         state.newTerminalSheet = nil
+        var sessionToCreate = session
+        // Preserve lineage across rerun so coupled cards/bookmarks stay
+        // linked for the replacement incarnation too.
+        if let pendingID = state.pendingRerunSessionID,
+          let previous = state.sessions.first(where: { $0.id == pendingID })
+        {
+          if sessionToCreate.sourceBookmarkID == nil {
+            sessionToCreate.sourceBookmarkID = previous.sourceBookmarkID
+          }
+          if sessionToCreate.debugSourceSessionID == nil {
+            sessionToCreate.debugSourceSessionID = previous.debugSourceSessionID
+          }
+        }
         // The rerun's replacement is ready — drop the original now.
         if let pendingID = state.pendingRerunSessionID {
           state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
           state.pendingRerunSessionID = nil
         }
-        return .send(.createSession(session))
+        return .send(.createSession(sessionToCreate))
 
       case .newTerminalSheet(.presented(.delegate(.spawnRequested(let request, let displayName)))):
         // Local-path submit: dismiss the sheet immediately so the user
@@ -1216,19 +1264,32 @@ struct BoardFeature {
         }
 
       case ._sessionSpawnCompleted(let session):
+        var sessionToCreate = session
+        // Preserve lineage across rerun so coupled cards/bookmarks stay
+        // linked for the replacement incarnation too.
+        if let pendingID = state.pendingRerunSessionID,
+          let previous = state.sessions.first(where: { $0.id == pendingID })
+        {
+          if sessionToCreate.sourceBookmarkID == nil {
+            sessionToCreate.sourceBookmarkID = previous.sourceBookmarkID
+          }
+          if sessionToCreate.debugSourceSessionID == nil {
+            sessionToCreate.debugSourceSessionID = previous.debugSourceSessionID
+          }
+        }
         // Refresh the placeholder's displayName in case it was refined
         // (e.g. PR-context displayName is set on the AgentSession).
-        if let index = state.trayCards.firstIndex(where: { $0.id == session.id }) {
+        if let index = state.trayCards.firstIndex(where: { $0.id == sessionToCreate.id }) {
           state.trayCards[index].kind = .sessionCreating(
-            sessionID: session.id,
-            displayName: session.displayName
+            sessionID: sessionToCreate.id,
+            displayName: sessionToCreate.displayName
           )
         }
         if let pendingID = state.pendingRerunSessionID {
           state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
           state.pendingRerunSessionID = nil
         }
-        return .send(.createSession(session))
+        return .send(.createSession(sessionToCreate))
 
       case ._sessionSpawnFailed(let sessionID, let message):
         boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
@@ -1707,12 +1768,15 @@ struct BoardFeature {
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,
           pullRequestLookup: .idle,
-          suggestedDisplayName: "Debug: \(source.displayName)",
+          suggestedDisplayName: SupacoolDebugSupport.debugDisplayName(
+            sourceDisplayName: source.displayName
+          ),
           removeBackingWorktreeOnDelete: true
         )
         return .run { send in
           do {
-            let session = try await SessionSpawner.spawnLocal(request)
+            var session = try await SessionSpawner.spawnLocal(request)
+            session.debugSourceSessionID = source.id
             await send(._debugSpawnCompleted(session: session))
           } catch {
             await send(._debugSpawnFailed(message: error.localizedDescription))
@@ -2043,6 +2107,14 @@ extension BoardFeature.State {
   /// Sessions visible under the current repo filter, preserving insertion order.
   var visibleSessions: [AgentSession] {
     sessions.filter { filters.includes(repositoryID: $0.repositoryID) }
+  }
+
+  /// Bookmark ids that should not be launchable right now:
+  /// - a spawn is already in-flight for that bookmark
+  /// - a live session spawned from that bookmark still exists
+  var unavailableBookmarkIDs: Set<Bookmark.ID> {
+    let activeSessionBookmarkIDs = sessions.compactMap(\.sourceBookmarkID)
+    return bookmarkSpawnInFlight.union(activeSessionBookmarkIDs)
   }
 
   /// Look up a session by ID (O(n), fine for small N).

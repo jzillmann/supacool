@@ -23,6 +23,9 @@ struct FullScreenTerminalView: View {
   /// (e.g. `claude --resume`). Present for any agent session even if we
   /// never captured a native session id.
   let onResumePicker: (() -> Void)?
+  /// Pause/park this session: mark parked and destroy the live PTY tab.
+  /// Optional so parked sessions can hide the control.
+  let onPark: (() -> Void)?
   let onRemove: () -> Void
   /// Present only for remote sessions whose ssh link has dropped. Clicked
   /// by the user from the disconnected state to re-spawn ssh and
@@ -178,6 +181,7 @@ struct FullScreenTerminalView: View {
       splitButton
       Spacer()
       agentChip
+      pauseButton
       removeButton
     }
     .padding(.horizontal, 14)
@@ -465,6 +469,21 @@ struct FullScreenTerminalView: View {
           )
         }
       )
+    }
+  }
+
+  /// Pause button beside delete. Uses the existing park flow: mark the
+  /// session as parked and tear down its tab/surfaces.
+  @ViewBuilder
+  private var pauseButton: some View {
+    if let onPark {
+      Button(action: onPark) {
+        Image(systemName: "pause.fill")
+          .font(.system(size: 13, weight: .medium))
+          .modifier(HeaderIconStyle())
+      }
+      .buttonStyle(.plain)
+      .help("Pause terminal")
     }
   }
 

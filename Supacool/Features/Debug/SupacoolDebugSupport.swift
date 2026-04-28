@@ -40,6 +40,16 @@ enum SupacoolDebugSupport {
     return "debug_\(base)_\(stamp)"
   }
 
+  /// Stable display-name format for debug sessions. Avoids endlessly
+  /// stacking prefixes when the user debugs a debug session.
+  static func debugDisplayName(sourceDisplayName: String) -> String {
+    let trimmed = sourceDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let base = trimmed.hasPrefix("Debug: ")
+      ? String(trimmed.dropFirst("Debug: ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+      : trimmed
+    return "Debug: \(base)"
+  }
+
   /// Prompt template handed to the debug agent. The agent receives the
   /// user's observation, knows the absolute path to the source session's
   /// trace JSONL, and is told it has the supacool codebase available at

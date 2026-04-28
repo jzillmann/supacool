@@ -1219,9 +1219,8 @@ struct BoardFeatureTests {
   }
 
   @Test(.dependencies) func updateSessionBusyFalseKeepsSessionCreatingCard() async {
-    // A busy=false transition (e.g. agent idled before the user saw the
-    // card) must NOT prematurely clear the progress indicator — we only
-    // dismiss on the first positive busy signal.
+    // A busy=false transition alone must NOT clear the progress
+    // indicator. Status observation is the separate fallback path.
     let session = Self.sampleSession(displayName: "Starting soon")
     var state = BoardFeature.State()
     state.$sessions.withLock {
@@ -1236,6 +1235,34 @@ struct BoardFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.updateSessionBusyState(id: session.id, busy: false))
+    #expect(store.state.trayCards == [card])
+  }
+
+  @Test(.dependencies) func sessionStatusObservedFreshClearsSessionCreatingCard() async {
+    let session = Self.sampleSession(displayName: "Starting soon")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.trayCards = [Self.sessionCreatingCard(for: session)]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.sessionStatusObserved(id: session.id, status: .fresh)) {
+      $0.trayCards = []
+    }
+  }
+
+  @Test(.dependencies) func sessionStatusObservedDetachedKeepsSessionCreatingCard() async {
+    let session = Self.sampleSession(displayName: "Starting soon")
+    let card = Self.sessionCreatingCard(for: session)
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.sessionStatusObserved(id: session.id, status: .detached))
     #expect(store.state.trayCards == [card])
   }
 

@@ -22,9 +22,10 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   case staleHooks(slots: [AgentHookSlot])
 
   /// A session was just submitted via New Terminal / Rerun / Resume and is
-  /// still spawning its PTY. Auto-dismissed when the session reports its
-  /// first busy transition (= the agent is running). Primary tap focuses
-  /// the session so the user jumps straight into the fresh terminal.
+  /// still spawning its PTY. Auto-dismissed either on busy=true or when
+  /// the watcher confirms the session is already live (shell sessions may
+  /// never emit busy=true). Primary tap focuses the session so the user
+  /// jumps straight into the fresh terminal.
   case sessionCreating(sessionID: AgentSession.ID, displayName: String)
 
   /// A hook install / reinstall errored. Surfaced as a red tray card so
