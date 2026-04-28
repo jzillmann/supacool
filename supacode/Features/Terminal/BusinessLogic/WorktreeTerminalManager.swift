@@ -280,6 +280,13 @@ final class WorktreeTerminalManager {
   /// Persists the agent-native session identifier from a hook payload onto
   /// the matching `AgentSession` (by tabID). Silently no-ops when no session
   /// exists for the tab yet, or when the payload carried no session id.
+  ///
+  /// Hook ids from a *different* agent than the session was registered with
+  /// are dropped — without this guard, a user who exits claude and runs codex
+  /// in the same tab would have codex's UUIDv7 silently overwrite claude's
+  /// captured id, leaving Resume to issue `claude --resume <codex-uuid>` and
+  /// fail. The session "is" what it was launched as; foreign hooks shouldn't
+  /// mutate its identity.
   private func captureAgentNativeSessionID(
     tabID: UUID,
     notification: AgentHookNotification
@@ -287,6 +294,15 @@ final class WorktreeTerminalManager {
     guard let sessionID = notification.sessionID, !sessionID.isEmpty else { return }
     $agentSessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == tabID }) else { return }
+      let storedAgentID = sessions[index].agent?.id.lowercased()
+      let hookAgentID = notification.agent.lowercased()
+      guard storedAgentID == hookAgentID else {
+        terminalLogger.warning(
+          "Ignoring \(hookAgentID) hook session id for tab \(tabID) — "
+            + "session is registered as \(storedAgentID ?? "shell")"
+        )
+        return
+      }
       guard sessions[index].agentNativeSessionID != sessionID else { return }
       sessions[index].agentNativeSessionID = sessionID
       sessions[index].lastActivityAt = Date()
