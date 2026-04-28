@@ -320,6 +320,14 @@ final class WorktreeTerminalState {
       tintColor: creation.tintColor,
       id: creation.tabID,
     )
+    // Ghostty consumes `initial_input` in C-level surface init, bypassing
+    // GhosttySurfaceView.sendText and therefore bridge.onInputTap. Log it
+    // here so the transcript reflects the launch command — without this
+    // the trace shows nothing at all when a hookless agent (pi, plain
+    // shell) crashes before producing visible output.
+    if let initialInput = creation.initialInput, !initialInput.isEmpty {
+      TranscriptRecorder.shared.appendInput(tabID: tabId, text: initialInput)
+    }
     let tree = splitTree(
       for: tabId,
       inheritingFromSurfaceId: creation.inheritingFromSurfaceId,
