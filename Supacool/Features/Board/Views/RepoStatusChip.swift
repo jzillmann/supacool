@@ -12,10 +12,12 @@ struct RepoStatusChip: View {
   @State private var localChangeCount: Int?
   @State private var currentBranch: String?
   @State private var isLoading: Bool = false
+  @State private var isSyncing: Bool = false
   @State private var isQuickDiffPresented: Bool = false
 
   @Dependency(WorktreeInventoryClient.self) private var worktreeInventory
   @Dependency(GitClientDependency.self) private var gitClient
+  @Dependency(RepoSyncClient.self) private var repoSync
 
   /// Keep the chip fresh while the board is open.
   private let refreshInterval: Duration = .seconds(8)
@@ -58,9 +60,21 @@ struct RepoStatusChip: View {
 
   @ViewBuilder
   private var behindView: some View {
-    if let behindCount {
+    if isSyncing {
+      ProgressView()
+        .controlSize(.mini)
+    } else if let behindCount, behindCount > 0 {
+      Button {
+        Task { await pullFromOrigin() }
+      } label: {
+        Text("↓\(behindCount)")
+      }
+      .buttonStyle(.plain)
+      .foregroundStyle(.orange)
+      .help("Pull latest from origin (fast-forward only)")
+    } else if let behindCount {
       Text("↓\(behindCount)")
-        .foregroundStyle(behindCount > 0 ? .orange : .secondary)
+        .foregroundStyle(.secondary)
     } else if isLoading {
       ProgressView()
         .controlSize(.mini)
@@ -95,7 +109,10 @@ struct RepoStatusChip: View {
     let branchText = currentBranch ?? "—"
     let behindText = behindCount.map(String.init) ?? "—"
     let localText = localChangeCount.map(String.init) ?? "—"
-    return "Branch: \(branchText) · Behind origin: \(behindText) · Local changes: \(localText)"
+    let pullHint = (behindCount ?? 0) > 0
+      ? " · Click ↓ to pull latest from origin"
+      : ""
+    return "Branch: \(branchText) · Behind origin: \(behindText) · Local changes: \(localText)\(pullHint)"
   }
 
   private func refreshLoop() async {
@@ -129,5 +146,13 @@ struct RepoStatusChip: View {
     }
 
     currentBranch = await branchName
+  }
+
+  private func pullFromOrigin() async {
+    guard !isSyncing else { return }
+    isSyncing = true
+    defer { isSyncing = false }
+    _ = await repoSync.syncIfSafe(repository.rootURL)
+    await refreshNow()
   }
 }
