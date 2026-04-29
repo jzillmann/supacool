@@ -46,6 +46,8 @@ struct RepoStatusChip: View {
       }
     }
     .font(.caption2.monospacedDigit())
+    .padding(.horizontal, 10)
+    .padding(.vertical, 4)
     .help(helpText)
     .task(id: repository.id) {
       await refreshLoop()
