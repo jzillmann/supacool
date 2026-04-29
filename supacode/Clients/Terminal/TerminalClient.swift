@@ -22,6 +22,10 @@ struct TerminalClient {
     /// an ssh invocation to a remote tmux session). Bypasses setup
     /// scripts and default-shell selection — the caller owns the exec.
     case createRemoteTab(Worktree, command: String, id: UUID)
+    /// Supacool: explicit user action for detached raw-shell sessions.
+    /// Reopens the saved tab split layout/folders when available, or a
+    /// blank shell under the same stable session tab ID otherwise.
+    case restoreShellLayout(Worktree, tabID: TerminalTabID)
     case ensureInitialTab(Worktree, runSetupScriptIfNew: Bool, focusing: Bool)
     case stopRunScript(Worktree)
     case runBlockingScript(Worktree, kind: BlockingScriptKind, script: String)

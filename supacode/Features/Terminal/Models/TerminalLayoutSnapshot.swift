@@ -32,6 +32,32 @@ struct TerminalLayoutSnapshot: Codable, Equatable, Sendable {
 
 }
 
+extension TerminalLayoutSnapshot {
+  /// Returns the saved tab matching `tabID`, or (for legacy single-tab
+  /// snapshots written before tab IDs were stable) the only tab with its
+  /// ID rewritten to the requested session tab.
+  func restorableTabSnapshot(for tabID: TerminalTabID) -> TabSnapshot? {
+    if let exact = tabs.first(where: { $0.id == tabID.rawValue }) {
+      return exact
+    }
+    guard tabs.count == 1, let only = tabs.first else { return nil }
+    return only.withID(tabID.rawValue)
+  }
+}
+
+extension TerminalLayoutSnapshot.TabSnapshot {
+  func withID(_ id: UUID) -> Self {
+    Self(
+      id: id,
+      title: title,
+      icon: icon,
+      tintColor: tintColor,
+      layout: layout,
+      focusedLeafIndex: focusedLeafIndex,
+    )
+  }
+}
+
 extension TerminalLayoutSnapshot.LayoutNode {
   /// The leftmost leaf in the subtree.
   var firstLeaf: TerminalLayoutSnapshot.SurfaceSnapshot {

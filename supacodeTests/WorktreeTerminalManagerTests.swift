@@ -51,6 +51,48 @@ struct WorktreeTerminalManagerTests {
     #expect(reusedState.pendingLayoutSnapshot == nil)
   }
 
+  @Test func restoreShellLayoutCommandRestoresSavedTabWithoutAutoRestoreSetting() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let tabID = TerminalTabID(rawValue: UUID())
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        TerminalLayoutSnapshot.TabSnapshot(
+          id: tabID.rawValue,
+          title: "shell",
+          icon: "terminal",
+          tintColor: nil,
+          layout: .split(
+            TerminalLayoutSnapshot.SplitSnapshot(
+              direction: .horizontal,
+              ratio: 0.4,
+              left: .leaf(
+                TerminalLayoutSnapshot.SurfaceSnapshot(id: UUID(), workingDirectory: "/tmp/repo/wt-1")
+              ),
+              right: .leaf(
+                TerminalLayoutSnapshot.SurfaceSnapshot(id: UUID(), workingDirectory: "/tmp")
+              )
+            )
+          ),
+          focusedLeafIndex: 1
+        ),
+      ],
+      selectedTabIndex: 0
+    )
+    manager.loadSavedLayoutSnapshot = { _ in snapshot }
+
+    manager.handleCommand(.restoreShellLayout(worktree, tabID: tabID))
+
+    guard let state = manager.stateIfExists(for: worktree.id) else {
+      Issue.record("Expected restored terminal state")
+      return
+    }
+    #expect(state.containsTabTree(tabID))
+    #expect(state.tabManager.selectedTabId == tabID)
+    #expect(state.splitTree(for: tabID).leaves().count == 2)
+    #expect(state.pendingLayoutSnapshot == nil)
+  }
+
   @Test func buffersEventsUntilStreamCreated() async {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

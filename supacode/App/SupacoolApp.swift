@@ -174,11 +174,15 @@ struct SupacoolApp: App {
         }
       }
     }
+    let loadSavedLayoutSnapshot: (Worktree.ID) -> TerminalLayoutSnapshot? = { worktreeID in
+      @SharedReader(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
+      return layouts[worktreeID]
+    }
+    terminalManager.loadSavedLayoutSnapshot = loadSavedLayoutSnapshot
     terminalManager.loadLayoutSnapshot = { worktreeID in
       @SharedReader(.settingsFile) var settingsFile
       guard settingsFile.global.restoreTerminalLayoutEnabled else { return nil }
-      @SharedReader(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
-      return layouts[worktreeID]
+      return loadSavedLayoutSnapshot(worktreeID)
     }
     _terminalManager = State(initialValue: terminalManager)
     let worktreeInfoWatcher = WorktreeInfoWatcherManager()

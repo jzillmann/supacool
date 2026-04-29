@@ -993,6 +993,82 @@ struct BoardFeatureTests {
     #expect(store.state.pendingRerunSessionID == nil)
   }
 
+  @Test(.dependencies) func restoreShellSessionLayoutSendsTerminalRestoreCommand() async throws {
+    let sessionID = UUID()
+    let now = Date(timeIntervalSince1970: 1_750_000_123)
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      currentWorkspacePath: "/tmp/repo/packages/api",
+      agent: nil,
+      initialPrompt: "",
+      lastKnownBusy: true,
+      parked: true
+    )
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.restoreShellSessionLayout(id: sessionID, repositories: [repo])) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].lastKnownBusy = false
+        sessions[0].lastBusyTransitionAt = nil
+        sessions[0].lastActivityAt = now
+        sessions[0].parked = false
+      }
+      $0.focusedSessionID = sessionID
+    }
+    await store.finish()
+
+    let command = try #require(sentCommands.value.first)
+    guard case .restoreShellLayout(let worktree, let tabID) = command else {
+      Issue.record("Expected restoreShellLayout command, got \(command)")
+      return
+    }
+    #expect(tabID.rawValue == sessionID)
+    #expect(worktree.id == "/tmp/repo")
+    #expect(worktree.workingDirectory.path(percentEncoded: false) == "/tmp/repo/packages/api")
+  }
+
+  @Test(.dependencies) func restoreShellSessionLayoutIgnoresAgentSessions() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.restoreShellSessionLayout(id: session.id, repositories: []))
+    await store.receive(.resumeFailed(id: session.id, message: "Only local shell sessions can restore a shell layout."))
+    await store.finish()
+
+    #expect(sentCommands.value.isEmpty)
+  }
+
   // MARK: - Worktree prune
 
   @Test(.dependencies) func pruneWorktreesHappyPath() async {

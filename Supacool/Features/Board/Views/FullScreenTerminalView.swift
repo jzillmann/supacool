@@ -16,6 +16,10 @@ struct FullScreenTerminalView: View {
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
   let onRerun: () -> Void
+  /// Present for local raw-shell sessions so a detached shell can reopen
+  /// the saved split layout and working directories without going through
+  /// the new-terminal sheet.
+  let onRestoreShellLayout: (() -> Void)?
   /// Present only when the session has a captured agent-native id and an
   /// agent CLI — shell sessions and pre-hook sessions can't be resumed.
   let onResume: (() -> Void)?
@@ -749,6 +753,31 @@ struct FullScreenTerminalView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  private var detachedDescription: String {
+    if session.agent == nil {
+      return """
+        The underlying shell process is gone — most likely because the app relaunched. \
+        Restore the saved layout to reopen panes in their last known folders.
+        """
+    }
+    return """
+      The underlying terminal process is gone — most likely because the app \
+      relaunched. The original prompt is preserved.
+      """
+  }
+
+  private var detachedPromptLabel: String {
+    session.agent == nil ? "Initial command" : "Original prompt"
+  }
+
+  private var shouldShowRerunButton: Bool {
+    session.agent != nil || !session.initialPrompt.isEmpty
+  }
+
+  private var detachedRerunLabel: String {
+    session.agent == nil ? "Rerun Command" : "Rerun"
+  }
+
   private var detachedState: some View {
     VStack(spacing: 14) {
       Image(systemName: "moon.zzz.fill")
@@ -756,28 +785,27 @@ struct FullScreenTerminalView: View {
         .foregroundStyle(.secondary)
       Text("Session detached")
         .font(.title3.weight(.medium))
-      Text("""
-        The underlying terminal process is gone — most likely because the app \
-        relaunched. The original prompt is preserved.
-        """)
+      Text(detachedDescription)
         .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
         .frame(maxWidth: 420)
 
-      VStack(alignment: .leading, spacing: 4) {
-        Label("Original prompt", systemImage: "quote.opening")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        Text(session.initialPrompt)
-          .font(.callout)
-          .padding(10)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.secondary.opacity(0.08))
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+      if session.agent != nil || !session.initialPrompt.isEmpty {
+        VStack(alignment: .leading, spacing: 4) {
+          Label(detachedPromptLabel, systemImage: "quote.opening")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          Text(session.initialPrompt)
+            .font(.callout)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxWidth: 460)
+        .padding(.top, 6)
       }
-      .frame(maxWidth: 460)
-      .padding(.top, 6)
 
       if let lastAgentMessage {
         VStack(alignment: .leading, spacing: 4) {
@@ -804,9 +832,16 @@ struct FullScreenTerminalView: View {
         } label: {
           Label("Remove", systemImage: "trash")
         }
-        let rerunIsDefault = onResume == nil && onResumePicker == nil
-        Button("Rerun", systemImage: "arrow.clockwise", action: onRerun)
-          .keyboardShortcut(rerunIsDefault ? KeyboardShortcut.defaultAction : nil)
+        if let onRestoreShellLayout {
+          Button("Restore Layout", systemImage: "rectangle.split.3x1", action: onRestoreShellLayout)
+            .keyboardShortcut(.defaultAction)
+            .help("Reopen shell panes using the last saved layout and working directories")
+        }
+        if shouldShowRerunButton {
+          let rerunIsDefault = onRestoreShellLayout == nil && onResume == nil && onResumePicker == nil
+          Button(detachedRerunLabel, systemImage: "arrow.clockwise", action: onRerun)
+            .keyboardShortcut(rerunIsDefault ? KeyboardShortcut.defaultAction : nil)
+        }
         if let onResume {
           Button("Resume", systemImage: "play.circle", action: onResume)
             .keyboardShortcut(.defaultAction)

@@ -257,6 +257,9 @@ struct BoardFeature {
     )
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    /// Raw-shell sessions have no agent-native resume. This reopens the
+    /// saved terminal split layout/folders under the same session tab ID.
+    case restoreShellSessionLayout(id: AgentSession.ID, repositories: [Repository])
     /// Fallback resume path: no captured id, so we launch the agent's own
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
@@ -1001,6 +1004,38 @@ struct BoardFeature {
               runSetupScriptIfNew: false,
               id: id
             )
+          )
+        }
+
+      case .restoreShellSessionLayout(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard session.agent == nil, !session.isRemote else {
+          return .send(
+            .resumeFailed(id: id, message: "Only local shell sessions can restore a shell layout.")
+          )
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
+        }
+        let now = date.now
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
+          sessions[index].lastActivityAt = now
+          sessions[index].parked = false
+        }
+        state.focusedSessionID = id
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "restored-shell-layout", context: nil, at: now),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        let worktree = Self.shellRestoreWorktree(for: session, repository: repository)
+        return .run { _ in
+          await terminalClient.send(
+            .restoreShellLayout(worktree, tabID: TerminalTabID(rawValue: id))
           )
         }
 
@@ -1921,6 +1956,20 @@ struct BoardFeature {
       return resumeCommand
     }
     return agent.command(prompt: session.initialPrompt, bypassPermissions: bypass)
+  }
+
+  fileprivate static func shellRestoreWorktree(
+    for session: AgentSession,
+    repository: Repository
+  ) -> Worktree {
+    let workingDirectory = URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
+    return Worktree(
+      id: session.worktreeID,
+      name: workingDirectory.lastPathComponent,
+      detail: "",
+      workingDirectory: workingDirectory,
+      repositoryRootURL: repository.rootURL.standardizedFileURL
+    )
   }
 
   fileprivate static func resumeWorktree(

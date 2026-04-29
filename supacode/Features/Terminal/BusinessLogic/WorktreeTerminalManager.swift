@@ -82,6 +82,7 @@ final class WorktreeTerminalManager {
   var selectedWorktreeID: Worktree.ID?
   var saveLayoutSnapshot: ((Worktree.ID, TerminalLayoutSnapshot?) -> Void)?
   var loadLayoutSnapshot: ((Worktree.ID) -> TerminalLayoutSnapshot?)?
+  var loadSavedLayoutSnapshot: ((Worktree.ID) -> TerminalLayoutSnapshot?)?
 
   init<C: Clock<Duration>>(
     runtime: GhosttyRuntime,
@@ -373,6 +374,8 @@ final class WorktreeTerminalManager {
       // — the supplied command is the full ssh invocation.
       let state = state(for: worktree) { false }
       _ = state.createTab(tabID: id, command: command)
+    case .restoreShellLayout(let worktree, let tabID):
+      restoreShellLayout(in: worktree, tabID: tabID)
     case .ensureInitialTab(let worktree, let runSetupScriptIfNew, let focusing):
       let state = state(for: worktree) { runSetupScriptIfNew }
       state.ensureInitialTab(focusing: focusing)
@@ -441,9 +444,9 @@ final class WorktreeTerminalManager {
       state(for: worktree).navigateSearchOnFocusedSurface(.previous)
     case .endSearch(let worktree):
       state(for: worktree).performBindingActionOnFocusedSurface("end_search")
-    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
-      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction, .selectTab,
-      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
+    case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
+      .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
+      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
       .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
@@ -454,10 +457,10 @@ final class WorktreeTerminalManager {
     switch command {
     case .performBindingAction(let worktree, let action):
       state(for: worktree).performBindingActionOnFocusedSurface(action)
-    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
-      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch, .searchSelection,
-      .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab, .focusSurface,
-      .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
+    case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
+      .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch,
+      .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab,
+      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
       .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
@@ -482,8 +485,8 @@ final class WorktreeTerminalManager {
       }
       selectedWorktreeID = id
       terminalLogger.info("Selected worktree \(id ?? "nil")")
-    case .createTab, .createTabWithInput, .createRemoteTab, .ensureInitialTab, .stopRunScript,
-      .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
+    case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
+      .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
       .startSearch, .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch,
       .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .sendText:
       assertionFailure("Unhandled terminal command reached management handler: \(command)")
@@ -571,6 +574,27 @@ final class WorktreeTerminalManager {
     states[worktree.id] = state
     terminalLogger.info("Created terminal state for worktree \(worktree.id)")
     return state
+  }
+
+  private func restoreShellLayout(in worktree: Worktree, tabID: TerminalTabID) {
+    let state = state(for: worktree) { false }
+    state.pendingLayoutSnapshot = nil
+
+    if state.containsTabTree(tabID) {
+      state.selectTab(tabID)
+      return
+    }
+
+    if let tabSnapshot = loadSavedLayoutSnapshot?(worktree.id)?.restorableTabSnapshot(for: tabID) {
+      _ = state.restoreTabLayout(tabSnapshot, focusing: true)
+      terminalLogger.info("Restored shell layout for tab \(tabID.rawValue) in worktree \(worktree.id)")
+      return
+    }
+
+    _ = state.createTab(focusing: true, tabID: tabID.rawValue)
+    terminalLogger.info(
+      "Opened fresh shell for tab \(tabID.rawValue) in worktree \(worktree.id); no saved layout found"
+    )
   }
 
   private func createTabAsync(

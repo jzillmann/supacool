@@ -231,6 +231,16 @@ struct BoardRootView: View {
             )
           )
         },
+        onRestoreShellLayout: (session.agent == nil && !session.isRemote)
+          ? {
+            store.send(
+              .restoreShellSessionLayout(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
         onResume: (session.agent != nil && session.agentNativeSessionID != nil)
           ? {
             store.send(
