@@ -98,13 +98,12 @@ struct BoardRootView: View {
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
-        // If a session is focused (full-screen terminal view), inherit
-        // its workspace — same reasoning as the header's ⌘N handler.
-        // Otherwise open the sheet clean so the global hotkey from the
-        // board still behaves like a fresh new-terminal.
+        // If a session is focused (full-screen terminal view), keep only
+        // its repository preference. Workspace/branch fields start blank
+        // so ⌘N never reuses the previous worktree.
         if let focusedID = store.focusedSessionID {
           store.send(
-            .openNewTerminalSheetInheritingFrom(
+            .openNewTerminalSheetFromSession(
               id: focusedID,
               repositories: Array(repositories)
             )
@@ -213,11 +212,10 @@ struct BoardRootView: View {
         terminalManager: terminalManager,
         onBackToBoard: { store.send(.focusSession(id: nil)) },
         onNewTerminal: {
-          // Pre-fill workspace from the focused session so "⌘N from a
-          // session converted to a worktree" opens the sheet on that
-          // same worktree instead of the default repo-root.
+          // Keep the focused session's repository, but never carry over
+          // its worktree/branch into a fresh New Terminal sheet.
           store.send(
-            .openNewTerminalSheetInheritingFrom(
+            .openNewTerminalSheetFromSession(
               id: session.id,
               repositories: Array(repositories)
             )

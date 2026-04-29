@@ -246,12 +246,10 @@ struct BoardFeature {
 
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
-    /// Opens the new-terminal sheet with workspace / repo fields pre-filled
-    /// from a focused session's current context. Intended for the ⌘N /
-    /// "new terminal" affordance inside FullScreenTerminalView — so a
-    /// second terminal opened from a session that has converted to a
-    /// worktree lands in the same worktree, not back at the default.
-    case openNewTerminalSheetInheritingFrom(
+    /// Opens the new-terminal sheet from a focused session, keeping only
+    /// the repository preference. Workspace/branch fields intentionally
+    /// start blank so the dialog never reuses the previous worktree.
+    case openNewTerminalSheetFromSession(
       id: AgentSession.ID,
       repositories: [Repository]
     )
@@ -805,22 +803,16 @@ struct BoardFeature {
         )
         return .none
 
-      case .openNewTerminalSheetInheritingFrom(let id, let repositories):
-        let available = IdentifiedArray(uniqueElements: repositories)
-        if let session = state.sessions.first(where: { $0.id == id }) {
-          state.newTerminalSheet = NewTerminalFeature.State(
-            availableRepositories: available,
-            inheritingFrom: session
+      case .openNewTerminalSheetFromSession(let id, let repositories):
+        let preferredRepositoryID = state.sessions.first(where: { $0.id == id })?.repositoryID
+          ?? filteredPreferredRepositoryID(
+            in: repositories,
+            filters: state.filters
           )
-        } else {
-          state.newTerminalSheet = NewTerminalFeature.State(
-            availableRepositories: available,
-            preferredRepositoryID: filteredPreferredRepositoryID(
-              in: repositories,
-              filters: state.filters
-            )
-          )
-        }
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          preferredRepositoryID: preferredRepositoryID
+        )
         return .none
 
       case .bookmarkTapped(let id, let repositories):

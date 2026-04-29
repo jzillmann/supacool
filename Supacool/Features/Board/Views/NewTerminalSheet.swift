@@ -25,10 +25,6 @@ struct NewTerminalSheet: View {
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
-  /// Restored into `workspaceQuery` when the user re-enables "New
-  /// worktree" after toggling it off — keeps a typed branch name from
-  /// disappearing on a flip-flop.
-  @State private var lastBranchQuery: String = ""
   /// Persists the disclosure state of the Advanced section so it stays
   /// open across re-renders within a single sheet presentation.
   @State private var isAdvancedExpanded: Bool = false
@@ -479,20 +475,14 @@ struct NewTerminalSheet: View {
     return true
   }
 
-  /// Toggle binding: flipping ON restores the user's last typed branch
-  /// query (if any) so the field doesn't surprise them with empty
-  /// state; flipping OFF stashes the current query for next time and
-  /// resets the selection to `.repoRoot`.
+  /// Toggle binding: flipping ON always starts a blank worktree draft;
+  /// flipping OFF resets the selection to `.repoRoot`. The new-terminal
+  /// sheet should not remember the last branch/worktree the user typed.
   private var useWorktreeBinding: Binding<Bool> {
     Binding(
       get: { isUsingWorktree },
       set: { newValue in
-        if newValue {
-          store.send(.workspaceSelected(.newBranch(name: lastBranchQuery)))
-        } else {
-          lastBranchQuery = store.workspaceQuery
-          store.send(.workspaceSelected(.repoRoot))
-        }
+        store.send(.workspaceSelected(newValue ? .newBranch(name: "") : .repoRoot))
       }
     )
   }

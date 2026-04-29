@@ -861,17 +861,18 @@ struct BoardFeatureTests {
     #expect(store.state.newTerminalSheet == nil)
   }
 
-  @Test(.dependencies) func openNewTerminalSheetInheritsWorkspaceFromFocusedSession() async {
-    // After a session has been converted from repo root to a worktree
-    // (`currentWorkspacePath` diverges from the immutable `worktreeID`),
-    // pressing ⌘N / + inside the focused terminal should preload the
-    // sheet on the NEW worktree — not reset to repo root.
+  @Test(.dependencies) func openNewTerminalSheetFromSessionDoesNotReuseWorktree() async {
+    // New-terminal is always a fresh dialog: even when launched from a
+    // session that has been converted from repo root to a worktree, it
+    // keeps only the repository preference and starts at repo root with
+    // a blank workspace field.
     let session = AgentSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo", // started at repo root
       currentWorkspacePath: "/tmp/repo/worktrees/feature-x", // converted
-      agent: .claude,
-      initialPrompt: "Fix tests"
+      agent: .codex,
+      initialPrompt: "Fix tests",
+      planMode: true
     )
     let worktree = Worktree(
       id: "/tmp/repo/worktrees/feature-x",
@@ -898,15 +899,16 @@ struct BoardFeatureTests {
     store.exhaustivity = .off
 
     await store.send(
-      .openNewTerminalSheetInheritingFrom(id: session.id, repositories: [repo])
+      .openNewTerminalSheetFromSession(id: session.id, repositories: [repo])
     )
 
     let sheet = store.state.newTerminalSheet
     #expect(sheet?.selectedRepositoryID == "/tmp/repo")
-    #expect(sheet?.selectedWorkspace == .existingWorktree(id: "/tmp/repo/worktrees/feature-x"))
-    #expect(sheet?.workspaceQuery == "feature-x")
-    // Fresh prompt — inheritance copies context, not content.
+    #expect(sheet?.selectedWorkspace == .repoRoot)
+    #expect(sheet?.workspaceQuery == "")
     #expect(sheet?.prompt == "")
+    #expect(sheet?.agent == .claude)
+    #expect(sheet?.planMode == false)
   }
 
   @Test(.dependencies) func convertSessionToWorktreeIgnoresEmptyBranchName() async {

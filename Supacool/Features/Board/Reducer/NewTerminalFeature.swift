@@ -235,53 +235,6 @@ struct NewTerminalFeature {
       // else: repo root — selectedWorkspace stays .repoRoot
     }
 
-    /// Constructor for "new terminal from a focused session": inherit the
-    /// session's current context (repo + current workspace) so the sheet
-    /// defaults to the same place the user is visually in. Differs from
-    /// `rerunFrom` in that we don't copy the prompt, agent, or plan mode
-    /// — the user is authoring a fresh invocation, just in the same
-    /// workspace. Reads `currentWorkspacePath` (not `worktreeID`) so a
-    /// converted-from-repo-root session forwards the user into the new
-    /// worktree, not back to the repo root where the state is still
-    /// anchored.
-    init(
-      availableRepositories: IdentifiedArrayOf<Repository>,
-      inheritingFrom session: AgentSession
-    ) {
-      self.availableRepositories = availableRepositories
-      let resolvedRepoID = availableRepositories[id: session.repositoryID]?.id
-        ?? availableRepositories.first?.id
-      selectedRepositoryID = resolvedRepoID
-      agent = session.agent
-      planMode = session.planMode
-
-      // Remote sessions don't expose the convert popover and have no
-      // notion of a worktree path, so the inheritance-from-focused-session
-      // path only has to reason about local sessions here.
-      guard !session.isRemote,
-        let repo = availableRepositories.first(where: { $0.id == resolvedRepoID })
-      else { return }
-
-      let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
-      let workspacePath = session.currentWorkspacePath
-      guard workspacePath != rootPath else {
-        // Session is at repo root — the default `.repoRoot` selection
-        // already matches; nothing more to wire.
-        return
-      }
-      if let wt = repo.worktrees.first(where: { $0.id == workspacePath }) {
-        selectedWorkspace = .existingWorktree(id: workspacePath)
-        workspaceQuery = wt.branch ?? wt.name
-      } else {
-        // Worktree exists on disk (the user `cd`'d there or we created it
-        // via convert) but isn't yet registered on the repo. Fall back to
-        // the directory name so the picker still surfaces meaningful text.
-        let derived = URL(fileURLWithPath: workspacePath).lastPathComponent
-        selectedWorkspace = .existingWorktree(id: workspacePath)
-        workspaceQuery = derived
-      }
-    }
-
     /// Constructor for "graduate to worktree": a repo-root session wants
     /// to spawn a sibling on a fresh worktree so the user can start
     /// making changes without touching the tracked working copy. The
