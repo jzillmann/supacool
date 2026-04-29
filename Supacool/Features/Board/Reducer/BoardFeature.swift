@@ -480,6 +480,7 @@ struct BoardFeature {
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
+  @Dependency(PiSettingsClient.self) var piSettingsClient
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
@@ -953,7 +954,14 @@ struct BoardFeature {
         }
         state.focusedSessionID = id
         let command = resumeCommand + "\r"
-        return .run { _ in
+        return .run { [terminalClient, piSettingsClient, agent] _ in
+          if agent.id == "pi" {
+            do {
+              try await piSettingsClient.install()
+            } catch {
+              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+            }
+          }
           await terminalClient.send(
             .createTabWithInput(
               worktree,
@@ -996,7 +1004,14 @@ struct BoardFeature {
         }
         state.focusedSessionID = id
         let command = pickerCommand + "\r"
-        return .run { _ in
+        return .run { [terminalClient, piSettingsClient, agent] _ in
+          if agent.id == "pi" {
+            do {
+              try await piSettingsClient.install()
+            } catch {
+              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+            }
+          }
           await terminalClient.send(
             .createTabWithInput(
               worktree,

@@ -168,6 +168,7 @@ private struct TrayCardView: View {
     case .claudeNotifications: "Claude Notifications"
     case .codexProgress: "Codex Progress"
     case .codexNotifications: "Codex Notifications"
+    case .piExtension: "Pi Extension"
     }
   }
 
@@ -178,6 +179,7 @@ private struct TrayCardView: View {
       case .claudeNotifications: "Claude Notifications"
       case .codexProgress: "Codex Progress"
       case .codexNotifications: "Codex Notifications"
+      case .piExtension: "Pi Extension"
       }
     }
     switch labels.count {

@@ -81,6 +81,15 @@ enum SessionSpawner {
     removeBackingWorktreeOnDelete: Bool
   ) async throws -> AgentSession {
     @Dependency(TerminalClient.self) var terminalClient
+    @Dependency(PiSettingsClient.self) var piSettingsClient
+
+    if request.agent?.id == "pi" {
+      do {
+        try await piSettingsClient.install()
+      } catch {
+        sessionSpawnerLogger.warning("Failed to auto-install Pi extension: \(error)")
+      }
+    }
 
     let input = buildInput(
       agent: request.agent,

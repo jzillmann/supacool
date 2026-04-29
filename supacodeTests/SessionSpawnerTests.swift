@@ -54,6 +54,29 @@ struct SessionSpawnerTests {
     #expect(spawnedInput.value == "codex --dangerously-bypass-approvals-and-sandbox 'List the tests'\r")
   }
 
+  @Test(.dependencies) func piAgentAutoInstallsExtensionBeforeSpawn() async throws {
+    let request = Self.makeRequest(
+      selection: .repoRoot,
+      agent: .pi,
+      prompt: "List the tests"
+    )
+    let events = LockIsolated<[String]>([])
+    try await withDependencies {
+      $0[PiSettingsClient.self].install = {
+        events.withValue { $0.append("installPi") }
+      }
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput = command {
+          events.withValue { $0.append("spawn") }
+        }
+      }
+      $0.repoSync = RepoSyncClient(syncIfSafe: { _ in .skippedDirtyTree })
+    } operation: {
+      _ = try await SessionSpawner.spawnLocal(request)
+    }
+    #expect(events.value == ["installPi", "spawn"])
+  }
+
   @Test(.dependencies) func claudePlanModeSpawnsWithoutBypassFlag() async throws {
     let request = Self.makeRequest(
       selection: .repoRoot,

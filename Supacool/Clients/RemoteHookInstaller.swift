@@ -3,10 +3,9 @@ import Foundation
 private nonisolated let remoteHookLogger = SupaLogger("Supacool.RemoteHooks")
 
 nonisolated enum RemoteHookInstallerError: Error {
-  /// Agent has no Supacool-known hook protocol — pi today, plus any
-  /// user-defined custom agent. The bootstrap snippet is silently
-  /// omitted; the remote session still spawns and falls back to the
-  /// screen-fingerprint poll for busy/idle.
+  /// Agent has no Supacool-known hook protocol — any user-defined custom
+  /// agent today. The bootstrap snippet is silently omitted; the remote
+  /// session still spawns and falls back to screen-fingerprint polling.
   case noHookProtocol(agentID: String)
 }
 
@@ -32,10 +31,14 @@ nonisolated enum RemoteHookInstallerError: Error {
 nonisolated enum RemoteHookInstaller {
   /// Serializes Supacool's hook groups for `agent` into a single JSON
   /// blob keyed by event, then returns a shell snippet that merges it
-  /// into the remote agent's config file. Returns `nil` for agents with
-  /// no hook protocol Supacool installs (pi, user-defined entries) — the
-  /// session still bootstraps without the hook merge step.
+  /// into the remote agent's config file. Pi uses a TypeScript extension
+  /// instead of settings.json hooks. Returns `nil` for agents with no hook
+  /// protocol Supacool installs (user-defined entries) — the session still
+  /// bootstraps without the hook merge step.
   static func bootstrapSnippet(for agent: AgentType) -> String? {
+    if agent.id == "pi" {
+      return renderPiExtensionSnippet()
+    }
     do {
       let hooks = try allHookGroups(for: agent)
       guard let configPath = remoteConfigPath(for: agent) else { return nil }
@@ -85,6 +88,25 @@ nonisolated enum RemoteHookInstaller {
     case "codex": "$HOME/.codex/hooks.json"
     default: nil
     }
+  }
+
+  /// Returns a bash snippet that idempotently installs Supacool's Pi
+  /// extension into Pi's global auto-discovery directory on the remote.
+  fileprivate static func renderPiExtensionSnippet() -> String {
+    let encoded = Data(PiSettingsInstaller.extensionSource.utf8).base64EncodedString()
+    return """
+      # Supacool Pi extension install — Pi has no settings.json hook
+      # protocol, so install a tiny extension that forwards lifecycle
+      # events to the reverse-forwarded Supacool socket.
+      if command -v base64 >/dev/null 2>&1; then
+        mkdir -p "$HOME/.pi/agent/extensions"
+        SUPACOOL_PI_EXTENSION_B64=\(encoded) \
+          sh -c 'printf %s "$SUPACOOL_PI_EXTENSION_B64" | base64 -d \
+            > "$HOME/.pi/agent/extensions/\(PiSettingsInstaller.extensionFileName)"' || true
+      else
+        echo "[supacool] base64 not found on remote; skipping Pi extension install" >&2
+      fi
+      """
   }
 
   /// Returns a bash snippet that writes `$HOOK_JSON`, ensures the parent

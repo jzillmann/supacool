@@ -753,4 +753,7 @@ private func receiveStartupHookChecks(from store: TestStoreOf<SettingsFeature>) 
   await store.receive(\.agentHookChecked) {
     $0.codexNotificationsState = .notInstalled
   }
+  await store.receive(\.agentHookChecked) {
+    $0.piExtensionState = .notInstalled
+  }
 }

@@ -92,6 +92,7 @@ struct AppFeature {
   @Dependency(WorktreeInfoWatcherClient.self) private var worktreeInfoWatcher
   @Dependency(ClaudeSettingsClient.self) private var claudeSettingsClient
   @Dependency(CodexSettingsClient.self) private var codexSettingsClient
+  @Dependency(PiSettingsClient.self) private var piSettingsClient
   @Dependency(\.uuid) private var uuid
 
   var body: some Reducer<State, Action> {
@@ -1348,24 +1349,26 @@ struct AppFeature {
   // MARK: Stale hook check.
 
   /// On every app launch, verify that the on-disk hook payload matches what
-  /// this build expects. If any of the four slots (Claude/Codex × progress
-  /// /notifications) is `.stale`, push one tray card so the user can
-  /// reinstall. `.missing` is intentionally ignored — it means the user
-  /// never installed that hook, not that something drifted.
+  /// this build expects. If any hook slot is `.stale`, push one tray card
+  /// so the user can reinstall. `.missing` is intentionally ignored — it
+  /// means the user never installed that hook, not that something drifted.
   private func checkStaleHooksEffect() -> Effect<Action> {
     let claude = claudeSettingsClient
     let codex = codexSettingsClient
+    let pi = piSettingsClient
     let uuid = uuid
     return .run { send in
       async let claudeProgress = claude.checkInstallState(true)
       async let claudeNotifications = claude.checkInstallState(false)
       async let codexProgress = codex.checkInstallState(true)
       async let codexNotifications = codex.checkInstallState(false)
+      async let piExtension = pi.checkInstallState()
       let results: [(AgentHookSlot, AgentHookSettingsFileInstaller.InstallState)] = await [
         (.claudeProgress, claudeProgress),
         (.claudeNotifications, claudeNotifications),
         (.codexProgress, codexProgress),
         (.codexNotifications, codexNotifications),
+        (.piExtension, piExtension),
       ]
       let staleSlots = results.compactMap { slot, state in
         state == .stale ? slot : nil
