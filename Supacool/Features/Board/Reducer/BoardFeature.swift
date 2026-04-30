@@ -240,6 +240,12 @@ struct BoardFeature {
     /// (prompt, captured resume id) is preserved so the user can unpark
     /// via the existing Resume / Rerun paths.
     case parkSession(id: AgentSession.ID, repositories: [Repository])
+    /// Park as active: move the session into the parked bucket but keep
+    /// its PTY/tab alive. Useful for hiding long-running agents without
+    /// interrupting them.
+    case parkActiveSession(id: AgentSession.ID)
+    /// Clears the parked bit for sessions whose tab is still alive.
+    case unparkSession(id: AgentSession.ID)
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -764,15 +770,16 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
+        let now = date.now
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
           sessions[index].lastKnownBusy = false
           sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = Date()
+          sessions[index].lastActivityAt = now
         }
         TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "parked", context: nil, at: Date()),
+          event: .sessionLifecycle(kind: "parked", context: "detached", at: now),
           tabID: TerminalTabID(rawValue: id)
         )
         // Drop focus if we're parking the focused session.
@@ -792,6 +799,41 @@ struct BoardFeature {
             .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
           )
         }
+
+      case .parkActiveSession(let id):
+        guard state.sessions.contains(where: { $0.id == id }) else {
+          return .none
+        }
+        let now = date.now
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].parked = true
+          sessions[index].lastActivityAt = now
+        }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "parked", context: "active", at: now),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        if state.focusedSessionID == id {
+          state.focusedSessionID = nil
+        }
+        return .none
+
+      case .unparkSession(let id):
+        guard state.sessions.contains(where: { $0.id == id }) else {
+          return .none
+        }
+        let now = date.now
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].parked = false
+          sessions[index].lastActivityAt = now
+        }
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "unparked", context: nil, at: now),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        return .none
 
       case .toggleRepository(let repositoryID):
         state.$filters.withLock { filters in

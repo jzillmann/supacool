@@ -120,6 +120,111 @@ struct BoardFeatureTests {
     }
   }
 
+  @Test(.dependencies) func parkSessionMarksParkedAndDestroysTab() async throws {
+    let now = Date(timeIntervalSince1970: 1_750_000_111)
+    let transition = Date(timeIntervalSince1970: 1_750_000_000)
+    var session = Self.sampleSession()
+    session.lastKnownBusy = true
+    session.lastBusyTransitionAt = transition
+    let repo = Repository(
+      id: session.repositoryID,
+      rootURL: URL(fileURLWithPath: session.repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.focusedSessionID = session.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+
+    await store.send(.parkSession(id: session.id, repositories: [repo])) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = true
+        sessions[0].lastKnownBusy = false
+        sessions[0].lastBusyTransitionAt = nil
+        sessions[0].lastActivityAt = now
+      }
+      $0.focusedSessionID = nil
+    }
+    await store.finish()
+
+    let command = try #require(sentCommands.value.first)
+    guard case .destroyTab(let worktree, let tabID) = command else {
+      Issue.record("Expected destroyTab command, got \(command)")
+      return
+    }
+    #expect(tabID.rawValue == session.id)
+    #expect(worktree.id == session.worktreeID)
+  }
+
+  @Test(.dependencies) func parkActiveSessionMarksParkedWithoutDestroyingTab() async {
+    let now = Date(timeIntervalSince1970: 1_750_000_222)
+    let transition = Date(timeIntervalSince1970: 1_750_000_000)
+    var session = Self.sampleSession()
+    session.lastKnownBusy = true
+    session.lastBusyTransitionAt = transition
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.focusedSessionID = session.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+
+    await store.send(.parkActiveSession(id: session.id)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = true
+        sessions[0].lastActivityAt = now
+      }
+      $0.focusedSessionID = nil
+    }
+
+    #expect(store.state.sessions[0].lastKnownBusy)
+    #expect(store.state.sessions[0].lastBusyTransitionAt == transition)
+    #expect(sentCommands.value.isEmpty)
+  }
+
+  @Test(.dependencies) func unparkSessionOnlyClearsParkedBit() async {
+    let now = Date(timeIntervalSince1970: 1_750_000_333)
+    var session = Self.sampleSession()
+    session.parked = true
+    session.lastKnownBusy = true
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.focusedSessionID = session.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+
+    await store.send(.unparkSession(id: session.id)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = false
+        sessions[0].lastActivityAt = now
+      }
+    }
+
+    #expect(store.state.focusedSessionID == session.id)
+    #expect(store.state.sessions[0].lastKnownBusy)
+  }
+
   @Test(.dependencies) func removeSessionDropsItAndClearsFocusIfFocused() async {
     let session = Self.sampleSession()
     var state = BoardFeature.State()

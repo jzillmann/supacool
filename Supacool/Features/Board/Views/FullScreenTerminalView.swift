@@ -30,6 +30,10 @@ struct FullScreenTerminalView: View {
   /// Pause/park this session: mark parked and destroy the live PTY tab.
   /// Optional so parked sessions can hide the control.
   let onPark: (() -> Void)?
+  /// Move into the parked bucket while keeping the live PTY/tab alive.
+  let onParkActive: (() -> Void)?
+  /// Clear the parked bit for active parked sessions.
+  let onUnpark: (() -> Void)?
   let onRemove: () -> Void
   /// Present only for remote sessions whose ssh link has dropped. Clicked
   /// by the user from the disconnected state to re-spawn ssh and
@@ -190,7 +194,7 @@ struct FullScreenTerminalView: View {
       splitButton
       Spacer()
       agentChip
-      pauseButton
+      parkControl
       removeButton
     }
     .padding(.horizontal, 14)
@@ -540,10 +544,12 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Pause button beside delete. Uses the existing park flow: mark the
-  /// session as parked and tear down its tab/surfaces.
+  /// Park control beside delete. Default click parks and tears down the
+  /// tab; the context menu offers "Park as Active" to hide the card
+  /// without interrupting the running terminal. When viewing an active
+  /// parked session, the same slot becomes Unpark.
   @ViewBuilder
-  private var pauseButton: some View {
+  private var parkControl: some View {
     if let onPark {
       Button(action: onPark) {
         Image(systemName: "pause.fill")
@@ -551,7 +557,25 @@ struct FullScreenTerminalView: View {
           .modifier(HeaderIconStyle())
       }
       .buttonStyle(.plain)
-      .help("Pause terminal")
+      .help(
+        onParkActive == nil
+          ? "Park session"
+          : "Park and stop terminal. Right-click for Park as Active."
+      )
+      .contextMenu {
+        Button("Park", systemImage: "parkingsign", action: onPark)
+        if let onParkActive {
+          Button("Park as Active", systemImage: "bolt.circle", action: onParkActive)
+        }
+      }
+    } else if let onUnpark {
+      Button(action: onUnpark) {
+        Image(systemName: "play.fill")
+          .font(.system(size: 13, weight: .medium))
+          .modifier(HeaderIconStyle())
+      }
+      .buttonStyle(.plain)
+      .help("Unpark session")
     }
   }
 

@@ -18,6 +18,7 @@ struct SessionCardView: View {
   var onResume: (() -> Void)?
   var onResumePicker: (() -> Void)?
   var onPark: (() -> Void)?
+  var onParkActive: (() -> Void)?
   var onUnpark: (() -> Void)?
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
@@ -135,11 +136,14 @@ struct SessionCardView: View {
       if let onPark {
         Button("Park", systemImage: "parkingsign", action: onPark)
       }
+      if let onParkActive {
+        Button("Park as Active", systemImage: "bolt.circle", action: onParkActive)
+      }
       if let onUnpark {
         Button("Unpark", systemImage: "play.circle", action: onUnpark)
       }
       if onResume != nil || onResumePicker != nil || onRerun != nil
-        || onPark != nil || onUnpark != nil
+        || onPark != nil || onParkActive != nil || onUnpark != nil
       {
         Divider()
       }

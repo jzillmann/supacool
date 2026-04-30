@@ -205,6 +205,8 @@ struct BoardRootView: View {
     if let focusedID = store.focusedSessionID,
       let session = store.sessions.first(where: { $0.id == focusedID })
     {
+      let sessionStatus = classify(session)
+      let sessionHasTab = sessionTabExists(session)
       FullScreenTerminalView(
         session: session,
         repositories: repositories,
@@ -259,7 +261,7 @@ struct BoardRootView: View {
             )
           }
           : nil,
-        onPark: (classify(session) != .parked)
+        onPark: (sessionStatus != .parked)
           ? {
             store.send(
               .parkSession(
@@ -268,6 +270,12 @@ struct BoardRootView: View {
               )
             )
           }
+          : nil,
+        onParkActive: (sessionStatus != .parked && sessionHasTab)
+          ? { store.send(.parkActiveSession(id: session.id)) }
+          : nil,
+        onUnpark: (sessionStatus == .parked && sessionHasTab)
+          ? { store.send(.unparkSession(id: session.id)) }
           : nil,
         onRemove: { store.send(.removeSession(id: session.id)) },
         onReconnect: session.isRemote
@@ -566,10 +574,17 @@ struct BoardRootView: View {
     let tabID = TerminalTabID(rawValue: session.id)
     return BoardSessionStatus.classify(
       session: session,
-      tabExists: terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID),
+      tabExists: sessionTabExists(session, tabID: tabID),
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
       deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID)
+    )
+  }
+
+  private func sessionTabExists(_ session: AgentSession, tabID: TerminalTabID? = nil) -> Bool {
+    terminalManager.sessionTabExists(
+      worktreeID: session.worktreeID,
+      tabID: tabID ?? TerminalTabID(rawValue: session.id)
     )
   }
 

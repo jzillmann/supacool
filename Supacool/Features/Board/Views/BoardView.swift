@@ -83,6 +83,13 @@ struct BoardView: View {
     BoardNavOrder.order(visibleSessions: store.visibleSessions, classify: classify)
   }
 
+  private func sessionTabExists(_ session: AgentSession) -> Bool {
+    terminalManager.sessionTabExists(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: session.id)
+    )
+  }
+
   private func moveHighlight(by delta: Int) {
     let order = currentNavOrder
     guard !order.isEmpty else { return }
@@ -350,6 +357,7 @@ struct BoardView: View {
         ) {
           ForEach(sessions, id: \.id) { session in
             let sessionStatus = classify(session)
+            let sessionHasTab = sessionTabExists(session)
             let debugLink = debugLinkDescriptor(for: session)
             let onDebugLinkTap: (() -> Void)? = {
               guard let targetID = debugLink?.targetID else { return nil }
@@ -411,7 +419,14 @@ struct BoardView: View {
                   )
                 }
                 : nil,
+              onParkActive: (sessionStatus != .parked && sessionHasTab)
+                ? {
+                  store.send(.parkActiveSession(id: session.id))
+                }
+                : nil,
               // Unpark routing:
+              //   • Still has a live tab (Park as Active) → just clear
+              //     the parked bit; the running terminal stays untouched.
               //   • Captured session id → one-click resume, same as
               //     detached cards with the same state.
               //   • No captured id (shell session, or agent whose id we
@@ -422,7 +437,9 @@ struct BoardView: View {
               //     a choice rather than picking for them.
               onUnpark: (sessionStatus == .parked)
                 ? {
-                  if session.agent != nil && session.agentNativeSessionID != nil {
+                  if sessionHasTab {
+                    store.send(.unparkSession(id: session.id))
+                  } else if session.agent != nil && session.agentNativeSessionID != nil {
                     store.send(
                       .resumeDetachedSession(
                         id: session.id,
@@ -569,6 +586,7 @@ private struct SessionCardContainer: View {
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
   let onPark: (() -> Void)?
+  let onParkActive: (() -> Void)?
   let onUnpark: (() -> Void)?
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
@@ -593,6 +611,7 @@ private struct SessionCardContainer: View {
       onResume: onResume,
       onResumePicker: onResumePicker,
       onPark: onPark,
+      onParkActive: onParkActive,
       onUnpark: onUnpark,
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
