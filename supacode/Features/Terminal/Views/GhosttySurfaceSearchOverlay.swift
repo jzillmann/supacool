@@ -115,7 +115,26 @@ struct GhosttySurfaceSearchOverlay: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: corner.alignment)
       .onAppear {
         focusSearchField()
-        scheduleSearch(searchText)
+        // The synchronous path through `scheduleSearch → emitSearch →
+        // performBindingAction("search:…")` round-trips into Ghostty's
+        // binding handler, which can synchronously call
+        // `Surface.Search.deinit → pthread_join` on a Zig worker
+        // parked in `kevent64`. Because `.onAppear` runs inside an
+        // `_AppearanceActionModifier` update on the SwiftUI layout
+        // pass, an indefinite join there freezes the entire main
+        // thread (sampled freeze on 2026-04-30, see freeze diagnosis
+        // in the agent-registry-pi branch discussion). Two
+        // adjustments avoid both the trigger and the hot zone:
+        //   1. Skip emitting at all when `searchText` is empty —
+        //      there's nothing to search and the empty emit is what
+        //      tears down a prior `Surface.Search` (which is what
+        //      pthread_joins).
+        //   2. For a prefilled needle, hop off the render pass via a
+        //      `Task` so even if the upstream join misbehaves it
+        //      doesn't wedge layout.
+        guard !searchText.isEmpty else { return }
+        let prefilled = searchText
+        Task { @MainActor in scheduleSearch(prefilled) }
       }
       .onChange(of: searchText) { _, newValue in
         scheduleSearch(newValue)
