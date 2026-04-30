@@ -352,10 +352,8 @@ struct QuickDiffSheet: View {
     do {
       switch diffMode {
       case .workingTree:
-        // `cached` is false here — `git diff <path>` covers unstaged
-        // changes; combined with `git diff --cached` we'd need two
-        // calls. v1 shows working-tree vs. index (what most users
-        // want); staged-only review is a future enhancement.
+        // `cached` is false here — the client diffs against HEAD so
+        // staged-only changes show up too.
         diffText = try await gitClient.diffForFile(worktreeURL, file.path, false)
       case .branchVsBase:
         guard let base = resolvedBaseRef else {

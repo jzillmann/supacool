@@ -35,4 +35,5 @@ nonisolated enum AgentHookSlot: Equatable, Sendable {
   case claudeNotifications
   case codexProgress
   case codexNotifications
+  case piExtension
 }

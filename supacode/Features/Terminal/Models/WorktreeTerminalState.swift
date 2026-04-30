@@ -320,6 +320,14 @@ final class WorktreeTerminalState {
       tintColor: creation.tintColor,
       id: creation.tabID,
     )
+    // Ghostty consumes `initial_input` in C-level surface init, bypassing
+    // GhosttySurfaceView.sendText and therefore bridge.onInputTap. Log it
+    // here so the transcript reflects the launch command — without this
+    // the trace shows nothing at all when a hookless agent (pi, plain
+    // shell) crashes before producing visible output.
+    if let initialInput = creation.initialInput, !initialInput.isEmpty {
+      TranscriptRecorder.shared.appendInput(tabID: tabId, text: initialInput)
+    }
     let tree = splitTree(
       for: tabId,
       inheritingFromSurfaceId: creation.inheritingFromSurfaceId,
@@ -874,6 +882,35 @@ final class WorktreeTerminalState {
     }
   }
 
+  @discardableResult
+  func restoreTabLayout(
+    _ tabSnapshot: TerminalLayoutSnapshot.TabSnapshot,
+    focusing: Bool
+  ) -> Bool {
+    pendingLayoutSnapshot = nil
+    pendingSetupScript = false
+
+    if let id = tabSnapshot.id {
+      let tabID = TerminalTabID(rawValue: id)
+      if tabManager.tabs.contains(where: { $0.id == tabID }) {
+        tabManager.selectTab(tabID)
+        if focusing {
+          focusSurface(in: tabID)
+        }
+        return true
+      }
+    }
+
+    let context: ghostty_surface_context_e =
+      tabManager.tabs.isEmpty ? GHOSTTY_SURFACE_CONTEXT_WINDOW : GHOSTTY_SURFACE_CONTEXT_TAB
+    guard let tabID = restoreTab(from: tabSnapshot, context: context) else { return false }
+    tabManager.selectTab(tabID)
+    if focusing {
+      focusSurface(in: tabID)
+    }
+    return true
+  }
+
   private func restoreFromSnapshot(_ snapshot: TerminalLayoutSnapshot, focusing: Bool) {
     guard !snapshot.tabs.isEmpty else {
       layoutLogger.warning("Attempted to restore empty layout snapshot, skipping restoration.")
@@ -883,61 +920,81 @@ final class WorktreeTerminalState {
     // Skip setup script when restoring a saved layout.
     pendingSetupScript = false
 
+    var restoredTabIDs: [TerminalTabID] = []
     for (index, tabSnapshot) in snapshot.tabs.enumerated() {
-      let firstLeafPwd = tabSnapshot.layout.firstLeaf.workingDirectory
-      let workingDir = firstLeafPwd.flatMap { URL(filePath: $0, directoryHint: .isDirectory) }
       let context: ghostty_surface_context_e =
-        index == 0 ? GHOSTTY_SURFACE_CONTEXT_WINDOW : GHOSTTY_SURFACE_CONTEXT_TAB
-      let tabId = tabManager.createTab(
-        title: tabSnapshot.title,
-        icon: tabSnapshot.icon,
-        isTitleLocked: false,
-        tintColor: tabSnapshot.tintColor,
-        id: tabSnapshot.id,
-      )
-      let surface = createSurface(
-        tabId: tabId,
-        initialInput: nil,
-        workingDirectoryOverride: workingDir,
-        inheritingFromSurfaceId: nil,
-        context: context,
-        surfaceID: tabSnapshot.layout.firstLeaf.id,
-      )
-      let tree = SplitTree(view: surface)
-      trees[tabId] = tree
-      focusedSurfaceIdByTab[tabId] = surface.id
-      tabIsRunningById[tabId] = false
-
-      // Recursively restore splits.
-      restoreLayoutNode(tabSnapshot.layout, anchor: surface, tabId: tabId)
-
-      // Log if partial restoration produced fewer panes than expected.
-      let leaves = trees[tabId]?.root?.leaves() ?? []
-      let expectedLeaves = tabSnapshot.layout.leafCount
-      if leaves.count != expectedLeaves {
-        layoutLogger.warning(
-          "Partial restore for tab '\(tabSnapshot.title)': expected \(expectedLeaves) panes, got \(leaves.count)"
-        )
+        index == 0 && tabManager.tabs.isEmpty
+        ? GHOSTTY_SURFACE_CONTEXT_WINDOW
+        : GHOSTTY_SURFACE_CONTEXT_TAB
+      if let tabID = restoreTab(from: tabSnapshot, context: context) {
+        restoredTabIDs.append(tabID)
       }
-
-      // Focus the correct leaf.
-      let focusedIndex = max(0, min(tabSnapshot.focusedLeafIndex, leaves.count - 1))
-      if focusedIndex < leaves.count {
-        focusedSurfaceIdByTab[tabId] = leaves[focusedIndex].id
-      }
-
-      onTabCreated?()
     }
 
-    // Select the correct tab.
-    let selectedIndex = max(0, min(snapshot.selectedTabIndex, tabManager.tabs.count - 1))
-    if selectedIndex < tabManager.tabs.count {
-      let selectedTab = tabManager.tabs[selectedIndex]
-      tabManager.selectTab(selectedTab.id)
+    // Select the correct restored tab.
+    let selectedIndex = max(0, min(snapshot.selectedTabIndex, restoredTabIDs.count - 1))
+    if selectedIndex < restoredTabIDs.count {
+      let selectedTabID = restoredTabIDs[selectedIndex]
+      tabManager.selectTab(selectedTabID)
       if focusing {
-        focusSurface(in: selectedTab.id)
+        focusSurface(in: selectedTabID)
       }
     }
+  }
+
+  private func restoreTab(
+    from tabSnapshot: TerminalLayoutSnapshot.TabSnapshot,
+    context: ghostty_surface_context_e
+  ) -> TerminalTabID? {
+    if let id = tabSnapshot.id,
+      tabManager.tabs.contains(where: { $0.id == TerminalTabID(rawValue: id) })
+    {
+      layoutLogger.warning("Skipping duplicate restored tab ID \(id).")
+      return nil
+    }
+
+    let firstLeafPwd = tabSnapshot.layout.firstLeaf.workingDirectory
+    let workingDir = firstLeafPwd.flatMap { URL(filePath: $0, directoryHint: .isDirectory) }
+    let tabId = tabManager.createTab(
+      title: tabSnapshot.title,
+      icon: tabSnapshot.icon,
+      isTitleLocked: false,
+      tintColor: tabSnapshot.tintColor,
+      id: tabSnapshot.id,
+    )
+    let surface = createSurface(
+      tabId: tabId,
+      initialInput: nil,
+      workingDirectoryOverride: workingDir,
+      inheritingFromSurfaceId: nil,
+      context: context,
+      surfaceID: tabSnapshot.layout.firstLeaf.id,
+    )
+    let tree = SplitTree(view: surface)
+    trees[tabId] = tree
+    focusedSurfaceIdByTab[tabId] = surface.id
+    tabIsRunningById[tabId] = false
+
+    // Recursively restore splits.
+    restoreLayoutNode(tabSnapshot.layout, anchor: surface, tabId: tabId)
+
+    // Log if partial restoration produced fewer panes than expected.
+    let leaves = trees[tabId]?.root?.leaves() ?? []
+    let expectedLeaves = tabSnapshot.layout.leafCount
+    if leaves.count != expectedLeaves {
+      layoutLogger.warning(
+        "Partial restore for tab '\(tabSnapshot.title)': expected \(expectedLeaves) panes, got \(leaves.count)"
+      )
+    }
+
+    // Focus the correct leaf.
+    let focusedIndex = max(0, min(tabSnapshot.focusedLeafIndex, leaves.count - 1))
+    if focusedIndex < leaves.count {
+      focusedSurfaceIdByTab[tabId] = leaves[focusedIndex].id
+    }
+
+    onTabCreated?()
+    return tabId
   }
 
   private func restoreLayoutNode(

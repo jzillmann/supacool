@@ -100,4 +100,55 @@ struct TerminalLayoutSnapshotTests {
     #expect(decoded.tabs[0].layout.firstLeaf.workingDirectory == "/home")
     #expect(decoded.tabs[0].layout.leafCount == 1)
   }
+
+  @Test func restorableTabSnapshotReturnsExactTab() {
+    let wantedID = UUID()
+    let otherID = UUID()
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        TerminalLayoutSnapshot.TabSnapshot(
+          id: otherID,
+          title: "other",
+          icon: nil,
+          tintColor: nil,
+          layout: .leaf(TerminalLayoutSnapshot.SurfaceSnapshot(id: nil, workingDirectory: "/other")),
+          focusedLeafIndex: 0
+        ),
+        TerminalLayoutSnapshot.TabSnapshot(
+          id: wantedID,
+          title: "wanted",
+          icon: "terminal",
+          tintColor: nil,
+          layout: .leaf(TerminalLayoutSnapshot.SurfaceSnapshot(id: nil, workingDirectory: "/wanted")),
+          focusedLeafIndex: 0
+        ),
+      ],
+      selectedTabIndex: 1
+    )
+
+    let restored = snapshot.restorableTabSnapshot(for: TerminalTabID(rawValue: wantedID))
+    #expect(restored?.id == wantedID)
+    #expect(restored?.title == "wanted")
+  }
+
+  @Test func restorableTabSnapshotRekeysLegacySingleTabSnapshot() throws {
+    let wantedID = UUID()
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        TerminalLayoutSnapshot.TabSnapshot(
+          id: nil,
+          title: "legacy",
+          icon: nil,
+          tintColor: nil,
+          layout: .leaf(TerminalLayoutSnapshot.SurfaceSnapshot(id: nil, workingDirectory: "/legacy")),
+          focusedLeafIndex: 0
+        ),
+      ],
+      selectedTabIndex: 0
+    )
+
+    let restored = try #require(snapshot.restorableTabSnapshot(for: TerminalTabID(rawValue: wantedID)))
+    #expect(restored.id == wantedID)
+    #expect(restored.title == "legacy")
+  }
 }

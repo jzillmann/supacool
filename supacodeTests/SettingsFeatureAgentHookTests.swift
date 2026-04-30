@@ -142,6 +142,13 @@ struct SettingsFeatureAgentHookTests {
         }
         return progress
       }
+      $0[PiSettingsClient.self].checkInstalled = {
+        _ = startedChecks.withValue { $0.insert("piExtension") }
+        await withCheckedContinuation { continuation in
+          continuations.withValue { $0.append(continuation) }
+        }
+        return true
+      }
     }
 
     await store.send(.task)
@@ -149,7 +156,7 @@ struct SettingsFeatureAgentHookTests {
     await store.receive(\.delegate.settingsChanged)
 
     await eventually {
-      startedChecks.value.count == 4
+      startedChecks.value.count == 5
     }
 
     continuations.withValue { continuations in
@@ -171,9 +178,12 @@ struct SettingsFeatureAgentHookTests {
     await store.receive(\.agentHookChecked) {
       $0.codexNotificationsState = .notInstalled
     }
+    await store.receive(\.agentHookChecked) {
+      $0.piExtensionState = .installed
+    }
   }
 
-  @Test(.dependencies) func taskChecksAllFourHookSlotsOnStartup() async {
+  @Test(.dependencies) func taskChecksAllFiveHookSlotsOnStartup() async {
     let checkedSlots = LockIsolated<[String]>([])
 
     let store = TestStore(initialState: SettingsFeature.State()) {
@@ -186,6 +196,10 @@ struct SettingsFeatureAgentHookTests {
       $0[CodexSettingsClient.self].checkInstalled = { progress in
         checkedSlots.withValue { $0.append(progress ? "codexProgress" : "codexNotifications") }
         return progress
+      }
+      $0[PiSettingsClient.self].checkInstalled = {
+        checkedSlots.withValue { $0.append("piExtension") }
+        return true
       }
     }
 
@@ -204,6 +218,9 @@ struct SettingsFeatureAgentHookTests {
     await store.receive(\.agentHookChecked) {
       $0.codexNotificationsState = .notInstalled
     }
+    await store.receive(\.agentHookChecked) {
+      $0.piExtensionState = .installed
+    }
 
     #expect(
       Set(checkedSlots.value) == [
@@ -211,6 +228,7 @@ struct SettingsFeatureAgentHookTests {
         "claudeNotifications",
         "codexProgress",
         "codexNotifications",
+        "piExtension",
       ])
   }
 

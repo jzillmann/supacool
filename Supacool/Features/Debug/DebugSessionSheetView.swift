@@ -50,6 +50,7 @@ struct DebugSessionSheetView: View {
   private var registeredBody: some View {
     VStack(alignment: .leading, spacing: 16) {
       header
+      agentPicker
       observationEditor
       if let message = store.errorMessage {
         Text(message)
@@ -57,6 +58,25 @@ struct DebugSessionSheetView: View {
           .foregroundStyle(.red)
       }
       registeredFooter
+    }
+  }
+
+  private var agentPicker: some View {
+    HStack(spacing: 10) {
+      Text("Agent")
+        .font(.callout)
+        .fontWeight(.medium)
+      Picker(selection: $store.agent) {
+        ForEach(AgentRegistry.allAgents) { agent in
+          Text(agent.displayName).tag(agent)
+        }
+      } label: {
+        EmptyView()
+      }
+      .labelsHidden()
+      .pickerStyle(.segmented)
+      .fixedSize()
+      Spacer(minLength: 0)
     }
   }
 

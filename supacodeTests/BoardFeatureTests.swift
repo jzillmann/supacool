@@ -861,17 +861,18 @@ struct BoardFeatureTests {
     #expect(store.state.newTerminalSheet == nil)
   }
 
-  @Test(.dependencies) func openNewTerminalSheetInheritsWorkspaceFromFocusedSession() async {
-    // After a session has been converted from repo root to a worktree
-    // (`currentWorkspacePath` diverges from the immutable `worktreeID`),
-    // pressing ⌘N / + inside the focused terminal should preload the
-    // sheet on the NEW worktree — not reset to repo root.
+  @Test(.dependencies) func openNewTerminalSheetFromSessionDoesNotReuseWorktree() async {
+    // New-terminal is always a fresh dialog: even when launched from a
+    // session that has been converted from repo root to a worktree, it
+    // keeps only the repository preference and starts at repo root with
+    // a blank workspace field.
     let session = AgentSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo", // started at repo root
       currentWorkspacePath: "/tmp/repo/worktrees/feature-x", // converted
-      agent: .claude,
-      initialPrompt: "Fix tests"
+      agent: .codex,
+      initialPrompt: "Fix tests",
+      planMode: true
     )
     let worktree = Worktree(
       id: "/tmp/repo/worktrees/feature-x",
@@ -898,15 +899,16 @@ struct BoardFeatureTests {
     store.exhaustivity = .off
 
     await store.send(
-      .openNewTerminalSheetInheritingFrom(id: session.id, repositories: [repo])
+      .openNewTerminalSheetFromSession(id: session.id, repositories: [repo])
     )
 
     let sheet = store.state.newTerminalSheet
     #expect(sheet?.selectedRepositoryID == "/tmp/repo")
-    #expect(sheet?.selectedWorkspace == .existingWorktree(id: "/tmp/repo/worktrees/feature-x"))
-    #expect(sheet?.workspaceQuery == "feature-x")
-    // Fresh prompt — inheritance copies context, not content.
+    #expect(sheet?.selectedWorkspace == .repoRoot)
+    #expect(sheet?.workspaceQuery == "")
     #expect(sheet?.prompt == "")
+    #expect(sheet?.agent == .claude)
+    #expect(sheet?.planMode == false)
   }
 
   @Test(.dependencies) func convertSessionToWorktreeIgnoresEmptyBranchName() async {
@@ -991,6 +993,82 @@ struct BoardFeatureTests {
     #expect(!store.state.sessions.contains(where: { $0.id == original.id }))
     #expect(store.state.sessions.contains(where: { $0.id == replacement.id }))
     #expect(store.state.pendingRerunSessionID == nil)
+  }
+
+  @Test(.dependencies) func restoreShellSessionLayoutSendsTerminalRestoreCommand() async throws {
+    let sessionID = UUID()
+    let now = Date(timeIntervalSince1970: 1_750_000_123)
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      currentWorkspacePath: "/tmp/repo/packages/api",
+      agent: nil,
+      initialPrompt: "",
+      lastKnownBusy: true,
+      parked: true
+    )
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.restoreShellSessionLayout(id: sessionID, repositories: [repo])) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].lastKnownBusy = false
+        sessions[0].lastBusyTransitionAt = nil
+        sessions[0].lastActivityAt = now
+        sessions[0].parked = false
+      }
+      $0.focusedSessionID = sessionID
+    }
+    await store.finish()
+
+    let command = try #require(sentCommands.value.first)
+    guard case .restoreShellLayout(let worktree, let tabID) = command else {
+      Issue.record("Expected restoreShellLayout command, got \(command)")
+      return
+    }
+    #expect(tabID.rawValue == sessionID)
+    #expect(worktree.id == "/tmp/repo")
+    #expect(worktree.workingDirectory.path(percentEncoded: false) == "/tmp/repo/packages/api")
+  }
+
+  @Test(.dependencies) func restoreShellSessionLayoutIgnoresAgentSessions() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.restoreShellSessionLayout(id: session.id, repositories: []))
+    await store.receive(.resumeFailed(id: session.id, message: "Only local shell sessions can restore a shell layout."))
+    await store.finish()
+
+    #expect(sentCommands.value.isEmpty)
   }
 
   // MARK: - Worktree prune

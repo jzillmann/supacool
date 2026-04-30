@@ -19,6 +19,13 @@ struct RemoteHookInstallerTests {
     #expect(snippet.contains("$HOME/.codex/hooks.json"))
   }
 
+  @Test func piSnippetInstallsPiExtension() throws {
+    let snippet = try #require(RemoteHookInstaller.bootstrapSnippet(for: .pi))
+    #expect(snippet.contains("$HOME/.pi/agent/extensions"))
+    #expect(snippet.contains(PiSettingsInstaller.extensionFileName))
+    #expect(snippet.contains("SUPACOOL_PI_EXTENSION_B64="))
+  }
+
   @Test func snippetEmbedsHooksAsBase64SoQuotingStaysFlat() throws {
     // The hook JSON embeds nested quotes, slashes, and `$`-vars — all of
     // which would be brittle to escape through base64 → bash → ssh →
@@ -61,9 +68,16 @@ struct RemoteHookInstallerTests {
     #expect(script.contains("$HOME/.claude/settings.json"))
   }
 
+  @Test func bootstrapScriptIncludesPiExtensionInstallForPi() {
+    let script = renderBootstrapScript(agentCommand: "pi 'hello'", agent: .pi)
+    #expect(script.contains("SUPACOOL_PI_EXTENSION_B64="))
+    #expect(script.contains(PiSettingsInstaller.extensionFileName))
+  }
+
   @Test func bootstrapScriptOmitsHookInstallForShellSession() {
     let script = renderBootstrapScript(agentCommand: nil, agent: nil)
     #expect(!script.contains("SUPACOOL_HOOK_B64="))
+    #expect(!script.contains("SUPACOOL_PI_EXTENSION_B64="))
     #expect(!script.contains("python3"))
   }
 }

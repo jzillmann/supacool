@@ -51,6 +51,48 @@ struct WorktreeTerminalManagerTests {
     #expect(reusedState.pendingLayoutSnapshot == nil)
   }
 
+  @Test func restoreShellLayoutCommandRestoresSavedTabWithoutAutoRestoreSetting() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let tabID = TerminalTabID(rawValue: UUID())
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        TerminalLayoutSnapshot.TabSnapshot(
+          id: tabID.rawValue,
+          title: "shell",
+          icon: "terminal",
+          tintColor: nil,
+          layout: .split(
+            TerminalLayoutSnapshot.SplitSnapshot(
+              direction: .horizontal,
+              ratio: 0.4,
+              left: .leaf(
+                TerminalLayoutSnapshot.SurfaceSnapshot(id: UUID(), workingDirectory: "/tmp/repo/wt-1")
+              ),
+              right: .leaf(
+                TerminalLayoutSnapshot.SurfaceSnapshot(id: UUID(), workingDirectory: "/tmp")
+              )
+            )
+          ),
+          focusedLeafIndex: 1
+        ),
+      ],
+      selectedTabIndex: 0
+    )
+    manager.loadSavedLayoutSnapshot = { _ in snapshot }
+
+    manager.handleCommand(.restoreShellLayout(worktree, tabID: tabID))
+
+    guard let state = manager.stateIfExists(for: worktree.id) else {
+      Issue.record("Expected restored terminal state")
+      return
+    }
+    #expect(state.containsTabTree(tabID))
+    #expect(state.tabManager.selectedTabId == tabID)
+    #expect(state.splitTree(for: tabID).leaves().count == 2)
+    #expect(state.pendingLayoutSnapshot == nil)
+  }
+
   @Test func buffersEventsUntilStreamCreated() async {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()
@@ -621,6 +663,112 @@ struct WorktreeTerminalManagerTests {
       await clock.advance(by: .milliseconds(500))
 
       #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+    }
+  }
+
+  @Test func deferredWorkStopKeepsSessionInProgressUntilLeaseExpires() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          deferredWorkLeaseBuffer: .seconds(1),
+          clock: clock
+        )
+        let worktree = makeWorktree()
+
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId,
+          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+        else {
+          Issue.record("Expected blocking script tab and surface")
+          return
+        }
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Stop",
+            title: nil,
+            body: "Will iterate on next 409 in ~7 min.",
+            sessionID: nil
+          )
+        )
+
+        #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .seconds(7 * 60))
+        #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .seconds(1))
+        #expect(!manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
+  @Test func finalStopClearsDeferredWorkLease() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          deferredWorkFallbackTTL: .seconds(60),
+          clock: clock
+        )
+        let worktree = makeWorktree()
+
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId,
+          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+        else {
+          Issue.record("Expected blocking script tab and surface")
+          return
+        }
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Stop",
+            title: nil,
+            body: "Watching in background. I'll report when complete.",
+            sessionID: nil
+          )
+        )
+        #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Stop",
+            title: nil,
+            body: "Done. PR #2516 review fixes shipped.",
+            sessionID: nil
+          )
+        )
+
+        #expect(!manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+      }
     }
   }
 

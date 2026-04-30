@@ -61,6 +61,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
     tabExists: Bool,
     awaitingInput: Bool,
     busy: Bool,
+    deferredWork: Bool = false,
     now: Date = Date()
   ) -> Self {
     if session.parked {
@@ -78,7 +79,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
     if awaitingInput {
       return .awaitingInput
     }
-    if busy {
+    if busy || deferredWork {
       return .inProgress
     }
     if shouldKeepInProgressWhileIdle(session: session, now: now) {

@@ -49,16 +49,17 @@ struct CodingAgentsSettingsView: View {
         Text("Applied to `~/.codex/hooks.json`.")
       }
       Section {
-        LabeledContent {
-          EmptyView()
-        } label: {
-          Text("No hooks to install")
-          Text("Pi has no settings.json hook protocol like Claude / Codex. Sessions still spawn and resume, but Supacool falls back to a screen-fingerprint poll for busy / idle and can't capture pi's native session id for one-click resume. A pi extension that wires up these events is on the roadmap.")
-        }
+        AgentInstallRow(
+          installAction: { store.send(.agentHookInstallTapped(.piExtension)) },
+          uninstallAction: { store.send(.agentHookUninstallTapped(.piExtension)) },
+          installState: store.piExtensionState,
+          title: "Supacool Extension",
+          subtitle: "Stabilizes busy / idle and captures Pi session ids for one-click resume."
+        )
       } header: {
         Label("Pi", image: "pi-mark")
       } footer: {
-        Text("Pi is detected when `pi` is on your `$PATH`. See [pi-mono on GitHub](https://github.com/badlogic/pi-mono).")
+        Text("Installed to `~/.pi/agent/extensions/supacool-hooks.ts` and auto-loaded by Pi.")
       }
     }
     .formStyle(.grouped)

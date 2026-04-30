@@ -16,6 +16,10 @@ struct FullScreenTerminalView: View {
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
   let onRerun: () -> Void
+  /// Present for local raw-shell sessions so a detached shell can reopen
+  /// the saved split layout and working directories without going through
+  /// the new-terminal sheet.
+  let onRestoreShellLayout: (() -> Void)?
   /// Present only when the session has a captured agent-native id and an
   /// agent CLI — shell sessions and pre-hook sessions can't be resumed.
   let onResume: (() -> Void)?
@@ -55,9 +59,11 @@ struct FullScreenTerminalView: View {
   let onAutoObserverRunNow: () -> Void
 
   /// The macOS app opened when the user clicks the diff button. Swap via
-  /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
+  /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
   @AppStorage("supacool.gitGuiApp") private var gitGuiApp: String = "Fork"
+
+  @Dependency(GitClientDependency.self) private var gitClient
 
   /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
   @State private var isEditingGitGuiApp: Bool = false
@@ -71,6 +77,9 @@ struct FullScreenTerminalView: View {
   /// Draft branch name shown in the convert-to-worktree popover.
   /// Initialized from the session display name when the popover opens.
   @State private var convertBranchDraft: String = ""
+  /// Latest `git status --porcelain` count for the current workspace.
+  /// Drives the dirty badge on the Quick Diff toolbar icon.
+  @State private var uncommittedChangeCount: Int?
 
   /// First leaf we ever observed in this session's tab — the agent's
   /// own surface. Captured the first time the tab has exactly one leaf
@@ -356,12 +365,26 @@ struct FullScreenTerminalView: View {
     Button {
       isQuickDiffPresented = true
     } label: {
-      Image(systemName: "plus.forwardslash.minus")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
+      ZStack(alignment: .topTrailing) {
+        Image(systemName: "plus.forwardslash.minus")
+          .font(.system(size: 13, weight: .medium))
+        if hasUncommittedChanges {
+          Circle()
+            .fill(.orange)
+            .frame(width: 6, height: 6)
+            .offset(x: 3, y: -3)
+            .accessibilityHidden(true)
+        }
+      }
+      .modifier(HeaderIconTintStyle(tint: hasUncommittedChanges ? .orange : .secondary))
+      .accessibilityLabel("Open diff")
+      .accessibilityValue(diffStatusAccessibilityValue)
     }
     .buttonStyle(.plain)
-    .help("Open diff (⌘⇧D · right-click for external apps)")
+    .help(openDiffHelpText)
+    .task(id: "\(session.id)#\(session.currentWorkspacePath)") {
+      await refreshUncommittedChangeCountLoop(worktreeURL: url)
+    }
     .contextMenu {
       Section("Open diff in") {
         Button {
@@ -404,6 +427,51 @@ struct FullScreenTerminalView: View {
       }
     } message: {
       Text("Name of the macOS app to launch (as it appears in /Applications). Used with `open -a`.")
+    }
+  }
+
+  private var hasUncommittedChanges: Bool {
+    (uncommittedChangeCount ?? 0) > 0
+  }
+
+  private var openDiffHelpText: String {
+    guard let uncommittedChangeCount else {
+      return "Open diff (⌘⇧D · right-click for external apps)"
+    }
+    guard uncommittedChangeCount > 0 else {
+      return "Open diff (working tree clean · ⌘⇧D · right-click for external apps)"
+    }
+    let noun = uncommittedChangeCount == 1 ? "change" : "changes"
+    return "Open diff (\(uncommittedChangeCount) uncommitted \(noun) · ⌘⇧D · right-click for external apps)"
+  }
+
+  private var diffStatusAccessibilityValue: String {
+    guard let uncommittedChangeCount else { return "Git status unknown" }
+    guard uncommittedChangeCount > 0 else { return "No uncommitted changes" }
+    let noun = uncommittedChangeCount == 1 ? "change" : "changes"
+    return "\(uncommittedChangeCount) uncommitted \(noun)"
+  }
+
+  private func refreshUncommittedChangeCountLoop(worktreeURL: URL) async {
+    uncommittedChangeCount = nil
+    while !Task.isCancelled {
+      await refreshUncommittedChangeCount(worktreeURL: worktreeURL)
+      do {
+        try await Task.sleep(for: Self.diffStatusRefreshInterval)
+      } catch {
+        return
+      }
+    }
+  }
+
+  private func refreshUncommittedChangeCount(worktreeURL: URL) async {
+    do {
+      let output = try await gitClient.statusPorcelain(worktreeURL)
+      guard !Task.isCancelled else { return }
+      uncommittedChangeCount = PorcelainStatusParser.parse(output).count
+    } catch {
+      guard !Task.isCancelled else { return }
+      uncommittedChangeCount = nil
     }
   }
 
@@ -625,6 +693,8 @@ struct FullScreenTerminalView: View {
     }
   }
 
+  private static let diffStatusRefreshInterval: Duration = .seconds(5)
+
   /// Built-in presets for the right-click menu. Manually curated — these
   /// are the common macOS git GUIs. Custom entries go through the
   /// "Set Custom…" alert.
@@ -749,6 +819,31 @@ struct FullScreenTerminalView: View {
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
+  private var detachedDescription: String {
+    if session.agent == nil {
+      return """
+        The underlying shell process is gone — most likely because the app relaunched. \
+        Restore the saved layout to reopen panes in their last known folders.
+        """
+    }
+    return """
+      The underlying terminal process is gone — most likely because the app \
+      relaunched. The original prompt is preserved.
+      """
+  }
+
+  private var detachedPromptLabel: String {
+    session.agent == nil ? "Initial command" : "Original prompt"
+  }
+
+  private var shouldShowRerunButton: Bool {
+    session.agent != nil || !session.initialPrompt.isEmpty
+  }
+
+  private var detachedRerunLabel: String {
+    session.agent == nil ? "Rerun Command" : "Rerun"
+  }
+
   private var detachedState: some View {
     VStack(spacing: 14) {
       Image(systemName: "moon.zzz.fill")
@@ -756,28 +851,27 @@ struct FullScreenTerminalView: View {
         .foregroundStyle(.secondary)
       Text("Session detached")
         .font(.title3.weight(.medium))
-      Text("""
-        The underlying terminal process is gone — most likely because the app \
-        relaunched. The original prompt is preserved.
-        """)
+      Text(detachedDescription)
         .font(.callout)
         .foregroundStyle(.secondary)
         .multilineTextAlignment(.center)
         .frame(maxWidth: 420)
 
-      VStack(alignment: .leading, spacing: 4) {
-        Label("Original prompt", systemImage: "quote.opening")
-          .font(.caption.weight(.semibold))
-          .foregroundStyle(.secondary)
-        Text(session.initialPrompt)
-          .font(.callout)
-          .padding(10)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.secondary.opacity(0.08))
-          .clipShape(RoundedRectangle(cornerRadius: 8))
+      if session.agent != nil || !session.initialPrompt.isEmpty {
+        VStack(alignment: .leading, spacing: 4) {
+          Label(detachedPromptLabel, systemImage: "quote.opening")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          Text(session.initialPrompt)
+            .font(.callout)
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .frame(maxWidth: 460)
+        .padding(.top, 6)
       }
-      .frame(maxWidth: 460)
-      .padding(.top, 6)
 
       if let lastAgentMessage {
         VStack(alignment: .leading, spacing: 4) {
@@ -804,9 +898,16 @@ struct FullScreenTerminalView: View {
         } label: {
           Label("Remove", systemImage: "trash")
         }
-        let rerunIsDefault = onResume == nil && onResumePicker == nil
-        Button("Rerun", systemImage: "arrow.clockwise", action: onRerun)
-          .keyboardShortcut(rerunIsDefault ? KeyboardShortcut.defaultAction : nil)
+        if let onRestoreShellLayout {
+          Button("Restore Layout", systemImage: "rectangle.split.3x1", action: onRestoreShellLayout)
+            .keyboardShortcut(.defaultAction)
+            .help("Reopen shell panes using the last saved layout and working directories")
+        }
+        if shouldShowRerunButton {
+          let rerunIsDefault = onRestoreShellLayout == nil && onResume == nil && onResumePicker == nil
+          Button(detachedRerunLabel, systemImage: "arrow.clockwise", action: onRerun)
+            .keyboardShortcut(rerunIsDefault ? KeyboardShortcut.defaultAction : nil)
+        }
         if let onResume {
           Button("Resume", systemImage: "play.circle", action: onResume)
             .keyboardShortcut(.defaultAction)

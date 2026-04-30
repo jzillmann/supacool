@@ -2,7 +2,7 @@
 
 Native terminal coding agents command center.
 
-<!-- TODO: add a local screenshot, e.g. `![screenshot](assets/screenshot.png)`. The old `supacode.sh` image is gone. -->
+![Supacool screenshot](assets/screenshot.png)
 
 ## Features
 

@@ -569,7 +569,11 @@ struct GitClient {
   ) async throws -> String {
     let repoPath = worktreeURL.path(percentEncoded: false)
     var args = ["-C", repoPath, "diff"]
-    if cached { args.append("--cached") }
+    if cached {
+      args.append("--cached")
+    } else {
+      args.append("HEAD")
+    }
     args += ["--", path]
     return try await runGit(operation: .diffFile, arguments: args)
   }

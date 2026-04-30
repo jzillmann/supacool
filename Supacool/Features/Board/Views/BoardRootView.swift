@@ -98,13 +98,12 @@ struct BoardRootView: View {
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
-        // If a session is focused (full-screen terminal view), inherit
-        // its workspace — same reasoning as the header's ⌘N handler.
-        // Otherwise open the sheet clean so the global hotkey from the
-        // board still behaves like a fresh new-terminal.
+        // If a session is focused (full-screen terminal view), keep only
+        // its repository preference. Workspace/branch fields start blank
+        // so ⌘N never reuses the previous worktree.
         if let focusedID = store.focusedSessionID {
           store.send(
-            .openNewTerminalSheetInheritingFrom(
+            .openNewTerminalSheetFromSession(
               id: focusedID,
               repositories: Array(repositories)
             )
@@ -213,11 +212,10 @@ struct BoardRootView: View {
         terminalManager: terminalManager,
         onBackToBoard: { store.send(.focusSession(id: nil)) },
         onNewTerminal: {
-          // Pre-fill workspace from the focused session so "⌘N from a
-          // session converted to a worktree" opens the sheet on that
-          // same worktree instead of the default repo-root.
+          // Keep the focused session's repository, but never carry over
+          // its worktree/branch into a fresh New Terminal sheet.
           store.send(
-            .openNewTerminalSheetInheritingFrom(
+            .openNewTerminalSheetFromSession(
               id: session.id,
               repositories: Array(repositories)
             )
@@ -231,6 +229,16 @@ struct BoardRootView: View {
             )
           )
         },
+        onRestoreShellLayout: (session.agent == nil && !session.isRemote)
+          ? {
+            store.send(
+              .restoreShellSessionLayout(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
         onResume: (session.agent != nil && session.agentNativeSessionID != nil)
           ? {
             store.send(
@@ -426,6 +434,19 @@ struct BoardRootView: View {
     }
   }
 
+  /// Repo shown by the center toolbar status chip. We only show this
+  /// when exactly one repo is in context (single registered repo, or a
+  /// single explicit filter selection).
+  private var statusRepository: Repository? {
+    if repositories.count == 1 {
+      return repositories.first
+    }
+    guard !store.filters.showsAllRepositories else { return nil }
+    let selected = repositories.filter { store.filters.selectedRepositoryIDs.contains($0.id) }
+    guard selected.count == 1 else { return nil }
+    return selected.first
+  }
+
   private var boardContents: some View {
     BoardView(
       store: store,
@@ -454,6 +475,11 @@ struct BoardRootView: View {
           if let footprintStore {
             FootprintChip(store: footprintStore)
           }
+        }
+      }
+      ToolbarItem(placement: .principal) {
+        if let statusRepository {
+          RepoStatusChip(repository: statusRepository)
         }
       }
       // Push the + button to the far right so there's breathing room
@@ -541,7 +567,8 @@ struct BoardRootView: View {
       session: session,
       tabExists: terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID),
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
-      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID)
+      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
+      deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID)
     )
   }
 

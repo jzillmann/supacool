@@ -70,23 +70,7 @@ struct SessionCardView: View {
 
       Spacer(minLength: 0)
 
-      HStack(spacing: 6) {
-        if let repositoryName {
-          Label(repositoryName, systemImage: "folder.fill")
-            .labelStyle(.titleAndIcon)
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-        }
-        Spacer()
-        if let footprint = footprintStore?.footprint(for: session.id) {
-          footprintBadge(footprint: footprint)
-        }
-        Text(relativeTimestamp)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .monospacedDigit()
-      }
+      footer
     }
     .padding(14)
     .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
@@ -264,6 +248,35 @@ struct SessionCardView: View {
     .transition(.opacity)
   }
 
+  private var footer: some View {
+    HStack(spacing: 8) {
+      if let repositoryName {
+        Label(repositoryName, systemImage: "folder.fill")
+          .labelStyle(.titleAndIcon)
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.tail)
+          .frame(minWidth: 0, alignment: .leading)
+      }
+
+      Spacer(minLength: 8)
+
+      HStack(spacing: 8) {
+        if let footprint = footprintStore?.footprint(for: session.id) {
+          footprintBadge(footprint: footprint)
+        }
+        Text(relativeTimestamp)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .monospacedDigit()
+          .lineLimit(1)
+          .fixedSize(horizontal: true, vertical: false)
+      }
+      .layoutPriority(1)
+    }
+  }
+
   private var statusChip: some View {
     HStack(spacing: 4) {
       Image(systemName: status.systemImage)
@@ -389,17 +402,22 @@ struct SessionCardView: View {
     footprint: ProcessFootprintSnapshot.SessionFootprint
   ) -> some View {
     let tint = Self.footprintTint(for: footprint.aggregatedBytes)
-    HStack(spacing: 2) {
+    HStack(spacing: 4) {
       Image(systemName: "memorychip")
         .font(.caption2)
+        .accessibilityHidden(true)
       Text(FootprintChip.formatBytes(footprint.aggregatedBytes))
         .font(.caption2.monospacedDigit())
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
     .foregroundStyle(tint)
-    .padding(.horizontal, 5)
+    .padding(.horizontal, 6)
     .padding(.vertical, 2)
     .background(tint.opacity(0.12))
     .clipShape(Capsule())
+    .fixedSize(horizontal: true, vertical: false)
+    .accessibilityLabel("Memory footprint: \(FootprintChip.formatBytes(footprint.aggregatedBytes))")
     .help(footprintHelp(footprint))
   }
 

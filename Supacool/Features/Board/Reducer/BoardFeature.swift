@@ -24,6 +24,10 @@ struct BoardFeature {
     @Shared(.remoteHosts) var remoteHosts: [RemoteHost] = []
     @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace] = []
     @Shared(.bookmarks) var bookmarks: [Bookmark] = []
+    /// Half-finished "new terminal" prompts. Surfaced as a slim row at
+    /// the top of the board; tap reopens the sheet pre-filled, launching
+    /// from the sheet consumes the draft.
+    @Shared(.drafts) var drafts: [Draft] = []
     /// Cards the user removed in the last 3 days. The sweeper at app
     /// launch nukes everything older; restore moves an entry back to
     /// `sessions`. Persisted so quitting + relaunching doesn't lose
@@ -246,17 +250,18 @@ struct BoardFeature {
 
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
-    /// Opens the new-terminal sheet with workspace / repo fields pre-filled
-    /// from a focused session's current context. Intended for the ⌘N /
-    /// "new terminal" affordance inside FullScreenTerminalView — so a
-    /// second terminal opened from a session that has converted to a
-    /// worktree lands in the same worktree, not back at the default.
-    case openNewTerminalSheetInheritingFrom(
+    /// Opens the new-terminal sheet from a focused session, keeping only
+    /// the repository preference. Workspace/branch fields intentionally
+    /// start blank so the dialog never reuses the previous worktree.
+    case openNewTerminalSheetFromSession(
       id: AgentSession.ID,
       repositories: [Repository]
     )
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    /// Raw-shell sessions have no agent-native resume. This reopens the
+    /// saved terminal split layout/folders under the same session tab ID.
+    case restoreShellSessionLayout(id: AgentSession.ID, repositories: [Repository])
     /// Fallback resume path: no captured id, so we launch the agent's own
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
@@ -320,6 +325,15 @@ struct BoardFeature {
     case _bookmarkSpawnCompleted(session: AgentSession)
     /// Internal failure callback — surfaces as a transient tray card.
     case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, message: String)
+
+    // MARK: Drafts
+    /// Tap on a draft pill: reopens the New Terminal sheet pre-filled
+    /// with the draft's contents. Save Draft inside the sheet updates
+    /// in-place; Create consumes the draft via `.draftConsumed`.
+    case draftTapped(id: Draft.ID, repositories: [Repository])
+    /// Right-click → Delete. No confirmation — re-typing the prompt is
+    /// cheap, and undo via the trash sheet would be over-engineering.
+    case draftDeleteRequested(id: Draft.ID)
 
     // MARK: Debug session
     /// Right-click → "Debug session…" on a card. Opens the debug sheet
@@ -477,6 +491,7 @@ struct BoardFeature {
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
+  @Dependency(PiSettingsClient.self) var piSettingsClient
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
@@ -801,22 +816,16 @@ struct BoardFeature {
         )
         return .none
 
-      case .openNewTerminalSheetInheritingFrom(let id, let repositories):
-        let available = IdentifiedArray(uniqueElements: repositories)
-        if let session = state.sessions.first(where: { $0.id == id }) {
-          state.newTerminalSheet = NewTerminalFeature.State(
-            availableRepositories: available,
-            inheritingFrom: session
+      case .openNewTerminalSheetFromSession(let id, let repositories):
+        let preferredRepositoryID = state.sessions.first(where: { $0.id == id })?.repositoryID
+          ?? filteredPreferredRepositoryID(
+            in: repositories,
+            filters: state.filters
           )
-        } else {
-          state.newTerminalSheet = NewTerminalFeature.State(
-            availableRepositories: available,
-            preferredRepositoryID: filteredPreferredRepositoryID(
-              in: repositories,
-              filters: state.filters
-            )
-          )
-        }
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          preferredRepositoryID: preferredRepositoryID
+        )
         return .none
 
       case .bookmarkTapped(let id, let repositories):
@@ -904,6 +913,21 @@ struct BoardFeature {
         boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
 
+      case .draftTapped(let id, let repositories):
+        guard let draft = state.drafts.first(where: { $0.id == id }) else {
+          return .none
+        }
+        let available = IdentifiedArray(uniqueElements: repositories)
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: available,
+          resuming: draft
+        )
+        return .none
+
+      case .draftDeleteRequested(let id):
+        state.$drafts.withLock { $0.removeAll { $0.id == id } }
+        return .none
+
       case .resumeDetachedSession(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -950,7 +974,14 @@ struct BoardFeature {
         }
         state.focusedSessionID = id
         let command = resumeCommand + "\r"
-        return .run { _ in
+        return .run { [terminalClient, piSettingsClient, agent] _ in
+          if agent.id == "pi" {
+            do {
+              try await piSettingsClient.install()
+            } catch {
+              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+            }
+          }
           await terminalClient.send(
             .createTabWithInput(
               worktree,
@@ -993,7 +1024,14 @@ struct BoardFeature {
         }
         state.focusedSessionID = id
         let command = pickerCommand + "\r"
-        return .run { _ in
+        return .run { [terminalClient, piSettingsClient, agent] _ in
+          if agent.id == "pi" {
+            do {
+              try await piSettingsClient.install()
+            } catch {
+              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+            }
+          }
           await terminalClient.send(
             .createTabWithInput(
               worktree,
@@ -1001,6 +1039,38 @@ struct BoardFeature {
               runSetupScriptIfNew: false,
               id: id
             )
+          )
+        }
+
+      case .restoreShellSessionLayout(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard session.agent == nil, !session.isRemote else {
+          return .send(
+            .resumeFailed(id: id, message: "Only local shell sessions can restore a shell layout.")
+          )
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
+        }
+        let now = date.now
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].lastKnownBusy = false
+          sessions[index].lastBusyTransitionAt = nil
+          sessions[index].lastActivityAt = now
+          sessions[index].parked = false
+        }
+        state.focusedSessionID = id
+        TranscriptRecorder.shared.append(
+          event: .sessionLifecycle(kind: "restored-shell-layout", context: nil, at: now),
+          tabID: TerminalTabID(rawValue: id)
+        )
+        let worktree = Self.shellRestoreWorktree(for: session, repository: repository)
+        return .run { _ in
+          await terminalClient.send(
+            .restoreShellLayout(worktree, tabID: TerminalTabID(rawValue: id))
           )
         }
 
@@ -1385,6 +1455,30 @@ struct BoardFeature {
         }
         return .none
 
+      case .newTerminalSheet(.presented(.delegate(.draftSaved(let draft)))):
+        // Upsert by id: reopened drafts preserve their id so a second
+        // Save Draft replaces in place rather than fanning out duplicates.
+        state.$drafts.withLock { drafts in
+          if let index = drafts.firstIndex(where: { $0.id == draft.id }) {
+            drafts[index] = draft
+          } else {
+            drafts.append(draft)
+          }
+        }
+        // Sheet stays open after a normal save? No — Save Draft is the
+        // user signalling "park this and get out of the way." Mirror
+        // the Cancel path: dismiss the sheet.
+        state.newTerminalSheet = nil
+        state.pendingRerunSessionID = nil
+        return .none
+
+      case .newTerminalSheet(.presented(.delegate(.draftConsumed(let id)))):
+        // Launching a draft "uses it up." Fires before `.created` /
+        // `.spawnRequested` so the pill disappears from the board the
+        // moment the new session card materializes.
+        state.$drafts.withLock { $0.removeAll { $0.id == id } }
+        return .none
+
       case .newTerminalSheet(.presented(.delegate(.cancel))):
         state.newTerminalSheet = nil
         // Cancelled / dismissed without creating — keep the original.
@@ -1731,7 +1825,7 @@ struct BoardFeature {
         state.debugSheet = sheetState
         return .none
 
-      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let source)))):
+      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let agent, let source)))):
         let repositories = state.pendingDebugRepositories
         guard let supacoolRepo = SupacoolDebugSupport.findSupacoolRepository(in: repositories) else {
           // Race-guard: user dismissed the picker without registering,
@@ -1761,7 +1855,7 @@ struct BoardFeature {
           sessionID: uuid(),
           repository: supacoolRepo,
           selection: .newBranch(name: worktreeName),
-          agent: .claude,
+          agent: agent,
           prompt: prompt,
           planMode: false,
           bypassPermissions: bypass,
@@ -1921,6 +2015,20 @@ struct BoardFeature {
       return resumeCommand
     }
     return agent.command(prompt: session.initialPrompt, bypassPermissions: bypass)
+  }
+
+  fileprivate static func shellRestoreWorktree(
+    for session: AgentSession,
+    repository: Repository
+  ) -> Worktree {
+    let workingDirectory = URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
+    return Worktree(
+      id: session.worktreeID,
+      name: workingDirectory.lastPathComponent,
+      detail: "",
+      workingDirectory: workingDirectory,
+      repositoryRootURL: repository.rootURL.standardizedFileURL
+    )
   }
 
   fileprivate static func resumeWorktree(

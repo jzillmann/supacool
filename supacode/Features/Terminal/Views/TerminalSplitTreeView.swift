@@ -14,7 +14,7 @@ struct TerminalSplitTreeView: View {
   let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
   let action: (Operation) -> Void
 
-  private static let dragType = UTType(exportedAs: "app.morethan.supacool.ghosttySurfaceId")
+  private static let dragType = UTType(exportedAs: "io.morethan.supacool.ghosttySurfaceId")
   private static func dragProvider(for surfaceView: GhosttySurfaceView) -> NSItemProvider {
     let provider = NSItemProvider()
     let data = surfaceView.id.uuidString.data(using: .utf8) ?? Data()
