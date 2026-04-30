@@ -165,8 +165,8 @@ enum SessionSpawner {
       // Pre-flight: try to fast-forward the repo root to origin/<default>
       // before we hand the terminal to the user. Supacool's model is that
       // users don't modify the root directly — worktrees are where work
-      // happens — so "on investigate, put me on latest main" is the
-      // expected behavior. Conservative guards in the client; failure
+      // happens — so the Main scope keeps the repo root on latest main.
+      // Conservative guards in the client; failure
       // never blocks the spawn.
       let syncOutcome = await repoSyncClient.syncIfSafe(repository.rootURL)
       sessionSpawnerLogger.info(

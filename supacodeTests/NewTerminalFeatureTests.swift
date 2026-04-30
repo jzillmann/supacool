@@ -104,7 +104,7 @@ struct NewTerminalFeatureTests {
 
   @Test(.dependencies) func workspaceQueryRoundTripKeepsWorktreeIntent() async {
     // Regression for "click Worktree → click Workspace field → picker
-    // reverts to Investigate". The user explicitly chose a worktree
+    // reverts to Main". The user explicitly chose a worktree
     // selection; re-binding the empty query must keep the `.newBranch`
     // intent (pending name) instead of flipping back to `.repoRoot`.
     var state = Self.makeState()

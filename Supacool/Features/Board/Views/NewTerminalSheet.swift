@@ -469,16 +469,16 @@ struct NewTerminalSheet: View {
   }
 
   /// Two-segment picker that mirrors the Agent picker's visual style.
-  /// "Investigate" runs the agent at the repo root (read-only intent);
+  /// "Main" runs the agent at the repo root (read-only intent);
   /// "Worktree" reveals the branch field below where the user picks or
   /// creates a branch to check out into a fresh worktree.
   private var worktreeModePicker: some View {
     Picker(selection: useWorktreeBinding) {
-      Text("Investigate").tag(false)
+      Text("Main").tag(false)
       Text("Worktree").tag(true)
     } label: {
       Text("Scope")
-      Text("Investigate at repo root, or work on a branch in a worktree.")
+      Text("Main runs at repo root, or work on a branch in a worktree.")
     }
     .pickerStyle(.segmented)
   }

@@ -444,11 +444,11 @@ struct NewTerminalFeature {
           state.workspaceQuery = state.workspaceQuery.replacing(/\s+/, with: "-")
         }
         // An empty query used to flip the selection back to `.repoRoot`,
-        // which fought the new explicit Investigate/Worktree segmented
-        // picker: the user would click Worktree, focus the Workspace
-        // field (which re-emits the binding via @Bindable's round-trip),
-        // and watch the picker snap back to Investigate on an empty
-        // round-trip. While the user has explicitly chosen a worktree
+        // which fought the new explicit Main/Worktree segmented picker:
+        // the user would click Worktree, focus the Workspace field (which
+        // re-emits the binding via @Bindable's round-trip), and watch the
+        // picker snap back to Main on an empty round-trip. While the user
+        // has explicitly chosen a worktree
         // selection, keep it — just blank the branch name in the
         // `.newBranch` case so the field stays in "pending name" mode
         // rather than reverting intent.
