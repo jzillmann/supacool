@@ -23,6 +23,11 @@ struct DebugSessionFeature {
     /// its root. When false, the view drops the editor and Spawn
     /// button entirely and shows a "register supacool first" panel.
     var isSupacoolRepoRegistered: Bool = true
+    /// Agent to spawn for the debug session. Defaults to Claude — it has
+    /// the strongest tool surface for the read-trace + propose-fix flow,
+    /// and matches what early debug sessions shipped with. Picker in the
+    /// sheet lets the user override (pi / codex / user-defined).
+    var agent: AgentType = .claude
     var observation: String = ""
     /// Inline error shown below the editor for transient validation
     /// (empty observation, etc.). Cleared on next edit.
@@ -38,7 +43,7 @@ struct DebugSessionFeature {
 
     @CasePathable
     enum Delegate: Equatable {
-      case spawnRequested(observation: String, sourceSession: AgentSession)
+      case spawnRequested(observation: String, agent: AgentType, sourceSession: AgentSession)
       case registerSupacoolRequested
       case cancelled
     }
@@ -61,7 +66,13 @@ struct DebugSessionFeature {
           return .none
         }
         return .send(
-          .delegate(.spawnRequested(observation: trimmed, sourceSession: state.sourceSession))
+          .delegate(
+            .spawnRequested(
+              observation: trimmed,
+              agent: state.agent,
+              sourceSession: state.sourceSession
+            )
+          )
         )
 
       case .cancelTapped:

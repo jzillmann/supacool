@@ -1825,7 +1825,7 @@ struct BoardFeature {
         state.debugSheet = sheetState
         return .none
 
-      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let source)))):
+      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let agent, let source)))):
         let repositories = state.pendingDebugRepositories
         guard let supacoolRepo = SupacoolDebugSupport.findSupacoolRepository(in: repositories) else {
           // Race-guard: user dismissed the picker without registering,
@@ -1855,7 +1855,7 @@ struct BoardFeature {
           sessionID: uuid(),
           repository: supacoolRepo,
           selection: .newBranch(name: worktreeName),
-          agent: .claude,
+          agent: agent,
           prompt: prompt,
           planMode: false,
           bypassPermissions: bypass,
