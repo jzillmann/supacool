@@ -567,7 +567,8 @@ struct BoardRootView: View {
       session: session,
       tabExists: terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID),
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
-      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID)
+      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
+      deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID)
     )
   }
 

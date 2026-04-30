@@ -16,6 +16,19 @@ struct BoardSessionStatusTests {
     #expect(status == .inProgress)
   }
 
+  @Test func deferredWorkSessionStaysInProgress() {
+    let session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: false)
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      deferredWork: true,
+      now: Date(timeIntervalSinceReferenceDate: 100)
+    )
+    #expect(status == .inProgress)
+  }
+
   @Test func recentBusyToIdleTransitionStaysInProgressBriefly() {
     let now = Date(timeIntervalSinceReferenceDate: 100)
     let session = sampleSession(
