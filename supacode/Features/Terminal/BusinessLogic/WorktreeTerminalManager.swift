@@ -1086,44 +1086,59 @@ final class WorktreeTerminalManager {
     }
   }
 
-  private func sampleAwaitingInputPromptScreens() {
+  // The poll runs on @MainActor (this class is @MainActor) so every tab's
+  // readScreenContents call is serialized on the same thread that drives
+  // the UI. With many surfaces (especially leaked / dead-shell ones)
+  // accumulated, scanning them all in one tick can saturate the main
+  // thread long enough to feel like a freeze. `await Task.yield()`
+  // between tabs lets queued main-thread work (input handling, layout,
+  // animation ticks) interleave instead of waiting for the entire scan.
+  private func sampleAwaitingInputPromptScreens() async {
     tickAgentPIDSweepIfNeeded()
     var openTabIDs = Set<UUID>()
 
-    for (worktreeID, state) in states {
-      for tab in state.tabManager.tabs {
-        let tabID = tab.id.rawValue
-        openTabIDs.insert(tabID)
+    // Snapshot the tab list up-front so the iteration is stable across
+    // yields — tabs added or removed mid-scan get picked up next tick.
+    let snapshot: [(Worktree.ID, TerminalTabID)] = states.flatMap { worktreeID, state in
+      state.tabManager.tabs.map { (worktreeID, $0.id) }
+    }
 
-        guard let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tab.id),
-          Self.isAwaitingInputPromptScreen(fingerprint)
-        else {
-          awaitingInputPromptCandidates.removeValue(forKey: tabID)
-          continue
-        }
+    for (worktreeID, tabID) in snapshot {
+      let rawTabID = tabID.rawValue
+      openTabIDs.insert(rawTabID)
 
-        var candidate: AwaitingInputPromptCandidate
-        if var existing = awaitingInputPromptCandidates[tabID] {
-          if existing.fingerprint == fingerprint {
-            existing.stableSampleCount += 1
-          } else {
-            existing = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
-          }
-          candidate = existing
+      guard let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tabID),
+        Self.isAwaitingInputPromptScreen(fingerprint)
+      else {
+        awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
+        await Task.yield()
+        continue
+      }
+
+      var candidate: AwaitingInputPromptCandidate
+      if var existing = awaitingInputPromptCandidates[rawTabID] {
+        if existing.fingerprint == fingerprint {
+          existing.stableSampleCount += 1
         } else {
-          candidate = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
+          existing = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
         }
+        candidate = existing
+      } else {
+        candidate = AwaitingInputPromptCandidate(worktreeID: worktreeID, fingerprint: fingerprint)
+      }
 
-        awaitingInputPromptCandidates[tabID] = candidate
+      awaitingInputPromptCandidates[rawTabID] = candidate
 
-        guard candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples else { continue }
+      if candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples {
         markAwaitingInputSignal(
           worktreeID: candidate.worktreeID,
-          tabID: tabID,
+          tabID: rawTabID,
           fingerprint: fingerprint,
           source: "screen-fallback"
         )
       }
+
+      await Task.yield()
     }
 
     cleanupAwaitingInputTracking(closedTabIDs: Set(awaitingInputByTab.keys).subtracting(openTabIDs))
