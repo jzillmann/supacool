@@ -164,6 +164,29 @@ struct BoardView: View {
       let parked = visible.filter { classify($0) == .parked }
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
+          // Drafts row sits ABOVE bookmarks. Always rendered when there's
+          // at least one draft, regardless of the repo filter — drafts
+          // are user inbox-state, not project-scoped artefacts; hiding
+          // them on a filter switch would be the most reliable way to
+          // forget about them.
+          let visibleDrafts = store.drafts
+          if !visibleDrafts.isEmpty {
+            DraftPillRow(
+              drafts: visibleDrafts,
+              repoLabelByID: draftRepoLabels,
+              onTap: { draft in
+                store.send(
+                  .draftTapped(
+                    id: draft.id,
+                    repositories: Array(repositories)
+                  )
+                )
+              },
+              onDelete: { draft in
+                store.send(.draftDeleteRequested(id: draft.id))
+              }
+            )
+          }
           // Bookmark pills render above "Waiting on Me" when a specific
           // repo is selected (not "All repos") and that repo has at
           // least one saved bookmark. Off-filter → hidden entirely so
@@ -245,6 +268,17 @@ struct BoardView: View {
       repositories[id: $0.repositoryID] != nil
         && store.filters.includes(repositoryID: $0.repositoryID)
     }
+  }
+
+  /// Repository name lookup for the draft pill's trailing repo hint.
+  /// Skips drafts whose repo was unregistered after save (the pill
+  /// renders without a label rather than showing a stale name).
+  private var draftRepoLabels: [String: String] {
+    var result: [String: String] = [:]
+    for repository in repositories {
+      result[repository.id] = repository.name
+    }
+    return result
   }
 
   private var emptyState: some View {

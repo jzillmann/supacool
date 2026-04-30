@@ -152,6 +152,17 @@ struct NewTerminalFeature {
     /// in-place rather than appending a duplicate.
     var editingBookmarkID: Bookmark.ID?
 
+    // MARK: - Drafts
+
+    /// Non-nil when the sheet was opened from a saved Draft. Two effects:
+    /// - `Save Draft` updates the same draft in-place (preserves the ID).
+    /// - On successful Create the sheet emits `.draftConsumed(id)` so
+    ///   BoardFeature drops the draft from `$drafts` — launching a draft
+    ///   "uses it up", matching the inbox-style mental model. To convert
+    ///   a draft into a recurring template the user saves a Bookmark
+    ///   instead.
+    var editingDraftID: Draft.ID?
+
     // MARK: - PR URL flow
 
     /// State of the "paste a PR URL into the prompt to pre-configure the
@@ -284,6 +295,36 @@ struct NewTerminalFeature {
       }
     }
 
+    /// Constructor for "resume a saved draft": pre-fills the sheet from a
+    /// `Draft` and pins `editingDraftID` so Save Draft updates in-place
+    /// and Create consumes the draft. Workspace selection is re-inferred
+    /// against the *current* branch list inside `.task` once branches
+    /// load — we only seed `workspaceQuery` here.
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      resuming draft: Draft
+    ) {
+      self.availableRepositories = availableRepositories
+      let resolvedRepoID =
+        draft.repositoryID.flatMap { availableRepositories[id: $0]?.id }
+        ?? availableRepositories.first?.id
+      selectedRepositoryID = resolvedRepoID
+      prompt = draft.prompt
+      agent = draft.agent
+      planMode = draft.planMode
+      workspaceQuery = draft.workspaceQuery
+      // Initial best-effort selection inference. The branches list is
+      // empty at init time so anything non-empty falls into `.newBranch`,
+      // but `branchesLoaded` re-runs inference once the actual branches
+      // arrive — at which point an existing-branch / existing-worktree
+      // match takes over.
+      let trimmed = workspaceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty {
+        selectedWorkspace = .newBranch(name: trimmed)
+      }
+      editingDraftID = draft.id
+    }
+
     /// Build the Bookmark to persist if the user opted in. Returns nil
     /// when the toggle is off, the name is blank, or there's no repo.
     /// Called from the `.sessionReady` handler so we only persist on
@@ -317,6 +358,12 @@ struct NewTerminalFeature {
     case workspaceSelected(WorkspaceSelection)
     case cancelButtonTapped
     case createButtonTapped
+    /// User tapped Save Draft — persists the current sheet state as a
+    /// `Draft` (without spawning anything) and dismisses the sheet.
+    /// Validation is intentionally minimal: we accept blank prompts,
+    /// blank workspace queries, etc. The whole point of a draft is that
+    /// the user isn't ready to commit yet.
+    case saveDraftButtonTapped
     case suggestBranchNameTapped
     case branchNameSuggested(String)
     case branchNameSuggestionFailed
@@ -360,6 +407,14 @@ struct NewTerminalFeature {
       /// BoardFeature appends to `$bookmarks` (or replaces in-place
       /// when `editingBookmarkID` is set on the bookmark).
       case bookmarkSaved(Bookmark)
+      /// User tapped Save Draft. Carries a fully-populated `Draft` (id
+      /// preserved when editing, generated when new). BoardFeature
+      /// upserts into `$drafts`.
+      case draftSaved(Draft)
+      /// Emitted alongside `.created` / `.spawnRequested` when the sheet
+      /// was originally opened from a draft. BoardFeature drops the
+      /// draft from `$drafts` — launching consumes it.
+      case draftConsumed(id: Draft.ID)
     }
   }
 
@@ -548,6 +603,27 @@ struct NewTerminalFeature {
         state.agent = agent
         return .none
 
+      case .saveDraftButtonTapped:
+        // Drafts capture the local-flow shape only. Saving from a remote
+        // destination would silently lose the host/path on resume; surface
+        // that explicitly rather than persisting a half-truthful draft.
+        if state.destination.isRemote {
+          state.validationMessage = "Drafts only support local destinations for now."
+          return .none
+        }
+        let draft = Draft(
+          id: state.editingDraftID ?? UUID(),
+          repositoryID: state.selectedRepositoryID,
+          prompt: state.prompt,
+          agent: state.agent,
+          workspaceQuery: state.workspaceQuery,
+          planMode: state.planMode,
+          createdAt: Date(),
+          updatedAt: Date()
+        )
+        state.validationMessage = nil
+        return .send(.delegate(.draftSaved(draft)))
+
       case .createButtonTapped:
         if case .repositoryRemote(let targetID) = state.destination {
           guard let target = state.availableRepositoryRemoteTargets.first(where: { $0.id == targetID }) else {
@@ -588,13 +664,15 @@ struct NewTerminalFeature {
         // the bookmark before (or independent of) spawning session
         // follow-up work, so the bookmark pill is already in state
         // when the new session card appears.
+        var effects: [Effect<Action>] = []
         if let bookmark = state.pendingBookmarkToSave(for: session) {
-          return .merge(
-            .send(.delegate(.bookmarkSaved(bookmark))),
-            .send(.delegate(.created(session)))
-          )
+          effects.append(.send(.delegate(.bookmarkSaved(bookmark))))
         }
-        return .send(.delegate(.created(session)))
+        if let draftID = state.editingDraftID {
+          effects.append(.send(.delegate(.draftConsumed(id: draftID))))
+        }
+        effects.append(.send(.delegate(.created(session))))
+        return .merge(effects)
 
       case .creationFailed(let message):
         state.isCreating = false
@@ -778,13 +856,21 @@ struct NewTerminalFeature {
       )
     }()
 
+    var effects: [Effect<Action>] = []
     if let bookmark = bookmarkToSave {
-      return .merge(
-        .send(.delegate(.bookmarkSaved(bookmark))),
-        .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
-      )
+      effects.append(.send(.delegate(.bookmarkSaved(bookmark))))
     }
-    return .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
+    if let draftID = state.editingDraftID {
+      // Launching from a draft consumes it. Sent before `.spawnRequested`
+      // so the parent removes the pill from the board before the new
+      // session card appears, avoiding a flash of "draft + spawning
+      // session" overlap.
+      effects.append(.send(.delegate(.draftConsumed(id: draftID))))
+    }
+    effects.append(
+      .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
+    )
+    return .merge(effects)
   }
 
   // MARK: - Remote create

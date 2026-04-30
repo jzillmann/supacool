@@ -149,6 +149,10 @@ struct NewTerminalSheet: View {
         Button("Cancel") { store.send(.cancelButtonTapped) }
           .keyboardShortcut(.cancelAction)
           .disabled(store.isCreating)
+        Button(saveDraftButtonTitle) { store.send(.saveDraftButtonTapped) }
+          .keyboardShortcut(.return, modifiers: [.option])
+          .disabled(store.isCreating)
+          .help(saveDraftButtonHelp)
         Button("Create") { store.send(.createButtonTapped) }
           .keyboardShortcut(.defaultAction)
           .disabled(store.isCreating)
@@ -296,6 +300,17 @@ struct NewTerminalSheet: View {
     case .existingWorktree, .repoRoot:
       return "Starting terminal…"
     }
+  }
+
+  /// "Update Draft" when reopened from an existing draft, "Save Draft"
+  /// otherwise. Same shortcut (⌥↵) either way — the verb just shifts so
+  /// the user knows whether they're spawning a new pill or updating one.
+  private var saveDraftButtonTitle: String {
+    store.editingDraftID == nil ? "Save Draft" : "Update Draft"
+  }
+
+  private var saveDraftButtonHelp: String {
+    "Park this prompt as a draft on the board (⌥↵). Doesn't start a session."
   }
 
   /// Segmented picker that flips between a local repo-backed session and

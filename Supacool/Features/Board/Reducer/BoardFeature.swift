@@ -24,6 +24,10 @@ struct BoardFeature {
     @Shared(.remoteHosts) var remoteHosts: [RemoteHost] = []
     @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace] = []
     @Shared(.bookmarks) var bookmarks: [Bookmark] = []
+    /// Half-finished "new terminal" prompts. Surfaced as a slim row at
+    /// the top of the board; tap reopens the sheet pre-filled, launching
+    /// from the sheet consumes the draft.
+    @Shared(.drafts) var drafts: [Draft] = []
     /// Cards the user removed in the last 3 days. The sweeper at app
     /// launch nukes everything older; restore moves an entry back to
     /// `sessions`. Persisted so quitting + relaunching doesn't lose
@@ -321,6 +325,15 @@ struct BoardFeature {
     case _bookmarkSpawnCompleted(session: AgentSession)
     /// Internal failure callback — surfaces as a transient tray card.
     case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, message: String)
+
+    // MARK: Drafts
+    /// Tap on a draft pill: reopens the New Terminal sheet pre-filled
+    /// with the draft's contents. Save Draft inside the sheet updates
+    /// in-place; Create consumes the draft via `.draftConsumed`.
+    case draftTapped(id: Draft.ID, repositories: [Repository])
+    /// Right-click → Delete. No confirmation — re-typing the prompt is
+    /// cheap, and undo via the trash sheet would be over-engineering.
+    case draftDeleteRequested(id: Draft.ID)
 
     // MARK: Debug session
     /// Right-click → "Debug session…" on a card. Opens the debug sheet
@@ -900,6 +913,21 @@ struct BoardFeature {
         boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
 
+      case .draftTapped(let id, let repositories):
+        guard let draft = state.drafts.first(where: { $0.id == id }) else {
+          return .none
+        }
+        let available = IdentifiedArray(uniqueElements: repositories)
+        state.newTerminalSheet = NewTerminalFeature.State(
+          availableRepositories: available,
+          resuming: draft
+        )
+        return .none
+
+      case .draftDeleteRequested(let id):
+        state.$drafts.withLock { $0.removeAll { $0.id == id } }
+        return .none
+
       case .resumeDetachedSession(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -1425,6 +1453,30 @@ struct BoardFeature {
             bookmarks.append(bookmark)
           }
         }
+        return .none
+
+      case .newTerminalSheet(.presented(.delegate(.draftSaved(let draft)))):
+        // Upsert by id: reopened drafts preserve their id so a second
+        // Save Draft replaces in place rather than fanning out duplicates.
+        state.$drafts.withLock { drafts in
+          if let index = drafts.firstIndex(where: { $0.id == draft.id }) {
+            drafts[index] = draft
+          } else {
+            drafts.append(draft)
+          }
+        }
+        // Sheet stays open after a normal save? No — Save Draft is the
+        // user signalling "park this and get out of the way." Mirror
+        // the Cancel path: dismiss the sheet.
+        state.newTerminalSheet = nil
+        state.pendingRerunSessionID = nil
+        return .none
+
+      case .newTerminalSheet(.presented(.delegate(.draftConsumed(let id)))):
+        // Launching a draft "uses it up." Fires before `.created` /
+        // `.spawnRequested` so the pill disappears from the board the
+        // moment the new session card materializes.
+        state.$drafts.withLock { $0.removeAll { $0.id == id } }
         return .none
 
       case .newTerminalSheet(.presented(.delegate(.cancel))):
