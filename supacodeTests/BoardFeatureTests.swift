@@ -590,6 +590,21 @@ struct BoardFeatureTests {
     }
   }
 
+  @Test(.dependencies) func focusRepositoryReplacesFilterWithSingleRepo() async {
+    var state = BoardFeature.State()
+    state.$filters.withLock {
+      $0.selectedRepositoryIDs = ["/tmp/a", "/tmp/b"]
+    }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/c")) {
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/c"] }
+    }
+  }
+
   // MARK: - Visibility query
 
   @Test(.dependencies) func visibleSessionsFiltersByRepo() {

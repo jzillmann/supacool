@@ -242,6 +242,7 @@ struct BoardFeature {
 
     // MARK: Repo filter
     case toggleRepository(id: String)
+    case focusRepository(id: String)
     case showAllRepositories
 
     // MARK: New-terminal sheet
@@ -785,6 +786,10 @@ struct BoardFeature {
             filters.selectedRepositoryIDs.insert(repositoryID)
           }
         }
+        return .none
+
+      case .focusRepository(let repositoryID):
+        state.$filters.withLock { $0.selectedRepositoryIDs = [repositoryID] }
         return .none
 
       case .showAllRepositories:

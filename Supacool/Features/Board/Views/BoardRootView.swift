@@ -447,6 +447,7 @@ struct BoardRootView: View {
             repositories: repositories,
             filters: store.filters,
             onToggleRepository: { store.send(.toggleRepository(id: $0)) },
+            onFocusRepository: { store.send(.focusRepository(id: $0)) },
             onShowAll: { store.send(.showAllRepositories) },
             onAddRepository: onAddRepository,
             onConfigureRepositories: onConfigureRepositories
