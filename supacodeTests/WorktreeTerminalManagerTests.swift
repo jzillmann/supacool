@@ -295,6 +295,124 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  @Test func awaitingInputPromptScreenRecognizesCodexPermissionPrompt() {
+    // Codex's PermissionRequest UI — the `activity-resumed` heuristic
+    // uses `isAwaitingInputPromptScreen` to tell "prompt just finished
+    // rendering after the hook fired" from "user moved on", so the
+    // matcher must recognize the codex prompt shape, not just
+    // claude's.
+    let codexScreen = """
+      Would you like to run the following command?
+
+      Reason: build the app outside the sandbox
+
+      |> make build-app
+
+      1. Yes, proceed (y)
+      2. Yes, and don't ask again for commands that start with `make build-app` (a)
+      3. No, and tell Codex what to do differently (esc)
+
+      Press enter to confirm or esc to cancel
+      """
+    #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(codexScreen))
+  }
+
+  @Test func awaitingInputSurvivesLatePromptRenderForCodex() async {
+    // Regression: codex fires `PermissionRequest` before its prompt
+    // UI has finished painting. The fingerprint at hook time is the
+    // pre-prompt preamble; the next activity-poll sees the full
+    // "Would you like to run …" block. Without the prompt-shape
+    // guard the activity-poll misreads "prompt just rendered" as
+    // "user moved on" and clears the chip ~2s after the hook.
+    //
+    // Driver leaves the initial screen empty so the screen-fallback
+    // promotion path doesn't independently re-mark the awaiting
+    // state — we want this test to exercise the activity-poll
+    // re-baseline guard in isolation.
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let screenContents = LockIsolated("Running make build-app\n…")
+        let server = AgentHookSocketServer()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+
+        guard let state = manager.stateIfExists(for: worktree.id),
+          let tabId = state.tabManager.selectedTabId,
+          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
+        else {
+          Issue.record("Expected blocking script tab and surface")
+          return
+        }
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          surface.id,
+          AgentHookNotification(
+            agent: "codex",
+            event: "PermissionRequest",
+            title: nil,
+            body: "make build-app",
+            sessionID: nil
+          )
+        )
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // Codex finishes rendering the prompt. Fingerprint diverges,
+        // but the new screen still matches a known prompt shape — so
+        // the activity-poll must re-baseline rather than clear.
+        screenContents.setValue(
+          """
+          Would you like to run the following command?
+
+          Reason: build the app
+
+          |> make build-app
+
+          1. Yes, proceed (y)
+          2. Yes, and don't ask again for commands that start with `make build-app` (a)
+          3. No, and tell Codex what to do differently (esc)
+
+          Press enter to confirm or esc to cancel
+          """
+        )
+
+        await clock.advance(by: .seconds(1))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // Surface stays on the prompt — chip must remain.
+        await clock.advance(by: .seconds(2))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // User answers — surface no longer looks like a prompt; the
+        // activity-poll's existing clear path takes over.
+        screenContents.setValue("Approved. Running make build-app...\nbuilding…")
+
+        await clock.advance(by: .seconds(1))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   @Test func awaitingInputClearsWhenTerminalOutputResumes() async {
     await withMainSerialExecutor {
       await withDependencies {
