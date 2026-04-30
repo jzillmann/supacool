@@ -59,7 +59,7 @@ struct FullScreenTerminalView: View {
   let onAutoObserverRunNow: () -> Void
 
   /// The macOS app opened when the user clicks the diff button. Swap via
-  /// `defaults write app.morethan.supacool supacool.gitGuiApp Tower`
+  /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
   @AppStorage("supacool.gitGuiApp") private var gitGuiApp: String = "Fork"
 

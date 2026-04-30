@@ -78,7 +78,7 @@ Other things that changed (update any personal scripts / shortcuts):
 | `~/.supacode/` | `~/.supacool/` |
 | `supacode.json` per-repo settings | `supacool.json` |
 
-The app bundle is `Supacool.app` with executable `Contents/MacOS/Supacool` and bundle ID `app.morethan.supacool`. Source directories on disk are still named `supacode/` and `supacodeTests/` — deliberate historical markers for code originally derived from the upstream fork — but the Xcode project (`supacool.xcodeproj`), scheme, and targets (`supacool`, `supacoolTests`) are all renamed.
+The app bundle is `Supacool.app` with executable `Contents/MacOS/Supacool` and bundle ID `io.morethan.supacool`. Source directories on disk are still named `supacode/` and `supacodeTests/` — deliberate historical markers for code originally derived from the upstream fork — but the Xcode project (`supacool.xcodeproj`), scheme, and targets (`supacool`, `supacoolTests`) are all renamed.
 
 ## Testing the update flow locally
 
@@ -93,7 +93,7 @@ The app bundle is `Supacool.app` with executable `Contents/MacOS/Supacool` and b
    ```
 2. Launch the installed build from `/Applications/Supacool.app` and trigger **Supacool → Check for Updates** (or wait — `SUEnableAutomaticChecks` is on).
 3. Sparkle should fetch the appcast, verify against `SUPublicEDKey`, and offer the newer release.
-4. Check `Console.app` with the subsystem filter `app.morethan.supacool` (or `make log-stream`) for Sparkle logs if the update is rejected.
+4. Check `Console.app` with the subsystem filter `io.morethan.supacool` (or `make log-stream`) for Sparkle logs if the update is rejected.
 
 ## Release-flow cheat sheet
 

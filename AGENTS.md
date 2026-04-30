@@ -81,7 +81,7 @@ If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to mi
 - Session persistence across relaunches; detached vs interrupted state; Rerun (fresh) and Resume (with captured agent session id) affordances.
 - New Terminal sheet: prompt, agent (Claude/Codex), repo picker, optional worktree creation.
 - Forward-compatible Codable on all persisted types.
-- App icon, bundle identity (`app.morethan.supacool`, display name "Supacool"), Metal-free ghostty build.
+- App icon, bundle identity (`io.morethan.supacool`, display name "Supacool"), Metal-free ghostty build.
 
 **Out of scope** (deliberately — see [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md)):
 - Workflow engine / autonomous orchestration. The earlier forgn+forgin merger idea is parked.

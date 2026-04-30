@@ -46,7 +46,7 @@ xcodebuild -downloadComponent MetalToolchain
 - Xcode project: `supacool.xcodeproj`. Targets: `supacool` (app) and `supacoolTests` (tests).
 - `PRODUCT_NAME = Supacool` → built bundle is `Supacool.app`, executable `Contents/MacOS/Supacool`.
 - `CFBundleDisplayName`, `CFBundleName`: `Supacool`.
-- `CFBundleIdentifier`: `app.morethan.supacool` — distinct from upstream `supabitapp/supacode`'s bundle ID so both can coexist on the same machine.
+- `CFBundleIdentifier`: `io.morethan.supacool` — distinct from upstream `supabitapp/supacode`'s bundle ID so both can coexist on the same machine.
 - **Source directories on disk** are still named `supacode/` and `supacodeTests/` — kept deliberately as historical markers for code originally derived from the fork. File-path references in docs and build settings (`supacode/Info.plist`, `supacode/supacool.entitlements`) use these legacy names.
 
 ## App icon regeneration
@@ -98,10 +98,10 @@ Test bundle flakiness: the upstream `AppFeatureCommandPaletteTests`, `WorktreeTe
 ## Logs
 
 ```bash
-make log-stream   # streams app.morethan.supacool subsystem
+make log-stream   # streams io.morethan.supacool subsystem
 ```
 
-Uses `log stream --predicate 'subsystem == "app.morethan.supacool"'`. If you see nothing, check that the running app's bundle ID actually is `app.morethan.supacool` (via `plutil -p <path>/Contents/Info.plist | grep Identifier`).
+Uses `log stream --predicate 'subsystem == "io.morethan.supacool"'`. If you see nothing, check that the running app's bundle ID actually is `io.morethan.supacool` (via `plutil -p <path>/Contents/Info.plist | grep Identifier`).
 
 ## Clean rebuild
 

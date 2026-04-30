@@ -8,7 +8,7 @@ private nonisolated let recorderLogger = SupaLogger("Supacool.TranscriptRecorder
 /// actor never blocks on disk.
 ///
 /// Storage: one JSONL file per session at
-/// `~/Library/Application Support/app.morethan.supacool/transcripts/<tab-uuid>.jsonl`.
+/// `~/Library/Application Support/io.morethan.supacool/transcripts/<tab-uuid>.jsonl`.
 /// One line = one `TranscriptEntry`. Append-only; rotation is a future concern.
 ///
 /// This recorder is deliberately ignorant of agent type. For Claude sessions
@@ -24,7 +24,7 @@ final class TranscriptRecorder {
   static let shared = TranscriptRecorder()
 
   private let fileManager = FileManager.default
-  private let writeQueue = DispatchQueue(label: "app.morethan.supacool.transcript", qos: .utility)
+  private let writeQueue = DispatchQueue(label: "io.morethan.supacool.transcript", qos: .utility)
   private let encoder: JSONEncoder = {
     let e = JSONEncoder()
     e.dateEncodingStrategy = .iso8601
@@ -50,7 +50,7 @@ final class TranscriptRecorder {
       return nil
     }
     let dir = base
-      .appending(path: "app.morethan.supacool", directoryHint: .isDirectory)
+      .appending(path: "io.morethan.supacool", directoryHint: .isDirectory)
       .appending(path: "transcripts", directoryHint: .isDirectory)
     do {
       try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)

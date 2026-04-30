@@ -34,7 +34,7 @@ nonisolated enum TranscriptReader {
     else { return nil }
     return
       base
-      .appending(path: "app.morethan.supacool", directoryHint: .isDirectory)
+      .appending(path: "io.morethan.supacool", directoryHint: .isDirectory)
       .appending(path: "transcripts", directoryHint: .isDirectory)
       .appending(path: "\(tabID.rawValue.uuidString).jsonl", directoryHint: .notDirectory)
   }
