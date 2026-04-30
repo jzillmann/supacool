@@ -18,6 +18,8 @@ private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptDetectionStableSamples = 2
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
+nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
+nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
 
 private let defaultIsProcessAlive: @Sendable (Int32) -> Bool = { pid in
   // `kill(pid, 0)` returns 0 when the process exists (signal-less ping).
@@ -42,6 +44,10 @@ final class WorktreeTerminalManager {
     var stableSampleCount = 1
   }
 
+  private struct DeferredWorkTracker {
+    let worktreeID: Worktree.ID
+  }
+
   /// Supacool-only. Per-tab registration of the agent process PID so a
   /// background sweep can clear stale busy/awaiting state if the agent
   /// crashes (SIGKILL, OOM) before a clean `Stop`/`SessionEnd` hook fires.
@@ -58,6 +64,8 @@ final class WorktreeTerminalManager {
   private let awaitingInputTransitionOffDebounce: Duration
   private let awaitingInputActivityPollInterval: Duration
   private let agentPIDSweepInterval: Duration
+  private let deferredWorkFallbackTTL: Duration
+  private let deferredWorkLeaseBuffer: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
@@ -72,6 +80,8 @@ final class WorktreeTerminalManager {
   private var awaitingInputPromptCandidates: [UUID: AwaitingInputPromptCandidate] = [:]
   private var awaitingInputPromptScanTask: Task<Void, Never>?
   private var awaitingInputPromptScanTickCount: Int = 0
+  private var deferredWorkByTab: [UUID: DeferredWorkTracker] = [:]
+  private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var agentPIDByTab: [UUID: AgentPIDRegistration] = [:]
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
@@ -91,6 +101,8 @@ final class WorktreeTerminalManager {
     awaitingInputTransitionOffDebounce: Duration = awaitingInputTransitionOffDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
+    deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
+    deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     clock: C = ContinuousClock(),
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
@@ -101,6 +113,8 @@ final class WorktreeTerminalManager {
     self.awaitingInputTransitionOffDebounce = awaitingInputTransitionOffDebounce
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
     self.agentPIDSweepInterval = agentPIDSweepInterval
+    self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
+    self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.isProcessAlive = isProcessAlive
     self.sleep = { duration in
       try await clock.sleep(for: duration)
@@ -151,6 +165,9 @@ final class WorktreeTerminalManager {
       // Any busy transition (resumed or finished) supersedes a prior
       // "awaiting input" signal for this tab.
       self?.clearAwaitingInput(tabID: tabID, reason: "busy-changed")
+      if active {
+        self?.clearDeferredWork(tabID: tabID)
+      }
       state.setAgentBusy(
         surfaceID: surfaceID,
         tabID: wrappedTabID,
@@ -205,7 +222,12 @@ final class WorktreeTerminalManager {
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
       if awaiting {
+        self?.clearDeferredWork(tabID: tabID)
         self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID, source: "hook")
+      } else if let duration = self?.deferredWorkLeaseDuration(for: notification) {
+        self?.markDeferredWork(worktreeID: decoded, tabID: tabID, duration: duration)
+      } else if notification.event == "Stop" {
+        self?.clearDeferredWork(tabID: tabID)
       }
     }
   }
@@ -238,6 +260,83 @@ final class WorktreeTerminalManager {
     }
     // Unknown agents: preserve the legacy "any Notification event" heuristic.
     return notification.event == "Notification"
+  }
+
+  /// Claude can stop its foreground turn while intentionally waiting on
+  /// a timed check (CI, deploy retry, external poll). That is not
+  /// "waiting on the user", but it also should not drop the card into
+  /// Waiting on Me. Treat those Stop messages as a short, transient
+  /// in-progress lease.
+  nonisolated static func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
+    guard isDeferredWorkSignal(notification) else { return nil }
+    return parsedDeferredWorkDuration(from: notification.body?.lowercased() ?? "", buffer: deferredWorkLeaseBufferDefault)
+      ?? deferredWorkFallbackTTLDefault
+  }
+
+  private func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
+    guard Self.isDeferredWorkSignal(notification) else { return nil }
+    return Self.parsedDeferredWorkDuration(
+      from: notification.body?.lowercased() ?? "",
+      buffer: deferredWorkLeaseBuffer
+    ) ?? deferredWorkFallbackTTL
+  }
+
+  private nonisolated static func isDeferredWorkSignal(_ notification: AgentHookNotification) -> Bool {
+    let agent = notification.agent.lowercased()
+    guard agent.contains("claude"), notification.event == "Stop" else { return false }
+    guard let body = notification.body?.lowercased(), !body.isEmpty else { return false }
+
+    let deferredPhrases = [
+      "check back",
+      "next check",
+      "re-checking",
+      "standing by",
+      "watching in background",
+      "watching again",
+      "will check",
+      "will get pinged",
+      "will iterate",
+      "will report",
+      "will report back",
+      "will report when",
+      "will stand by",
+      "retry running",
+      "iteration ",
+      "scheduled a",
+      "diagnostic is running",
+      "diagnostic preview running",
+    ]
+
+    return deferredPhrases.contains(where: { body.contains($0) })
+  }
+
+  private nonisolated static func parsedDeferredWorkDuration(from body: String, buffer: Duration) -> Duration? {
+    let normalized = body.map { character -> Character in
+      if character.isNumber || character.isLetter || character == "." {
+        return character
+      }
+      return " "
+    }
+    let words = String(normalized).split(separator: " ").map(String.init)
+    guard words.count >= 2 else { return nil }
+
+    for index in words.indices.dropLast() {
+      guard let value = Double(words[index]) else { continue }
+      let unit = words[words.index(after: index)]
+      let multiplier: Double
+      if unit.hasPrefix("sec") {
+        multiplier = 1
+      } else if unit.hasPrefix("min") {
+        multiplier = 60
+      } else if unit.hasPrefix("hr") || unit.hasPrefix("hour") {
+        multiplier = 60 * 60
+      } else {
+        continue
+      }
+      let seconds = Int((value * multiplier).rounded(.up))
+      return .seconds(seconds) + buffer
+    }
+    return nil
   }
 
   /// Screen-based fallback for hook misses. This only matches the inline
@@ -343,6 +442,14 @@ final class WorktreeTerminalManager {
   /// fallback can also promote known approval prompts when a hook is missed.
   func isAwaitingInput(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
     awaitingInputByTab[tabID.rawValue]?.presented == true
+  }
+
+  /// Whether the agent has intentionally paused its foreground turn while
+  /// waiting on an external timed check (CI, deploy retry, poll loop).
+  /// This keeps the board in the working bucket without treating the
+  /// session as blocked on user input.
+  func isDeferredWorkActive(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
+    deferredWorkByTab[tabID.rawValue]?.worktreeID == worktreeID
   }
 
   /// Whether the session's tab still exists in any terminal state — false
@@ -809,6 +916,35 @@ final class WorktreeTerminalManager {
     clearAwaitingInput(tabID: tabID, reason: "ttl-expired")
   }
 
+  private func markDeferredWork(
+    worktreeID: Worktree.ID,
+    tabID: UUID,
+    duration: Duration
+  ) {
+    deferredWorkByTab[tabID] = DeferredWorkTracker(worktreeID: worktreeID)
+    deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
+    let sleep = self.sleep
+    deferredWorkExpiryTasks[tabID] = Task { [weak self, sleep, duration] in
+      do {
+        try await sleep(duration)
+      } catch {
+        return
+      }
+      guard let self else { return }
+      await self.expireDeferredWork(tabID: tabID)
+    }
+  }
+
+  private func clearDeferredWork(tabID: UUID) {
+    deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
+    deferredWorkByTab.removeValue(forKey: tabID)
+  }
+
+  private func expireDeferredWork(tabID: UUID) {
+    deferredWorkExpiryTasks[tabID] = nil
+    deferredWorkByTab.removeValue(forKey: tabID)
+  }
+
   private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
     let sleep = self.sleep
@@ -941,6 +1077,7 @@ final class WorktreeTerminalManager {
       awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
+      deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputPromptCandidates.removeValue(forKey: tabID)
       // Trace: if the tab is being cleaned up while raw-active, record
       // the implicit clear so the session file shows the true→false
@@ -954,6 +1091,7 @@ final class WorktreeTerminalManager {
         )
       }
       awaitingInputByTab.removeValue(forKey: tabID)
+      deferredWorkByTab.removeValue(forKey: tabID)
       agentPIDByTab.removeValue(forKey: tabID)
     }
   }
@@ -990,6 +1128,7 @@ final class WorktreeTerminalManager {
       )
       agentPIDByTab.removeValue(forKey: tabID)
       clearAwaitingInput(tabID: tabID, reason: "pid-gone")
+      clearDeferredWork(tabID: tabID)
       guard let state = states[registration.worktreeID] else { continue }
       state.setAgentBusy(
         surfaceID: registration.surfaceID,
