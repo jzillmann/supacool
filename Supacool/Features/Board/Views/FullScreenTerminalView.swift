@@ -63,6 +63,8 @@ struct FullScreenTerminalView: View {
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
   @AppStorage("supacool.gitGuiApp") private var gitGuiApp: String = "Fork"
 
+  @Dependency(GitClientDependency.self) private var gitClient
+
   /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
   @State private var isEditingGitGuiApp: Bool = false
   @State private var gitGuiAppDraft: String = ""
@@ -75,6 +77,9 @@ struct FullScreenTerminalView: View {
   /// Draft branch name shown in the convert-to-worktree popover.
   /// Initialized from the session display name when the popover opens.
   @State private var convertBranchDraft: String = ""
+  /// Latest `git status --porcelain` count for the current workspace.
+  /// Drives the dirty badge on the Quick Diff toolbar icon.
+  @State private var uncommittedChangeCount: Int?
 
   /// First leaf we ever observed in this session's tab — the agent's
   /// own surface. Captured the first time the tab has exactly one leaf
@@ -360,12 +365,26 @@ struct FullScreenTerminalView: View {
     Button {
       isQuickDiffPresented = true
     } label: {
-      Image(systemName: "plus.forwardslash.minus")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
+      ZStack(alignment: .topTrailing) {
+        Image(systemName: "plus.forwardslash.minus")
+          .font(.system(size: 13, weight: .medium))
+        if hasUncommittedChanges {
+          Circle()
+            .fill(.orange)
+            .frame(width: 6, height: 6)
+            .offset(x: 3, y: -3)
+            .accessibilityHidden(true)
+        }
+      }
+      .modifier(HeaderIconTintStyle(tint: hasUncommittedChanges ? .orange : .secondary))
+      .accessibilityLabel("Open diff")
+      .accessibilityValue(diffStatusAccessibilityValue)
     }
     .buttonStyle(.plain)
-    .help("Open diff (⌘⇧D · right-click for external apps)")
+    .help(openDiffHelpText)
+    .task(id: "\(session.id)#\(session.currentWorkspacePath)") {
+      await refreshUncommittedChangeCountLoop(worktreeURL: url)
+    }
     .contextMenu {
       Section("Open diff in") {
         Button {
@@ -408,6 +427,51 @@ struct FullScreenTerminalView: View {
       }
     } message: {
       Text("Name of the macOS app to launch (as it appears in /Applications). Used with `open -a`.")
+    }
+  }
+
+  private var hasUncommittedChanges: Bool {
+    (uncommittedChangeCount ?? 0) > 0
+  }
+
+  private var openDiffHelpText: String {
+    guard let uncommittedChangeCount else {
+      return "Open diff (⌘⇧D · right-click for external apps)"
+    }
+    guard uncommittedChangeCount > 0 else {
+      return "Open diff (working tree clean · ⌘⇧D · right-click for external apps)"
+    }
+    let noun = uncommittedChangeCount == 1 ? "change" : "changes"
+    return "Open diff (\(uncommittedChangeCount) uncommitted \(noun) · ⌘⇧D · right-click for external apps)"
+  }
+
+  private var diffStatusAccessibilityValue: String {
+    guard let uncommittedChangeCount else { return "Git status unknown" }
+    guard uncommittedChangeCount > 0 else { return "No uncommitted changes" }
+    let noun = uncommittedChangeCount == 1 ? "change" : "changes"
+    return "\(uncommittedChangeCount) uncommitted \(noun)"
+  }
+
+  private func refreshUncommittedChangeCountLoop(worktreeURL: URL) async {
+    uncommittedChangeCount = nil
+    while !Task.isCancelled {
+      await refreshUncommittedChangeCount(worktreeURL: worktreeURL)
+      do {
+        try await Task.sleep(for: Self.diffStatusRefreshInterval)
+      } catch {
+        return
+      }
+    }
+  }
+
+  private func refreshUncommittedChangeCount(worktreeURL: URL) async {
+    do {
+      let output = try await gitClient.statusPorcelain(worktreeURL)
+      guard !Task.isCancelled else { return }
+      uncommittedChangeCount = PorcelainStatusParser.parse(output).count
+    } catch {
+      guard !Task.isCancelled else { return }
+      uncommittedChangeCount = nil
     }
   }
 
@@ -628,6 +692,8 @@ struct FullScreenTerminalView: View {
       onBackToBoard()
     }
   }
+
+  private static let diffStatusRefreshInterval: Duration = .seconds(5)
 
   /// Built-in presets for the right-click menu. Manually curated — these
   /// are the common macOS git GUIs. Custom entries go through the
