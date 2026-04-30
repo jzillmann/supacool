@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -19,6 +20,7 @@ struct BoardView: View {
   /// board → full-screen → board round-trip (BoardView itself is torn
   /// down and re-created during that cycle).
   @Binding var highlightedSessionID: AgentSession.ID?
+  @Binding var selectedSessionIDs: Set<AgentSession.ID>
   /// Must be true for `.onKeyPress` to receive anything. `.focusable()`
   /// alone makes the view focus-eligible but doesn't *grant* focus —
   /// without this FocusState binding, arrow keys just beep.
@@ -55,19 +57,29 @@ struct BoardView: View {
       .onKeyPress(.downArrow) { moveVertical(direction: +1); return .handled }
       .onKeyPress(.return) {
         if let id = highlightedSessionID {
+          selectedSessionIDs.removeAll()
           store.send(.focusSession(id: id))
           return .handled
         }
         return .ignored
       }
+      .onKeyPress(.escape) {
+        guard !selectedSessionIDs.isEmpty else { return .ignored }
+        selectedSessionIDs.removeAll()
+        return .handled
+      }
       .onAppear { ensureHighlightValid() }
       .onChange(of: currentNavOrder) { _, _ in ensureHighlightValid() }
+      .onChange(of: visibleSessionIDSet) { _, visibleIDs in
+        selectedSessionIDs.formIntersection(visibleIDs)
+      }
       // Symmetric to the full-screen terminal's ⌘. / ⌘B shortcut that
       // returns to the board: press ⌘. on the board to enter the
       // highlighted card's terminal.
       .background(
         Button("Enter Session") {
           if let id = highlightedSessionID {
+            selectedSessionIDs.removeAll()
             store.send(.focusSession(id: id))
           }
         }
@@ -83,11 +95,85 @@ struct BoardView: View {
     BoardNavOrder.order(visibleSessions: store.visibleSessions, classify: classify)
   }
 
+  private var visibleSessionIDSet: Set<AgentSession.ID> {
+    Set(store.visibleSessions.map(\.id))
+  }
+
+  private var selectedDirectResumeSessionIDs: [AgentSession.ID] {
+    guard selectedSessionIDs.count > 1 else { return [] }
+    let selected = selectedSessionIDs
+    return store.visibleSessions.compactMap { session in
+      guard selected.contains(session.id),
+        canDirectResume(session, status: classify(session), includingParked: true)
+      else {
+        return nil
+      }
+      return session.id
+    }
+  }
+
+  private func hasCapturedNativeSessionID(_ session: AgentSession) -> Bool {
+    guard let sessionID = session.agentNativeSessionID else { return false }
+    return !sessionID.isEmpty
+  }
+
+  private func canDirectResume(
+    _ session: AgentSession,
+    status: BoardSessionStatus,
+    includingParked: Bool = false
+  ) -> Bool {
+    guard session.agent != nil, hasCapturedNativeSessionID(session) else { return false }
+    switch status {
+    case .detached, .interrupted:
+      return true
+    case .parked:
+      return includingParked && !sessionTabExists(session)
+    default:
+      return false
+    }
+  }
+
+  private func canResumeWithPicker(_ session: AgentSession, status: BoardSessionStatus) -> Bool {
+    guard session.agent != nil, !hasCapturedNativeSessionID(session) else { return false }
+    switch status {
+    case .detached, .interrupted:
+      return true
+    default:
+      return false
+    }
+  }
+
   private func sessionTabExists(_ session: AgentSession) -> Bool {
     terminalManager.sessionTabExists(
       worktreeID: session.worktreeID,
       tabID: TerminalTabID(rawValue: session.id)
     )
+  }
+
+  private func handleCardTap(_ session: AgentSession) {
+    let modifiers = NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask)
+    if modifiers.contains(.shift) || modifiers.contains(.command) {
+      if selectedSessionIDs.contains(session.id) {
+        selectedSessionIDs.remove(session.id)
+      } else {
+        selectedSessionIDs.insert(session.id)
+      }
+      highlightedSessionID = session.id
+      return
+    }
+
+    selectedSessionIDs.removeAll()
+    store.send(.focusSession(id: session.id))
+  }
+
+  private func resumeSelectedSessions(ids: [AgentSession.ID]) {
+    guard !ids.isEmpty else { return }
+    let availableRepositories = Array(repositories)
+    selectedSessionIDs.removeAll()
+    for id in ids {
+      store.send(.resumeDetachedSession(id: id, repositories: availableRepositories))
+    }
+    store.send(.focusSession(id: nil))
   }
 
   private func moveHighlight(by delta: Int) {
@@ -355,9 +441,11 @@ struct BoardView: View {
           columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)],
           spacing: 14
         ) {
+          let bulkResumeIDs = selectedDirectResumeSessionIDs
           ForEach(sessions, id: \.id) { session in
             let sessionStatus = classify(session)
             let sessionHasTab = sessionTabExists(session)
+            let activeParked = session.parked && sessionHasTab
             let debugLink = debugLinkDescriptor(for: session)
             let onDebugLinkTap: (() -> Void)? = {
               guard let targetID = debugLink?.targetID else { return nil }
@@ -371,7 +459,10 @@ struct BoardView: View {
               onDebugLinkTap: onDebugLinkTap,
               dimmed: dimmed,
               isHighlighted: highlightedSessionID == session.id,
-              onTap: { store.send(.focusSession(id: session.id)) },
+              isActiveParked: activeParked,
+              isSelected: selectedSessionIDs.contains(session.id),
+              selectedResumeCount: bulkResumeIDs.count,
+              onTap: { handleCardTap(session) },
               onRemove: { store.send(.removeSession(id: session.id)) },
               onRename: { onRenameSession(session) },
               onTogglePriority: { store.send(.togglePriority(id: session.id)) },
@@ -385,9 +476,7 @@ struct BoardView: View {
                   )
                 }
                 : nil,
-              onResume: ((sessionStatus == .detached || sessionStatus == .interrupted)
-                && session.agent != nil
-                && session.agentNativeSessionID != nil)
+              onResume: canDirectResume(session, status: sessionStatus)
                 ? {
                   store.send(
                     .resumeDetachedSession(
@@ -397,9 +486,7 @@ struct BoardView: View {
                   )
                 }
                 : nil,
-              onResumePicker: ((sessionStatus == .detached || sessionStatus == .interrupted)
-                && session.agent != nil
-                && session.agentNativeSessionID == nil)
+              onResumePicker: canResumeWithPicker(session, status: sessionStatus)
                 ? {
                   store.send(
                     .resumeDetachedSessionWithPicker(
@@ -408,6 +495,9 @@ struct BoardView: View {
                     )
                   )
                 }
+                : nil,
+              onResumeSelected: (selectedSessionIDs.contains(session.id) && bulkResumeIDs.count > 1)
+                ? { resumeSelectedSessions(ids: bulkResumeIDs) }
                 : nil,
               onPark: (sessionStatus != .parked)
                 ? {
@@ -439,7 +529,7 @@ struct BoardView: View {
                 ? {
                   if sessionHasTab {
                     store.send(.unparkSession(id: session.id))
-                  } else if session.agent != nil && session.agentNativeSessionID != nil {
+                  } else if session.agent != nil && hasCapturedNativeSessionID(session) {
                     store.send(
                       .resumeDetachedSession(
                         id: session.id,
@@ -578,6 +668,9 @@ private struct SessionCardContainer: View {
   let onDebugLinkTap: (() -> Void)?
   let dimmed: Bool
   let isHighlighted: Bool
+  let isActiveParked: Bool
+  let isSelected: Bool
+  let selectedResumeCount: Int
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRename: () -> Void
@@ -585,6 +678,7 @@ private struct SessionCardContainer: View {
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
+  let onResumeSelected: (() -> Void)?
   let onPark: (() -> Void)?
   let onParkActive: (() -> Void)?
   let onUnpark: (() -> Void)?
@@ -601,6 +695,7 @@ private struct SessionCardContainer: View {
       session: session,
       repositoryName: repositoryName,
       status: status,
+      isActiveParked: isActiveParked,
       debugLinkTitle: debugLinkTitle,
       onDebugLinkTap: onDebugLinkTap,
       onTap: onTap,
@@ -610,6 +705,8 @@ private struct SessionCardContainer: View {
       onRerun: onRerun,
       onResume: onResume,
       onResumePicker: onResumePicker,
+      onResumeSelected: onResumeSelected,
+      selectedResumeCount: selectedResumeCount,
       onPark: onPark,
       onParkActive: onParkActive,
       onUnpark: onUnpark,
@@ -619,16 +716,34 @@ private struct SessionCardContainer: View {
       onDebug: onDebug,
       onAppear: onAppear
     )
-    .opacity(dimmed && !isHovered && !isHighlighted ? 0.55 : 1.0)
+    .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)
+    .overlay {
+      if isSelected {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+          .fill(Color.accentColor.opacity(0.08))
+          .allowsHitTesting(false)
+      }
+    }
     .overlay(
-      // Keyboard-nav highlight ring. Uses the accent color so it's
+      // Keyboard-nav / multi-selection ring. Uses the accent color so it's
       // visibly distinct from the per-status border colors on the card.
       RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .strokeBorder(Color.accentColor, lineWidth: isHighlighted ? 2 : 0)
+        .strokeBorder(Color.accentColor, lineWidth: (isHighlighted || isSelected) ? 2 : 0)
         .allowsHitTesting(false)
     )
+    .overlay(alignment: .topTrailing) {
+      if isSelected {
+        Image(systemName: "checkmark.circle.fill")
+          .font(.caption)
+          .foregroundStyle(Color.accentColor)
+          .background(Circle().fill(.background))
+          .padding(6)
+          .allowsHitTesting(false)
+      }
+    }
     .animation(.easeOut(duration: 0.12), value: isHovered)
     .animation(.easeOut(duration: 0.08), value: isHighlighted)
+    .animation(.easeOut(duration: 0.08), value: isSelected)
     .onHover { hovering in
       isHovered = hovering
       if hovering {

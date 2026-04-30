@@ -8,6 +8,8 @@ struct SessionCardView: View {
   let session: AgentSession
   let repositoryName: String?
   let status: BoardSessionStatus
+  /// True for "Park as Active": parked in the board, but its PTY/tab is still alive.
+  var isActiveParked: Bool = false
   var debugLinkTitle: String? = nil
   var onDebugLinkTap: (() -> Void)? = nil
   let onTap: () -> Void
@@ -17,6 +19,8 @@ struct SessionCardView: View {
   var onRerun: (() -> Void)?
   var onResume: (() -> Void)?
   var onResumePicker: (() -> Void)?
+  var onResumeSelected: (() -> Void)?
+  var selectedResumeCount: Int = 0
   var onPark: (() -> Void)?
   var onParkActive: (() -> Void)?
   var onUnpark: (() -> Void)?
@@ -112,6 +116,14 @@ struct SessionCardView: View {
       onAppear?()
     }
     .contextMenu {
+      if let onResumeSelected {
+        Button(
+          "Resume \(selectedResumeCount) Selected Sessions",
+          systemImage: "play.circle.fill",
+          action: onResumeSelected
+        )
+        Divider()
+      }
       if let onRename {
         Button("Rename…", systemImage: "pencil", action: onRename)
         Divider()
@@ -353,10 +365,10 @@ struct SessionCardView: View {
 
   /// Cards whose underlying PTY/tab isn't alive right now. Renders
   /// with a frosted "cracked glass" overlay so the board communicates
-  /// dormancy at a glance. Covers everything the Board treats as
-  /// "tab is gone" — the four states the reducer already groups
-  /// together for Rerun / Resume / Reconnect affordances.
+  /// dormancy at a glance. Active-parked cards keep a live tab, so they
+  /// should look like normal cards even though they stay in the Parked bucket.
   private var isDormant: Bool {
+    if isActiveParked { return false }
     switch status {
     case .detached, .interrupted, .parked, .disconnected: true
     default: false

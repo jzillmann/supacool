@@ -30,6 +30,10 @@ struct BoardRootView: View {
   /// "come back to the card you just left."
   @State private var highlightedSessionID: AgentSession.ID?
 
+  /// Multi-select is transient board UI state. Shift-click (or ⌘-click)
+  /// toggles cards so context-menu actions can run across the selection.
+  @State private var selectedSessionIDs: Set<AgentSession.ID> = []
+
   /// When true, the ⌘-Tab-style session switcher overlay is visible over
   /// the full-screen terminal. Opened by `⌘⌥←/→/↑/↓` (plain ⌘+arrow is
   /// reserved for the terminal surface's own line-navigation), committed
@@ -120,7 +124,10 @@ struct BoardRootView: View {
     // entering a card (tap, Enter, ⌘.) updates the cursor, and the user
     // returns to that same card when they come back to the board.
     .onChange(of: store.focusedSessionID) { oldValue, newValue in
-      if let newValue { highlightedSessionID = newValue }
+      if let newValue {
+        highlightedSessionID = newValue
+        selectedSessionIDs.removeAll()
+      }
       // Any manual focus change invalidates a queued auto-exit —
       // otherwise the countdown would commit on top of the user's own
       // navigation (⌘B, ⌘-arrow, card tap, etc.).
@@ -463,7 +470,8 @@ struct BoardRootView: View {
       classify: { classify($0) },
       onAddRepository: onAddRepository,
       onRenameSession: { session in beginRename(session) },
-      highlightedSessionID: $highlightedSessionID
+      highlightedSessionID: $highlightedSessionID,
+      selectedSessionIDs: $selectedSessionIDs
     )
     // The window title is still "Supacool" (visible in the menu bar
     // and Window menu) but we hide it from the toolbar chrome — the
