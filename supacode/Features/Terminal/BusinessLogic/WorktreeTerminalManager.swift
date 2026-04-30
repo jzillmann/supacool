@@ -1088,14 +1088,27 @@ final class WorktreeTerminalManager {
 
   // The poll runs on @MainActor (this class is @MainActor) so every tab's
   // readScreenContents call is serialized on the same thread that drives
-  // the UI. With many surfaces (especially leaked / dead-shell ones)
-  // accumulated, scanning them all in one tick can saturate the main
-  // thread long enough to feel like a freeze. `await Task.yield()`
-  // between tabs lets queued main-thread work (input handling, layout,
-  // animation ticks) interleave instead of waiting for the entire scan.
+  // the UI. With many surfaces accumulated, scanning them all in one
+  // tick can saturate the main thread long enough to feel like a freeze.
+  // Two mitigations:
+  //   1. Skip tabs that already get busy/idle from the hook stream
+  //      (Claude / Codex with hooks installed) — the screen fingerprint
+  //      is a fallback for hookless agents (pi, plain shell, broken or
+  //      missing hook config), not the primary signal.
+  //   2. `await Task.yield()` between tabs that we DO scan, so queued
+  //      main-thread work (input handling, layout, animation ticks)
+  //      interleaves instead of waiting for the entire sweep.
   private func sampleAwaitingInputPromptScreens() async {
     tickAgentPIDSweepIfNeeded()
     var openTabIDs = Set<UUID>()
+
+    // Tabs that have ever received a hook event. These get accurate
+    // busy/idle from the hook layer; the (expensive) fingerprint scan
+    // would be redundant work — and ~80ms × N-tabs / second of it on
+    // the main thread translates directly into UI lag.
+    let hookedTabIDs: Set<UUID> = Set(
+      agentSessions.compactMap { $0.hasObservedInitialAgentEvent ? $0.id : nil }
+    )
 
     // Snapshot the tab list up-front so the iteration is stable across
     // yields — tabs added or removed mid-scan get picked up next tick.
@@ -1106,6 +1119,13 @@ final class WorktreeTerminalManager {
     for (worktreeID, tabID) in snapshot {
       let rawTabID = tabID.rawValue
       openTabIDs.insert(rawTabID)
+
+      // Hooked tabs get busy/idle from the hook stream — skip the
+      // screen-content read entirely.
+      if hookedTabIDs.contains(rawTabID) {
+        awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
+        continue
+      }
 
       guard let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tabID),
         Self.isAwaitingInputPromptScreen(fingerprint)
