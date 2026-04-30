@@ -45,6 +45,19 @@ nonisolated final class LoginStreamCallRecorder: @unchecked Sendable {
 }
 
 struct ShellClientStreamingTests {
+  @Test func runPreservesLeadingWhitespaceInFinishedOutput() async throws {
+    let shell = ShellClient.liveValue
+    let commandURL = URL(fileURLWithPath: "/bin/sh")
+
+    let output = try await shell.run(
+      commandURL,
+      ["-c", "printf ' M .pi/prompts/pr-review.md\\0'"],
+      nil
+    )
+
+    #expect(output.stdout == " M .pi/prompts/pr-review.md\0")
+  }
+
   @Test func runStreamYieldsStdoutAndStderrLines() async throws {
     let shell = ShellClient.liveValue
     let commandURL = URL(fileURLWithPath: "/bin/sh")

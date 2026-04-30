@@ -307,8 +307,8 @@ private actor ShellOutputAccumulator {
   }
 
   private static func normalized(lines: [String]) -> String {
+    // Preserve leading spaces: git porcelain uses them as meaningful status fields.
     lines.joined(separator: "\n")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 
