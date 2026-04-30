@@ -340,9 +340,13 @@ final class WorktreeTerminalManager {
     return nil
   }
 
-  /// Screen-based fallback for hook misses. This only matches the inline
-  /// approval UI used by Claude's edit / permission prompts, and still
-  /// requires repeated identical samples before the tab is promoted.
+  /// Screen-based fallback for hook misses *and* discriminator for the
+  /// activity-resumed heuristic. Matches the inline approval UI used by
+  /// Claude's edit / permission prompts and Codex's `Would you like to
+  /// run the following command?` prompts. The screen-fallback path
+  /// requires repeated identical samples before the tab is promoted;
+  /// the activity-resumed path uses this to tell "prompt just finished
+  /// rendering after the hook fired" apart from "user moved on".
   nonisolated static func isAwaitingInputPromptScreen(_ screen: String) -> Bool {
     let lines = screen
       .split(separator: "\n", omittingEmptySubsequences: false)
@@ -363,6 +367,7 @@ final class WorktreeTerminalManager {
       || normalized.contains("allow claude to edit its own settings")
       || normalized.contains("claude requested permissions")
       || normalized.contains("do you want to proceed")
+      || normalized.contains("would you like to run the following command")
     let hasApprovalOptions =
       lines.contains { $0 == "1. yes" || $0.hasPrefix("1. yes,") || $0.hasPrefix("1. allow") }
       && lines.contains {
@@ -1003,6 +1008,21 @@ final class WorktreeTerminalManager {
       let newFingerprint,
       previousFingerprint != newFingerprint
     {
+      // Hook events frequently arrive *before* the agent has finished
+      // painting its prompt UI — codex's PermissionRequest in
+      // particular fires while "Would you like to run …" is still
+      // streaming to the surface. The first activity-poll then sees a
+      // different fingerprint and, naively, treats the prompt
+      // finishing its paint as the user resuming work — clearing the
+      // chip 1–2s after the hook even though the user never responded.
+      // If the divergent screen still looks like a known approval
+      // prompt, re-baseline and stay awaiting; only clear when the
+      // surface has visibly moved past the prompt.
+      if Self.isAwaitingInputPromptScreen(newFingerprint) {
+        tracker.lastScreenFingerprint = newFingerprint
+        awaitingInputByTab[tabID] = tracker
+        return
+      }
       tracker.lastScreenFingerprint = newFingerprint
       awaitingInputByTab[tabID] = tracker
       clearAwaitingInput(tabID: tabID, reason: "activity-resumed")
