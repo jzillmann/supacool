@@ -370,8 +370,8 @@ struct SessionCardView: View {
   private var isDormant: Bool {
     if isActiveParked { return false }
     switch status {
-    case .detached, .interrupted, .parked, .disconnected: true
-    default: false
+    case .detached, .interrupted, .parked, .disconnected: return true
+    default: return false
     }
   }
 
