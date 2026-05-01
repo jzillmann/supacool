@@ -222,23 +222,76 @@ struct BookmarkTests {
     }
   }
 
-  @Test(.dependencies) func bookmarkSpawnFailedClearsInFlightMarker() async {
+  @Test(.dependencies) func bookmarkTappedShowsStartingSessionCardImmediately() async {
+    let sessionID = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
+    let bookmark = Self.sampleBookmark(
+      prompt: "Investigate failing CI",
+      worktreeMode: .repoRoot
+    )
+    let repo = Self.sampleRepository(id: bookmark.repositoryID)
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(
+        sessionID: sessionID,
+        displayName: AgentSession.deriveDisplayName(from: bookmark.prompt, fallbackID: sessionID)
+      )
+    )
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.$bookmarks.withLock { $0 = [bookmark] }
+        return state
+      }()
+    ) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .constant(sessionID)
+      $0.repoSync = RepoSyncClient(syncIfSafe: { _ in .skippedDirtyTree })
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.bookmarkTapped(id: bookmark.id, repositories: [repo])) {
+      $0.bookmarkSpawnInFlight.insert(bookmark.id)
+      $0.trayCards = [placeholder]
+    }
+    await store.receive(\._bookmarkSpawnCompleted) {
+      $0.bookmarkSpawnInFlight.remove(bookmark.id)
+      $0.trayCards = [placeholder]
+    }
+    await store.receive(\.createSession)
+
+    #expect(store.state.sessions.count == 1)
+    #expect(store.state.sessions.first?.id == sessionID)
+    #expect(store.state.sessions.first?.sourceBookmarkID == bookmark.id)
+    #expect(store.state.trayCards == [placeholder])
+  }
+
+  @Test(.dependencies) func bookmarkSpawnFailedClearsInFlightMarkerAndPlaceholder() async {
     let bookmarkID = UUID()
+    let sessionID = UUID()
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(sessionID: sessionID, displayName: "Investigate")
+    )
     let store = TestStore(
       initialState: {
         var state = BoardFeature.State()
         state.bookmarkSpawnInFlight.insert(bookmarkID)
+        state.trayCards = [placeholder]
         return state
       }()
     ) {
       BoardFeature()
     }
 
-    await store.send(._bookmarkSpawnFailed(bookmarkID: bookmarkID, message: "boom")) {
+    await store.send(
+      ._bookmarkSpawnFailed(bookmarkID: bookmarkID, sessionID: sessionID, message: "boom")
+    ) {
       $0.bookmarkSpawnInFlight.remove(bookmarkID)
+      $0.trayCards = []
     }
   }
-
 
   // MARK: - Helpers
 

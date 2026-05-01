@@ -330,8 +330,8 @@ struct BoardFeature {
     case bookmarkDeleteRequested(id: Bookmark.ID)
     /// Internal success callback from `bookmarkTapped`.
     case _bookmarkSpawnCompleted(session: AgentSession)
-    /// Internal failure callback — surfaces as a transient tray card.
-    case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, message: String)
+    /// Internal failure callback — drops the placeholder tray card.
+    case _bookmarkSpawnFailed(bookmarkID: Bookmark.ID, sessionID: AgentSession.ID, message: String)
 
     // MARK: Drafts
     /// Tap on a draft pill: reopens the New Terminal sheet pre-filled
@@ -889,13 +889,12 @@ struct BoardFeature {
           return .none
         }
         state.bookmarkSpawnInFlight.insert(id)
-        let now = date.now
         let selection: WorkspaceSelection = {
           switch bookmark.worktreeMode {
           case .repoRoot:
             return .repoRoot
           case .newWorktree:
-            return .newBranch(name: bookmark.generateWorktreeName(now: now))
+            return .newBranch(name: bookmark.generateWorktreeName(now: date.now))
           }
         }()
         let planMode = bookmark.agent?.supportsPlanMode == true && bookmark.planMode
@@ -918,6 +917,16 @@ struct BoardFeature {
           suggestedDisplayName: nil,
           removeBackingWorktreeOnDelete: bookmark.worktreeMode == .newWorktree
         )
+        let placeholderDisplayName = AgentSession.deriveDisplayName(
+          from: bookmark.prompt,
+          fallbackID: sessionID
+        )
+        let placeholder = TrayCard(
+          id: sessionID,
+          kind: .sessionCreating(sessionID: sessionID, displayName: placeholderDisplayName)
+        )
+        state.trayCards.append(placeholder)
+
         let bookmarkID = bookmark.id
         return .run { send in
           do {
@@ -928,6 +937,7 @@ struct BoardFeature {
             await send(
               ._bookmarkSpawnFailed(
                 bookmarkID: bookmarkID,
+                sessionID: sessionID,
                 message: error.localizedDescription
               )
             )
@@ -953,10 +963,17 @@ struct BoardFeature {
         if let bookmarkID = session.sourceBookmarkID {
           state.bookmarkSpawnInFlight.remove(bookmarkID)
         }
+        if let index = state.trayCards.firstIndex(where: { $0.id == session.id }) {
+          state.trayCards[index].kind = .sessionCreating(
+            sessionID: session.id,
+            displayName: session.displayName
+          )
+        }
         return .send(.createSession(session))
 
-      case ._bookmarkSpawnFailed(let bookmarkID, let message):
+      case ._bookmarkSpawnFailed(let bookmarkID, let sessionID, let message):
         state.bookmarkSpawnInFlight.remove(bookmarkID)
+        state.trayCards.removeAll(where: { $0.id == sessionID })
         boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
 
