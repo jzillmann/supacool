@@ -223,7 +223,10 @@ struct AppFeature {
             .filter { !archivedIDs.contains($0) || deleteScriptIDs.contains($0) }
         ).union(sessionWorktreeIDs)
         state.repositories.runScriptWorktreeIDs.formIntersection(ids)
-        let recencyIDs = CommandPaletteFeature.recencyRetentionIDs(from: repositories)
+        let recencyIDs = CommandPaletteFeature.recencyRetentionIDs(
+          from: repositories,
+          sessions: state.board.sessions
+        )
         let worktrees = state.repositories.worktreesForInfoWatcher()
         var effects: [Effect<Action>] = [
           .send(.settings(.repositoriesChanged(repositories))),
@@ -783,6 +786,12 @@ struct AppFeature {
 
       case .commandPalette(.delegate(.selectWorktree(let worktreeID))):
         return .send(.repositories(.selectWorktree(worktreeID)))
+
+      case .commandPalette(.delegate(.openSession(let sessionID))):
+        guard state.board.sessions.contains(where: { $0.id == sessionID }) else {
+          return .none
+        }
+        return .send(.board(.focusSession(id: sessionID)))
 
       case .commandPalette(.delegate(.checkForUpdates)):
         return .send(.updates(.checkForUpdates))

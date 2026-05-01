@@ -235,6 +235,52 @@ struct SessionSpawnerTests {
     #expect(createWorktreeRan.value == true)
   }
 
+  // MARK: - Reference seeding
+
+  @Test(.dependencies) func spawnSeedsPromptAndPullRequestReferences() async throws {
+    let prContext = PullRequestContext(
+      parsed: ParsedPullRequestURL(
+        url: "https://github.com/acme/widgets/pull/2349",
+        owner: "acme",
+        repo: "widgets",
+        number: 2349
+      ),
+      metadata: SupacoolPRMetadata(
+        title: "refactor",
+        headRefName: "refactor/overview-card-consistency",
+        baseRefName: "main",
+        headRepositoryOwner: "acme",
+        state: "OPEN",
+        isDraft: false
+      ),
+      matchedRepositoryID: "/tmp/repo",
+      isFork: false
+    )
+    let request = Self.makeRequest(
+      selection: .repoRoot,
+      prompt: "Fix CEN-123",
+      pullRequestLookup: .resolved(prContext)
+    )
+
+    let session = try await withDependencies {
+      $0[SessionReferenceScannerClient.self].scanText = { text in
+        text.contains("CEN-123") ? [.ticket(id: "CEN-123")] : []
+      }
+      $0.terminalClient.send = { _ in }
+      $0.repoSync = RepoSyncClient(syncIfSafe: { _ in .skippedDirtyTree })
+    } operation: {
+      try await SessionSpawner.spawnLocal(request)
+    }
+
+    #expect(
+      session.references == [
+        .ticket(id: "CEN-123"),
+        .pullRequest(owner: "acme", repo: "widgets", number: 2349, state: nil),
+      ]
+    )
+    #expect(session.referencesScannedAt != nil)
+  }
+
   // MARK: - PR-armed existing-branch flow
 
   @Test(.dependencies) func prArmedExistingBranchFetchesRefspecThenWorktreeAdds() async throws {

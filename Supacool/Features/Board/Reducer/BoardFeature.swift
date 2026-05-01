@@ -1511,8 +1511,12 @@ struct BoardFeature {
         // Also kick off PR status refresh for any PRs in the current cache,
         // throttled by the cache window.
         let cacheWindow = Self.prStateCacheWindow
-        let shouldRefreshPRs =
-          session.referencesScannedAt.map { Date().timeIntervalSince($0) > cacheWindow } ?? true
+        let hasUnresolvedPR = session.references.contains {
+          if case .pullRequest(_, _, _, nil) = $0 { return true }
+          return false
+        }
+        let shouldRefreshPRs = hasUnresolvedPR
+          || (session.referencesScannedAt.map { Date().timeIntervalSince($0) > cacheWindow } ?? true)
         let worktreeID = session.worktreeID
         let agentID = session.agentNativeSessionID
         let initialPrompt = session.initialPrompt

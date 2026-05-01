@@ -27,6 +27,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
     case checkForUpdates
     case openRepository
     case worktreeSelect(Worktree.ID)
+    case openSession(AgentSession.ID)
     case openSettings
     case newWorktree
     case removeWorktree(Worktree.ID, Repository.ID)
@@ -63,7 +64,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
       .rerunFailedJobs,
       .openFailingCheckDetails:
       true
-    case .worktreeSelect, .removeWorktree, .archiveWorktree:
+    case .worktreeSelect, .openSession, .removeWorktree, .archiveWorktree:
       false
     #if DEBUG
       case .debugTestToast:
@@ -88,6 +89,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
       .rerunFailedJobs,
       .openFailingCheckDetails,
       .worktreeSelect,
+      .openSession,
       .removeWorktree,
       .archiveWorktree:
       false
@@ -116,6 +118,7 @@ struct CommandPaletteItem: Identifiable, Equatable {
       .rerunFailedJobs,
       .openFailingCheckDetails,
       .worktreeSelect,
+      .openSession,
       .removeWorktree,
       .archiveWorktree:
       nil

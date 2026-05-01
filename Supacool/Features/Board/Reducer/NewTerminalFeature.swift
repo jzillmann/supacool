@@ -423,6 +423,7 @@ struct NewTerminalFeature {
   @Dependency(BackgroundInferenceClient.self) var backgroundInferenceClient
   @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
+  @Dependency(SessionReferenceScannerClient.self) var scannerClient
   @Dependency(RepoSyncClient.self) var repoSyncClient
 
   private nonisolated enum CancelID: Hashable, Sendable {
@@ -982,6 +983,11 @@ struct NewTerminalFeature {
       repositoryRootURL: URL(fileURLWithPath: "/")
     )
 
+    let seededReferences = initialReferences(
+      prompt: trimmedPrompt,
+      pullRequestLookup: state.pullRequestLookup
+    )
+
     let session = AgentSession(
       id: sessionID,
       repositoryID: repositoryID,
@@ -990,6 +996,8 @@ struct NewTerminalFeature {
       initialPrompt: trimmedPrompt,
       removeBackingWorktreeOnDelete: false,
       planMode: planMode,
+      references: seededReferences,
+      referencesScannedAt: seededReferences.isEmpty ? nil : Date(),
       remoteWorkspaceID: workspace.id,
       remoteHostID: hostID,
       repositoryRemoteTargetID: repositoryRemoteTargetID,
@@ -1003,6 +1011,33 @@ struct NewTerminalFeature {
       )
       await send(.sessionReady(session))
     }
+  }
+
+  private func initialReferences(
+    prompt: String,
+    pullRequestLookup: PullRequestLookupState
+  ) -> [SessionReference] {
+    var refs = scannerClient.scanText(prompt)
+    if case .resolved(let context) = pullRequestLookup {
+      refs.append(
+        .pullRequest(
+          owner: context.parsed.owner,
+          repo: context.parsed.repo,
+          number: context.parsed.number,
+          state: nil
+        )
+      )
+    }
+    return Self.dedupeReferences(refs)
+  }
+
+  private nonisolated static func dedupeReferences(_ refs: [SessionReference]) -> [SessionReference] {
+    var seen = Set<String>()
+    var result: [SessionReference] = []
+    for ref in refs where seen.insert(ref.dedupeKey).inserted {
+      result.append(ref)
+    }
+    return result
   }
 
   // MARK: - PR URL handling

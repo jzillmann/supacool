@@ -8,6 +8,7 @@ import SwiftUI
 struct BoardView: View {
   @Bindable var store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
+  let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
   let terminalManager: WorktreeTerminalManager
   let classify: (AgentSession) -> BoardSessionStatus
   let onAddRepository: () -> Void
@@ -358,6 +359,7 @@ struct BoardView: View {
             SessionCardContainer(
               session: session,
               repositoryName: repositories[id: session.repositoryID]?.name,
+              pullRequest: matchedPullRequest(for: session),
               status: sessionStatus,
               debugLinkTitle: debugLink?.title,
               onDebugLinkTap: onDebugLinkTap,
@@ -472,6 +474,21 @@ struct BoardView: View {
     }
   }
 
+  private func matchedPullRequest(for session: AgentSession) -> GithubPullRequest? {
+    guard let repo = repositories[id: session.repositoryID] else { return nil }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    let workspacePath = session.currentWorkspacePath
+    guard workspacePath != rootPath else { return nil }
+    guard let worktree = repo.worktrees.first(where: { $0.id == workspacePath }) else {
+      return nil
+    }
+    guard let pullRequest = worktreeInfoByID[workspacePath]?.pullRequest else { return nil }
+    guard pullRequest.headRefName == nil || pullRequest.headRefName == worktree.name else {
+      return nil
+    }
+    return pullRequest
+  }
+
   private struct SessionDebugLinkDescriptor {
     let title: String
     let targetID: AgentSession.ID
@@ -556,6 +573,7 @@ enum BoardNavOrder {
 private struct SessionCardContainer: View {
   let session: AgentSession
   let repositoryName: String?
+  let pullRequest: GithubPullRequest?
   let status: BoardSessionStatus
   let debugLinkTitle: String?
   let onDebugLinkTap: (() -> Void)?
@@ -582,6 +600,7 @@ private struct SessionCardContainer: View {
     SessionCardView(
       session: session,
       repositoryName: repositoryName,
+      pullRequest: pullRequest,
       status: status,
       debugLinkTitle: debugLinkTitle,
       onDebugLinkTap: onDebugLinkTap,
