@@ -92,4 +92,23 @@ struct SupacoolPathsTests {
 
     #expect(path == expectedPath)
   }
+
+  @Test func sshControlDirectoryLivesUnderBaseDirectory() {
+    let dir = SupacoolPaths.sshControlDirectory
+    #expect(dir.lastPathComponent == "ssh")
+    #expect(dir.deletingLastPathComponent().standardizedFileURL.path
+      == SupacoolPaths.baseDirectory.standardizedFileURL.path)
+  }
+
+  @Test func ensureSSHControlDirectoryIsIdempotent() throws {
+    try SupacoolPaths.ensureSSHControlDirectoryExists()
+    try SupacoolPaths.ensureSSHControlDirectoryExists()
+    var isDir: ObjCBool = false
+    let exists = FileManager.default.fileExists(
+      atPath: SupacoolPaths.sshControlDirectory.path,
+      isDirectory: &isDir
+    )
+    #expect(exists)
+    #expect(isDir.boolValue)
+  }
 }

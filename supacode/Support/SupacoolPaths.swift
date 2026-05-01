@@ -10,6 +10,26 @@ nonisolated enum SupacoolPaths {
     baseDirectory.appending(path: "repos", directoryHint: .isDirectory)
   }
 
+  /// Local directory ssh's `ControlMaster` binds its multiplex socket
+  /// inside (`-o ControlPath=~/.supacool/ssh/%r@%h:%p`). ssh expands the
+  /// tilde locally but does NOT create the parent — first spawn on a
+  /// clean machine fails with `unix_listener: cannot bind to path` if
+  /// this directory is missing.
+  static var sshControlDirectory: URL {
+    baseDirectory.appending(path: "ssh", directoryHint: .isDirectory)
+  }
+
+  /// Idempotent mkdir-p for `sshControlDirectory`. Call at every site
+  /// that hands ssh / scp the ControlPath option — `createDirectory` is
+  /// a no-op when the directory already exists.
+  static func ensureSSHControlDirectoryExists() throws {
+    try FileManager.default.createDirectory(
+      at: sshControlDirectory,
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+  }
+
   static func repositoryDirectory(for rootURL: URL) -> URL {
     let name = repositoryDirectoryName(for: rootURL)
     return reposDirectory.appending(path: name, directoryHint: .isDirectory)

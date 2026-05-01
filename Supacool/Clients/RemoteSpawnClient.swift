@@ -1,6 +1,8 @@
 import ComposableArchitecture
 import Foundation
 
+private nonisolated let remoteSpawnLogger = SupaLogger("Supacool.RemoteSpawn")
+
 /// Builds the ssh command string that Ghostty runs to bring up a remote
 /// tmux session. All logic is pure string assembly so it's unit-testable
 /// without actually shelling out; the `DependencyKey.liveValue` is the
@@ -108,7 +110,17 @@ nonisolated struct RemoteSpawnInvocation: Equatable, Sendable {
 extension RemoteSpawnClient: DependencyKey {
   static let liveValue = RemoteSpawnClient(
     sshInvocation: { invocation in
-      renderSSHInvocation(invocation)
+      // ssh expands `~/.supacool/ssh/%r@%h:%p` locally but won't create
+      // the parent — first spawn on a clean machine fails the bind
+      // with `unix_listener: cannot bind to path` otherwise.
+      do {
+        try SupacoolPaths.ensureSSHControlDirectoryExists()
+      } catch {
+        remoteSpawnLogger.warning(
+          "Failed to create ssh ControlPath directory: \(error.localizedDescription)"
+        )
+      }
+      return renderSSHInvocation(invocation)
     }
   )
 

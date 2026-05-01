@@ -96,6 +96,18 @@ nonisolated func uploadViaSCP(
     "\(alias):\(remotePath)",
   ]
 
+  // Belt to RemoteSpawnClient's: scp is happy to fall back to a fresh
+  // connection when the multiplex socket isn't there, but it still
+  // needs the parent directory to exist before binding any control
+  // socket of its own.
+  do {
+    try SupacoolPaths.ensureSSHControlDirectoryExists()
+  } catch {
+    imageTransportLogger.warning(
+      "Failed to create ssh ControlPath directory: \(error.localizedDescription)"
+    )
+  }
+
   do {
     _ = try await shell.runLogin(envURL, arguments, nil, log: false)
   } catch {
