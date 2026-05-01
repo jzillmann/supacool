@@ -7,6 +7,20 @@ description: Evaluate and cherry-pick selected commits from upstream supabitapp/
 
 Goal: opportunistically pull genuinely useful changes from `supabitapp/supacode` into Supacool's `main`. Supacool decoupled from upstream at v0.8.0 — this is **not** a routine sync; every pick is a deliberate evaluation. Deep reference: [`docs/agent-guides/upstream-cherry-pick.md`](../../../docs/agent-guides/upstream-cherry-pick.md).
 
+## Pre-flight: never run in the root checkout
+
+**The root checkout at `/Users/jz/Projects/morethan/supacool` must always stay on `main`.** Cherry-pick / submodule-bump work happens in a worktree, so a feature branch never strands the root off `main`. Run this check before doing anything else:
+
+```bash
+if [ "$(git rev-parse --git-dir)" = "$(git rev-parse --git-common-dir)" ]; then
+  echo "ABORT: this skill must run from a worktree, not the primary checkout."
+  echo "Ask Comandante to launch a new card/session against a worktree, then retry."
+  exit 1
+fi
+```
+
+If the check fires, **stop and report**. Do not commit on the root checkout, do not create a topic branch on the root, do not try to fix it yourself — the recovery is for Comandante to redirect the work into a worktree.
+
 ## Survey
 
 ```bash
