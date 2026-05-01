@@ -73,6 +73,41 @@ struct BoardFeatureTests {
     // before calling infer because displayName != deriveDisplayName(prompt).
   }
 
+  // MARK: - References
+
+  @Test(.dependencies) func cardAppearedRefreshesSeededUnresolvedPullRequestsImmediately() async {
+    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
+    var session = Self.sampleSession()
+    session.references = [ref]
+    session.referencesScannedAt = Date()
+    session.lastActivityAt = session.referencesScannedAt!.addingTimeInterval(-1)
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let lookups = LockIsolated<[(String, String, Int)]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.githubCLI.viewPullRequest = { owner, repo, number in
+        lookups.withValue { $0.append((owner, repo, number)) }
+        return .open
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.cardAppeared(id: session.id))
+    await store.skipReceivedActions()
+
+    #expect(lookups.value.count == 1)
+    #expect(lookups.value.first?.0 == "acme")
+    #expect(lookups.value.first?.1 == "widgets")
+    #expect(lookups.value.first?.2 == 42)
+    #expect(
+      store.state.sessions.first?.references == [
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+      ]
+    )
+  }
+
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {
     let session = Self.sampleSession(displayName: "Old Name")
     var state = BoardFeature.State()

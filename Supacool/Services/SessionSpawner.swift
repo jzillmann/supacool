@@ -82,6 +82,7 @@ enum SessionSpawner {
   ) async throws -> AgentSession {
     @Dependency(TerminalClient.self) var terminalClient
     @Dependency(PiSettingsClient.self) var piSettingsClient
+    @Dependency(SessionReferenceScannerClient.self) var scannerClient
 
     if request.agent?.id == "pi" {
       do {
@@ -113,6 +114,12 @@ enum SessionSpawner {
       )
     )
 
+    let seededReferences = initialReferences(
+      prompt: request.prompt,
+      pullRequestLookup: request.pullRequestLookup,
+      scannerClient: scannerClient
+    )
+
     return AgentSession(
       id: request.sessionID,
       repositoryID: request.repository.id,
@@ -121,11 +128,41 @@ enum SessionSpawner {
       initialPrompt: request.prompt,
       displayName: request.suggestedDisplayName,
       removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
-      planMode: request.planMode
+      planMode: request.planMode,
+      references: seededReferences,
+      referencesScannedAt: seededReferences.isEmpty ? nil : Date()
     )
   }
 
   // MARK: - Internals
+
+  private static func initialReferences(
+    prompt: String,
+    pullRequestLookup: PullRequestLookupState,
+    scannerClient: SessionReferenceScannerClient
+  ) -> [SessionReference] {
+    var refs = scannerClient.scanText(prompt)
+    if case .resolved(let context) = pullRequestLookup {
+      refs.append(
+        .pullRequest(
+          owner: context.parsed.owner,
+          repo: context.parsed.repo,
+          number: context.parsed.number,
+          state: nil
+        )
+      )
+    }
+    return dedupeReferences(refs)
+  }
+
+  private static func dedupeReferences(_ refs: [SessionReference]) -> [SessionReference] {
+    var seen = Set<String>()
+    var result: [SessionReference] = []
+    for ref in refs where seen.insert(ref.dedupeKey).inserted {
+      result.append(ref)
+    }
+    return result
+  }
 
   private static func resolveWorktree(
     selection: WorkspaceSelection,

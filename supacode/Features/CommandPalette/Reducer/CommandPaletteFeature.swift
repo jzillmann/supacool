@@ -32,6 +32,7 @@ struct CommandPaletteFeature {
   @CasePathable
   enum Delegate: Equatable {
     case selectWorktree(Worktree.ID)
+    case openSession(AgentSession.ID)
     case checkForUpdates
     case openSettings
     case newWorktree
@@ -163,6 +164,7 @@ struct CommandPaletteFeature {
 
   static func commandPaletteItems(
     from repositories: RepositoriesFeature.State,
+    sessions: [AgentSession] = [],
     ghosttyCommands: [GhosttyCommand] = []
   ) -> [CommandPaletteItem] {
     var items: [CommandPaletteItem] = [
@@ -222,6 +224,7 @@ struct CommandPaletteFeature {
     #if DEBUG
       items.append(contentsOf: debugToastItems())
     #endif
+    items.append(contentsOf: sessionItems(sessions: sessions, repositories: repositories))
     for row in repositories.orderedWorktreeRows() {
       guard row.status == .idle else { continue }
       let repositoryName = repositories.repositoryName(for: row.repositoryID) ?? "Repository"
@@ -239,9 +242,11 @@ struct CommandPaletteFeature {
   }
 
   static func recencyRetentionIDs(
-    from repositories: IdentifiedArrayOf<Repository>
+    from repositories: IdentifiedArrayOf<Repository>,
+    sessions: [AgentSession] = []
   ) -> [CommandPaletteItem.ID] {
     var ids = CommandPaletteItemID.globalIDs
+    ids.append(contentsOf: sessions.map { CommandPaletteItemID.sessionOpen($0.id) })
     for repository in repositories {
       ids.append(contentsOf: CommandPaletteItemID.pullRequestIDs(repositoryID: repository.id))
       for worktree in repository.worktrees {
@@ -250,6 +255,98 @@ struct CommandPaletteFeature {
     }
     return ids
   }
+}
+
+private func sessionItems(
+  sessions: [AgentSession],
+  repositories: RepositoriesFeature.State
+) -> [CommandPaletteItem] {
+  sessions.map { session in
+    let repositoryName = repositories.repositoryName(for: session.repositoryID) ?? "Repository"
+    let subtitle = sessionSearchSubtitle(session: session, repositoryName: repositoryName, repositories: repositories)
+    return CommandPaletteItem(
+      id: CommandPaletteItemID.sessionOpen(session.id),
+      title: session.displayName,
+      subtitle: subtitle,
+      kind: .openSession(session.id)
+    )
+  }
+}
+
+private func sessionSearchSubtitle(
+  session: AgentSession,
+  repositoryName: String,
+  repositories: RepositoriesFeature.State
+) -> String {
+  var parts = ["Session", repositoryName]
+  parts.append(contentsOf: sessionWorkspaceLabels(session: session, repositories: repositories))
+  parts.append(contentsOf: sessionReferenceLabels(session.references))
+  if let promptText = sessionPromptSearchText(session.initialPrompt) {
+    parts.append(promptText)
+  }
+  return dedupedNonEmpty(parts).joined(separator: " • ")
+}
+
+private func sessionPromptSearchText(_ prompt: String) -> String? {
+  let collapsed = prompt
+    .split(whereSeparator: \.isWhitespace)
+    .joined(separator: " ")
+    .trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !collapsed.isEmpty else { return nil }
+  return String(collapsed.prefix(160))
+}
+
+private func sessionWorkspaceLabels(
+  session: AgentSession,
+  repositories: RepositoriesFeature.State
+) -> [String] {
+  guard let repository = repositories.repositories[id: session.repositoryID] else {
+    return [session.currentWorkspacePath, session.worktreeID]
+  }
+  let rootPath = repository.rootURL.standardizedFileURL.path(percentEncoded: false)
+  let workspacePath = session.currentWorkspacePath
+  if workspacePath == rootPath {
+    return ["repo root", rootPath]
+  }
+  var labels: [String] = []
+  if let worktree = repository.worktrees.first(where: { $0.id == workspacePath }) {
+    if let branch = worktree.branch { labels.append(branch) }
+    labels.append(worktree.name)
+  }
+  labels.append(URL(fileURLWithPath: workspacePath).lastPathComponent)
+  labels.append(workspacePath)
+  if session.worktreeID != workspacePath {
+    labels.append(session.worktreeID)
+  }
+  return labels
+}
+
+private func sessionReferenceLabels(_ references: [SessionReference]) -> [String] {
+  references.flatMap { ref -> [String] in
+    switch ref {
+    case .ticket(let id):
+      return [id]
+    case .pullRequest(let owner, let repo, let number, let state):
+      var labels = ["#\(number)", "\(owner)/\(repo)#\(number)", "github.com/\(owner)/\(repo)/pull/\(number)"]
+      if let state {
+        labels.append("PR \(state.rawValue)")
+      }
+      return labels
+    }
+  }
+}
+
+private func dedupedNonEmpty(_ values: [String]) -> [String] {
+  var seen = Set<String>()
+  var result: [String] = []
+  for value in values {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { continue }
+    if seen.insert(trimmed).inserted {
+      result.append(trimmed)
+    }
+  }
+  return result
 }
 
 private func pullRequestItems(
@@ -443,6 +540,10 @@ private enum CommandPaletteItemID {
     "worktree.\(worktreeID).select"
   }
 
+  static func sessionOpen(_ sessionID: AgentSession.ID) -> CommandPaletteItem.ID {
+    "session.\(sessionID.uuidString).open"
+  }
+
   static func ghosttyCommand(_ command: GhosttyCommand) -> CommandPaletteItem.ID {
     "\(ghosttyPrefix)\(command.action)|\(command.title)"
   }
@@ -529,6 +630,8 @@ private func delegateAction(for kind: CommandPaletteItem.Kind) -> CommandPalette
   switch kind {
   case .worktreeSelect(let id):
     return .selectWorktree(id)
+  case .openSession(let id):
+    return .openSession(id)
   case .checkForUpdates:
     return .checkForUpdates
   case .openSettings:
@@ -584,6 +687,7 @@ private func pullRequestDelegateAction(
   case .openFailingCheckDetails(let worktreeID):
     return .openFailingCheckDetails(worktreeID)
   case .worktreeSelect,
+    .openSession,
     .checkForUpdates,
     .openSettings,
     .newWorktree,

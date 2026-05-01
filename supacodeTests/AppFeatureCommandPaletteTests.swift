@@ -119,6 +119,27 @@ struct AppFeatureCommandPaletteTests {
     )
   }
 
+  @Test(.dependencies) func openSessionFocusesBoardSession() async {
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000126")!
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix tests"
+    )
+    var state = AppFeature.State()
+    state.board.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      AppFeature()
+    }
+
+    await store.send(.commandPalette(.delegate(.openSession(sessionID))))
+    await store.receive(\.board.focusSession) {
+      $0.board.focusedSessionID = sessionID
+    }
+  }
+
   @Test(.dependencies) func closePullRequestDispatchesAction() async {
     let store = TestStore(initialState: AppFeature.State()) {
       AppFeature()

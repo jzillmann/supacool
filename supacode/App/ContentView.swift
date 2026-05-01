@@ -109,6 +109,7 @@ struct ContentView: View {
         store: store.scope(state: \.commandPalette, action: \.commandPalette),
         items: CommandPaletteFeature.commandPaletteItems(
           from: store.repositories,
+          sessions: store.board.sessions,
           ghosttyCommands: ghosttyShortcuts.commandPaletteEntries
         )
       )

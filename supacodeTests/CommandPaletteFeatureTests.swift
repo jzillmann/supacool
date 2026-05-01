@@ -259,6 +259,70 @@ struct CommandPaletteFeatureTests {
     #expect(selectItem?.title == "Repo / khoi/cache")
   }
 
+  @Test func commandPaletteItems_includeSessionsIndexedByReferencesAndWorkspace() {
+    let rootPath = "/tmp/repo"
+    let worktree = makeWorktree(
+      id: "\(rootPath)/wt-auth",
+      name: "wt-auth",
+      repoRoot: rootPath,
+      branch: "fix/tests"
+    )
+    let repository = makeRepository(rootPath: rootPath, name: "Repo", worktrees: [worktree])
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: repository.id,
+      worktreeID: worktree.id,
+      currentWorkspacePath: worktree.id,
+      agent: .claude,
+      initialPrompt: "Fix CEN-123 and review https://github.com/acme/widgets/pull/42",
+      displayName: "Fix auth tests",
+      references: [
+        .ticket(id: "CEN-123"),
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open),
+      ]
+    )
+    let items = CommandPaletteFeature.commandPaletteItems(
+      from: RepositoriesFeature.State(repositories: [repository]),
+      sessions: [session]
+    )
+    let item = items.first {
+      if case .openSession(let id) = $0.kind {
+        return id == sessionID
+      }
+      return false
+    }
+
+    #expect(item?.id == "session.\(sessionID.uuidString).open")
+    #expect(item?.title == "Fix auth tests")
+    #expect(item?.subtitle?.contains("fix/tests") == true)
+    #expect(item?.subtitle?.contains("CEN-123") == true)
+    #expect(item?.subtitle?.contains("acme/widgets#42") == true)
+    #expect(
+      CommandPaletteFeature.filterItems(items: items, query: "CEN-123").first?.id == item?.id
+    )
+    #expect(
+      CommandPaletteFeature.filterItems(items: items, query: "acme/widgets#42").first?.id == item?.id
+    )
+    #expect(
+      CommandPaletteFeature.filterItems(items: items, query: "fix/tests").first?.id == item?.id
+    )
+  }
+
+  @Test func emptyQueryHidesSessionItems() {
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000124")!
+    let sessionItem = CommandPaletteItem(
+      id: "session.\(sessionID.uuidString).open",
+      title: "Fix auth tests",
+      subtitle: "Session • Repo • CEN-123",
+      kind: .openSession(sessionID)
+    )
+
+    let result = CommandPaletteFeature.filterItems(items: [sessionItem], query: "")
+
+    #expect(result.isEmpty)
+  }
+
   @Test func commandPaletteItems_respectsRowOrderWithinRepository() {
     let rootPath = "/tmp/repo"
     let main = makeWorktree(
@@ -982,6 +1046,31 @@ struct CommandPaletteFeatureTests {
     await store.receive(.delegate(.openRepository))
   }
 
+  @Test func activateSessionDispatchesDelegate() async {
+    let now = Date(timeIntervalSince1970: 1_234_568)
+    let sessionID = UUID(uuidString: "00000000-0000-0000-0000-000000000125")!
+    let item = CommandPaletteItem(
+      id: "session.\(sessionID.uuidString).open",
+      title: "Fix auth tests",
+      subtitle: "Session • Repo • CEN-123",
+      kind: .openSession(sessionID)
+    )
+    var state = CommandPaletteFeature.State()
+    state.isPresented = true
+    let store = TestStore(initialState: state) {
+      CommandPaletteFeature()
+    }
+    store.dependencies.date = .constant(now)
+
+    await store.send(.activateItem(item)) {
+      $0.isPresented = false
+      $0.query = ""
+      $0.selectedIndex = nil
+      $0.recencyByItemID[item.id] = now.timeIntervalSince1970
+    }
+    await store.receive(.delegate(.openSession(sessionID)))
+  }
+
   @Test func activateGhosttyCommandDispatchesDelegate() async {
     let now = Date(timeIntervalSince1970: 7_654_321)
     let item = CommandPaletteItem(
@@ -1012,14 +1101,16 @@ private func makeWorktree(
   name: String,
   detail: String = "detail",
   repoRoot: String,
-  workingDirectory: String? = nil
+  workingDirectory: String? = nil,
+  branch: String? = nil
 ) -> Worktree {
   Worktree(
     id: id,
     name: name,
     detail: detail,
     workingDirectory: URL(fileURLWithPath: workingDirectory ?? id),
-    repositoryRootURL: URL(fileURLWithPath: repoRoot)
+    repositoryRootURL: URL(fileURLWithPath: repoRoot),
+    branch: branch
   )
 }
 

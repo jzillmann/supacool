@@ -266,7 +266,7 @@ private struct CommandPaletteQuery: View {
       .frame(width: 0, height: 0)
       .accessibilityHidden(true)
 
-      TextField("Search for actions or branches...", text: $query)
+      TextField("Search actions, branches, sessions, tickets, or PRs...", text: $query)
         .padding()
         .font(.title3.weight(.light))
         .frame(height: Self.fieldHeight)
@@ -345,7 +345,7 @@ private struct CommandPaletteRowView: View {
       .ghosttyCommand,
       .openPullRequest, .markPullRequestReady, .mergePullRequest, .closePullRequest, .copyFailingJobURL,
       .copyCiFailureLogs,
-      .rerunFailedJobs, .openFailingCheckDetails, .worktreeSelect:
+      .rerunFailedJobs, .openFailingCheckDetails, .worktreeSelect, .openSession:
       return nil
     case .removeWorktree:
       return "Remove"
@@ -392,6 +392,8 @@ private struct CommandPaletteRowView: View {
       return "exclamationmark.triangle"
     case .worktreeSelect:
       return nil
+    case .openSession:
+      return "rectangle.stack"
     case .removeWorktree:
       return "trash"
     case .archiveWorktree:
@@ -412,7 +414,7 @@ private struct CommandPaletteRowView: View {
       .copyCiFailureLogs,
       .rerunFailedJobs, .openFailingCheckDetails:
       return true
-    case .worktreeSelect, .removeWorktree, .archiveWorktree:
+    case .worktreeSelect, .openSession, .removeWorktree, .archiveWorktree:
       return false
     #if DEBUG
       case .debugTestToast:
@@ -490,6 +492,8 @@ private struct CommandPaletteRowView: View {
     switch row.kind {
     case .worktreeSelect:
       base = "Switch to \(row.title)"
+    case .openSession:
+      base = "Open session \(row.title)"
     case .checkForUpdates:
       base = "Check for Updates"
     case .openRepository:

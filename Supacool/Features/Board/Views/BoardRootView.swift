@@ -466,6 +466,7 @@ struct BoardRootView: View {
     BoardView(
       store: store,
       repositories: repositories,
+      worktreeInfoByID: worktreeInfoByID,
       terminalManager: terminalManager,
       classify: { classify($0) },
       onAddRepository: onAddRepository,
@@ -640,6 +641,7 @@ struct BoardRootView: View {
         },
         onBusyToIdleTransition: {
           store.send(.markSessionCompletedOnce(id: session.id))
+          store.send(.cardAppeared(id: session.id))
           store.send(.autoObserverTriggered(id: session.id))
         },
         onAwaitingInputEntered: {

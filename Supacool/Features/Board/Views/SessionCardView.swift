@@ -7,6 +7,7 @@ import SwiftUI
 struct SessionCardView: View {
   let session: AgentSession
   let repositoryName: String?
+  var pullRequest: GithubPullRequest? = nil
   let status: BoardSessionStatus
   /// True for "Park as Active": parked in the board, but its PTY/tab is still alive.
   var isActiveParked: Bool = false
@@ -67,6 +68,10 @@ struct SessionCardView: View {
 
       if let debugLinkTitle, let onDebugLinkTap {
         debugLinkChip(title: debugLinkTitle, onTap: onDebugLinkTap)
+      }
+
+      if let model = PullRequestStatusModel(pullRequest: pullRequest) {
+        pullRequestStatus(model)
       }
 
       if !session.references.isEmpty {
@@ -338,6 +343,12 @@ struct SessionCardView: View {
         .help("Show all references")
       }
     }
+  }
+
+  private func pullRequestStatus(_ model: PullRequestStatusModel) -> some View {
+    PullRequestStatusButton(model: model)
+      .font(.caption)
+      .lineLimit(1)
   }
 
   private func debugLinkChip(title: String, onTap: @escaping () -> Void) -> some View {
