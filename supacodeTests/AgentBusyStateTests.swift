@@ -115,6 +115,72 @@ struct AgentBusyStateTests {
     #expect(manager.taskStatus(for: worktree.id) == .idle)
   }
 
+  // MARK: - Nested agents on a single surface (pi spawning codex).
+
+  /// When pi spawns codex on the same Ghostty surface, both agents emit
+  /// busy hooks against the same `surfaceID` but with different PIDs.
+  /// Codex completing must not flip the surface idle while pi is still
+  /// running — that would silently rebucket the card to "Waiting" mid-
+  /// turn. Verified by walking the exact sequence from the captured
+  /// transcript C47A96FA…: pi-busy → codex-busy → codex-idle.
+  @Test func nestedAgentBusyKeepsSurfaceBusyWhenInnerAgentClears() {
+    let worktree = makeWorktree()
+    let fixture = makeStateWithSurface(worktree: worktree)
+    let outerPID: Int32 = 32196  // pi
+    let innerPID: Int32 = 63935  // codex
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: outerPID, active: true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: innerPID, active: true)
+    #expect(fixture.manager.taskStatus(for: worktree.id) == .running)
+
+    // Codex finishes — pi must keep the surface busy.
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: innerPID, active: false)
+    #expect(fixture.manager.taskStatus(for: worktree.id) == .running)
+    #expect(fixture.surface.bridge.state.agentBusy == true)
+
+    // Pi finishes — surface goes idle.
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: outerPID, active: false)
+    #expect(fixture.manager.taskStatus(for: worktree.id) == .idle)
+    #expect(fixture.surface.bridge.state.agentBusy == false)
+  }
+
+  /// Idempotency: the same PID emitting `active=true` multiple times
+  /// (codex sends keep-alives every few seconds while running) must
+  /// collapse to a single registration so a single `active=false` clears
+  /// it.
+  @Test func repeatedActiveHooksFromSamePIDAreIdempotent() {
+    let fixture = makeStateWithSurface()
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 4242, active: true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 4242, active: true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 4242, active: true)
+    #expect(fixture.surface.bridge.state.agentBusy == true)
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 4242, active: false)
+    #expect(fixture.surface.bridge.state.agentBusy == false)
+  }
+
+  /// Legacy hooks without a PID share a sentinel slot — paired on/off
+  /// calls with `pid: nil` still balance.
+  @Test func legacyNilPIDPairsBalance() {
+    let fixture = makeStateWithSurface()
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, active: true)
+    #expect(fixture.surface.bridge.state.agentBusy == true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, active: false)
+    #expect(fixture.surface.bridge.state.agentBusy == false)
+  }
+
+  /// A legacy `nil` clear must not wipe a real PID's busy slot — the
+  /// sentinel and PID slots are independent.
+  @Test func legacyNilClearDoesNotWipeRealPIDBusy() {
+    let fixture = makeStateWithSurface()
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 9999, active: true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: nil, active: false)
+    #expect(fixture.surface.bridge.state.agentBusy == true)
+  }
+
   @Test func taskStatusChangedEmittedOnBusyToggle() async {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

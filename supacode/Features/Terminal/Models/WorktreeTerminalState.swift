@@ -44,6 +44,13 @@ final class WorktreeTerminalState {
   var notificationsEnabled = true
   @ObservationIgnored @Dependency(\.date.now) private var now
   private var recentHookBySurfaceID: [UUID: (text: String, recordedAt: Date)] = [:]
+  /// Per-surface set of currently-busy agent PIDs. A surface can host
+  /// multiple agents simultaneously (pi spawning codex as a sub-call on
+  /// the same PTY), so the surface's busy bit is the union of all active
+  /// PIDs — when codex emits its `active=false` hook, pi's still-active
+  /// PID keeps the surface busy. Legacy hooks without a PID share a
+  /// sentinel slot (`0`) so paired on/off calls still balance.
+  private var busyPIDsBySurface: [UUID: Set<Int32>] = [:]
   var hasUnseenNotification: Bool {
     notifications.contains { !$0.isRead }
   }
@@ -363,13 +370,26 @@ final class WorktreeTerminalState {
     emitTaskStatusIfChanged()
   }
 
-  /// Sets or clears the agent busy flag on a specific surface.
-  func setAgentBusy(surfaceID: UUID, tabID: TerminalTabID, active: Bool) {
+  /// Sets or clears the agent busy flag on a specific surface, scoped to
+  /// the reporting agent's PID. Multiple agents can share a surface (pi
+  /// spawning codex on the same PTY); the surface stays busy as long as
+  /// any registered PID is busy. `pid == nil` uses a sentinel slot for
+  /// legacy hooks so paired on/off calls without PID balance correctly.
+  func setAgentBusy(surfaceID: UUID, tabID: TerminalTabID, pid: Int32? = nil, active: Bool) {
     guard let surface = surfaces[surfaceID] else {
       terminalStateLogger.debug("Dropped busy update for unknown surface \(surfaceID) in worktree \(worktree.id)")
       return
     }
-    surface.bridge.state.agentBusy = active
+    let key = pid ?? 0
+    if active {
+      busyPIDsBySurface[surfaceID, default: []].insert(key)
+    } else {
+      busyPIDsBySurface[surfaceID]?.remove(key)
+      if busyPIDsBySurface[surfaceID]?.isEmpty == true {
+        busyPIDsBySurface.removeValue(forKey: surfaceID)
+      }
+    }
+    surface.bridge.state.agentBusy = busyPIDsBySurface[surfaceID]?.isEmpty == false
     tabManager.updateDirty(tabID, isDirty: isTabBusy(tabID))
     emitTaskStatusIfChanged()
   }
@@ -1441,6 +1461,7 @@ final class WorktreeTerminalState {
 
   private func cleanupSurfaceState(for surfaceID: UUID) {
     recentHookBySurfaceID.removeValue(forKey: surfaceID)
+    busyPIDsBySurface.removeValue(forKey: surfaceID)
     surfaces.removeValue(forKey: surfaceID)
   }
 

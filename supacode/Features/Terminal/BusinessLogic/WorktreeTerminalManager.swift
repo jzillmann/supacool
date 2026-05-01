@@ -82,7 +82,12 @@ final class WorktreeTerminalManager {
   private var awaitingInputPromptScanTickCount: Int = 0
   private var deferredWorkByTab: [UUID: DeferredWorkTracker] = [:]
   private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
-  private var agentPIDByTab: [UUID: AgentPIDRegistration] = [:]
+  /// Per-tab PID registry, keyed by PID so a surface running multiple
+  /// agents (pi spawning codex on the same PTY) keeps a registration for
+  /// each. Without per-PID keying the inner agent's registration would
+  /// overwrite the outer's, leaving the sweep blind to pi when codex
+  /// finishes cleanly.
+  private var agentPIDByTab: [UUID: [Int32: AgentPIDRegistration]] = [:]
   private var notificationsEnabled = true
   private var lastNotificationIndicatorCount: Int?
   private var eventContinuation: AsyncStream<TerminalClient.Event>.Continuation?
@@ -151,16 +156,25 @@ final class WorktreeTerminalManager {
       }
       // Register / unregister the agent PID so the 30s sweep can clear
       // stale busy state if the agent crashes before a clean hook fires.
-      // Pre-upgrade hooks send pid=nil; don't disturb existing tracking.
+      // Per-PID keyed so an inner agent (codex spawned by pi) doesn't
+      // overwrite the outer's registration. Pre-upgrade hooks send
+      // pid=nil; don't disturb existing tracking.
       if let pid {
         if active {
-          self?.agentPIDByTab[tabID] = AgentPIDRegistration(
+          var registrations = self?.agentPIDByTab[tabID] ?? [:]
+          registrations[pid] = AgentPIDRegistration(
             worktreeID: decoded,
             surfaceID: surfaceID,
             pid: pid
           )
-        } else {
-          self?.agentPIDByTab.removeValue(forKey: tabID)
+          self?.agentPIDByTab[tabID] = registrations
+        } else if var registrations = self?.agentPIDByTab[tabID] {
+          registrations.removeValue(forKey: pid)
+          if registrations.isEmpty {
+            self?.agentPIDByTab.removeValue(forKey: tabID)
+          } else {
+            self?.agentPIDByTab[tabID] = registrations
+          }
         }
       }
       // Any busy transition (resumed or finished) supersedes a prior
@@ -172,6 +186,7 @@ final class WorktreeTerminalManager {
       state.setAgentBusy(
         surfaceID: surfaceID,
         tabID: wrappedTabID,
+        pid: pid,
         active: active
       )
       // Supacool transcript: when the agent reports going idle, snapshot
@@ -1159,34 +1174,60 @@ final class WorktreeTerminalManager {
 
   /// Walks registered agent PIDs and clears busy/awaiting state for any
   /// whose process has died. Safety net for SIGKILL/OOM where no hook
-  /// fires to report the transition.
+  /// fires to report the transition. Per-PID granularity: a dead inner
+  /// agent (codex) is dropped without disturbing a still-live outer
+  /// agent (pi) on the same tab.
   func sweepAgentPIDs() {
     guard !agentPIDByTab.isEmpty else { return }
     var dead: [(tabID: UUID, registration: AgentPIDRegistration)] = []
-    for (tabID, registration) in agentPIDByTab where !isProcessAlive(registration.pid) {
-      dead.append((tabID, registration))
+    for (tabID, registrations) in agentPIDByTab {
+      for registration in registrations.values where !isProcessAlive(registration.pid) {
+        dead.append((tabID, registration))
+      }
     }
     for (tabID, registration) in dead {
       terminalLogger.info(
-        "Agent PID \(registration.pid) gone; clearing tab \(tabID) busy/awaiting state"
+        "Agent PID \(registration.pid) gone; clearing busy state on tab \(tabID)"
       )
-      agentPIDByTab.removeValue(forKey: tabID)
-      clearAwaitingInput(tabID: tabID, reason: "pid-gone")
-      clearDeferredWork(tabID: tabID)
+      if var registrations = agentPIDByTab[tabID] {
+        registrations.removeValue(forKey: registration.pid)
+        if registrations.isEmpty {
+          agentPIDByTab.removeValue(forKey: tabID)
+        } else {
+          agentPIDByTab[tabID] = registrations
+        }
+      }
+      // Awaiting / deferred state belongs to the tab as a whole — only
+      // clear it once the last registered agent dies.
+      if agentPIDByTab[tabID] == nil {
+        clearAwaitingInput(tabID: tabID, reason: "pid-gone")
+        clearDeferredWork(tabID: tabID)
+      }
       guard let state = states[registration.worktreeID] else { continue }
       state.setAgentBusy(
         surfaceID: registration.surfaceID,
         tabID: TerminalTabID(rawValue: tabID),
+        pid: registration.pid,
         active: false
       )
     }
   }
 
   /// Whether an agent PID has been registered for this tab (pre-upgrade
-  /// hook clients don't send a PID so this can be false even for a live
-  /// agent). Exposed for tests and for the Matrix Board's sweep debug UI.
+  /// hook clients don't send a PID so this can be nil even for a live
+  /// agent). Returns any one of the registered PIDs when multiple agents
+  /// share the tab. Exposed for tests and for the Matrix Board's sweep
+  /// debug UI.
   func registeredAgentPID(tabID: UUID) -> Int32? {
-    agentPIDByTab[tabID]?.pid
+    agentPIDByTab[tabID]?.values.first?.pid
+  }
+
+  /// All currently registered agent PIDs on this tab. A surface running
+  /// nested agents (pi spawning codex) reports more than one. Exposed
+  /// for tests; production callers use the bool from `isAgentBusy`.
+  func registeredAgentPIDs(tabID: UUID) -> Set<Int32> {
+    guard let registrations = agentPIDByTab[tabID] else { return [] }
+    return Set(registrations.keys)
   }
 
   private func commitAwaitingInputPresentation(for tabID: UUID, desiredState: Bool) {

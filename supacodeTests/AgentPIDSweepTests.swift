@@ -54,6 +54,53 @@ struct AgentPIDSweepTests {
     #expect(fixture.manager.registeredAgentPID(tabID: fixture.tabID.rawValue) == 10001)
   }
 
+  // MARK: - Nested agents (pi + codex on same surface).
+
+  /// Outer agent (pi) and inner agent (codex) run on the same surface;
+  /// both PIDs must be tracked so the sweep can distinguish a dead inner
+  /// from a dead outer. Without per-PID keying, codex's registration
+  /// would overwrite pi's and the sweep would lose track of pi.
+  @Test(.dependencies) func nestedAgentsRegisterIndependently() {
+    let fixture = makeFixture()
+
+    fixture.fireBusy(active: true, pid: 32196)  // pi
+    fixture.fireBusy(active: true, pid: 63935)  // codex
+
+    let registered = fixture.manager.registeredAgentPIDs(tabID: fixture.tabID.rawValue)
+    #expect(registered == [32196, 63935])
+    #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
+  }
+
+  /// The exact bug from transcript C47A96FA…: pi spawns codex, codex
+  /// emits a clean `active=false`, pi keeps working. Surface must stay
+  /// busy until pi itself reports idle.
+  @Test(.dependencies) func innerAgentStopDoesNotClearOuterAgentBusy() {
+    let fixture = makeFixture()
+
+    fixture.fireBusy(active: true, pid: 32196)  // pi
+    fixture.fireBusy(active: true, pid: 63935)  // codex
+    fixture.fireBusy(active: false, pid: 63935)  // codex done
+
+    #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
+    #expect(fixture.manager.registeredAgentPID(tabID: fixture.tabID.rawValue) == 32196)
+  }
+
+  /// Sweep must clear only dead PIDs. With pi alive and codex dead, the
+  /// surface stays busy and pi stays registered.
+  @Test(.dependencies) func sweepClearsDeadInnerPIDOnly() {
+    let pi: Int32 = 32196
+    let codex: Int32 = 63935
+    let fixture = makeFixture(deadPIDs: [codex])
+
+    fixture.fireBusy(active: true, pid: pi)
+    fixture.fireBusy(active: true, pid: codex)
+
+    fixture.manager.sweepAgentPIDs()
+
+    #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
+    #expect(fixture.manager.registeredAgentPIDs(tabID: fixture.tabID.rawValue) == [pi])
+  }
+
   @Test(.dependencies) func legacyHookWithoutPIDDoesNotRegister() {
     let fixture = makeFixture()
 
