@@ -68,6 +68,19 @@ struct SingleSessionTerminalView: View {
         state.focusSelectedTab()
       }
     }
+    .onDisappear {
+      // Tell the worktree state its surfaces are no longer on-screen so
+      // Ghostty's per-surface Metal renderers pause. Without this, every
+      // session the user has ever opened in a run keeps its renderer
+      // thread painting full-bore in the background — a 30s sample of a
+      // hot app showed 8 surfaces cumulatively burning ~200% of one
+      // core in the renderer pool. syncFocus → applySurfaceActivity
+      // recomputes per-surface visibility and calls setOcclusion(false)
+      // on each leaf, which is the upstream lever for renderer pausing.
+      // When the user re-enters this session, the .onAppear above flips
+      // them back via the same path.
+      state.syncFocus(windowIsKey: false, windowIsVisible: false)
+    }
   }
 
   private var resolvedWindowActivity: WindowActivityState {
