@@ -1429,8 +1429,29 @@ struct BoardFeature {
 
       case ._sessionSpawnFailed(let sessionID, let message):
         boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
-        // Drop the placeholder; v1 has no error tray-card variant.
-        state.trayCards.removeAll(where: { $0.id == sessionID })
+        // Convert the in-flight placeholder card into a red failure
+        // card so the user sees what went wrong instead of watching
+        // the "Starting session" toast disappear silently. Falls back
+        // to appending a fresh card if the placeholder was already
+        // dropped (e.g. user dismissed it manually mid-spawn).
+        let displayName: String
+        if let index = state.trayCards.firstIndex(where: { $0.id == sessionID }),
+          case .sessionCreating(_, let placeholderName) = state.trayCards[index].kind
+        {
+          displayName = placeholderName
+          state.trayCards[index].kind = .sessionSpawnFailed(
+            displayName: displayName,
+            message: message
+          )
+        } else {
+          displayName = "Session"
+          state.trayCards.append(
+            TrayCard(
+              id: sessionID,
+              kind: .sessionSpawnFailed(displayName: displayName, message: message)
+            )
+          )
+        }
         // Keep `pendingRerunSessionID` set so the user's original
         // session card stays put — they can retry.
         return .none
@@ -1723,7 +1744,7 @@ struct BoardFeature {
         case .hookInstallFailed:
           state.trayCards.remove(id: id)
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
-        case .worktreeDeleteFailed:
+        case .worktreeDeleteFailed, .sessionSpawnFailed:
           state.trayCards.remove(id: id)
           return .none
         }
@@ -1737,7 +1758,8 @@ struct BoardFeature {
           // `.hookInstallFailed` card describing the failure.
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
-        case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed:
+        case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed,
+          .sessionSpawnFailed:
           return .none
         }
 

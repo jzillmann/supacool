@@ -159,6 +159,14 @@ private struct TrayCardView: View {
         subtitle: "\(folder) — \(message)",
         helpText: "The directory may still be on disk. Dismiss to clear."
       )
+    case .sessionSpawnFailed(let displayName, let message):
+      return TrayCardPresentation(
+        icon: "xmark.octagon.fill",
+        tint: .red,
+        title: "Couldn't start \(displayName)",
+        subtitle: message,
+        helpText: "Tap to dismiss. Re-paste your prompt to retry."
+      )
     }
   }
 

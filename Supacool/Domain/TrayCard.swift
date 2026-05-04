@@ -40,12 +40,23 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// to navigate to); user can rerun cleanup from Trash → Worktrees.
   case worktreeDeleteFailed(path: String, message: String)
 
+  /// `SessionSpawner.spawnLocal` (or its remote sibling) threw a
+  /// non-conflict error. Replaces the in-flight `.sessionCreating`
+  /// placeholder so the user sees what went wrong instead of the
+  /// previous silent disappearance. `displayName` is the placeholder's
+  /// label so the user can correlate the failure with the intended
+  /// session; `message` is `error.localizedDescription` from the throw.
+  /// Primary tap dismisses (no native retry — user re-paste prompt
+  /// into a fresh New Terminal sheet).
+  case sessionSpawnFailed(displayName: String, message: String)
+
   /// Whether this kind offers a secondary call-to-action button next to
   /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
   var hasSecondaryAction: Bool {
     switch self {
     case .staleHooks: true
-    case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed: false
+    case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed,
+      .sessionSpawnFailed: false
     }
   }
 }
