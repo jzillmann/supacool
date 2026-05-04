@@ -1,4 +1,5 @@
 import ComposableArchitecture
+import ConcurrencyExtras
 import DependenciesTestSupport
 import Foundation
 import IdentifiedCollections
@@ -573,6 +574,48 @@ struct NewTerminalFeatureTests {
     }
     let lastAction = store.state  // Just touch state so actor isolation stays happy.
     _ = lastAction
+  }
+
+  @Test(.dependencies) func remoteCreateUsesSessionIDAsRemoteSurfaceID() async throws {
+    let hostID = UUID()
+    let host = RemoteHost(id: hostID, sshAlias: "dev", importedFromSSHConfig: true)
+    var state = Self.makeState()
+    state.destination = .remote(hostID: hostID)
+    state.prompt = "Fix it"
+    state.availableRemoteHosts = [host]
+    state.remoteWorkingDirectoryDraft = "/home/jz/code/api"
+    @Shared(.remoteHosts) var sharedHosts: [RemoteHost]
+    @Shared(.remoteWorkspaces) var sharedWorkspaces: [RemoteWorkspace]
+    $sharedHosts.withLock { $0 = [host] }
+    $sharedWorkspaces.withLock { $0 = [] }
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { "/tmp/supacool-local.sock" }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.createButtonTapped) {
+      $0.validationMessage = nil
+      $0.isCreating = true
+    }
+    await store.receive(\.sessionReady) {
+      $0.isCreating = false
+    }
+
+    let command = try #require(sentCommands.value.first)
+    guard case .createRemoteTab(let worktree, let sshCommand, let id, let surfaceID) = command else {
+      Issue.record("Expected createRemoteTab command, got \(command)")
+      return
+    }
+    #expect(worktree.id == "remote:dev:/home/jz/code/api")
+    #expect(id == surfaceID)
+    #expect(!sshCommand.contains("SetEnv="))
   }
 
   @Test(.dependencies) func taskLoadsRepositoryRemoteTargetsFromSettings() async {

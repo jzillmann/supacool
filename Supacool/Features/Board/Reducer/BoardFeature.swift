@@ -1188,7 +1188,9 @@ struct BoardFeature {
         // colliding with the stale one.
         return .run { _ in
           await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: id)))
-          await terminalClient.send(.createRemoteTab(worktree, command: sshCommand, id: id))
+          await terminalClient.send(
+            .createRemoteTab(worktree, command: sshCommand, id: id, surfaceID: id)
+          )
         }
 
       case ._reconnectFailed(let id, let message):

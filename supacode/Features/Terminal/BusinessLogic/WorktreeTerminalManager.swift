@@ -512,11 +512,11 @@ final class WorktreeTerminalManager {
       Task {
         createTabAsync(in: worktree, runSetupScriptIfNew: runSetupScriptIfNew, initialInput: input, tabID: id)
       }
-    case .createRemoteTab(let worktree, let command, let id):
+    case .createRemoteTab(let worktree, let command, let id, let surfaceID):
       // Supacool: bypass setup-script / default-shell plumbing entirely
       // — the supplied command is the full ssh invocation.
       let state = state(for: worktree) { false }
-      _ = state.createTab(tabID: id, command: command)
+      _ = state.createTab(tabID: id, command: command, surfaceID: surfaceID)
     case .restoreShellLayout(let worktree, let tabID):
       restoreShellLayout(in: worktree, tabID: tabID)
     case .ensureInitialTab(let worktree, let runSetupScriptIfNew, let focusing):

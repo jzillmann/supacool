@@ -20,8 +20,10 @@ private nonisolated let remoteSpawnLogger = SupaLogger("Supacool.RemoteSpawn")
 ///    tunnels straight back to the Mac's `AgentHookSocketServer`. We
 ///    also pass `StreamLocalBindUnlink=yes` so a prior stale socket
 ///    doesn't block the new forward.
-/// 3. **SetEnv of the SUPACOOL_* tuple** — the same env vars the local
-///    spawn path exports. Notably `SUPACOOL_TAB_ID` and
+/// 3. **Bootstrap exports of the SUPACOOL_* tuple** — the same env vars
+///    the local spawn path exports, embedded directly in the remote bash
+///    bootstrap instead of SSH `SetEnv` so the flow does not depend on
+///    remote `sshd_config AcceptEnv`. Notably `SUPACOOL_TAB_ID` and
 ///    `SUPACOOL_SURFACE_ID` match the Mac-side UUIDs, so hook payloads
 ///    are parse-identical to local ones and the existing classifier
 ///    needs no change.
@@ -143,16 +145,6 @@ extension DependencyValues {
 /// to run it unless the command starts with a path to an executable, so
 /// we shell-quote every argument that might contain special chars.
 nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
-  let setEnvPairs = [
-    "SUPACOOL_WORKTREE_ID=\(inv.worktreeID)",
-    "SUPACOOL_TAB_ID=\(inv.tabID.uuidString.lowercased())",
-    "SUPACOOL_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())",
-    "SUPACOOL_SOCKET_PATH=\(inv.remoteSocketPath)",
-    "SUPACOOL_WORKTREE_PATH=\(inv.remoteWorkingDirectory)",
-    "SUPACOOL_ROOT_PATH=\(inv.remoteWorkingDirectory)",
-    "TMUX_SESSION=\(inv.tmuxSessionName)",
-  ]
-
   let reverseForward = "\(inv.remoteSocketPath):\(inv.localSocketPath)"
 
   var args: [String] = [
@@ -163,7 +155,6 @@ nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
     "-o", "ControlPersist=600",
     "-o", "StreamLocalBindUnlink=yes",
     "-R", reverseForward,
-    "-o", "SetEnv=\(setEnvPairs.joined(separator: " "))",
   ]
 
   if inv.deferToSSHConfig {
@@ -183,7 +174,7 @@ nonisolated func renderSSHInvocation(_ inv: RemoteSpawnInvocation) -> String {
     args.append(target)
   }
 
-  args.append(renderBootstrapCommand(agentCommand: inv.agentCommand, agent: inv.agent))
+  args.append(renderBootstrapCommand(invocation: inv))
 
   return args.map { remoteSpawnShellQuote($0) }.joined(separator: " ")
 }
@@ -212,6 +203,15 @@ nonisolated func renderBootstrapCommand(
   agent: AgentType? = nil
 ) -> String {
   let script = renderBootstrapScript(agentCommand: agentCommand, agent: agent)
+  return renderBootstrapCommand(script: script)
+}
+
+nonisolated func renderBootstrapCommand(invocation inv: RemoteSpawnInvocation) -> String {
+  let script = renderBootstrapScript(invocation: inv)
+  return renderBootstrapCommand(script: script)
+}
+
+private nonisolated func renderBootstrapCommand(script: String) -> String {
   let encoded = Data(script.utf8).base64EncodedString()
   // Decode and pipe into bash. `bash -s --` prevents `--` from being
   // interpreted as an option; we pass no positional args.
@@ -222,17 +222,24 @@ nonisolated func renderBootstrapCommand(
 /// every spawn — idempotent on success, noisy-on-fatal-error on failure.
 nonisolated func renderBootstrapScript(
   agentCommand: String?,
-  agent: AgentType? = nil
+  agent: AgentType? = nil,
+  environment: [(name: String, value: String)] = []
 ) -> String {
+  let tmuxCommandPrefix =
+    #"exec tmux new-session -A -s "$TMUX_SESSION" "#
+    + #"-c "$SUPACOOL_WORKTREE_PATH" "${tmux_env[@]}""#
   let execCommand: String
   if let agentCommand, !agentCommand.isEmpty {
     // Pass through tmux so the agent is the foreground process in the
     // session. `--` separates tmux flags from the user's command.
-    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACOOL_WORKTREE_PATH\" -- \(agentCommand)"
+    execCommand = "\(tmuxCommandPrefix) -- \(agentCommand)"
   } else {
     // No agent — plain login shell inside tmux.
-    execCommand = "exec tmux new-session -A -s \"$TMUX_SESSION\" -c \"$SUPACOOL_WORKTREE_PATH\""
+    execCommand = tmuxCommandPrefix
   }
+
+  let exports = renderBootstrapExports(environment)
+  let tmuxEnvironment = renderTmuxEnvironment(environment)
 
   // Hook install runs BEFORE exec — silent skip when python3 isn't on
   // the remote. Shell sessions skip entirely (nothing to hook).
@@ -240,16 +247,64 @@ nonisolated func renderBootstrapScript(
 
   return """
     set -e
+    \(exports)
     mkdir -p ~/.supacool/hooks ~/.supacool/ssh
-    # Stale-socket belt: if a prior ssh crashed, the reverse-forward unlink
-    # may have failed; rm -f makes the bind idempotent.
-    rm -f "$SUPACOOL_SOCKET_PATH" 2>/dev/null || true
     # Fall back when the remote doesn't have the custom terminfo installed.
     if ! infocmp xterm-ghostty >/dev/null 2>&1; then
       export TERM=xterm-256color
     fi
+    \(tmuxEnvironment)
     \(hookInstall)
     \(execCommand)
+    """
+}
+
+nonisolated func renderBootstrapScript(invocation inv: RemoteSpawnInvocation) -> String {
+  renderBootstrapScript(
+    agentCommand: inv.agentCommand,
+    agent: inv.agent,
+    environment: bootstrapEnvironment(for: inv)
+  )
+}
+
+private nonisolated func bootstrapEnvironment(
+  for inv: RemoteSpawnInvocation
+) -> [(name: String, value: String)] {
+  [
+    ("SUPACOOL_WORKTREE_ID", percentEncodeRemoteHookID(inv.worktreeID)),
+    ("SUPACOOL_TAB_ID", inv.tabID.uuidString.lowercased()),
+    ("SUPACOOL_SURFACE_ID", inv.surfaceID.uuidString.lowercased()),
+    ("SUPACOOL_SOCKET_PATH", inv.remoteSocketPath),
+    ("SUPACOOL_WORKTREE_PATH", inv.remoteWorkingDirectory),
+    ("SUPACOOL_ROOT_PATH", inv.remoteWorkingDirectory),
+    ("TMUX_SESSION", inv.tmuxSessionName),
+  ]
+}
+
+private nonisolated func percentEncodeRemoteHookID(_ value: String) -> String {
+  let allowedCharacters = CharacterSet.urlPathAllowed.subtracting(.init(charactersIn: "/"))
+  return value.addingPercentEncoding(withAllowedCharacters: allowedCharacters) ?? value
+}
+
+private nonisolated func renderBootstrapExports(
+  _ environment: [(name: String, value: String)]
+) -> String {
+  environment
+    .map { "export \($0.name)=\(remoteSpawnShellQuote($0.value))" }
+    .joined(separator: "\n")
+}
+
+private nonisolated func renderTmuxEnvironment(
+  _ environment: [(name: String, value: String)]
+) -> String {
+  guard !environment.isEmpty else { return "tmux_env=()" }
+  let entries = environment
+    .map { "  -e \"\($0.name)=$\($0.name)\"" }
+    .joined(separator: "\n")
+  return """
+    tmux_env=(
+    \(entries)
+    )
     """
 }
 
@@ -263,7 +318,7 @@ nonisolated func remoteSpawnShellQuote(_ value: String) -> String {
   return "'\(escaped)'"
 }
 
-private nonisolated func isShellSafeChar(_ ch: Character) -> Bool {
-  if ch.isLetter || ch.isNumber { return true }
-  return "_@%+=:,./-".contains(ch)
+private nonisolated func isShellSafeChar(_ character: Character) -> Bool {
+  if character.isLetter || character.isNumber { return true }
+  return "_@%+=:,./-".contains(character)
 }

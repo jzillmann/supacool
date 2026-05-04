@@ -134,6 +134,28 @@ struct SplitTreeTests {
     #expect(emissions == [first.id, second.id])
   }
 
+  @Test func commandBackedTabUsesRequestedRootSurfaceID() throws {
+    let state = WorktreeTerminalState(
+      runtime: GhosttyRuntime(),
+      worktree: makeWorktree(),
+      splitPreserveZoomOnNavigation: { true }
+    )
+    let requestedTabID = UUID()
+    let requestedSurfaceID = UUID()
+
+    let tabID = try #require(
+      state.createTab(
+        tabID: requestedTabID,
+        command: "/bin/echo supacool",
+        surfaceID: requestedSurfaceID
+      )
+    )
+
+    #expect(tabID.rawValue == requestedTabID)
+    #expect(state.hasSurface(requestedSurfaceID, in: tabID))
+    #expect(state.activeSurfaceID(for: tabID) == requestedSurfaceID)
+  }
+
   private func makeWorktreeFixture(preserveZoomOnNavigation: Bool) -> WorktreeFixture {
     let state = WorktreeTerminalState(
       runtime: GhosttyRuntime(),

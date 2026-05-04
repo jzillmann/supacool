@@ -1007,7 +1007,12 @@ struct NewTerminalFeature {
     let terminalClient = self.terminalClient
     return .run { send in
       await terminalClient.send(
-        .createRemoteTab(worktreeShim, command: sshCommand, id: sessionID)
+        .createRemoteTab(
+          worktreeShim,
+          command: sshCommand,
+          id: sessionID,
+          surfaceID: sessionID,
+        )
       )
       await send(.sessionReady(session))
     }

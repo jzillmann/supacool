@@ -21,7 +21,7 @@ struct TerminalClient {
     /// Supacool: spawn a tab whose PTY is the given `command` (typically
     /// an ssh invocation to a remote tmux session). Bypasses setup
     /// scripts and default-shell selection — the caller owns the exec.
-    case createRemoteTab(Worktree, command: String, id: UUID)
+    case createRemoteTab(Worktree, command: String, id: UUID, surfaceID: UUID)
     /// Supacool: explicit user action for detached raw-shell sessions.
     /// Reopens the saved tab split layout/folders when available, or a
     /// blank shell under the same stable session tab ID otherwise.

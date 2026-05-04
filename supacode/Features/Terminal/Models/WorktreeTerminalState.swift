@@ -171,7 +171,10 @@ final class WorktreeTerminalState {
     /// local shell first. Setup scripts + `initialInput` composition is
     /// bypassed when `command` is set — the caller owns the full
     /// invocation.
-    command: String? = nil
+    command: String? = nil,
+    /// Supacool: force the root surface UUID for command-backed remote
+    /// sessions so hook payloads address the actual Ghostty surface.
+    surfaceID: UUID? = nil
   ) -> TerminalTabID? {
     let context: ghostty_surface_context_e =
       tabManager.tabs.isEmpty
@@ -240,6 +243,7 @@ final class WorktreeTerminalState {
         inheritingFromSurfaceId: resolvedInheritanceSurfaceId,
         context: context,
         tabID: tabID,
+        surfaceID: surfaceID,
       )
     )
     if shouldConsumeSetupScript, tabId != nil {
@@ -288,6 +292,7 @@ final class WorktreeTerminalState {
         inheritingFromSurfaceId: currentFocusedSurfaceId(),
         context: GHOSTTY_SURFACE_CONTEXT_TAB,
         tabID: nil,
+        surfaceID: nil,
       )
     )
     guard let tabId else {
@@ -317,6 +322,7 @@ final class WorktreeTerminalState {
     let inheritingFromSurfaceId: UUID?
     let context: ghostty_surface_context_e
     let tabID: UUID?
+    let surfaceID: UUID?
   }
 
   private func createTab(_ creation: TabCreation) -> TerminalTabID? {
@@ -340,7 +346,8 @@ final class WorktreeTerminalState {
       inheritingFromSurfaceId: creation.inheritingFromSurfaceId,
       command: creation.command,
       initialInput: creation.initialInput,
-      context: creation.context
+      context: creation.context,
+      surfaceID: creation.surfaceID,
     )
     tabIsRunningById[tabId] = false
     updateShouldHideTabBar()
@@ -617,7 +624,8 @@ final class WorktreeTerminalState {
     inheritingFromSurfaceId: UUID? = nil,
     command: String? = nil,
     initialInput: String? = nil,
-    context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_TAB
+    context: ghostty_surface_context_e = GHOSTTY_SURFACE_CONTEXT_TAB,
+    surfaceID: UUID? = nil
   ) -> SplitTree<GhosttySurfaceView> {
     if let existing = trees[tabId] {
       return existing
@@ -627,7 +635,8 @@ final class WorktreeTerminalState {
       command: command,
       initialInput: initialInput,
       inheritingFromSurfaceId: inheritingFromSurfaceId,
-      context: context
+      context: context,
+      surfaceID: surfaceID,
     )
     let tree = SplitTree(view: surface)
     trees[tabId] = tree

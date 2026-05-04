@@ -75,13 +75,14 @@ UI surface: in `RemoteHostsSettingsView`, a disclosure section "Found in shell h
   -o ControlMaster=auto -o ControlPath=… -o ControlPersist=600 \
   -o StreamLocalBindUnlink=yes \
   -R <remoteSock>:<localSock> \
-  -o SetEnv=… \
   [-p <port>] [-i <identityFile>] \
   [<user>@]<hostname> \
-  '~/.supacool/bootstrap-<sha>.sh'
+  'echo <base64-bootstrap> | base64 -d | bash -s --'
 ```
 
-When `deferToSSHConfig == true`, the `[-p …] [-i …] [<user>@]<hostname>` block is replaced by `<sshAlias>` and nothing else — OpenSSH resolves the rest. `SetEnv`, `ControlMaster`, and the reverse-forward flag are common to both paths.
+When `deferToSSHConfig == true`, the `[-p …] [-i …] [<user>@]<hostname>` block is replaced by `<sshAlias>` and nothing else — OpenSSH resolves the rest. `ControlMaster` and the reverse-forward flag are common to both paths.
+
+The bootstrap script exports the required `SUPACOOL_*` tuple itself instead of using SSH `SetEnv`; `SetEnv` depends on the remote `sshd_config AcceptEnv` allow-list and silently drops arbitrary variables on default macOS/Linux sshd installs.
 
 `identityFile` is stored as written (`~/.ssh/id_ed25519`); tilde-expand at command-build time, never at import time.
 

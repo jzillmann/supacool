@@ -6,9 +6,10 @@ import Testing
 /// Locks the exact shape of the ssh command we hand to Ghostty. These
 /// invariants are load-bearing for two reasons:
 ///
-/// 1. A typo in a flag name / SetEnv pair would silently break the hook
-///    socket tunnel or the tmux session name — failure modes that only
-///    show up at runtime and look like "remote sessions just don't work."
+/// 1. A typo in a flag name / bootstrap export would silently break the
+///    hook socket tunnel or the tmux session name — failure modes that
+///    only show up at runtime and look like "remote sessions just don't
+///    work."
 /// 2. The base64 bootstrap is decoded-and-exec'd by the remote shell; if
 ///    our quoting collapses the single-quote envelope, the remote gets
 ///    garbage input.
@@ -45,9 +46,9 @@ struct RemoteSpawnClientTests {
     #expect(!script.contains("-- "))
   }
 
-  @Test func bootstrapClearsStaleSocket() {
+  @Test func bootstrapDoesNotUnlinkForwardedSocket() {
     let script = renderBootstrapScript(agentCommand: nil)
-    #expect(script.contains(#"rm -f "$SUPACOOL_SOCKET_PATH""#))
+    #expect(!script.contains(#"rm -f "$SUPACOOL_SOCKET_PATH""#))
   }
 
   @Test func bootstrapCreatesSupacoolDirectories() {
@@ -80,7 +81,7 @@ struct RemoteSpawnClientTests {
 
   // MARK: renderSSHInvocation
 
-  @Test func invocationIncludesControlMasterAndReverseForward() {
+  @Test func invocationIncludesControlMuxAndReverseForward() {
     let inv = sampleInvocation()
     let rendered = renderSSHInvocation(inv)
     #expect(rendered.contains("ControlMaster=auto"))
@@ -91,18 +92,34 @@ struct RemoteSpawnClientTests {
     #expect(rendered.contains("-R /tmp/supacool-hook-xyz.sock:/tmp/supacool-local.sock"))
   }
 
-  @Test func invocationIncludesAllSupacoolEnvVars() {
+  @Test func invocationDoesNotUseSetEnvForSupacoolState() {
+    let rendered = renderSSHInvocation(sampleInvocation())
+    #expect(!rendered.contains("SetEnv="))
+    #expect(!rendered.contains("SUPACOOL_TAB_ID="))
+  }
+
+  @Test func bootstrapExportsAllSupacoolEnvVars() {
     let inv = sampleInvocation()
-    let rendered = renderSSHInvocation(inv)
-    // The SetEnv block combines pairs with spaces inside one arg; we
-    // should see them shell-quoted together.
-    #expect(rendered.contains("SUPACOOL_WORKTREE_ID=remote:dev:/home/jz"))
-    #expect(rendered.contains("SUPACOOL_TAB_ID=\(inv.tabID.uuidString.lowercased())"))
-    #expect(rendered.contains("SUPACOOL_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())"))
-    #expect(rendered.contains("SUPACOOL_SOCKET_PATH=/tmp/supacool-hook-xyz.sock"))
-    #expect(rendered.contains("SUPACOOL_WORKTREE_PATH=/home/jz/code/api"))
-    #expect(rendered.contains("SUPACOOL_ROOT_PATH=/home/jz/code/api"))
-    #expect(rendered.contains("TMUX_SESSION=supacool-abc123"))
+    let script = renderBootstrapScript(invocation: inv)
+    #expect(script.contains("export SUPACOOL_WORKTREE_ID=remote:dev:%2Fhome%2Fjz"))
+    #expect(script.contains("export SUPACOOL_TAB_ID=\(inv.tabID.uuidString.lowercased())"))
+    #expect(script.contains("export SUPACOOL_SURFACE_ID=\(inv.surfaceID.uuidString.lowercased())"))
+    #expect(script.contains("export SUPACOOL_SOCKET_PATH=/tmp/supacool-hook-xyz.sock"))
+    #expect(script.contains("export SUPACOOL_WORKTREE_PATH=/home/jz/code/api"))
+    #expect(script.contains("export SUPACOOL_ROOT_PATH=/home/jz/code/api"))
+    #expect(script.contains("export TMUX_SESSION=supacool-abc123"))
+    #expect(script.contains(#"-e "SUPACOOL_WORKTREE_ID=$SUPACOOL_WORKTREE_ID""#))
+  }
+
+  @Test func bootstrapShellQuotesUnsafeEnvValues() {
+    let script = renderBootstrapScript(
+      invocation: sampleInvocation(
+        remoteWorkingDirectory: "/home/jz/code api",
+        worktreeID: "remote:dev:/home/jz/code api"
+      )
+    )
+    #expect(script.contains("export SUPACOOL_WORKTREE_ID=remote:dev:%2Fhome%2Fjz%2Fcode%20api"))
+    #expect(script.contains("export SUPACOOL_WORKTREE_PATH='/home/jz/code api'"))
   }
 
   @Test func deferredInvocationPassesAliasUnquotedForSimpleNames() {
@@ -190,9 +207,9 @@ struct RemoteSpawnClientTests {
       tabID: UUID(uuidString: "DEADBEEF-1234-1234-1234-123456789ABC")!,
       surfaceID: UUID(uuidString: "DEADBEEF-4321-4321-4321-CBA987654321")!
     )
-    let rendered = renderSSHInvocation(inv)
-    #expect(rendered.contains("SUPACOOL_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
-    #expect(rendered.contains("SUPACOOL_SURFACE_ID=deadbeef-4321-4321-4321-cba987654321"))
+    let script = renderBootstrapScript(invocation: inv)
+    #expect(script.contains("SUPACOOL_TAB_ID=deadbeef-1234-1234-1234-123456789abc"))
+    #expect(script.contains("SUPACOOL_SURFACE_ID=deadbeef-4321-4321-4321-cba987654321"))
   }
 
   // MARK: expandTilde
@@ -215,6 +232,8 @@ struct RemoteSpawnClientTests {
     port: Int? = nil,
     identityFile: String? = nil,
     deferToSSHConfig: Bool = true,
+    remoteWorkingDirectory: String = "/home/jz/code/api",
+    worktreeID: String = "remote:dev:/home/jz",
     tabID: UUID = UUID(),
     surfaceID: UUID = UUID(),
     agent: String? = "claude code"
@@ -226,11 +245,11 @@ struct RemoteSpawnClientTests {
       port: port,
       identityFile: identityFile,
       deferToSSHConfig: deferToSSHConfig,
-      remoteWorkingDirectory: "/home/jz/code/api",
+      remoteWorkingDirectory: remoteWorkingDirectory,
       remoteSocketPath: "/tmp/supacool-hook-xyz.sock",
       localSocketPath: "/tmp/supacool-local.sock",
       tmuxSessionName: "supacool-abc123",
-      worktreeID: "remote:dev:/home/jz",
+      worktreeID: worktreeID,
       tabID: tabID,
       surfaceID: surfaceID,
       agentCommand: agent,
