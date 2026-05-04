@@ -5,16 +5,20 @@ import Foundation
 /// Code session's native transcript file, so the board card can surface
 /// them as clickable chips.
 ///
-/// The transcript lives at `~/.claude/projects/<hashed>/<session-id>.jsonl`
-/// where `<hashed>` is the session's CWD with `/` replaced by `-`. Codex
-/// sessions don't have a Supacool-readable equivalent yet, so they fall
-/// back to `scanText` on just the initial prompt.
+/// The Claude transcript lives at `~/.claude/projects/<hashed>/<session-id>.jsonl`
+/// where `<hashed>` is the session's CWD with `/` replaced by `-`. Supacool
+/// also scans its own terminal transcript so Codex/raw sessions can surface
+/// references beyond the initial prompt.
 struct SessionReferenceScannerClient: Sendable {
   /// Read the JSONL and pull out every unique ticket/PR reference from
   /// user and assistant messages. Returns `[]` if the file doesn't exist.
   var scan: @Sendable (_ cwdPath: String, _ agentNativeSessionID: String) async -> [SessionReference]
   /// One-shot regex pass over a plain string (e.g. `session.initialPrompt`).
   var scanText: @Sendable (_ text: String) -> [SessionReference]
+  /// Read Supacool's own terminal transcript JSONL and scan user input /
+  /// rendered output deltas. This catches Codex and raw terminal text that
+  /// never lands in Claude Code's native transcript.
+  var scanTerminalTranscript: @Sendable (_ tabID: UUID) async -> [SessionReference]
 }
 
 extension SessionReferenceScannerClient: DependencyKey {
@@ -27,12 +31,16 @@ extension SessionReferenceScannerClient: DependencyKey {
     },
     scanText: { text in
       SessionReferenceScannerLive.scanText(text)
+    },
+    scanTerminalTranscript: { tabID in
+      SessionReferenceScannerLive.scanTerminalTranscript(tabID: tabID)
     }
   )
 
   static let testValue = Self(
     scan: { _, _ in [] },
-    scanText: { _ in [] }
+    scanText: { _ in [] },
+    scanTerminalTranscript: { _ in [] }
   )
 }
 
@@ -127,6 +135,42 @@ nonisolated enum SessionReferenceScannerLive {
       }
     }
     return parts.joined(separator: "\n")
+  }
+
+  /// Scan Supacool's agent-agnostic terminal transcript for references.
+  static func scanTerminalTranscript(tabID: UUID) -> [SessionReference] {
+    scanTranscriptEntries(TranscriptReader.loadEntries(rawTabID: tabID))
+  }
+
+  /// Pure transcript-entry scanner so tests can cover terminal-text
+  /// extraction without touching the user's Application Support folder.
+  static func scanTranscriptEntries(_ entries: [TranscriptEntry]) -> [SessionReference] {
+    var seen = Set<String>()
+    var results: [SessionReference] = []
+
+    func appendRefs(from text: String) {
+      for ref in scanText(text) {
+        if seen.insert(ref.dedupeKey).inserted {
+          results.append(ref)
+        }
+      }
+    }
+
+    for entry in entries {
+      switch entry {
+      case .input(let text, _):
+        appendRefs(from: text)
+      case .outputTurn(_, let delta, _):
+        appendRefs(from: delta)
+      case .hookEvent(_, _, let title, let body, _, _, _, _):
+        if let title { appendRefs(from: title) }
+        if let body { appendRefs(from: body) }
+      default:
+        continue
+      }
+    }
+
+    return results
   }
 
   /// Single-pass regex extraction from plain text. Applies the ticket

@@ -126,6 +126,36 @@ struct SessionReferenceScannerTests {
     #expect(refs.first == .ticket(id: "CEN-1"))
   }
 
+  // MARK: - Terminal transcript
+
+  @Test func scanTranscriptEntriesReadsTerminalText() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .input(text: "Please finish CEN-77", at: now),
+      .outputTurn(
+        fullText: "Opened https://github.com/acme/widgets/pull/42",
+        delta: "Opened https://github.com/acme/widgets/pull/42",
+        at: now
+      ),
+      .hookEvent(
+        agent: "codex",
+        event: "notification",
+        title: "CEN-77 done",
+        body: "PR https://github.com/acme/widgets/pull/42 is ready",
+        sessionID: nil,
+        awaitingClassifierVerdict: false,
+        surfaceID: UUID(),
+        at: now
+      ),
+    ]
+
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [
+      .ticket(id: "CEN-77"),
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
+    ])
+  }
+
   // MARK: - Path hashing
 
   @Test func hashProjectPathReplacesSlashes() {

@@ -108,6 +108,32 @@ struct BoardFeatureTests {
     )
   }
 
+  @Test(.dependencies) func cardAppearedMergesPromptAndTerminalTranscriptReferences() async {
+    var session = Self.sampleSession()
+    session.references = []
+    session.referencesScannedAt = nil
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.sessionReferenceScannerClient.scanText = { _ in [.ticket(id: "CEN-10")] }
+      $0.sessionReferenceScannerClient.scanTerminalTranscript = { _ in [
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
+      ] }
+      $0.githubCLI.viewPullRequest = { _, _, _ in .open }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.cardAppeared(id: session.id))
+    await store.skipReceivedActions()
+
+    #expect(store.state.sessions.first?.references == [
+      .ticket(id: "CEN-10"),
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open),
+    ])
+  }
+
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {
     let session = Self.sampleSession(displayName: "Old Name")
     var state = BoardFeature.State()

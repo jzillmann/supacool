@@ -314,35 +314,10 @@ struct SessionCardView: View {
     .fixedSize()
   }
 
-  /// Inline chips for ticket ids / PR numbers parsed from the session's
-  /// conversation. Shows up to 3; rest collapse to "+N" which opens the
-  /// full list via the info popover.
-  @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
-
-  @ViewBuilder
+  /// Inline chips for parsed work references. Keeps the obvious Linear
+  /// ticket visible and collapses multiple PRs into a stacked dropdown chip.
   private var referenceChips: some View {
-    let visible = session.references.prefix(3)
-    let overflow = max(0, session.references.count - visible.count)
-    HStack(spacing: 4) {
-      ForEach(Array(visible), id: \.dedupeKey) { ref in
-        ReferenceChip(reference: ref, linearOrgSlug: linearOrgSlug)
-      }
-      if overflow > 0 {
-        Button {
-          isInfoPopoverShown = true
-        } label: {
-          Text("+\(overflow)")
-            .font(.caption2.weight(.medium))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.12))
-            .clipShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .help("Show all references")
-      }
-    }
+    SessionReferenceSummaryChips(references: session.references)
   }
 
   private func pullRequestStatus(_ model: PullRequestStatusModel) -> some View {
@@ -534,6 +509,271 @@ struct ReferenceChip: View {
   }
 }
 
+/// Compact reference summary used on board cards and the terminal header.
+/// Linear tickets stay visible; multiple PRs collapse into one stacked chip
+/// with a dropdown list so PR-heavy sessions do not flood the layout.
+struct SessionReferenceSummaryChips: View {
+  let references: [SessionReference]
+
+  @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
+
+  private var tickets: [SessionReference] {
+    references.filter {
+      if case .ticket = $0 { return true }
+      return false
+    }
+  }
+
+  private var pullRequests: [SessionReference] {
+    references.filter {
+      if case .pullRequest = $0 { return true }
+      return false
+    }
+  }
+
+  var body: some View {
+    HStack(spacing: 4) {
+      if let ticket = tickets.first {
+        ReferenceChip(reference: ticket, linearOrgSlug: linearOrgSlug)
+      }
+      if tickets.count > 1 {
+        ReferenceStackChip(
+          kind: .tickets,
+          references: Array(tickets.dropFirst()),
+          linearOrgSlug: linearOrgSlug
+        )
+      }
+      if pullRequests.count == 1, let pullRequest = pullRequests.first {
+        ReferenceChip(reference: pullRequest, linearOrgSlug: linearOrgSlug)
+      } else if pullRequests.count > 1 {
+        ReferenceStackChip(
+          kind: .pullRequests,
+          references: pullRequests,
+          linearOrgSlug: linearOrgSlug
+        )
+      }
+    }
+    .lineLimit(1)
+    .fixedSize(horizontal: true, vertical: false)
+  }
+}
+
+private struct ReferenceStackChip: View {
+  enum Kind {
+    case pullRequests
+    case tickets
+
+    var title: String {
+      switch self {
+      case .pullRequests: return "Pull requests"
+      case .tickets: return "Other tickets"
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .pullRequests: return "rectangle.stack.fill"
+      case .tickets: return "tag.fill"
+      }
+    }
+  }
+
+  let kind: Kind
+  let references: [SessionReference]
+  let linearOrgSlug: String
+
+  @State private var isPopoverShown: Bool = false
+
+  var body: some View {
+    Button {
+      isPopoverShown.toggle()
+    } label: {
+      HStack(spacing: 4) {
+        stackGlyph
+        Text(chipText)
+          .font(.caption2.weight(.medium))
+          .lineLimit(1)
+      }
+      .foregroundStyle(.primary.opacity(0.85))
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(tint.opacity(0.15))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .help(helpText)
+    .popover(isPresented: $isPopoverShown, arrowEdge: .bottom) {
+      popoverContent
+    }
+  }
+
+  private var stackGlyph: some View {
+    ZStack {
+      ForEach(0..<min(references.count, 3), id: \.self) { index in
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+          .strokeBorder(tint.opacity(0.75), lineWidth: 1)
+          .background(
+            RoundedRectangle(cornerRadius: 2, style: .continuous)
+              .fill(tint.opacity(0.08))
+          )
+          .frame(width: 10, height: 8)
+          .offset(x: CGFloat(index) * 2, y: CGFloat(index) * -1)
+      }
+    }
+    .frame(width: 16, height: 11)
+  }
+
+  private var chipText: String {
+    switch kind {
+    case .pullRequests:
+      guard case .pullRequest(_, _, let number, _) = references.first else {
+        return "\(references.count) PRs"
+      }
+      return "#\(number) +\(references.count - 1)"
+    case .tickets:
+      return "+\(references.count)"
+    }
+  }
+
+  private var helpText: String {
+    switch kind {
+    case .pullRequests:
+      return "Show \(references.count) pull requests"
+    case .tickets:
+      let noun = references.count == 1 ? "ticket" : "tickets"
+      return "Show \(references.count) more \(noun)"
+    }
+  }
+
+  private var tint: Color {
+    switch kind {
+    case .tickets:
+      return .blue
+    case .pullRequests:
+      let states = references.compactMap { ref -> PRState? in
+        if case .pullRequest(_, _, _, let state) = ref { return state }
+        return nil
+      }
+      if states.contains(.closed) { return .red }
+      if states.contains(.draft) { return .gray }
+      if states.contains(.open) { return .green }
+      if !states.isEmpty, states.allSatisfy({ $0 == .merged }) { return .purple }
+      return .secondary
+    }
+  }
+
+  private var popoverContent: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      Label(kind.title, systemImage: kind.systemImage)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 4) {
+        ForEach(references, id: \.dedupeKey) { reference in
+          referenceRow(reference)
+        }
+      }
+    }
+    .padding(12)
+    .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
+  }
+
+  private func referenceRow(_ reference: SessionReference) -> some View {
+    Button {
+      open(reference)
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: rowSystemImage(for: reference))
+          .font(.caption)
+          .foregroundStyle(rowTint(for: reference))
+          .frame(width: 14)
+        VStack(alignment: .leading, spacing: 1) {
+          Text(rowTitle(for: reference))
+            .font(.caption.weight(.medium))
+            .lineLimit(1)
+          Text(rowSubtitle(for: reference))
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 12)
+        Image(systemName: "arrow.up.forward")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+      .contentShape(Rectangle())
+      .padding(.vertical, 4)
+    }
+    .buttonStyle(.plain)
+    .help(rowHelp(for: reference))
+  }
+
+  private func open(_ reference: SessionReference) {
+    guard let url = reference.url(linearOrgSlug: linearOrgSlug) else { return }
+    NSWorkspace.shared.open(url)
+    isPopoverShown = false
+  }
+
+  private func rowSystemImage(for reference: SessionReference) -> String {
+    switch reference {
+    case .ticket:
+      return "tag.fill"
+    case .pullRequest:
+      return "number.circle"
+    }
+  }
+
+  private func rowTint(for reference: SessionReference) -> Color {
+    switch reference {
+    case .ticket:
+      return .blue
+    case .pullRequest(_, _, _, let state):
+      guard let state else { return .secondary }
+      return prStateColor(state)
+    }
+  }
+
+  private func rowTitle(for reference: SessionReference) -> String {
+    switch reference {
+    case .ticket(let id):
+      return id
+    case .pullRequest(let owner, let repo, let number, _):
+      return "\(owner)/\(repo) #\(number)"
+    }
+  }
+
+  private func rowSubtitle(for reference: SessionReference) -> String {
+    switch reference {
+    case .ticket:
+      return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Configure Linear org to open"
+        : "Linear issue"
+    case .pullRequest(_, _, _, let state):
+      return "GitHub pull request · \((state?.rawValue ?? "loading…").capitalized)"
+    }
+  }
+
+  private func rowHelp(for reference: SessionReference) -> String {
+    switch reference {
+    case .ticket(let id):
+      return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "\(id) — configure Linear org in Settings → Coding Agents"
+        : "Open \(id) in Linear"
+    case .pullRequest(let owner, let repo, let number, let state):
+      let stateLabel = state?.rawValue ?? "loading…"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)) on GitHub"
+    }
+  }
+
+  private func prStateColor(_ state: PRState) -> Color {
+    switch state {
+    case .open: return .green
+    case .merged: return .purple
+    case .closed: return .red
+    case .draft: return .gray
+    }
+  }
+}
+
 #Preview {
   let session = AgentSession(
     repositoryID: "/tmp/repo",
@@ -544,6 +784,7 @@ struct ReferenceChip: View {
     references: [
       .ticket(id: "CEN-1234"),
       .pullRequest(owner: "foo", repo: "bar", number: 42, state: .open),
+      .pullRequest(owner: "foo", repo: "bar", number: 43, state: .draft),
     ]
   )
   return VStack {
