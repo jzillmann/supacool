@@ -150,6 +150,7 @@ struct SupacoolApp: App {
     if let resourceURL = Bundle.main.resourceURL?.appendingPathComponent("ghostty") {
       setenv("GHOSTTY_RESOURCES_DIR", resourceURL.path, 1)
     }
+    TerminfoInstaller.installIfNeeded()
     GhosttyCLI.argv.withUnsafeBufferPointer { buffer in
       let argc = UInt(max(0, buffer.count - 1))
       let argv = UnsafeMutablePointer(mutating: buffer.baseAddress)
