@@ -304,7 +304,15 @@ struct BoardRootView: View {
         onAutoObserverPromptChanged: { prompt in
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
         },
-        onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) }
+        onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
+        onDebug: {
+          store.send(
+            .debugSessionRequested(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        }
       )
       .task(id: session.lastActivityAt) {
         store.send(.cardAppeared(id: session.id))

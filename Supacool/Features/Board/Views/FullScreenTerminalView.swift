@@ -62,6 +62,10 @@ struct FullScreenTerminalView: View {
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
 
+  /// Mirrors the board card's right-click "Debug session…" action so the
+  /// user can spawn a debug agent without leaving the terminal view.
+  let onDebug: () -> Void
+
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
@@ -192,6 +196,7 @@ struct FullScreenTerminalView: View {
       openDiffButton
       recentPromptsButton
       autoObserverButton
+      debugButton
       splitButton
       Spacer()
       agentChip
@@ -634,6 +639,19 @@ struct FullScreenTerminalView: View {
         onRunNow: onAutoObserverRunNow
       )
     }
+  }
+
+  /// Header button that mirrors the board card's right-click "Debug
+  /// session…" action — opens the debug sheet that spawns a fresh agent
+  /// in the supacool repo, primed with this session's trace.
+  private var debugButton: some View {
+    Button(action: onDebug) {
+      Image(systemName: "ladybug")
+        .font(.system(size: 13, weight: .medium))
+        .modifier(HeaderIconStyle())
+    }
+    .buttonStyle(.plain)
+    .help("Debug session…")
   }
 
   /// Header button that toggles a single shell split beside the agent
