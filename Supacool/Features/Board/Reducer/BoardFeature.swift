@@ -370,9 +370,9 @@ struct BoardFeature {
     case _autoObserverDecided(id: AgentSession.ID, response: String?)
 
     // MARK: References (ticket ids, PR URLs)
-    /// Fired from `SessionCardView.task` on first appearance. Triggers a
-    /// scan of the Claude Code JSONL if the session's references are
-    /// stale (never scanned, or `lastActivityAt > referencesScannedAt`).
+    /// Fired when a board card or focused terminal appears/updates. Triggers
+    /// a scan of Claude Code JSONL plus Supacool's terminal transcript when
+    /// references are stale (never scanned, or `lastActivityAt > referencesScannedAt`).
     case cardAppeared(id: AgentSession.ID)
     case _referencesScanned(id: AgentSession.ID, refs: [SessionReference])
     /// Fetches fresh `PRState` for a pull-request reference via `gh pr view`
@@ -1616,11 +1616,15 @@ struct BoardFeature {
               if let agentID, !agentID.isEmpty {
                 refs = await scannerClient.scan(worktreeID, agentID)
               }
-              // Always also scan the initialPrompt — covers Codex sessions
-              // with no JSONL, and catches tickets the user typed before
-              // any Claude hook fired.
+              // Always also scan the initialPrompt and Supacool's own
+              // terminal transcript. The transcript pass catches Codex/raw
+              // terminal refs that never land in Claude's native JSONL.
               let promptRefs = scannerClient.scanText(initialPrompt)
-              let merged = Self.mergeReferences(refs, with: promptRefs)
+              let terminalRefs = await scannerClient.scanTerminalTranscript(id)
+              let merged = Self.mergeReferences(
+                Self.mergeReferences(refs, with: promptRefs),
+                with: terminalRefs
+              )
               await send(._referencesScanned(id: id, refs: merged))
             }
           )

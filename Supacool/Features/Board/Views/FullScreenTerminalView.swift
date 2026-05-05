@@ -177,6 +177,7 @@ struct FullScreenTerminalView: View {
 
       repoChip
       pullRequestStatus
+      referenceChips
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -247,6 +248,13 @@ struct FullScreenTerminalView: View {
       PullRequestStatusButton(model: model)
         .font(.caption)
         .padding(.leading, 2)
+    }
+  }
+
+  @ViewBuilder
+  private var referenceChips: some View {
+    if !session.references.isEmpty {
+      SessionReferenceSummaryChips(references: session.references)
     }
   }
 

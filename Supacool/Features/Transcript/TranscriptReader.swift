@@ -24,6 +24,12 @@ nonisolated enum TranscriptReader {
   /// Returns the JSONL path for a tab. Mirrors `TranscriptRecorder.transcriptURL`
   /// so the reader doesn't need to hold a reference to the recorder.
   static func transcriptURL(tabID: TerminalTabID) -> URL? {
+    transcriptURL(rawTabID: tabID.rawValue)
+  }
+
+  /// Nonisolated UUID overload for background scanners that should not
+  /// construct `TerminalTabID` under Swift 6's default main-actor isolation.
+  static func transcriptURL(rawTabID: UUID) -> URL? {
     guard
       let base = try? FileManager.default.url(
         for: .applicationSupportDirectory,
@@ -36,13 +42,18 @@ nonisolated enum TranscriptReader {
       base
       .appending(path: "io.morethan.supacool", directoryHint: .isDirectory)
       .appending(path: "transcripts", directoryHint: .isDirectory)
-      .appending(path: "\(tabID.rawValue.uuidString).jsonl", directoryHint: .notDirectory)
+      .appending(path: "\(rawTabID.uuidString).jsonl", directoryHint: .notDirectory)
   }
 
   /// Load every entry for a session. Ignores malformed lines, returns
   /// `[]` if the file doesn't exist yet.
   static func loadEntries(tabID: TerminalTabID) -> [TranscriptEntry] {
-    guard let url = transcriptURL(tabID: tabID),
+    loadEntries(rawTabID: tabID.rawValue)
+  }
+
+  /// UUID overload for scanners that only have the session/tab UUID.
+  static func loadEntries(rawTabID: UUID) -> [TranscriptEntry] {
+    guard let url = transcriptURL(rawTabID: rawTabID),
       let data = try? Data(contentsOf: url),
       let text = String(data: data, encoding: .utf8)
     else { return [] }

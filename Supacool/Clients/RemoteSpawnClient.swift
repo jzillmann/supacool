@@ -236,7 +236,7 @@ nonisolated func renderBootstrapScript(
   environment: [(name: String, value: String)] = []
 ) -> String {
   let tmuxCommandPrefix =
-    #"exec tmux new-session -A -s "$TMUX_SESSION" "#
+    #"exec "$SUPACOOL_TMUX_BIN" new-session -A -s "$TMUX_SESSION" "#
     + #"-c "$SUPACOOL_WORKTREE_PATH" "${tmux_env[@]}""#
   let execCommand: String
   if let agentCommand, !agentCommand.isEmpty {
@@ -261,7 +261,18 @@ nonisolated func renderBootstrapScript(
     # `open terminal failed: not a terminal`, leaving the surface dead
     # without a clear error. ssh -tt + `bash -c "$(…)"` should keep us tty-side.
     [ -t 0 ] || { echo "supacool: stdin is not a tty (expected ssh -t); aborting before tmux" >&2; exit 71; }
+    SUPACOOL_PATH_PREFIX="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin"
+    SUPACOOL_PATH_PREFIX="$SUPACOOL_PATH_PREFIX:/opt/local/bin:$HOME/.local/bin:$HOME/bin"
+    export PATH="$SUPACOOL_PATH_PREFIX:$PATH"
     \(exports)
+    SUPACOOL_TMUX_BIN="$(command -v tmux || true)"
+    if [ -z "$SUPACOOL_TMUX_BIN" ]; then
+      echo "[supacool] Remote sessions require tmux, but tmux was not found on the remote PATH." >&2
+      echo "[supacool] PATH=$PATH" >&2
+      echo "[supacool] Install tmux on the remote host." >&2
+      echo "[supacool] macOS: brew install tmux; Ubuntu/Debian: sudo apt install tmux." >&2
+      exit 127
+    fi
     mkdir -p ~/.supacool/hooks ~/.supacool/ssh
     # Fall back when the remote doesn't have the custom terminfo installed.
     if ! infocmp xterm-ghostty >/dev/null 2>&1; then

@@ -12,9 +12,9 @@ private nonisolated let recorderLogger = SupaLogger("Supacool.TranscriptRecorder
 /// One line = one `TranscriptEntry`. Append-only; rotation is a future concern.
 ///
 /// This recorder is deliberately ignorant of agent type. For Claude sessions
-/// there's a richer native transcript at `~/.claude/projects/.../...jsonl` —
-/// `SessionReferenceScannerLive` is the thing that reads it. This file is the
-/// unified, agent-agnostic view.
+/// there's a richer native transcript at `~/.claude/projects/.../...jsonl`,
+/// but this file is the unified, agent-agnostic view that reference scanning
+/// can use for Codex/raw terminal text.
 ///
 /// Not `@Observable` — nothing in the UI reads its state; it's a background
 /// sink. Keeping it a plain class also avoids the `lazy`-vs-macro clash the

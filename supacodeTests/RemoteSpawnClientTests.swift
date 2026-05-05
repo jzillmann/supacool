@@ -34,14 +34,14 @@ struct RemoteSpawnClientTests {
 
   @Test func bootstrapIncludesTmuxAttachOrCreate() {
     let script = renderBootstrapScript(agentCommand: "claude code")
-    #expect(script.contains("tmux new-session -A -s"))
+    #expect(script.contains(#""$SUPACOOL_TMUX_BIN" new-session -A -s"#))
     #expect(script.contains("-c \"$SUPACOOL_WORKTREE_PATH\""))
     #expect(script.contains("-- claude code"))
   }
 
   @Test func bootstrapFallsBackWhenNoAgentCommand() {
     let script = renderBootstrapScript(agentCommand: nil)
-    #expect(script.contains("tmux new-session -A -s"))
+    #expect(script.contains(#""$SUPACOOL_TMUX_BIN" new-session -A -s"#))
     // No trailing `-- <cmd>` when there's no agent command.
     #expect(!script.contains("-- "))
   }
@@ -60,6 +60,25 @@ struct RemoteSpawnClientTests {
     let script = renderBootstrapScript(agentCommand: nil)
     #expect(script.contains("infocmp xterm-ghostty"))
     #expect(script.contains("export TERM=xterm-256color"))
+  }
+
+  @Test func bootstrapAddsRemotePathFallbacksAndTmuxPreflight() {
+    let script = renderBootstrapScript(agentCommand: nil)
+    #expect(
+      script.contains(
+        #"SUPACOOL_PATH_PREFIX="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin""#
+      )
+    )
+    #expect(
+      script.contains(
+        #"SUPACOOL_PATH_PREFIX="$SUPACOOL_PATH_PREFIX:/opt/local/bin:$HOME/.local/bin:$HOME/bin""#
+      )
+    )
+    #expect(script.contains(#"export PATH="$SUPACOOL_PATH_PREFIX:$PATH""#))
+    #expect(script.contains(#"SUPACOOL_TMUX_BIN="$(command -v tmux || true)""#))
+    #expect(script.contains("Remote sessions require tmux"))
+    #expect(script.contains("brew install tmux"))
+    #expect(script.contains("exit 127"))
   }
 
   // MARK: renderBootstrapCommand

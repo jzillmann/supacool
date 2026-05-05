@@ -306,6 +306,9 @@ struct BoardRootView: View {
         },
         onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) }
       )
+      .task(id: session.lastActivityAt) {
+        store.send(.cardAppeared(id: session.id))
+      }
       .overlay {
         if isSessionSwitcherPresented {
           SessionSwitcherOverlay(
