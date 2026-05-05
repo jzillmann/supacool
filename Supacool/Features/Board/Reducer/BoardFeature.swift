@@ -1921,7 +1921,9 @@ struct BoardFeature {
         state.debugSheet = sheetState
         return .none
 
-      case .debugSheet(.presented(.delegate(.spawnRequested(let observation, let agent, let source)))):
+      case .debugSheet(
+        .presented(.delegate(.spawnRequested(let observation, let agent, let selection, let source)))
+      ):
         let repositories = state.pendingDebugRepositories
         guard let supacoolRepo = SupacoolDebugSupport.findSupacoolRepository(in: repositories) else {
           // Race-guard: user dismissed the picker without registering,
@@ -1940,17 +1942,19 @@ struct BoardFeature {
           sourceSession: source,
           tracePath: tracePath
         )
-        let worktreeName = SupacoolDebugSupport.debugWorktreeName(
-          sourceDisplayName: source.displayName
-        )
         let bypass =
           UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
         @Shared(.settingsFile) var settingsFile
         let fetchOrigin = settingsFile.global.fetchOriginBeforeWorktreeCreation
+        // Only sweep the worktree on session delete when we created one.
+        let removeOnDelete: Bool = {
+          if case .newBranch = selection { return true }
+          return false
+        }()
         let request = SessionSpawner.LocalRequest(
           sessionID: uuid(),
           repository: supacoolRepo,
-          selection: .newBranch(name: worktreeName),
+          selection: selection,
           agent: agent,
           prompt: prompt,
           planMode: false,
@@ -1961,7 +1965,7 @@ struct BoardFeature {
           suggestedDisplayName: SupacoolDebugSupport.debugDisplayName(
             sourceDisplayName: source.displayName
           ),
-          removeBackingWorktreeOnDelete: true
+          removeBackingWorktreeOnDelete: removeOnDelete
         )
         return .run { send in
           do {

@@ -21,7 +21,7 @@ struct DebugSessionSheetView: View {
     }
     .padding(20)
     .frame(width: 520)
-    .frame(minHeight: 200, idealHeight: 360, maxHeight: 360)
+    .frame(minHeight: 200, idealHeight: 400, maxHeight: 420)
     .onExitCommand { store.send(.cancelTapped) }
   }
 
@@ -51,6 +51,7 @@ struct DebugSessionSheetView: View {
     VStack(alignment: .leading, spacing: 16) {
       header
       agentPicker
+      targetPicker
       observationEditor
       if let message = store.errorMessage {
         Text(message)
@@ -77,6 +78,38 @@ struct DebugSessionSheetView: View {
       .pickerStyle(.segmented)
       .fixedSize()
       Spacer(minLength: 0)
+    }
+  }
+
+  private var targetPicker: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      HStack(spacing: 10) {
+        Text("Run on")
+          .font(.callout)
+          .fontWeight(.medium)
+        Picker(selection: $store.target) {
+          ForEach(DebugTarget.allCases) { target in
+            Text(target.displayName).tag(target)
+          }
+        } label: {
+          EmptyView()
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+        Spacer(minLength: 0)
+      }
+      if store.target == .worktree {
+        HStack(spacing: 10) {
+          Text("Branch")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .frame(width: 56, alignment: .leading)
+          TextField("debug_<slug>_<HHmm>", text: $store.branchName)
+            .textFieldStyle(.roundedBorder)
+            .font(.body.monospaced())
+        }
+      }
     }
   }
 

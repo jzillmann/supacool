@@ -11,6 +11,21 @@ import Foundation
 /// sheet only owns the observation field, the submit / cancel
 /// gestures, and the structural switch between "registered" and
 /// "supacool repo missing" modes.
+/// Where the debug agent runs. `.main` reuses the supacool repo root
+/// (no worktree created); `.worktree` carves a fresh worktree off HEAD
+/// using the user-editable branch name in `State.branchName`.
+nonisolated enum DebugTarget: String, CaseIterable, Identifiable, Equatable, Sendable {
+  case main
+  case worktree
+  var id: String { rawValue }
+  var displayName: String {
+    switch self {
+    case .main: return "Main"
+    case .worktree: return "Worktree"
+    }
+  }
+}
+
 @Reducer
 struct DebugSessionFeature {
   @ObservableState
@@ -28,10 +43,25 @@ struct DebugSessionFeature {
     /// and matches what early debug sessions shipped with. Picker in the
     /// sheet lets the user override (pi / codex / user-defined).
     var agent: AgentType = .claude
+    /// Run on the supacool repo root vs. a fresh worktree. Defaults to
+    /// `.worktree` to preserve the previous behaviour (every debug spawn
+    /// got its own branch); the picker lets the user opt into running
+    /// directly on the main checkout when they don't want the churn.
+    var target: DebugTarget = .worktree
+    /// Auto-generated `debug_<slug>_<HHmm>` name shown when `target` is
+    /// `.worktree`. Editable so the user can rename before spawning.
+    var branchName: String = ""
     var observation: String = ""
     /// Inline error shown below the editor for transient validation
     /// (empty observation, etc.). Cleared on next edit.
     var errorMessage: String?
+
+    init(sourceSession: AgentSession) {
+      self.sourceSession = sourceSession
+      self.branchName = SupacoolDebugSupport.debugWorktreeName(
+        sourceDisplayName: sourceSession.displayName
+      )
+    }
   }
 
   enum Action: BindableAction, Equatable {
@@ -43,7 +73,12 @@ struct DebugSessionFeature {
 
     @CasePathable
     enum Delegate: Equatable {
-      case spawnRequested(observation: String, agent: AgentType, sourceSession: AgentSession)
+      case spawnRequested(
+        observation: String,
+        agent: AgentType,
+        selection: WorkspaceSelection,
+        sourceSession: AgentSession
+      )
       case registerSupacoolRequested
       case cancelled
     }
@@ -65,11 +100,24 @@ struct DebugSessionFeature {
           state.errorMessage = "Type what you noticed before spawning a debug session."
           return .none
         }
+        let selection: WorkspaceSelection
+        switch state.target {
+        case .main:
+          selection = .repoRoot
+        case .worktree:
+          let trimmedBranch = state.branchName.trimmingCharacters(in: .whitespacesAndNewlines)
+          guard !trimmedBranch.isEmpty else {
+            state.errorMessage = "Worktree branch name can't be empty."
+            return .none
+          }
+          selection = .newBranch(name: trimmedBranch)
+        }
         return .send(
           .delegate(
             .spawnRequested(
               observation: trimmed,
               agent: state.agent,
+              selection: selection,
               sourceSession: state.sourceSession
             )
           )
