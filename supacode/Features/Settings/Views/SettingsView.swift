@@ -40,6 +40,7 @@ private struct RepositoryLabel: View {
 struct SettingsView: View {
   @Bindable var store: StoreOf<AppFeature>
   @Bindable var settingsStore: StoreOf<SettingsFeature>
+  @Environment(\.dismissWindow) private var dismissWindow
 
   init(store: StoreOf<AppFeature>) {
     self.store = store
@@ -132,6 +133,14 @@ struct SettingsView: View {
     .alert(store: settingsStore.scope(state: \.$alert, action: \.alert))
     .alert(store: store.scope(state: \.$alert, action: \.alert))
     .frame(minWidth: 750, minHeight: 500)
+    .background {
+      Button("Close Settings") {
+        dismissWindow(id: WindowID.settings)
+      }
+      .keyboardShortcut(.escape, modifiers: [])
+      .opacity(0)
+      .accessibilityHidden(true)
+    }
     .onAppear {
       guard settingsStore.selection == nil else { return }
       settingsStore.send(.setSelection(.general))

@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -27,16 +28,22 @@ extension View {
 // MARK: - Menu button.
 
 /// Settings menu button that opens the dedicated settings window and supports custom keyboard shortcuts.
+/// Toggles: if the settings window is already the key window, closes it instead of re-opening.
 struct SettingsMenuButton: View {
   @Environment(\.openWindow) private var openWindow
+  @Environment(\.dismissWindow) private var dismissWindow
   let shortcutOverrides: [AppShortcutID: AppShortcutOverride]
   let onOpen: () -> Void
 
   var body: some View {
     let settings = AppShortcuts.openSettings.effective(from: shortcutOverrides)
     Button("Settings...", systemImage: "gear") {
-      onOpen()
-      openWindow(id: WindowID.settings)
+      if NSApp.keyWindow?.identifier?.rawValue == WindowID.settings {
+        dismissWindow(id: WindowID.settings)
+      } else {
+        onOpen()
+        openWindow(id: WindowID.settings)
+      }
     }
     .appKeyboardShortcut(settings)
   }
