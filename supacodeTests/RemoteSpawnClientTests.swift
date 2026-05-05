@@ -85,9 +85,12 @@ struct RemoteSpawnClientTests {
 
   @Test func bootstrapCommandRoundTripsThroughBase64() throws {
     let command = renderBootstrapCommand(agentCommand: "codex resume x")
-    // "echo <base64> | base64 -d | bash -s --"
-    let prefix = "echo "
-    let suffix = " | base64 -d | bash -s --"
+    // `bash -c "$(echo <base64> | base64 -d)"` — substitution form, not
+    // a pipe into `bash -s`. The pipe form would make bash's stdin the
+    // pipe end and break `exec tmux new-session …` with
+    // "open terminal failed: not a terminal".
+    let prefix = #"bash -c "$(echo "#
+    let suffix = #" | base64 -d)""#
     #expect(command.hasPrefix(prefix))
     #expect(command.hasSuffix(suffix))
     let startIdx = command.index(command.startIndex, offsetBy: prefix.count)
@@ -96,6 +99,20 @@ struct RemoteSpawnClientTests {
     let decoded = try #require(Data(base64Encoded: encoded))
     let decodedScript = String(data: decoded, encoding: .utf8) ?? ""
     #expect(decodedScript == renderBootstrapScript(agentCommand: "codex resume x"))
+  }
+
+  @Test func bootstrapCommandDoesNotPipeIntoBashStdin() {
+    // Regression guard: piping into `bash -s` makes tmux's stdin the
+    // pipe end and breaks remote sessions with
+    // "open terminal failed: not a terminal".
+    let command = renderBootstrapCommand(agentCommand: "codex resume x")
+    #expect(!command.contains("| bash -s"))
+    #expect(!command.contains("|bash -s"))
+  }
+
+  @Test func bootstrapAbortsWhenStdinIsNotATTY() {
+    let script = renderBootstrapScript(agentCommand: "claude code")
+    #expect(script.contains("[ -t 0 ]"))
   }
 
   // MARK: renderSSHInvocation
@@ -214,11 +231,13 @@ struct RemoteSpawnClientTests {
     #expect(!rendered.contains("@dev.example.com"))
   }
 
-  @Test func invocationEndsWithBootstrapBashPipe() {
+  @Test func invocationEndsWithBootstrapBashSubstitution() {
     let rendered = renderSSHInvocation(sampleInvocation())
     // The tail is the base64 bootstrap, wrapped in single quotes by
-    // remoteSpawnShellQuote (contains spaces + pipe chars).
-    #expect(rendered.contains("| base64 -d | bash -s --"))
+    // remoteSpawnShellQuote (contains spaces, pipe chars, and the
+    // double-quoted command substitution).
+    #expect(rendered.contains(#"bash -c "$(echo "#))
+    #expect(rendered.contains(#" | base64 -d)""#))
   }
 
   @Test func invocationLowercasesUUIDs() {

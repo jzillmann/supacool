@@ -77,10 +77,12 @@ UI surface: in `RemoteHostsSettingsView`, a disclosure section "Found in shell h
   -R <remoteSock>:<localSock> \
   [-p <port>] [-i <identityFile>] \
   [<user>@]<hostname> \
-  'echo <base64-bootstrap> | base64 -d | bash -s --'
+  'bash -c "$(echo <base64-bootstrap> | base64 -d)"'
 ```
 
 When `deferToSSHConfig == true`, the `[-p …] [-i …] [<user>@]<hostname>` block is replaced by `<sshAlias>` and nothing else — OpenSSH resolves the rest. `ControlMaster` and the reverse-forward flag are common to both paths.
+
+**Why `bash -c "$(…)"` and not `… | bash -s`?** The pipe form makes bash's stdin the read end of the decode pipe. The bootstrap script ends in `exec tmux new-session …`, which inherits that pipe and dies with `open terminal failed: not a terminal` — even though `ssh -tt` did allocate a pty. Command substitution keeps bash's stdin pointed at the inherited pty, so tmux attaches successfully. The bootstrap also opens with `[ -t 0 ] || exit 71` as a defensive guard — if a future change re-introduces a non-tty stdin, it'll fail loud on the surface instead of with the cryptic tmux message.
 
 The bootstrap script exports the required `SUPACOOL_*` tuple itself instead of using SSH `SetEnv`; `SetEnv` depends on the remote `sshd_config AcceptEnv` allow-list and silently drops arbitrary variables on default macOS/Linux sshd installs.
 
