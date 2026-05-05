@@ -69,11 +69,14 @@ nonisolated struct PiSettingsInstaller {
     import { createConnection } from "node:net";
 
     const IDLE_DEBOUNCE_MS = 500;
+    const COMPACTION_FALLBACK_MS = 15 * 60 * 1000;
     const SOCKET_TIMEOUT_MS = 1000;
     const AGENT_NAME = "pi";
 
-    let busy = false;
+    const busyReasons = new Set();
+    let reportedBusy = false;
     let idleTimer = undefined;
+    let compactionFallbackTimer = undefined;
 
     function supacoolEnv() {
       const socketPath = process.env.SUPACOOL_SOCKET_PATH;
@@ -106,13 +109,36 @@ nonisolated struct PiSettingsInstaller {
       idleTimer = undefined;
     }
 
-    function sendBusy(active, force = false) {
-      if (!force && busy === active) return;
-      busy = active;
+    function clearCompactionFallbackTimer() {
+      if (compactionFallbackTimer !== undefined) clearTimeout(compactionFallbackTimer);
+      compactionFallbackTimer = undefined;
+    }
+
+    function sendBusySnapshot(force = false) {
+      const active = busyReasons.size > 0;
+      if (!force && reportedBusy === active) return;
+      reportedBusy = active;
 
       const baseHeader = header();
       if (!baseHeader) return;
       sendToSupacool(`${baseHeader} ${active ? "1" : "0"} ${process.pid}\n`);
+    }
+
+    function setBusyReason(reason, active, force = false) {
+      if (active) {
+        busyReasons.add(reason);
+      } else {
+        busyReasons.delete(reason);
+      }
+      sendBusySnapshot(force);
+    }
+
+    function scheduleCompactionFallbackClear() {
+      clearCompactionFallbackTimer();
+      compactionFallbackTimer = setTimeout(() => {
+        compactionFallbackTimer = undefined;
+        setBusyReason("compaction", false);
+      }, COMPACTION_FALLBACK_MS);
     }
 
     function sendSessionID(ctx, eventName) {
@@ -144,20 +170,45 @@ nonisolated struct PiSettingsInstaller {
       pi.on("agent_start", async (_event, ctx) => {
         clearIdleTimer();
         sendSessionID(ctx, "AgentStart");
-        sendBusy(true);
+        setBusyReason("agent", true);
       });
 
       pi.on("agent_end", async () => {
         clearIdleTimer();
         idleTimer = setTimeout(() => {
           idleTimer = undefined;
-          sendBusy(false);
+          setBusyReason("agent", false);
         }, IDLE_DEBOUNCE_MS);
+      });
+
+      pi.on("session_before_compact", async (event, ctx) => {
+        clearIdleTimer();
+        sendSessionID(ctx, "CompactionStart");
+        setBusyReason("compaction", true);
+        scheduleCompactionFallbackClear();
+        if (event.signal) {
+          event.signal.addEventListener(
+            "abort",
+            () => {
+              clearCompactionFallbackTimer();
+              setBusyReason("compaction", false);
+            },
+            { once: true }
+          );
+        }
+      });
+
+      pi.on("session_compact", async (_event, ctx) => {
+        clearCompactionFallbackTimer();
+        sendSessionID(ctx, "CompactionEnd");
+        setBusyReason("compaction", false);
       });
 
       pi.on("session_shutdown", async () => {
         clearIdleTimer();
-        sendBusy(false, true);
+        clearCompactionFallbackTimer();
+        busyReasons.clear();
+        sendBusySnapshot(true);
       });
     }
     """#

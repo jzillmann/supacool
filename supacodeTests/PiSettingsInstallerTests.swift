@@ -26,6 +26,31 @@ struct PiSettingsInstallerTests {
     #expect(installer.installState() == .current)
   }
 
+  @Test func extensionMarksPiCompactionAsBusy() {
+    let source = PiSettingsInstaller.extensionSource
+
+    #expect(source.contains("pi.on(\"session_before_compact\""))
+    #expect(source.contains("pi.on(\"session_compact\""))
+    #expect(source.contains("sendSessionID(ctx, \"CompactionStart\")"))
+    #expect(source.contains("sendSessionID(ctx, \"CompactionEnd\")"))
+    #expect(source.contains("setBusyReason(\"compaction\", true)"))
+    #expect(source.contains("setBusyReason(\"compaction\", false)"))
+    #expect(source.contains("event.signal.addEventListener"))
+    #expect(source.contains("COMPACTION_FALLBACK_MS"))
+  }
+
+  @Test func extensionKeepsIndependentBusyReasonsFromClearingEachOther() {
+    let source = PiSettingsInstaller.extensionSource
+
+    #expect(source.contains("const busyReasons = new Set();"))
+    #expect(source.contains("const active = busyReasons.size > 0;"))
+    #expect(source.contains("busyReasons.add(reason);"))
+    #expect(source.contains("busyReasons.delete(reason);"))
+    #expect(source.contains("setBusyReason(\"agent\", true)"))
+    #expect(source.contains("setBusyReason(\"agent\", false)"))
+    #expect(source.contains("busyReasons.clear();"))
+  }
+
   @Test func staleWhenExistingExtensionDiffers() throws {
     let homeURL = makeTempHomeURL()
     defer { try? fileManager.removeItem(at: homeURL) }
