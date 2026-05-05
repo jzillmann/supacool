@@ -11,6 +11,7 @@ GHOSTTY_XCFRAMEWORK_PATH := Frameworks/GhosttyKit.xcframework
 GHOSTTY_RESOURCE_PATH := Resources/ghostty
 GHOSTTY_TERMINFO_PATH := Resources/terminfo
 GHOSTTY_BUILD_OUTPUTS := $(GHOSTTY_XCFRAMEWORK_PATH) $(GHOSTTY_RESOURCE_PATH) $(GHOSTTY_TERMINFO_PATH)
+SUBMODULE_PATHS := ThirdParty/ghostty Resources/git-wt
 PROJECT_FILE_PATH := supacool.xcodeproj/project.pbxproj
 SPM_CACHE_DIR := /tmp/supacool-spm-cache/SourcePackages
 FORMAT ?= xcsift
@@ -32,14 +33,37 @@ else
   $(error Unknown FORMAT "$(FORMAT)". Use xcsift, xcpretty, or none)
 endif
 .DEFAULT_GOAL := help
-.PHONY: build-ghostty-xcframework build-app run-app install-dev-build archive export-archive format lint check test bump-version bump-and-release log-stream
+.PHONY: build-ghostty-xcframework repair-submodules ensure-submodules build-app run-app install-dev-build archive export-archive format lint check test bump-version bump-and-release log-stream
 
 help:  # Display this help.
 	@-+echo "Run make with one of the following targets:"
 	@-+echo
 	@-+grep -Eh "^[a-z-]+:.*#" Makefile | sed -E 's/^(.*:)(.*#+)(.*)/  \1 @@@ \3 /' | column -t -s "@@@"
 
-build-ghostty-xcframework: $(GHOSTTY_BUILD_OUTPUTS) # Build ghostty framework
+build-ghostty-xcframework: ensure-submodules $(GHOSTTY_BUILD_OUTPUTS) # Build ghostty framework
+
+repair-submodules: # Initialize or repair git submodules
+	git submodule sync --recursive
+	git submodule update --init --recursive --force --depth=1 -j 8 --progress || \
+		git submodule update --init --recursive --force -j 8 --progress
+
+ensure-submodules:
+	@status="$$(git submodule status --recursive $(SUBMODULE_PATHS) 2>/dev/null || true)"; \
+	if [ -z "$$status" ] \
+		|| echo "$$status" | grep -qE '^[+-U]' \
+		|| [ ! -f ThirdParty/ghostty/build.zig ] \
+		|| [ ! -x Resources/git-wt/wt ]; then \
+		echo "Submodules missing, mismatched, or incomplete; repairing..."; \
+		$(MAKE) repair-submodules; \
+	fi; \
+	if [ ! -f ThirdParty/ghostty/build.zig ]; then \
+		echo "error: ThirdParty/ghostty is missing build.zig after submodule repair"; \
+		exit 1; \
+	fi; \
+	if [ ! -x Resources/git-wt/wt ]; then \
+		echo "error: Resources/git-wt/wt is missing or not executable after submodule repair"; \
+		exit 1; \
+	fi
 
 $(GHOSTTY_BUILD_OUTPUTS):
 	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false -Dxcframework-target=native
