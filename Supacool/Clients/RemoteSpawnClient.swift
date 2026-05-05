@@ -195,7 +195,16 @@ nonisolated func expandTilde(in path: String) -> String {
 
 /// The single-line shell command the remote shell runs. Keeps the Mac
 /// side free of heredoc quoting gymnastics: we base64-embed a small
-/// bootstrap script and the remote decodes + execs it with `bash -s`.
+/// bootstrap script and the remote decodes it via `$(…)` then runs it
+/// with `bash -c`.
+///
+/// **Why `bash -c "$(…)"` and not `… | bash -s`?** The pipe form makes
+/// bash's stdin the read end of the decode pipe; the trailing
+/// `exec tmux new-session …` then inherits that pipe and dies with
+/// `open terminal failed: not a terminal`. Command substitution keeps
+/// bash's stdin pointed at the ssh-allocated pty, so tmux attaches
+/// successfully.
+///
 /// Invariant: exactly one set of single quotes around the whole thing,
 /// since the enclosing ssh arg is shell-escaped once by `renderSSHInvocation`.
 nonisolated func renderBootstrapCommand(
@@ -213,9 +222,10 @@ nonisolated func renderBootstrapCommand(invocation inv: RemoteSpawnInvocation) -
 
 private nonisolated func renderBootstrapCommand(script: String) -> String {
   let encoded = Data(script.utf8).base64EncodedString()
-  // Decode and pipe into bash. `bash -s --` prevents `--` from being
-  // interpreted as an option; we pass no positional args.
-  return "echo \(encoded) | base64 -d | bash -s --"
+  // Run via `bash -c "$(…)"` so the script inherits the ssh-allocated
+  // pty as stdin. Piping into `bash -s` breaks `exec tmux new-session …`
+  // — tmux can't attach when stdin is the read end of the decode pipe.
+  return "bash -c \"$(echo \(encoded) | base64 -d)\""
 }
 
 /// Pure function, unit-tested directly. Runs inside the remote shell on
@@ -247,6 +257,10 @@ nonisolated func renderBootstrapScript(
 
   return """
     set -e
+    # Fail fast if stdin isn't a tty: tmux below would otherwise die with
+    # `open terminal failed: not a terminal`, leaving the surface dead
+    # without a clear error. ssh -tt + `bash -c "$(…)"` should keep us tty-side.
+    [ -t 0 ] || { echo "supacool: stdin is not a tty (expected ssh -t); aborting before tmux" >&2; exit 71; }
     \(exports)
     mkdir -p ~/.supacool/hooks ~/.supacool/ssh
     # Fall back when the remote doesn't have the custom terminfo installed.
