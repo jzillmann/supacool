@@ -19,12 +19,42 @@ private nonisolated let repoSyncLogger = SupaLogger("Supacool.RepoSync")
 /// - Merge must be strict fast-forward (`--ff-only`) — never auto-merge
 ///   or rebase anything.
 ///
+/// `pullWithStrategy` exists for the diverged-branch case where the user
+/// has explicitly chosen rebase or merge — same guards minus the
+/// fast-forward requirement.
+///
 /// Supacool-specific — lives under `Supacool/` rather than replacing upstream's repo sync.
 nonisolated struct RepoSyncClient: Sendable {
   /// Try to fast-forward the repo root to its default origin branch.
   /// Never mutates state unless every guard passes. Returns a structured
   /// outcome the caller can log or surface in UI.
   var syncIfSafe: @Sendable (_ repoRoot: URL) async -> RepoSyncOutcome
+
+  /// User-initiated reconciliation when the branch has diverged from
+  /// origin. Same safety guards as `syncIfSafe` (default branch, clean
+  /// tree, successful fetch) but performs a rebase or merge instead of
+  /// requiring fast-forward. Conflicts surface as `.failedUnknown` with
+  /// the git stderr in the message.
+  var pullWithStrategy: @Sendable (_ repoRoot: URL, _ strategy: PullStrategy) async -> RepoSyncOutcome
+
+  init(
+    syncIfSafe: @escaping @Sendable (URL) async -> RepoSyncOutcome,
+    pullWithStrategy: @escaping @Sendable (URL, PullStrategy) async -> RepoSyncOutcome = { _, _ in
+      .failedUnknown(message: "RepoSyncClient.pullWithStrategy unimplemented")
+    }
+  ) {
+    self.syncIfSafe = syncIfSafe
+    self.pullWithStrategy = pullWithStrategy
+  }
+}
+
+/// User-chosen reconciliation strategy when the local branch has both
+/// commits ahead of and behind origin (no fast-forward possible).
+nonisolated enum PullStrategy: Equatable, Sendable {
+  /// Replay local commits on top of origin/<default>.
+  case rebase
+  /// Create a merge commit combining local with origin/<default>.
+  case merge
 }
 
 /// Structured result of a sync attempt. `.synced(ahead: 0)` means the
@@ -53,10 +83,27 @@ extension RepoSyncClient: DependencyKey {
     RepoSyncClient(
       syncIfSafe: { repoRoot in
         do {
-          return try await performSync(repoRoot: repoRoot, shell: shell)
+          return try await performSync(
+            repoRoot: repoRoot, shell: shell, strategy: .fastForwardOnly
+          )
         } catch {
+          let path = repoRoot.path(percentEncoded: false)
           repoSyncLogger.warning(
-            "RepoSyncClient failed for \(repoRoot.path(percentEncoded: false)): \(error.localizedDescription)"
+            "RepoSyncClient.syncIfSafe failed for \(path): \(error.localizedDescription)"
+          )
+          return .failedUnknown(message: error.localizedDescription)
+        }
+      },
+      pullWithStrategy: { repoRoot, strategy in
+        let internalStrategy: InternalStrategy = (strategy == .rebase) ? .rebase : .merge
+        do {
+          return try await performSync(
+            repoRoot: repoRoot, shell: shell, strategy: internalStrategy
+          )
+        } catch {
+          let path = repoRoot.path(percentEncoded: false)
+          repoSyncLogger.warning(
+            "RepoSyncClient.pullWithStrategy(\(strategy)) failed for \(path): \(error.localizedDescription)"
           )
           return .failedUnknown(message: error.localizedDescription)
         }
@@ -81,12 +128,22 @@ extension DependencyValues {
 
 // MARK: - Live implementation
 
+/// Internal strategy enum drives the merge step. `.fastForwardOnly` is
+/// the bail-silently path used by `syncIfSafe`; the others are user-
+/// initiated and bubble conflict errors as `.failedUnknown`.
+private enum InternalStrategy: Equatable, Sendable {
+  case fastForwardOnly
+  case rebase
+  case merge
+}
+
 /// Runs the guard chain + sync. Splits cleanly so unit tests can
 /// exercise the decision logic by stubbing a `ShellClient` with scripted
 /// outputs (see `RepoSyncClientTests`).
 nonisolated private func performSync(
   repoRoot: URL,
-  shell: ShellClient
+  shell: ShellClient,
+  strategy: InternalStrategy
 ) async throws -> RepoSyncOutcome {
   let repoPath = repoRoot.path(percentEncoded: false)
   let env = URL(fileURLWithPath: "/usr/bin/env")
@@ -166,17 +223,15 @@ nonisolated private func performSync(
     return .skippedFetchFailed(message: error.localizedDescription)
   }
 
-  // 5. Fast-forward merge. `--ff-only` refuses to auto-merge; if
-  //    we've diverged (rare on a read-only root, but possible if
-  //    someone committed locally), we bail without touching state.
-  do {
-    _ = try await shell.run(
-      env,
-      ["git", "-C", repoPath, "merge", "--ff-only", "origin/\(defaultBranch)"],
-      nil
-    )
-  } catch {
-    return .skippedFastForwardNotPossible(message: error.localizedDescription)
+  // 5. Apply the chosen strategy. FF-only bails silently on diverge;
+  //    rebase / merge are user-initiated and surface conflicts.
+  if let failure = await applyStrategy(
+    strategy: strategy,
+    repoPath: repoPath,
+    defaultBranch: defaultBranch,
+    shell: shell
+  ) {
+    return failure
   }
 
   let headAfter = (try? await shell.run(
@@ -198,4 +253,49 @@ nonisolated private func performSync(
   }
 
   return .synced(advancedBy: advancedBy)
+}
+
+/// Runs the strategy-specific git step (ff-only merge, rebase, or
+/// merge). Returns `nil` on success; otherwise the appropriate
+/// `RepoSyncOutcome` failure variant. Extracted so `performSync`
+/// stays comfortably under SwiftLint's body-length cap.
+nonisolated private func applyStrategy(
+  strategy: InternalStrategy,
+  repoPath: String,
+  defaultBranch: String,
+  shell: ShellClient
+) async -> RepoSyncOutcome? {
+  let env = URL(fileURLWithPath: "/usr/bin/env")
+  let originRef = "origin/\(defaultBranch)"
+  switch strategy {
+  case .fastForwardOnly:
+    do {
+      _ = try await shell.run(
+        env, ["git", "-C", repoPath, "merge", "--ff-only", originRef], nil
+      )
+      return nil
+    } catch {
+      return .skippedFastForwardNotPossible(message: error.localizedDescription)
+    }
+  case .rebase:
+    do {
+      _ = try await shell.run(
+        env, ["git", "-C", repoPath, "rebase", originRef], nil
+      )
+      return nil
+    } catch {
+      return .failedUnknown(message: error.localizedDescription)
+    }
+  case .merge:
+    // `--no-edit` keeps the default merge message so we never block on
+    // $EDITOR firing up. Conflicts still surface as a non-zero exit.
+    do {
+      _ = try await shell.run(
+        env, ["git", "-C", repoPath, "merge", "--no-edit", originRef], nil
+      )
+      return nil
+    } catch {
+      return .failedUnknown(message: error.localizedDescription)
+    }
+  }
 }

@@ -122,6 +122,99 @@ struct RepoSyncClientTests {
     #expect(outcome == .synced(advancedBy: 0))
   }
 
+  // MARK: - pullWithStrategy
+
+  @Test func pullRebaseAdvancesByTwo() async {
+    let shaCallCount = CallCounter()
+    let shell = scriptedShell { args in
+      if args.contains("symbolic-ref") {
+        return ShellOutput(stdout: "origin/main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-parse"), args.contains("--abbrev-ref") {
+        return ShellOutput(stdout: "main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("status"), args.contains("--porcelain") {
+        return ShellOutput(stdout: "", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-parse"), args.contains("HEAD"),
+        !args.contains("--abbrev-ref")
+      {
+        let count = await shaCallCount.increment()
+        let sha = (count == 1) ? "aaa111\n" : "ccc333\n"
+        return ShellOutput(stdout: sha, stderr: "", exitCode: 0)
+      }
+      if args.contains("fetch") {
+        return ShellOutput(stdout: "", stderr: "", exitCode: 0)
+      }
+      if args.contains("rebase") {
+        return ShellOutput(stdout: "Successfully rebased.\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-list"), args.contains("--count") {
+        return ShellOutput(stdout: "2\n", stderr: "", exitCode: 0)
+      }
+      throw UnexpectedCall(args: args)
+    }
+    let client = RepoSyncClient.live(shell: shell)
+    let outcome = await client.pullWithStrategy(URL(fileURLWithPath: "/tmp/repo"), .rebase)
+    #expect(outcome == .synced(advancedBy: 2))
+  }
+
+  @Test func pullMergeReportsConflict() async {
+    let shell = scriptedShell { args in
+      if args.contains("symbolic-ref") {
+        return ShellOutput(stdout: "origin/main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-parse"), args.contains("--abbrev-ref") {
+        return ShellOutput(stdout: "main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("status"), args.contains("--porcelain") {
+        return ShellOutput(stdout: "", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-parse"), args.contains("HEAD"),
+        !args.contains("--abbrev-ref")
+      {
+        return ShellOutput(stdout: "abc\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("fetch") {
+        return ShellOutput(stdout: "", stderr: "", exitCode: 0)
+      }
+      if args.contains("merge"), args.contains("--no-edit") {
+        throw ShellClientError(
+          command: "git merge",
+          stdout: "Auto-merging README.md\nCONFLICT (content): Merge conflict in README.md",
+          stderr: "Automatic merge failed; fix conflicts and then commit the result.",
+          exitCode: 1
+        )
+      }
+      throw UnexpectedCall(args: args)
+    }
+    let client = RepoSyncClient.live(shell: shell)
+    let outcome = await client.pullWithStrategy(URL(fileURLWithPath: "/tmp/repo"), .merge)
+    if case .failedUnknown(let message) = outcome {
+      #expect(message.contains("Automatic merge failed") || message.contains("CONFLICT"))
+    } else {
+      Issue.record("Expected .failedUnknown for merge conflict, got \(outcome)")
+    }
+  }
+
+  @Test func pullDivergedSkipsWhenTreeDirty() async {
+    let shell = scriptedShell { args in
+      if args.contains("symbolic-ref") {
+        return ShellOutput(stdout: "origin/main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("rev-parse"), args.contains("--abbrev-ref") {
+        return ShellOutput(stdout: "main\n", stderr: "", exitCode: 0)
+      }
+      if args.contains("status"), args.contains("--porcelain") {
+        return ShellOutput(stdout: " M src/main.swift\n", stderr: "", exitCode: 0)
+      }
+      throw UnexpectedCall(args: args)
+    }
+    let client = RepoSyncClient.live(shell: shell)
+    let outcome = await client.pullWithStrategy(URL(fileURLWithPath: "/tmp/repo"), .rebase)
+    #expect(outcome == .skippedDirtyTree)
+  }
+
   @Test func syncedAdvancedByThree() async {
     // rev-parse HEAD returns different shas before / after the merge;
     // rev-list --count reports 3.
