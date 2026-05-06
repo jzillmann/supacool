@@ -248,7 +248,7 @@ struct BoardRootView: View {
             )
           }
           : nil,
-        onResume: (session.agent != nil && session.agentNativeSessionID != nil)
+        onResume: (session.agent != nil && BoardResumeEligibility.hasCapturedNativeSessionID(session))
           ? {
             store.send(
               .resumeDetachedSession(
@@ -258,7 +258,7 @@ struct BoardRootView: View {
             )
           }
           : nil,
-        onResumePicker: (session.agent != nil && session.agentNativeSessionID == nil)
+        onResumePicker: (session.agent != nil && !BoardResumeEligibility.hasCapturedNativeSessionID(session))
           ? {
             store.send(
               .resumeDetachedSessionWithPicker(

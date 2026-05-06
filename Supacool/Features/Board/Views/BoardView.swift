@@ -100,22 +100,17 @@ struct BoardView: View {
     Set(store.visibleSessions.map(\.id))
   }
 
-  private var selectedDirectResumeSessionIDs: [AgentSession.ID] {
-    guard selectedSessionIDs.count > 1 else { return [] }
-    let selected = selectedSessionIDs
-    return store.visibleSessions.compactMap { session in
-      guard selected.contains(session.id),
-        canDirectResume(session, status: classify(session), includingParked: true)
-      else {
-        return nil
-      }
-      return session.id
-    }
+  private var selectedResumeRoutes: [BoardSelectedResumeRoute] {
+    BoardResumeEligibility.selectedResumeRoutes(
+      sessions: store.visibleSessions,
+      selectedIDs: selectedSessionIDs,
+      classify: classify,
+      tabExists: sessionTabExists
+    )
   }
 
   private func hasCapturedNativeSessionID(_ session: AgentSession) -> Bool {
-    guard let sessionID = session.agentNativeSessionID else { return false }
-    return !sessionID.isEmpty
+    BoardResumeEligibility.hasCapturedNativeSessionID(session)
   }
 
   private func canDirectResume(
@@ -123,25 +118,20 @@ struct BoardView: View {
     status: BoardSessionStatus,
     includingParked: Bool = false
   ) -> Bool {
-    guard session.agent != nil, hasCapturedNativeSessionID(session) else { return false }
-    switch status {
-    case .detached, .interrupted:
-      return true
-    case .parked:
-      return includingParked && !sessionTabExists(session)
-    default:
-      return false
-    }
+    BoardResumeEligibility.canDirectResume(
+      session,
+      status: status,
+      tabExists: sessionTabExists(session),
+      includingParked: includingParked
+    )
   }
 
   private func canResumeWithPicker(_ session: AgentSession, status: BoardSessionStatus) -> Bool {
-    guard session.agent != nil, !hasCapturedNativeSessionID(session) else { return false }
-    switch status {
-    case .detached, .interrupted:
-      return true
-    default:
-      return false
-    }
+    BoardResumeEligibility.canResumeWithPicker(
+      session,
+      status: status,
+      tabExists: sessionTabExists(session)
+    )
   }
 
   private func sessionTabExists(_ session: AgentSession) -> Bool {
@@ -167,12 +157,17 @@ struct BoardView: View {
     store.send(.focusSession(id: session.id))
   }
 
-  private func resumeSelectedSessions(ids: [AgentSession.ID]) {
-    guard !ids.isEmpty else { return }
+  private func resumeSelectedSessions(routes: [BoardSelectedResumeRoute]) {
+    guard !routes.isEmpty else { return }
     let availableRepositories = Array(repositories)
     selectedSessionIDs.removeAll()
-    for id in ids {
-      store.send(.resumeDetachedSession(id: id, repositories: availableRepositories))
+    for route in routes {
+      switch route {
+      case .direct(let id):
+        store.send(.resumeDetachedSession(id: id, repositories: availableRepositories))
+      case .picker(let id):
+        store.send(.resumeDetachedSessionWithPicker(id: id, repositories: availableRepositories))
+      }
     }
     store.send(.focusSession(id: nil))
   }
@@ -442,7 +437,9 @@ struct BoardView: View {
           columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)],
           spacing: 14
         ) {
-          let bulkResumeIDs = selectedDirectResumeSessionIDs
+          let bulkResumeRoutes = selectedResumeRoutes
+          let selectedResumeCount = bulkResumeRoutes.count
+          let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
           ForEach(sessions, id: \.id) { session in
             let sessionStatus = classify(session)
             let sessionHasTab = sessionTabExists(session)
@@ -463,7 +460,8 @@ struct BoardView: View {
               isHighlighted: highlightedSessionID == session.id,
               isActiveParked: activeParked,
               isSelected: selectedSessionIDs.contains(session.id),
-              selectedResumeCount: bulkResumeIDs.count,
+              selectedResumeCount: selectedResumeCount,
+              selectedPickerResumeCount: selectedPickerResumeCount,
               onTap: { handleCardTap(session) },
               onRemove: { store.send(.removeSession(id: session.id)) },
               onRename: { onRenameSession(session) },
@@ -498,8 +496,8 @@ struct BoardView: View {
                   )
                 }
                 : nil,
-              onResumeSelected: (selectedSessionIDs.contains(session.id) && bulkResumeIDs.count > 1)
-                ? { resumeSelectedSessions(ids: bulkResumeIDs) }
+              onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
+                ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
                 : nil,
               onPark: (sessionStatus != .parked)
                 ? {
@@ -689,6 +687,7 @@ private struct SessionCardContainer: View {
   let isActiveParked: Bool
   let isSelected: Bool
   let selectedResumeCount: Int
+  let selectedPickerResumeCount: Int
   let onTap: () -> Void
   let onRemove: () -> Void
   let onRename: () -> Void
@@ -726,6 +725,7 @@ private struct SessionCardContainer: View {
       onResumePicker: onResumePicker,
       onResumeSelected: onResumeSelected,
       selectedResumeCount: selectedResumeCount,
+      selectedPickerResumeCount: selectedPickerResumeCount,
       onPark: onPark,
       onParkActive: onParkActive,
       onUnpark: onUnpark,

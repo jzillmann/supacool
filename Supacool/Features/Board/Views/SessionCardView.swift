@@ -22,6 +22,7 @@ struct SessionCardView: View {
   var onResumePicker: (() -> Void)?
   var onResumeSelected: (() -> Void)?
   var selectedResumeCount: Int = 0
+  var selectedPickerResumeCount: Int = 0
   var onPark: (() -> Void)?
   var onParkActive: (() -> Void)?
   var onUnpark: (() -> Void)?
@@ -123,10 +124,11 @@ struct SessionCardView: View {
     .contextMenu {
       if let onResumeSelected {
         Button(
-          "Resume \(selectedResumeCount) Selected Sessions",
+          selectedResumeTitle,
           systemImage: "play.circle.fill",
           action: onResumeSelected
         )
+        .help(selectedResumeHelp)
         Divider()
       }
       if let onRename {
@@ -238,15 +240,37 @@ struct SessionCardView: View {
   /// agent's own picker). Only meaningful for agent sessions.
   @ViewBuilder
   private var sessionIDIndicator: some View {
-    let captured = session.agentNativeSessionID != nil
+    let captured = BoardResumeEligibility.hasCapturedNativeSessionID(session)
     Image(systemName: captured ? "bookmark.fill" : "bookmark")
       .font(.caption2)
-      .foregroundStyle(captured ? Color.green : Color.secondary.opacity(0.6))
+      .foregroundStyle(sessionIDIndicatorColor(captured: captured))
       .help(
         captured
           ? "Session id captured — resume is one click"
           : "No session id captured yet — resume will open the agent's picker"
       )
+  }
+
+  private var selectedResumeTitle: String {
+    let noun = selectedResumeCount == 1 ? "Session" : "Sessions"
+    guard selectedPickerResumeCount > 0 else {
+      return "Resume \(selectedResumeCount) Selected \(noun)"
+    }
+    return "Resume \(selectedResumeCount) Selected \(noun) (\(selectedPickerResumeCount) via Picker)"
+  }
+
+  private var selectedResumeHelp: String {
+    guard selectedPickerResumeCount > 0 else {
+      return "Resume the selected sessions with captured session ids."
+    }
+    let noun = selectedPickerResumeCount == 1 ? "session" : "sessions"
+    return "Resume captured sessions directly; open the agent picker for "
+      + "\(selectedPickerResumeCount) selected \(noun) without a captured id."
+  }
+
+  private func sessionIDIndicatorColor(captured: Bool) -> Color {
+    if captured { return .green }
+    return isDormant ? .orange : Color.secondary.opacity(0.6)
   }
 
   /// Shown on hover for any dormant card — a big centered play symbol over
