@@ -144,14 +144,42 @@ nonisolated enum SessionReferenceScannerLive {
 
   /// Pure transcript-entry scanner so tests can cover terminal-text
   /// extraction without touching the user's Application Support folder.
+  ///
+  /// Signal-vs-noise: `input` and `hookEvent` are high-signal — the user
+  /// typed a ticket id, or the agent emitted it as a notification. Any
+  /// match there is kept. `outputTurn.delta` is the noisiest source — a
+  /// single `git log --grep='CEN-'` dump or a grep across the codebase
+  /// can drop dozens of incidental ids on screen, and `TranscriptDelta`'s
+  /// scrollback-trim fallback re-emits whole buffers, so chips keep
+  /// accumulating over a long session. Require **≥ 2 distinct outputTurns**
+  /// for an output-only reference: a real focus comes back in conversation;
+  /// a one-shot in a tool dump does not.
   static func scanTranscriptEntries(_ entries: [TranscriptEntry]) -> [SessionReference] {
-    var seen = Set<String>()
-    var results: [SessionReference] = []
+    var firstSeen: [String: SessionReference] = [:]
+    var order: [String] = []
+    var highSignalKeys = Set<String>()
+    var outputTurnCounts: [String: Int] = [:]
 
-    func appendRefs(from text: String) {
+    func recordFirstSeen(_ ref: SessionReference) {
+      if firstSeen[ref.dedupeKey] == nil {
+        firstSeen[ref.dedupeKey] = ref
+        order.append(ref.dedupeKey)
+      }
+    }
+
+    func observeHighSignal(_ text: String) {
       for ref in scanText(text) {
-        if seen.insert(ref.dedupeKey).inserted {
-          results.append(ref)
+        recordFirstSeen(ref)
+        highSignalKeys.insert(ref.dedupeKey)
+      }
+    }
+
+    func observeOutputTurn(_ text: String) {
+      var seenInTurn = Set<String>()
+      for ref in scanText(text) {
+        recordFirstSeen(ref)
+        if seenInTurn.insert(ref.dedupeKey).inserted {
+          outputTurnCounts[ref.dedupeKey, default: 0] += 1
         }
       }
     }
@@ -159,18 +187,23 @@ nonisolated enum SessionReferenceScannerLive {
     for entry in entries {
       switch entry {
       case .input(let text, _):
-        appendRefs(from: text)
+        observeHighSignal(text)
       case .outputTurn(_, let delta, _):
-        appendRefs(from: delta)
+        observeOutputTurn(delta)
       case .hookEvent(_, _, let title, let body, _, _, _, _):
-        if let title { appendRefs(from: title) }
-        if let body { appendRefs(from: body) }
+        if let title { observeHighSignal(title) }
+        if let body { observeHighSignal(body) }
       default:
         continue
       }
     }
 
-    return results
+    return order.compactMap { key in
+      guard let ref = firstSeen[key] else { return nil }
+      if highSignalKeys.contains(key) { return ref }
+      if (outputTurnCounts[key] ?? 0) >= 2 { return ref }
+      return nil
+    }
   }
 
   /// Single-pass regex extraction from plain text. Applies the ticket
