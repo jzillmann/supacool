@@ -156,6 +156,119 @@ struct SessionReferenceScannerTests {
     ])
   }
 
+  @Test func scanTranscriptEntriesKeepsInputOnlyTicket() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .input(text: "look at CEN-1 today", at: now),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [.ticket(id: "CEN-1")])
+  }
+
+  @Test func scanTranscriptEntriesDropsOutputOnlySingleTurn() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .outputTurn(
+        fullText: "git log dump: CEN-9999 fixed something",
+        delta: "git log dump: CEN-9999 fixed something",
+        at: now
+      ),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs.isEmpty)
+  }
+
+  @Test func scanTranscriptEntriesKeepsOutputAcrossTwoTurns() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .outputTurn(fullText: "CEN-50 mentioned", delta: "CEN-50 mentioned", at: now),
+      .outputTurn(
+        fullText: "CEN-50 mentioned\nfollow-up: CEN-50 still open",
+        delta: "follow-up: CEN-50 still open",
+        at: now
+      ),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [.ticket(id: "CEN-50")])
+  }
+
+  @Test func scanTranscriptEntriesDropsDocPlaceholderRegression() {
+    // Regression: a `pi` brainstorm session that browsed skill docs once
+    // would surface CEN-1234 / CEN-123 placeholders forever. Single-turn
+    // output occurrences must be filtered out.
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .input(text: "Brainstorm e2e stabilization", at: now),
+      .outputTurn(
+        fullText: "...\ntest.fixme(isKnownFlake, 'CEN-1234 expires ...')",
+        delta: "...\ntest.fixme(isKnownFlake, 'CEN-1234 expires ...')",
+        at: now
+      ),
+      .outputTurn(
+        fullText: "...\nlinear issues update CEN-123 --assignee me",
+        delta: "...\nlinear issues update CEN-123 --assignee me",
+        at: now
+      ),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs.isEmpty)
+  }
+
+  @Test func scanTranscriptEntriesKeepsHookOnlyReference() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .hookEvent(
+        agent: "claude",
+        event: "notification",
+        title: nil,
+        body: "Awaiting input on CEN-7",
+        sessionID: nil,
+        awaitingClassifierVerdict: true,
+        surfaceID: UUID(),
+        at: now
+      ),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [.ticket(id: "CEN-7")])
+  }
+
+  @Test func scanTranscriptEntriesPromotesOutputRefViaInput() {
+    // A ticket that appears once in input AND once in output should be
+    // kept (input is high-signal — the user typed it).
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .input(text: "fix CEN-3", at: now),
+      .outputTurn(fullText: "CEN-3 done", delta: "CEN-3 done", at: now),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [.ticket(id: "CEN-3")])
+  }
+
+  @Test func scanTranscriptEntriesDedupesRepeatsWithinSingleTurn() {
+    // CEN-9 mentioned twice in the same delta still counts as one turn —
+    // must NOT promote to >= 2.
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .outputTurn(
+        fullText: "CEN-9 here and CEN-9 again",
+        delta: "CEN-9 here and CEN-9 again",
+        at: now
+      ),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs.isEmpty)
+  }
+
+  @Test func scanTranscriptEntriesPreservesFirstSeenOrder() {
+    let now = Date()
+    let entries: [TranscriptEntry] = [
+      .input(text: "First CEN-2 then CEN-1", at: now),
+      .outputTurn(fullText: "CEN-1 again", delta: "CEN-1 again", at: now),
+    ]
+    let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
+    #expect(refs == [.ticket(id: "CEN-2"), .ticket(id: "CEN-1")])
+  }
+
   // MARK: - Path hashing
 
   @Test func hashProjectPathReplacesSlashes() {
