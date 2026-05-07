@@ -1,4 +1,5 @@
 import Clocks
+import ComposableArchitecture
 import ConcurrencyExtras
 import Dependencies
 import Foundation
@@ -1231,6 +1232,54 @@ struct WorktreeTerminalManagerTests {
     // Select the first tab.
     manager.handleCommand(.selectTab(worktree, tabID: firstTabId))
     #expect(state.tabManager.selectedTabId == firstTabId)
+  }
+
+  @Test func inputObservedAutoUnparksMatchingSession() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    let sessionID = UUID()
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: worktree.id,
+      worktreeID: worktree.id,
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    session.parked = true
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    state.onInputObserved?(TerminalTabID(rawValue: sessionID))
+
+    #expect(sessions.first?.parked == false)
+  }
+
+  @Test func inputObservedNoOpForNonParkedSession() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    let sessionID = UUID()
+    let session = AgentSession(
+      id: sessionID,
+      repositoryID: worktree.id,
+      worktreeID: worktree.id,
+      agent: .claude,
+      initialPrompt: "x"
+    )
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+    let beforeActivity = sessions.first?.lastActivityAt
+
+    state.onInputObserved?(TerminalTabID(rawValue: sessionID))
+
+    // Non-parked sessions stay untouched — lastActivityAt isn't bumped on
+    // every keystroke, so a quiet user typing in a live terminal doesn't
+    // generate write churn against the persisted shared store.
+    #expect(sessions.first?.parked == false)
+    #expect(sessions.first?.lastActivityAt == beforeActivity)
   }
 
   @Test func selectTabWithStaleIdIsNoOp() {

@@ -434,6 +434,29 @@ final class WorktreeTerminalManager {
     }
   }
 
+  /// Auto-unpark: any input reaching the PTY (keystroke, paste,
+  /// programmatic `sendText`) clears the `parked` bit so the user
+  /// re-engaging with the session moves it back into the live buckets.
+  /// No-ops when the session isn't parked, so per-keystroke calls are
+  /// effectively free after the first one.
+  private func unparkSessionIfNeeded(tabID: TerminalTabID) {
+    var didUnpark = false
+    let now = Date()
+    $agentSessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == tabID.rawValue }) else { return }
+      guard sessions[index].parked else { return }
+      sessions[index].parked = false
+      sessions[index].lastActivityAt = now
+      didUnpark = true
+    }
+    guard didUnpark else { return }
+    TranscriptRecorder.shared.append(
+      event: .sessionLifecycle(kind: "unparked", context: "input", at: now),
+      tabID: tabID
+    )
+    terminalLogger.info("Auto-unparked session \(tabID.rawValue) on input")
+  }
+
   /// Persists that the tab has received at least one agent hook event.
   /// This lets the board keep a new session in "Starting" until the CLI
   /// has actually loaded its hook config, instead of guessing from a
@@ -713,6 +736,9 @@ final class WorktreeTerminalManager {
     }
     state.onSetupScriptConsumed = { [weak self] in
       self?.emit(.setupScriptConsumed(worktreeID: worktree.id))
+    }
+    state.onInputObserved = { [weak self] tabID in
+      self?.unparkSessionIfNeeded(tabID: tabID)
     }
     states[worktree.id] = state
     terminalLogger.info("Created terminal state for worktree \(worktree.id)")

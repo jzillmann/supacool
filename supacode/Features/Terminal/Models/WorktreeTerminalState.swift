@@ -69,6 +69,10 @@ final class WorktreeTerminalState {
   var onBlockingScriptCompleted: ((BlockingScriptKind, Int?, TerminalTabID?) -> Void)?
   var onCommandPaletteToggle: (() -> Void)?
   var onSetupScriptConsumed: (() -> Void)?
+  /// Fires when any input (keystroke, paste, programmatic `sendText`)
+  /// reaches a tab's PTY. Supacool uses it to auto-unpark a session that
+  /// the user is engaging with again.
+  var onInputObserved: ((TerminalTabID) -> Void)?
 
   init(
     runtime: GhosttyRuntime,
@@ -1297,8 +1301,11 @@ final class WorktreeTerminalState {
     }
     // Supacool transcript recorder — capture every byte the user sends to
     // the PTY. Skip while secureInput is on so passwords typed at sudo /
-    // SSH prompts never land in the transcript file.
-    view.bridge.onInputTap = { [weak view] text in
+    // SSH prompts never land in the transcript file. The unpark callback
+    // is fired regardless: re-engaging with a parked session via input
+    // (even a sudo password) should still bring the card back.
+    view.bridge.onInputTap = { [weak self, weak view] text in
+      self?.onInputObserved?(tabId)
       guard let view, view.bridge.state.secureInput != GHOSTTY_SECURE_INPUT_ON else { return }
       TranscriptRecorder.shared.appendInput(tabID: tabId, text: text)
     }
