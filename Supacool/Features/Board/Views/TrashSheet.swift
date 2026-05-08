@@ -11,6 +11,7 @@ struct TrashSheet: View {
 
   @State private var section: CleanupSection = .trash
   @State private var selectedRepositoryID: Repository.ID?
+  @State private var trashSearchText = ""
 
   nonisolated enum CleanupSection: String, CaseIterable, Identifiable {
     case trash
@@ -86,6 +87,10 @@ struct TrashSheet: View {
       }
       .pickerStyle(.segmented)
 
+      if section == .trash, !store.trashedSessions.isEmpty {
+        trashSearchField
+      }
+
       if section == .worktrees, !repositories.isEmpty {
         Picker("Repository", selection: selectedRepositoryBinding) {
           ForEach(repositories) { repository in
@@ -120,10 +125,21 @@ struct TrashSheet: View {
           .foregroundStyle(.secondary)
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if filteredEntries.isEmpty {
+      VStack(spacing: 8) {
+        Image(systemName: "magnifyingglass")
+          .font(.largeTitle)
+          .foregroundStyle(.tertiary)
+        Text("No trashed cards match “\(trimmedTrashSearchText)”.")
+          .foregroundStyle(.secondary)
+        Button("Clear Search") { trashSearchText = "" }
+          .help("Show every trashed card.")
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
     } else {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 8) {
-          ForEach(sortedEntries, id: \.id) { entry in
+          ForEach(filteredEntries, id: \.id) { entry in
             TrashRow(entry: entry, store: store)
           }
         }
@@ -161,8 +177,101 @@ struct TrashSheet: View {
     }
   }
 
+  private var trashSearchField: some View {
+    HStack(spacing: 6) {
+      Image(systemName: "magnifyingglass")
+        .foregroundStyle(.secondary)
+      TextField("Search trash", text: $trashSearchText)
+        .textFieldStyle(.plain)
+        .help("Search trashed cards by title, prompt, repository, worktree, or agent.")
+      if !trashSearchText.isEmpty {
+        Button {
+          trashSearchText = ""
+        } label: {
+          Image(systemName: "xmark.circle.fill")
+            .accessibilityLabel("Clear Trash Search")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .help("Clear trash search.")
+      }
+    }
+    .padding(.horizontal, 8)
+    .padding(.vertical, 6)
+    .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+
   private var sortedEntries: [TrashedSession] {
     store.trashedSessions.sorted { $0.trashedAt > $1.trashedAt }
+  }
+
+  private var filteredEntries: [TrashedSession] {
+    let entries = sortedEntries
+    let query = trimmedTrashSearchText
+    guard !query.isEmpty else { return entries }
+    return entries.filter { trashEntry($0, matches: query) }
+  }
+
+  private var trimmedTrashSearchText: String {
+    trashSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func trashEntry(_ entry: TrashedSession, matches query: String) -> Bool {
+    searchableText(for: entry).contains { value in
+      value.localizedCaseInsensitiveContains(query)
+    }
+  }
+
+  private func searchableText(for entry: TrashedSession) -> [String] {
+    var values = [
+      entry.session.id.uuidString,
+      entry.session.displayName,
+      entry.session.initialPrompt,
+      entry.session.repositoryID,
+      entry.session.worktreeID,
+      entry.session.currentWorkspacePath,
+      entry.repositoryID,
+      entry.worktreeID,
+      AgentType.displayName(for: entry.session.agent),
+    ]
+
+    if let agent = entry.session.agent {
+      values += [agent.id, agent.binary]
+    }
+    if let agentNativeSessionID = entry.session.agentNativeSessionID {
+      values.append(agentNativeSessionID)
+    }
+    if let repository = repositories[id: entry.repositoryID] {
+      values.append(contentsOf: [repository.name, repository.rootURL.path(percentEncoded: false)])
+      if let worktree = matchingWorktree(for: entry, in: repository) {
+        values.append(contentsOf: [
+          worktree.id,
+          worktree.name,
+          worktree.detail,
+          worktree.workingDirectory.path(percentEncoded: false),
+        ])
+        if let branch = worktree.branch {
+          values.append(branch)
+        }
+      }
+    }
+
+    return values.filter { !$0.isEmpty }
+  }
+
+  private func matchingWorktree(for entry: TrashedSession, in repository: Repository) -> Worktree? {
+    let paths = [entry.worktreeID, entry.session.worktreeID, entry.session.currentWorkspacePath]
+    for path in paths {
+      if let worktree = repository.worktrees[id: path] {
+        return worktree
+      }
+      if let worktree = repository.worktrees.first(where: {
+        $0.workingDirectory.path(percentEncoded: false) == path
+      }) {
+        return worktree
+      }
+    }
+    return nil
   }
 
   private var selectedRepositoryBinding: Binding<Repository.ID> {
