@@ -162,7 +162,10 @@ struct SupacoolApp: App {
     _ghostty = State(initialValue: runtime)
     let shortcuts = GhosttyShortcutManager(runtime: runtime)
     _ghosttyShortcuts = State(initialValue: shortcuts)
-    let terminalManager = WorktreeTerminalManager(runtime: runtime)
+    let terminalManager = WorktreeTerminalManager(
+      runtime: runtime,
+      orphanProcessReaper: WorktreeOrphanProcessReaper()
+    )
     // Always persist layouts regardless of `restoreTerminalLayoutEnabled`, so enabling
     // the setting retroactively restores the most recent session.
     terminalManager.saveLayoutSnapshot = { worktreeID, snapshot in

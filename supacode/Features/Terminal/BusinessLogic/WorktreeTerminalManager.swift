@@ -18,6 +18,7 @@ private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptDetectionStableSamples = 2
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
+private let orphanProcessReapIntervalDefault: Duration = .seconds(60)
 nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
 nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
 
@@ -64,9 +65,15 @@ final class WorktreeTerminalManager {
   private let awaitingInputTransitionOffDebounce: Duration
   private let awaitingInputActivityPollInterval: Duration
   private let agentPIDSweepInterval: Duration
+  private let orphanProcessReapInterval: Duration
   private let deferredWorkFallbackTTL: Duration
   private let deferredWorkLeaseBuffer: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
+  /// Reaper for orphaned (`ppid == 1`) processes whose cwd is under
+  /// `~/.supacool/repos/`. Optional so tests can disable the live OS
+  /// scan; production wiring in `SupacoolApp` injects a real instance.
+  private let orphanProcessReaper: WorktreeOrphanProcessReaper?
+  private var orphanProcessReaperTickCount: Int = 0
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
@@ -107,9 +114,11 @@ final class WorktreeTerminalManager {
     awaitingInputTransitionOffDebounce: Duration = awaitingInputTransitionOffDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
+    orphanProcessReapInterval: Duration = orphanProcessReapIntervalDefault,
     deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
+    orphanProcessReaper: WorktreeOrphanProcessReaper? = nil,
     clock: C = ContinuousClock(),
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
   ) {
@@ -119,9 +128,11 @@ final class WorktreeTerminalManager {
     self.awaitingInputTransitionOffDebounce = awaitingInputTransitionOffDebounce
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
     self.agentPIDSweepInterval = agentPIDSweepInterval
+    self.orphanProcessReapInterval = orphanProcessReapInterval
     self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.isProcessAlive = isProcessAlive
+    self.orphanProcessReaper = orphanProcessReaper
     self.sleep = { duration in
       try await clock.sleep(for: duration)
     }
@@ -1126,6 +1137,7 @@ final class WorktreeTerminalManager {
   //      interleaves instead of waiting for the entire sweep.
   private func sampleAwaitingInputPromptScreens() async {
     tickAgentPIDSweepIfNeeded()
+    tickOrphanProcessReaperIfNeeded()
     var openTabIDs = Set<UUID>()
 
     // Tabs that have ever received a hook event. These get accurate
@@ -1231,6 +1243,22 @@ final class WorktreeTerminalManager {
     )
     guard awaitingInputPromptScanTickCount % ticksPerSweep == 0 else { return }
     sweepAgentPIDs()
+  }
+
+  /// Piggy-backs on the 1s prompt-scan loop and runs the orphan process
+  /// reaper every `orphanProcessReapInterval`. Same rationale as the
+  /// agent PID sweep above — a separate background Task was observed to
+  /// destabilise TestClock-driven tests under parallel Swift Testing.
+  /// No-op when `orphanProcessReaper` is nil (default in tests).
+  private func tickOrphanProcessReaperIfNeeded() {
+    guard let orphanProcessReaper else { return }
+    orphanProcessReaperTickCount &+= 1
+    let ticksPerReap = max(
+      1,
+      Int(orphanProcessReapInterval / awaitingInputActivityPollInterval)
+    )
+    guard orphanProcessReaperTickCount % ticksPerReap == 0 else { return }
+    orphanProcessReaper.reap()
   }
 
   /// Walks registered agent PIDs and clears busy/awaiting state for any
