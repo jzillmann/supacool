@@ -201,7 +201,12 @@ nonisolated struct PiSettingsInstaller {
       pi.on("session_compact", async (_event, ctx) => {
         clearCompactionFallbackTimer();
         sendSessionID(ctx, "CompactionEnd");
-        setBusyReason("compaction", false);
+        // Pi can return to the prompt after compaction without emitting
+        // agent_end. If the agent reason remains set, Supacool never
+        // receives busy=false for the Pi PID and the board keeps the
+        // session marked Running.
+        busyReasons.delete("agent");
+        setBusyReason("compaction", false, true);
       });
 
       pi.on("session_shutdown", async () => {

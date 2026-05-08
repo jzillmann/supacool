@@ -35,6 +35,8 @@ struct PiSettingsInstallerTests {
     #expect(source.contains("sendSessionID(ctx, \"CompactionEnd\")"))
     #expect(source.contains("setBusyReason(\"compaction\", true)"))
     #expect(source.contains("setBusyReason(\"compaction\", false)"))
+    #expect(source.contains("setBusyReason(\"compaction\", false, true)"))
+    #expect(source.contains("busyReasons.delete(\"agent\");"))
     #expect(source.contains("event.signal.addEventListener"))
     #expect(source.contains("COMPACTION_FALLBACK_MS"))
   }
