@@ -469,7 +469,7 @@ struct SessionCardView: View {
   }
 }
 
-/// A single reference chip: ticket id or PR number. Click opens in browser.
+/// A single reference chip: ticket id or PR number. Click opens the reference externally.
 struct ReferenceChip: View {
   let reference: SessionReference
   let linearOrgSlug: String
@@ -522,10 +522,9 @@ struct ReferenceChip: View {
   private var tooltip: String {
     switch reference {
     case .ticket(let id):
-      if linearOrgSlug.trimmingCharacters(in: .whitespaces).isEmpty {
-        return "\(id) — configure Linear org in Settings → Coding Agents to enable the link"
-      }
-      return "Open \(id) in Linear"
+      return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        ? "Open \(id) in the Linear desktop app"
+        : "Open \(id) in Linear"
     case .pullRequest(let owner, let repo, let number, let state):
       let stateLabel = state?.rawValue ?? "loading…"
       return "Open \(owner)/\(repo) #\(number) (\(stateLabel)) on GitHub"
@@ -769,7 +768,7 @@ private struct ReferenceStackChip: View {
     switch reference {
     case .ticket:
       return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? "Configure Linear org to open"
+        ? "Linear desktop app"
         : "Linear issue"
     case .pullRequest(_, _, _, let state):
       return "GitHub pull request · \((state?.rawValue ?? "loading…").capitalized)"
@@ -780,7 +779,7 @@ private struct ReferenceStackChip: View {
     switch reference {
     case .ticket(let id):
       return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        ? "\(id) — configure Linear org in Settings → Coding Agents"
+        ? "Open \(id) in the Linear desktop app"
         : "Open \(id) in Linear"
     case .pullRequest(let owner, let repo, let number, let state):
       let stateLabel = state?.rawValue ?? "loading…"

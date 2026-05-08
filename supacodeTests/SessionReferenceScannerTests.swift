@@ -299,10 +299,10 @@ struct SessionReferenceScannerTests {
     )
   }
 
-  @Test func ticketURLWithoutOrgSlugIsNil() {
+  @Test func ticketURLWithoutOrgSlugUsesLinearDesktopDeeplink() {
     let ref = SessionReference.ticket(id: "CEN-1234")
-    #expect(ref.url(linearOrgSlug: "") == nil)
-    #expect(ref.url(linearOrgSlug: "   ") == nil)
+    #expect(ref.url(linearOrgSlug: "") == URL(string: "linear://issue/CEN-1234"))
+    #expect(ref.url(linearOrgSlug: "   ") == URL(string: "linear://issue/CEN-1234"))
   }
 
   @Test func pullRequestURL() {

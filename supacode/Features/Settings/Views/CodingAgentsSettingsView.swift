@@ -130,7 +130,10 @@ private struct ReferencesSettingsSection: View {
           .frame(maxWidth: 240)
       } label: {
         Text("Linear org slug")
-        Text("Used to build ticket URLs like `linear.app/<slug>/issue/<id>`. Leave empty if you don't use Linear — chips still render but aren't clickable.")
+        Text(
+          "Optional. When empty, ticket chips open the Linear desktop app by issue ID. "
+            + "Set this to build exact URLs like `linear.app/<slug>/issue/<id>`."
+        )
       }
       LabeledContent {
         TextField("CEN, FOO", text: $ticketPrefixes)

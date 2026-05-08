@@ -81,12 +81,15 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
     }
   }
 
-  /// Build the external URL for a ticket (nil if no Linear org configured).
+  /// Build the external URL for a reference.
+  /// Tickets prefer the canonical Linear web route when an org slug is configured.
+  /// Without a slug, use Linear's desktop deep link route (`linear://issue/<id>`),
+  /// which lets the app resolve the issue by identifier without Supacool knowing the org.
   func url(linearOrgSlug: String) -> URL? {
     switch self {
     case .ticket(let id):
       let slug = linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !slug.isEmpty else { return nil }
+      guard !slug.isEmpty else { return URL(string: "linear://issue/\(id)") }
       return URL(string: "https://linear.app/\(slug)/issue/\(id)")
     case .pullRequest(let owner, let repo, let number, _):
       return URL(string: "https://github.com/\(owner)/\(repo)/pull/\(number)")
