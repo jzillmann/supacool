@@ -170,6 +170,23 @@ struct NewTerminalFeature {
     /// input. Resets to `.idle` when the URL is removed from the prompt.
     var pullRequestLookup: PullRequestLookupState = .idle
 
+    // MARK: - Linear ticket lookup
+
+    /// In-flight fetch identifier (the ticket id being fetched) so the
+    /// reducer can ignore stale completions when the user has already
+    /// edited past them. `nil` while no fetch is running.
+    var pendingLinearTicketID: String?
+    /// Cache of resolved Linear ticket titles keyed by uppercase id
+    /// (`CEN-6690`). Persists for the life of the sheet so re-typing the
+    /// same id doesn't re-hit the API. Negative results are stored as
+    /// empty-string sentinels so we don't loop on missing tickets.
+    var linearTitleCache: [String: String] = [:]
+    /// True the first time the user has manually edited the workspace
+    /// query field. Used to decide whether to overwrite the field with
+    /// a freshly-fetched ticket-derived branch name (we won't, once the
+    /// user has signalled intent).
+    var workspaceQueryUserEdited: Bool = false
+
     init(
       availableRepositories: IdentifiedArrayOf<Repository>,
       preferredRepositoryID: Repository.ID? = nil
@@ -380,6 +397,17 @@ struct NewTerminalFeature {
     /// the lookup.
     case pullRequestDismissTapped
 
+    /// Background fetch of a Linear issue title resolved successfully.
+    /// `id` is the ticket id we asked about (uppercase, e.g. `CEN-6690`).
+    /// When `title` is nil we record a negative cache so the same id
+    /// doesn't get re-fetched on every keystroke.
+    case linearTicketTitleResolved(id: String, title: String?)
+    /// Background Linear fetch failed (network / auth / etc). Caches a
+    /// negative result so the failure doesn't thrash the API on every
+    /// keystroke; the user can retry by editing the prompt or clicking
+    /// the wand button.
+    case linearTicketTitleFailed(id: String)
+
     /// User flipped the destination segmented picker. `.local` reverts
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
     /// workspace pickers with the remote working-directory field.
@@ -425,11 +453,14 @@ struct NewTerminalFeature {
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(SessionReferenceScannerClient.self) var scannerClient
   @Dependency(RepoSyncClient.self) var repoSyncClient
+  @Dependency(LinearClient.self) var linearClient
+  @Dependency(\.continuousClock) var clock
 
   private nonisolated enum CancelID: Hashable, Sendable {
     case branchNameSuggestion
     case loadBranches
     case pullRequestLookup
+    case linearTicketLookup
   }
 
   var body: some Reducer<State, Action> {
@@ -437,6 +468,10 @@ struct NewTerminalFeature {
     Reduce { state, action in
       switch action {
       case .binding(\.workspaceQuery):
+        // The binding fires for user typing, so flag the field as
+        // user-edited. Linear-title auto-fill only happens before this
+        // flips — once the user touches the field we never overwrite.
+        state.workspaceQueryUserEdited = true
         // Git refuses branch names containing whitespace. Replace any
         // typed (or pasted) whitespace with hyphens inline so the user
         // never has to see the "can't contain spaces" error — what they
@@ -555,6 +590,20 @@ struct NewTerminalFeature {
         guard !state.isSuggestingBranchName else { return .none }
         let prompt = state.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return .none }
+
+        // Fast path: when the prompt names a Linear ticket and we already
+        // have its title cached, derive the branch name from the title
+        // directly. The LLM round-trip would just paraphrase the title
+        // anyway, badly.
+        if let ticketID = firstLinearTicketID(in: prompt)?.uppercased(),
+          let title = state.linearTitleCache[ticketID], !title.isEmpty
+        {
+          let derived = branchNameFromLinearTitle(ticketID: ticketID, title: title)
+          if !derived.isEmpty {
+            return .send(.branchNameSuggested(derived))
+          }
+        }
+
         state.isSuggestingBranchName = true
         let inferencePrompt =
           "Generate a concise git branch name for this task:\n\n\(prompt)\n\n"
@@ -582,6 +631,11 @@ struct NewTerminalFeature {
         state.isSuggestingBranchName = false
         state.workspaceQuery = name
         state.selectedWorkspace = Self.inferSelection(from: name, state: state)
+        // The wand button is the user explicitly accepting the suggestion;
+        // their next manual edit should still flip the user-edited flag,
+        // but a fresh suggestion shouldn't be blocked just because we
+        // wrote into the field once via auto-fill earlier.
+        state.workspaceQueryUserEdited = true
         return .none
 
       case .branchNameSuggestionFailed:
@@ -702,6 +756,25 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         return .none
 
+      case .linearTicketTitleResolved(let id, let title):
+        // Stale guard: only accept the result if it matches the id we
+        // most recently kicked off. Anything older is yesterday's news.
+        guard state.pendingLinearTicketID == id else { return .none }
+        state.pendingLinearTicketID = nil
+        // Negative cache: empty string sentinel keeps us from re-fetching
+        // a typo'd id on every keystroke.
+        state.linearTitleCache[id] = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return Self.maybeAutoFillWorkspaceQueryFromLinear(state: &state)
+
+      case .linearTicketTitleFailed(let id):
+        guard state.pendingLinearTicketID == id else { return .none }
+        state.pendingLinearTicketID = nil
+        // Cache the failure so a transient outage doesn't pummel the API
+        // every time the user adds a character. The user can still hit
+        // the wand button to retry; the cache only blocks the auto path.
+        state.linearTitleCache[id] = ""
+        return .none
+
       case .pullRequestDismissTapped:
         let parsed: ParsedPullRequestURL
         switch state.pullRequestLookup {
@@ -792,12 +865,10 @@ struct NewTerminalFeature {
     // already have a high-quality human title ready. Pass it through
     // so the card shows "PR #42: Fix the widget" from moment one,
     // instead of the URL hostname that the prompt slice would yield.
-    let suggestedDisplayName: String? = {
-      if case .resolved(let context) = state.pullRequestLookup {
-        return "PR #\(context.parsed.number): \(context.metadata.title)"
-      }
-      return nil
-    }()
+    // Linear ticket titles work the same way — when the prompt names
+    // a ticket and we resolved its title, the card opens with
+    // "CEN-6690 · Streamline foobar" instead of the prompt slice.
+    let suggestedDisplayName: String? = Self.suggestedDisplayName(state: state)
 
     let agent = state.agent
     let planMode = agent?.supportsPlanMode == true && state.planMode
@@ -994,6 +1065,7 @@ struct NewTerminalFeature {
       worktreeID: worktreeKey,
       agent: agent,
       initialPrompt: trimmedPrompt,
+      displayName: Self.suggestedDisplayName(state: state),
       removeBackingWorktreeOnDelete: false,
       planMode: planMode,
       references: seededReferences,
@@ -1055,6 +1127,14 @@ struct NewTerminalFeature {
     state: inout State
   ) -> Effect<Action> {
     state.validationMessage = nil
+    let prEffect = handlePullRequestPromptChange(state: &state)
+    let linearEffect = handleLinearTicketPromptChange(state: &state)
+    return .merge(prEffect, linearEffect)
+  }
+
+  private func handlePullRequestPromptChange(
+    state: inout State
+  ) -> Effect<Action> {
     let parsed = ParsedPullRequestURL.firstMatch(in: state.prompt)
 
     switch (parsed, state.pullRequestLookup) {
@@ -1079,6 +1159,73 @@ struct NewTerminalFeature {
     case (let parsed?, _):
       return startPullRequestLookup(state: &state, parsed: parsed)
     }
+  }
+
+  /// Detects a Linear ticket id in the prompt and kicks off a debounced
+  /// background fetch to resolve its title. Cached results (positive or
+  /// negative) short-circuit. Auto-fills the workspace branch field on
+  /// success when the user hasn't manually edited it yet.
+  private func handleLinearTicketPromptChange(
+    state: inout State
+  ) -> Effect<Action> {
+    guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
+      // Ticket id removed — drop any in-flight fetch but keep the cache;
+      // re-typing the same id should still hit it.
+      state.pendingLinearTicketID = nil
+      return .cancel(id: CancelID.linearTicketLookup)
+    }
+    if state.linearTitleCache[ticketID] != nil {
+      // Already resolved (or negatively cached). The auto-fill helper
+      // re-runs whenever the cache gains an entry, so nothing to do here.
+      return .none
+    }
+    if state.pendingLinearTicketID == ticketID {
+      // Same id already mid-flight — let it finish.
+      return .none
+    }
+    state.pendingLinearTicketID = ticketID
+    return .run { [linearClient, clock] send in
+      // Tiny debounce so a typing storm doesn't fire one HTTP call per
+      // keystroke once the id is fully formed (`CEN-`, `CEN-6`, …).
+      try? await clock.sleep(for: .milliseconds(400))
+      do {
+        let title = try await linearClient.fetchIssueTitle(ticketID)
+        await send(.linearTicketTitleResolved(id: ticketID, title: title))
+      } catch is CancellationError {
+        return
+      } catch {
+        newTerminalLogger.warning(
+          "Linear ticket lookup failed for \(ticketID): \(error.localizedDescription)"
+        )
+        await send(.linearTicketTitleFailed(id: ticketID))
+      }
+    }
+    .cancellable(id: CancelID.linearTicketLookup, cancelInFlight: true)
+  }
+
+  /// If the prompt's first Linear ticket has a cached title and the user
+  /// hasn't manually edited the workspace field, prefill it with a
+  /// kebab-cased branch name derived from the title (`cen-6690-foo-bar`).
+  /// Idempotent — returns `.none` when conditions aren't met.
+  static func maybeAutoFillWorkspaceQueryFromLinear(
+    state: inout State
+  ) -> Effect<Action> {
+    guard !state.workspaceQueryUserEdited else { return .none }
+    guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
+      return .none
+    }
+    guard let title = state.linearTitleCache[ticketID], !title.isEmpty else {
+      return .none
+    }
+    // PR-armed flows pin the workspace field; don't fight that.
+    if case .resolved = state.pullRequestLookup {
+      return .none
+    }
+    let branchName = branchNameFromLinearTitle(ticketID: ticketID, title: title)
+    guard !branchName.isEmpty else { return .none }
+    state.workspaceQuery = branchName
+    state.selectedWorkspace = .newBranch(name: branchName)
+    return .none
   }
 
   private func startPullRequestLookup(
@@ -1325,6 +1472,28 @@ struct NewTerminalFeature {
       return true
     }
   }
+
+  /// Pre-resolves the card's display name when the sheet has enough
+  /// context to do better than chopping the prompt into 5 words. PR-armed
+  /// flows produce `"PR #42: title"`; Linear-armed flows produce
+  /// `"CEN-6690 · title"`. Returns `nil` when neither applies, letting
+  /// `AgentSession.deriveDisplayName` handle the fallback.
+  ///
+  /// PR resolution wins over Linear because a pasted PR URL is the
+  /// strongest signal in the sheet — the user explicitly aimed at a
+  /// specific PR. A Linear id in the prompt could just be a passing
+  /// reference.
+  static func suggestedDisplayName(state: State) -> String? {
+    if case .resolved(let context) = state.pullRequestLookup {
+      return "PR #\(context.parsed.number): \(context.metadata.title)"
+    }
+    if let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased(),
+      let title = state.linearTitleCache[ticketID], !title.isEmpty
+    {
+      return displayNameFromLinearTitle(ticketID: ticketID, title: title)
+    }
+    return nil
+  }
 }
 
 /// Error surfaced from the create effect when the state snapshot taken at
@@ -1363,6 +1532,31 @@ extension String {
   nonisolated func supacoolMatchingRemote(from remotes: [String]) -> String? {
     remotes.sorted { $0.count > $1.count }.first { hasPrefix("\($0)/") }
   }
+}
+
+// MARK: - Linear-derived naming
+
+/// Builds a kebab-case branch name from a Linear ticket id and its title:
+/// `cen-6690-streamline-the-foobar-pipeline`. The ticket id is always
+/// included as a prefix so a glance at `git branch` makes the link to
+/// the ticket obvious. Reuses `sanitizeBranchName` so the slug rules
+/// (40-char cap, no special characters) match the LLM-generated path.
+nonisolated func branchNameFromLinearTitle(ticketID: String, title: String) -> String {
+  let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmedTitle.isEmpty else {
+    return sanitizeBranchName(ticketID)
+  }
+  return sanitizeBranchName("\(ticketID) \(trimmedTitle)")
+}
+
+/// Builds a card display name from a Linear ticket id and its title:
+/// `CEN-6690 · Streamline the foobar pipeline`. Capped at 80 chars so a
+/// pathological Linear title doesn't blow up the matrix card layout.
+nonisolated func displayNameFromLinearTitle(ticketID: String, title: String) -> String {
+  let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmedTitle.isEmpty else { return ticketID }
+  let combined = "\(ticketID) · \(trimmedTitle)"
+  return String(combined.prefix(80))
 }
 
 /// Find the first configured repository whose GitHub remote matches the

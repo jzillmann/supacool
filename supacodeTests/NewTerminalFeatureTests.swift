@@ -181,6 +181,7 @@ struct NewTerminalFeatureTests {
       $0.isSuggestingBranchName = false
       $0.workspaceQuery = "add-ssh-connection-pooling"
       $0.selectedWorkspace = .newBranch(name: "add-ssh-connection-pooling")
+      $0.workspaceQueryUserEdited = true
     }
   }
 
@@ -223,7 +224,186 @@ struct NewTerminalFeatureTests {
       $0.isSuggestingBranchName = false
       $0.workspaceQuery = "fix-marios-bug"
       $0.selectedWorkspace = .newBranch(name: "fix-marios-bug")
+      $0.workspaceQueryUserEdited = true
     }
+  }
+
+  // MARK: - Linear ticket title lookup
+
+  /// Typing a prompt that names a Linear ticket fires a debounced fetch.
+  /// On success, the title is cached and the workspace branch field is
+  /// auto-filled with a kebab-cased name derived from the title.
+  @Test(.dependencies) func linearTicketResolvesAndAutoFillsBranchName() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { id in
+        #expect(id == "CEN-6690")
+        return "Streamline the foobar pipeline"
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    #expect(store.state.pendingLinearTicketID == "CEN-6690")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.linearTitleCache["CEN-6690"] == "Streamline the foobar pipeline")
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+    #expect(
+      store.state.selectedWorkspace
+        == .newBranch(name: "cen-6690-streamline-the-foobar-pipeline")
+    )
+  }
+
+  /// If the user has already typed something into the workspace field,
+  /// the auto-fill from a resolved Linear title doesn't overwrite it.
+  /// Their intent wins.
+  @Test(.dependencies) func linearTicketAutoFillRespectsUserEdit() async {
+    var state = Self.makeState()
+    state.workspaceQuery = "my-custom-branch"
+    state.workspaceQueryUserEdited = true
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in "Some Linear title" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Look into CEN-1")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    // Cache was populated, but the field was left alone.
+    #expect(store.state.linearTitleCache["CEN-1"] == "Some Linear title")
+    #expect(store.state.workspaceQuery == "my-custom-branch")
+  }
+
+  /// A negative cache entry (failed lookup or unknown ticket) prevents
+  /// re-fetching on subsequent keystrokes for the same id.
+  @Test(.dependencies) func linearTicketFailureNegativelyCaches() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    struct Boom: Error {}
+    let fetchCount = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in
+        fetchCount.withValue { $0 += 1 }
+        throw Boom()
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "CEN-9999")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleFailed)
+
+    #expect(store.state.linearTitleCache["CEN-9999"] == "")
+
+    // Editing the prompt while keeping the same id must not re-fetch.
+    await store.send(\.binding.prompt, "CEN-9999 please look")
+    await clock.advance(by: .milliseconds(400))
+    #expect(fetchCount.value == 1)
+  }
+
+  /// When a Linear title is cached, the wand button uses it directly
+  /// instead of round-tripping through the LLM.
+  @Test(.dependencies) func suggestBranchNamePrefersCachedLinearTitle() async {
+    var state = Self.makeState()
+    state.prompt = "Fix CEN-6690"
+    state.linearTitleCache["CEN-6690"] = "Improve auto naming"
+    let inferenceCalls = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.backgroundInferenceClient.infer = { _, _ in
+        inferenceCalls.withValue { $0 += 1 }
+        return "should-not-be-used"
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.suggestBranchNameTapped)
+    await store.receive(\.branchNameSuggested) {
+      $0.workspaceQuery = "cen-6690-improve-auto-naming"
+      $0.selectedWorkspace = .newBranch(name: "cen-6690-improve-auto-naming")
+      $0.workspaceQueryUserEdited = true
+    }
+    #expect(inferenceCalls.value == 0)
+    #expect(store.state.isSuggestingBranchName == false)
+  }
+
+  /// Branch / display name helpers produce the expected slugs.
+  @Test func linearNamingHelpers() {
+    #expect(
+      branchNameFromLinearTitle(ticketID: "CEN-6690", title: "Streamline the foobar")
+        == "cen-6690-streamline-the-foobar"
+    )
+    #expect(
+      displayNameFromLinearTitle(ticketID: "CEN-6690", title: "Streamline the foobar")
+        == "CEN-6690 · Streamline the foobar"
+    )
+    // Empty title falls back to bare ticket id.
+    #expect(branchNameFromLinearTitle(ticketID: "CEN-6690", title: "  ") == "cen-6690")
+    #expect(displayNameFromLinearTitle(ticketID: "CEN-6690", title: "") == "CEN-6690")
+  }
+
+  /// `suggestedDisplayName` prefers a resolved PR over a Linear title
+  /// when both are present — the PR URL is the stronger explicit signal.
+  @Test func suggestedDisplayNamePrefersPullRequestOverLinear() {
+    var state = Self.makeState()
+    state.prompt = "Fix CEN-1 (see PR)"
+    state.linearTitleCache["CEN-1"] = "Linear title"
+    state.pullRequestLookup = .resolved(
+      PullRequestContext(
+        parsed: ParsedPullRequestURL(
+          url: "https://github.com/acme/widgets/pull/42",
+          owner: "acme",
+          repo: "widgets",
+          number: 42
+        ),
+        metadata: SupacoolPRMetadata(
+          title: "PR title",
+          headRefName: "feat",
+          baseRefName: "main",
+          headRepositoryOwner: "acme",
+          state: "OPEN",
+          isDraft: false
+        ),
+        matchedRepositoryID: "/tmp/repo",
+        isFork: false
+      )
+    )
+    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == "PR #42: PR title")
+  }
+
+  /// `suggestedDisplayName` falls back to the cached Linear title when
+  /// no PR is resolved.
+  @Test func suggestedDisplayNameUsesLinearTitleWhenNoPR() {
+    var state = Self.makeState()
+    state.prompt = "Fix CEN-6690 today"
+    state.linearTitleCache["CEN-6690"] = "Streamline the foobar"
+    #expect(
+      NewTerminalFeature.suggestedDisplayName(state: state)
+        == "CEN-6690 · Streamline the foobar"
+    )
+  }
+
+  /// `suggestedDisplayName` returns nil when neither signal is available
+  /// — callers fall back to `AgentSession.deriveDisplayName`.
+  @Test func suggestedDisplayNameIsNilWithoutSignal() {
+    var state = Self.makeState()
+    state.prompt = "Just a quick task"
+    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == nil)
   }
 
   // MARK: - Workspace selection inference

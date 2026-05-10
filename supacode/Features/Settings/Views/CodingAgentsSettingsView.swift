@@ -121,6 +121,7 @@ private struct AIAssistSettingsSection: View {
 private struct ReferencesSettingsSection: View {
   @AppStorage("supacool.references.linearOrg") private var linearOrg: String = ""
   @AppStorage("supacool.references.ticketPrefixes") private var ticketPrefixes: String = ""
+  @AppStorage("supacool.linear.apiKey") private var linearAPIKey: String = ""
 
   var body: some View {
     Section {
@@ -144,6 +145,18 @@ private struct ReferencesSettingsSection: View {
         Text(
           "Comma-separated list of team keys (e.g. `CEN`). "
             + "Empty = any uppercase prefix matches, which can pick up noise like `HTTP-200`."
+        )
+      }
+      LabeledContent {
+        SecureField("lin_api_…", text: $linearAPIKey)
+          .textFieldStyle(.roundedBorder)
+          .frame(maxWidth: 240)
+      } label: {
+        Text("Linear API key")
+        Text(
+          "Optional. When set, typing a ticket id in the New Terminal prompt fetches the "
+            + "issue title and uses it for the suggested branch name and card title. "
+            + "Generate a personal key at linear.app/settings/api."
         )
       }
     } header: {
