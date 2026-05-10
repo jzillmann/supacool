@@ -60,6 +60,34 @@ struct FullScreenTerminalViewTests {
     #expect(matched == pullRequest)
   }
 
+  @Test func finderRevealURLUsesCurrentWorkspacePathForLocalSession() {
+    let path = "/Users/example/repo/.worktrees/feature-x"
+    let session = AgentSession(
+      repositoryID: "/Users/example/repo",
+      worktreeID: "/Users/example/repo",
+      currentWorkspacePath: path,
+      agent: .claude,
+      initialPrompt: "Ship it"
+    )
+
+    let url = FullScreenTerminalView.finderRevealURL(session: session)
+
+    #expect(url?.path(percentEncoded: false) == path)
+  }
+
+  @Test func finderRevealURLIsNilForRemoteSessions() {
+    let session = AgentSession(
+      repositoryID: "/Users/example/repo",
+      worktreeID: "remote:host:/home/dev/repo",
+      currentWorkspacePath: "/home/dev/repo",
+      agent: .claude,
+      initialPrompt: "Ship it",
+      remoteWorkspaceID: UUID()
+    )
+
+    #expect(FullScreenTerminalView.finderRevealURL(session: session) == nil)
+  }
+
   @Test func matchedPullRequestIgnoresRepoRootSessions() {
     let repository = Repository(
       id: "/tmp/repo",

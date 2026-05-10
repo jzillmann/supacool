@@ -193,6 +193,7 @@ struct FullScreenTerminalView: View {
         .help("Double-click to rename")
       priorityButton
       infoButton
+      revealInFinderButton
       openDiffButton
       recentPromptsButton
       autoObserverButton
@@ -368,6 +369,25 @@ struct FullScreenTerminalView: View {
     }
     let trimmed = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
     return String(trimmed.prefix(40))
+  }
+
+  /// Opens Finder with the session's current workspace selected. Hidden
+  /// for remote sessions because their workspace path lives on the host,
+  /// not this Mac.
+  @ViewBuilder
+  private var revealInFinderButton: some View {
+    if let url = Self.finderRevealURL(session: session) {
+      Button {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+      } label: {
+        Image(systemName: "folder")
+          .font(.system(size: 13, weight: .medium))
+          .modifier(HeaderIconStyle())
+          .accessibilityLabel("Reveal in Finder")
+      }
+      .buttonStyle(.plain)
+      .help("Reveal workspace in Finder")
+    }
   }
 
   /// Combined diff button: left-click opens the in-house QuickDiffSheet;
@@ -787,6 +807,14 @@ struct FullScreenTerminalView: View {
       return worktree.branch ?? worktree.name
     }
     return URL(fileURLWithPath: workspacePath).lastPathComponent
+  }
+
+  @MainActor
+  static func finderRevealURL(session: AgentSession) -> URL? {
+    guard !session.isRemote else { return nil }
+    let path = session.currentWorkspacePath
+    guard !path.isEmpty else { return nil }
+    return URL(fileURLWithPath: path).standardizedFileURL
   }
 
   @MainActor
