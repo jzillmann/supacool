@@ -581,6 +581,46 @@ struct SessionReferenceSummaryChips: View {
   }
 }
 
+/// Presentation model for the reference stack popover.
+///
+/// Once merged PR noise crosses the threshold, merged PRs collapse into one
+/// expandable row so active/open PRs stay immediately visible.
+nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
+  static let mergedPullRequestCollapseThreshold = 5
+
+  let primaryReferences: [SessionReference]
+  let collapsedMergedPullRequests: [SessionReference]
+
+  init(
+    references: [SessionReference],
+    collapseMergedPullRequests: Bool,
+    threshold: Int = Self.mergedPullRequestCollapseThreshold
+  ) {
+    guard collapseMergedPullRequests else {
+      primaryReferences = references
+      collapsedMergedPullRequests = []
+      return
+    }
+
+    let mergedPullRequests = references.filter { $0.isMergedPullRequest }
+    guard mergedPullRequests.count > threshold else {
+      primaryReferences = references
+      collapsedMergedPullRequests = []
+      return
+    }
+
+    primaryReferences = references.filter { !$0.isMergedPullRequest }
+    collapsedMergedPullRequests = mergedPullRequests
+  }
+}
+
+private extension SessionReference {
+  nonisolated var isMergedPullRequest: Bool {
+    guard case .pullRequest(_, _, _, let state) = self else { return false }
+    return state == .merged
+  }
+}
+
 private struct ReferenceStackChip: View {
   enum Kind {
     case pullRequests
@@ -606,6 +646,7 @@ private struct ReferenceStackChip: View {
   let linearOrgSlug: String
 
   @State private var isPopoverShown: Bool = false
+  @State private var isMergedPullRequestsExpanded: Bool = false
 
   var body: some View {
     Button {
@@ -685,19 +726,66 @@ private struct ReferenceStackChip: View {
     }
   }
 
+  private var popoverPresentation: ReferenceStackPopoverPresentation {
+    ReferenceStackPopoverPresentation(
+      references: references,
+      collapseMergedPullRequests: kind == .pullRequests
+    )
+  }
+
   private var popoverContent: some View {
     VStack(alignment: .leading, spacing: 8) {
       Label(kind.title, systemImage: kind.systemImage)
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
       VStack(alignment: .leading, spacing: 4) {
-        ForEach(references, id: \.dedupeKey) { reference in
+        ForEach(popoverPresentation.primaryReferences, id: \.dedupeKey) { reference in
           referenceRow(reference)
+        }
+        if !popoverPresentation.collapsedMergedPullRequests.isEmpty {
+          mergedPullRequestsDisclosureRow(count: popoverPresentation.collapsedMergedPullRequests.count)
+          if isMergedPullRequestsExpanded {
+            ForEach(popoverPresentation.collapsedMergedPullRequests, id: \.dedupeKey) { reference in
+              referenceRow(reference)
+                .padding(.leading, 18)
+            }
+          }
         }
       }
     }
     .padding(12)
     .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
+  }
+
+  private func mergedPullRequestsDisclosureRow(count: Int) -> some View {
+    Button {
+      isMergedPullRequestsExpanded.toggle()
+    } label: {
+      HStack(spacing: 8) {
+        Image(systemName: PRState.merged.systemImage)
+          .font(.caption)
+          .foregroundStyle(prStateColor(.merged))
+          .frame(width: 14)
+        VStack(alignment: .leading, spacing: 1) {
+          Text("\(count) merged pull requests")
+            .font(.caption.weight(.medium))
+            .lineLimit(1)
+          Text(isMergedPullRequestsExpanded ? "Hide merged PRs" : "Show merged PRs")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 12)
+        Image(systemName: "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(isMergedPullRequestsExpanded ? 90 : 0))
+      }
+      .contentShape(Rectangle())
+      .padding(.vertical, 4)
+    }
+    .buttonStyle(.plain)
+    .help("\(isMergedPullRequestsExpanded ? "Hide" : "Show") \(count) merged pull requests")
   }
 
   private func referenceRow(_ reference: SessionReference) -> some View {
