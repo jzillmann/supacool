@@ -264,6 +264,12 @@ struct BoardFeature {
       id: AgentSession.ID,
       repositories: [Repository]
     )
+    /// Forwarded from AppFeature when the underlying repository list
+    /// changes (a repo was added/removed/reloaded). Live-patches an open
+    /// New Terminal sheet so its picker stays in sync without the user
+    /// having to close and reopen — fixes the "added a third repo,
+    /// dialog still shows two" stale-snapshot bug.
+    case _repositoriesUpdated(repositories: [Repository])
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
     /// Raw-shell sessions have no agent-native resume. This reopens the
@@ -890,6 +896,24 @@ struct BoardFeature {
           availableRepositories: IdentifiedArray(uniqueElements: repositories),
           preferredRepositoryID: preferredRepositoryID
         )
+        return .none
+
+      case ._repositoriesUpdated(let repositories):
+        guard state.newTerminalSheet != nil else { return .none }
+        let updated = IdentifiedArray(uniqueElements: repositories)
+        let currentSelection = state.newTerminalSheet?.selectedRepositoryID
+        let filtersSnapshot = state.filters
+        state.newTerminalSheet?.availableRepositories = updated
+        // Heal a stale selection (repo was removed) or fill in a freshly
+        // valid one (sheet was opened mid-load with no repos available).
+        if let currentSelection, updated[id: currentSelection] != nil {
+          // Selection still valid — leave it alone.
+        } else {
+          state.newTerminalSheet?.selectedRepositoryID = filteredPreferredRepositoryID(
+            in: repositories,
+            filters: filtersSnapshot
+          ) ?? updated.first?.id
+        }
         return .none
 
       case .bookmarkTapped(let id, let repositories):

@@ -1147,6 +1147,61 @@ struct BoardFeatureTests {
     #expect(sheet?.planMode == false)
   }
 
+  @Test(.dependencies) func repositoriesUpdatedRefreshesOpenNewTerminalSheet() async {
+    // Regression: opening the New Terminal sheet during the async repo
+    // load window used to freeze the picker on a stale snapshot. The
+    // forwarded `_repositoriesUpdated` action must live-patch the open
+    // sheet so the user doesn't have to close and reopen.
+    let initialRepo = Repository(
+      id: "/tmp/alpha",
+      rootURL: URL(fileURLWithPath: "/tmp/alpha"),
+      name: "alpha",
+      worktrees: []
+    )
+    let addedRepo = Repository(
+      id: "/tmp/beta",
+      rootURL: URL(fileURLWithPath: "/tmp/beta"),
+      name: "beta",
+      worktrees: []
+    )
+
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.openNewTerminalSheet(repositories: [initialRepo]))
+    #expect(store.state.newTerminalSheet?.availableRepositories.count == 1)
+    #expect(store.state.newTerminalSheet?.selectedRepositoryID == initialRepo.id)
+
+    await store.send(._repositoriesUpdated(repositories: [initialRepo, addedRepo]))
+    #expect(store.state.newTerminalSheet?.availableRepositories.count == 2)
+    // Selection sticks because the previous repo is still in the list.
+    #expect(store.state.newTerminalSheet?.selectedRepositoryID == initialRepo.id)
+
+    // Removing the currently selected repo must heal the selection to a
+    // still-valid one rather than leaving a dangling id.
+    await store.send(._repositoriesUpdated(repositories: [addedRepo]))
+    #expect(store.state.newTerminalSheet?.availableRepositories.count == 1)
+    #expect(store.state.newTerminalSheet?.selectedRepositoryID == addedRepo.id)
+  }
+
+  @Test(.dependencies) func repositoriesUpdatedIsNoOpWhenSheetClosed() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    let repo = Repository(
+      id: "/tmp/alpha",
+      rootURL: URL(fileURLWithPath: "/tmp/alpha"),
+      name: "alpha",
+      worktrees: []
+    )
+    await store.send(._repositoriesUpdated(repositories: [repo]))
+    #expect(store.state.newTerminalSheet == nil)
+  }
+
   @Test(.dependencies) func convertSessionToWorktreeIgnoresEmptyBranchName() async {
     let original = Self.sampleSession(repositoryID: "/tmp/repo")
     let repo = Repository(

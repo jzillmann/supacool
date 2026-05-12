@@ -473,6 +473,13 @@ struct RepositoriesFeature {
       case .openRepositories(let urls):
         analyticsClient.capture("repository_added", ["count": urls.count])
         state.alert = nil
+        // Capture the live snapshot so the effect can splice in only the
+        // newly-added roots instead of re-running `git worktree list` on
+        // every existing repo. Cuts the gap during which the New Terminal
+        // sheet's picker shows a stale list (the bigger the existing set,
+        // the wider that gap was).
+        let existingRepositories = state.repositories
+        let existingFailureMessages = state.loadFailuresByID
         return .run { send in
           let loadedPaths = await repositoryPersistence.loadRoots()
           let existingRootPaths = RepositoryPathNormalizer.normalize(loadedPaths)
@@ -492,11 +499,35 @@ struct RepositoriesFeature {
           let mergedPaths = RepositoryPathNormalizer.normalize(existingRootPaths + resolvedRootPaths)
           let mergedRoots = mergedPaths.map { URL(fileURLWithPath: $0) }
           await repositoryPersistence.saveRoots(mergedPaths)
-          let (repositories, failures) = await loadRepositoriesData(mergedRoots)
+
+          // Only fetch worktrees for paths the user just added — anything
+          // already loaded keeps its existing Repository entry. A separate
+          // refresh path (`reloadRepositories`) handles bulk re-fetch.
+          let existingPathSet = Set(existingRepositories.ids)
+          let pathsToFetch = mergedPaths.filter { !existingPathSet.contains($0) }
+          let rootsToFetch = pathsToFetch.map { URL(fileURLWithPath: $0) }
+          let (freshlyLoaded, freshFailures) = await loadRepositoriesData(rootsToFetch)
+          let freshRepoByID = Dictionary(uniqueKeysWithValues: freshlyLoaded.map { ($0.id, $0) })
+          let freshFailureByID = Dictionary(uniqueKeysWithValues: freshFailures.map { ($0.rootID, $0) })
+
+          var finalRepositories: [Repository] = []
+          var finalFailures: [LoadFailure] = []
+          for path in mergedPaths {
+            if let fresh = freshRepoByID[path] {
+              finalRepositories.append(fresh)
+            } else if let existing = existingRepositories[id: path] {
+              finalRepositories.append(existing)
+            } else if let freshFailure = freshFailureByID[path] {
+              finalFailures.append(freshFailure)
+            } else if let existingMessage = existingFailureMessages[path] {
+              finalFailures.append(LoadFailure(rootID: path, message: existingMessage))
+            }
+          }
+
           await send(
             .openRepositoriesFinished(
-              repositories,
-              failures: failures,
+              finalRepositories,
+              failures: finalFailures,
               invalidRoots: invalidRoots,
               roots: mergedRoots
             )

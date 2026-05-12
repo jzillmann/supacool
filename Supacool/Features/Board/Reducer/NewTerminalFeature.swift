@@ -87,7 +87,10 @@ struct NewTerminalFeature {
 
   @ObservableState
   struct State: Equatable {
-    let availableRepositories: IdentifiedArrayOf<Repository>
+    /// Live-updated by BoardFeature when the underlying repository list
+    /// changes — keeps the open sheet's repository picker in sync with
+    /// repos added (or removed) while the user is mid-prompt.
+    var availableRepositories: IdentifiedArrayOf<Repository>
     var selectedRepositoryID: Repository.ID?
     var prompt: String = ""
     /// `nil` = raw shell session (no agent CLI invoked).
