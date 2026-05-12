@@ -141,7 +141,10 @@ private struct ReferencesSettingsSection: View {
           .frame(maxWidth: 240)
       } label: {
         Text("Ticket prefix allowlist")
-        Text("Comma-separated list of team keys (e.g. `CEN`). Empty = any uppercase prefix matches, which can pick up noise like `HTTP-200`.")
+        Text(
+          "Comma-separated list of team keys (e.g. `CEN`). "
+            + "Empty = any uppercase prefix matches, which can pick up noise like `HTTP-200`."
+        )
       }
     } header: {
       Label("References", systemImage: "link")

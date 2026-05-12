@@ -141,7 +141,7 @@ struct RemoteHostPersistenceTests {
     // Clamp to whole seconds — .iso8601 strategy drops sub-second precision
     // on encode, so a naïve Date() round-trip diverges by fractional ms.
     let whenSeconds = floor(Date().timeIntervalSince1970)
-    let ws = RemoteWorkspace(
+    let remoteWorkspace = RemoteWorkspace(
       hostID: UUID(),
       remoteWorkingDirectory: "/home/jz/code/backend",
       displayName: "Backend",
@@ -151,9 +151,9 @@ struct RemoteHostPersistenceTests {
     encoder.dateEncodingStrategy = .iso8601
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    let data = try encoder.encode(ws)
+    let data = try encoder.encode(remoteWorkspace)
     let decoded = try decoder.decode(RemoteWorkspace.self, from: data)
-    #expect(decoded == ws)
+    #expect(decoded == remoteWorkspace)
   }
 
   @Test func remoteWorkspaceDerivesDisplayNameFromPath() {

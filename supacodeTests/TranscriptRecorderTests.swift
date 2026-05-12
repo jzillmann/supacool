@@ -70,7 +70,7 @@ struct TranscriptRecorderTests {
     // dropped one of the optional payload fields should still decode (with
     // the field defaulted) rather than failing the whole row. Mirrors the
     // `decodeIfPresent` pattern used everywhere in the project.
-    let payload = #"{"kind":"input"}"#.data(using: .utf8)!
+    let payload = Data(#"{"kind":"input"}"#.utf8)
     let decoded = try JSONDecoder().decode(TranscriptEntry.self, from: payload)
     if case .input(let text, _) = decoded {
       #expect(text == "")
@@ -80,7 +80,7 @@ struct TranscriptRecorderTests {
   }
 
   @Test func decodingUnknownKindThrows() {
-    let payload = #"{"kind":"unknownFutureKind"}"#.data(using: .utf8)!
+    let payload = Data(#"{"kind":"unknownFutureKind"}"#.utf8)
     #expect(throws: DecodingError.self) {
       _ = try JSONDecoder().decode(TranscriptEntry.self, from: payload)
     }

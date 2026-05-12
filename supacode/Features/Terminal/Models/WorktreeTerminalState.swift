@@ -716,8 +716,8 @@ final class WorktreeTerminalState {
   ) -> UUID? {
     guard let focusedId = focusedSurfaceIdByTab[tabId] else { return nil }
     let newID = UUID()
-    let ok = performSplitAction(.newSplit(direction: direction), for: focusedId, newSurfaceID: newID)
-    return ok ? newID : nil
+    let splitSucceeded = performSplitAction(.newSplit(direction: direction), for: focusedId, newSurfaceID: newID)
+    return splitSucceeded ? newID : nil
   }
 
   func performSplitAction(
@@ -1281,6 +1281,15 @@ final class WorktreeTerminalState {
     return encoded
   }
 
+  private func resolvedSurfaceID(requested: UUID?) -> UUID {
+    guard let requested else { return UUID() }
+    if surfaces[requested] != nil {
+      terminalStateLogger.warning("Duplicate surface ID \(requested), generating a new one.")
+      return UUID()
+    }
+    return requested
+  }
+
   private func createSurface(
     tabId: TerminalTabID,
     command: String? = nil,
@@ -1290,18 +1299,7 @@ final class WorktreeTerminalState {
     context: ghostty_surface_context_e,
     surfaceID: UUID? = nil
   ) -> GhosttySurfaceView {
-    let resolvedID: UUID
-    if let requested = surfaceID {
-      if surfaces[requested] != nil {
-        terminalStateLogger.warning("Duplicate surface ID \(requested), generating a new one.")
-        resolvedID = UUID()
-      } else {
-        resolvedID = requested
-      }
-    } else {
-      resolvedID = UUID()
-    }
-    let surfaceID = resolvedID
+    let surfaceID = resolvedSurfaceID(requested: surfaceID)
     terminalStateLogger.info("createSurface: resolved=\(surfaceID)")
     let inherited = inheritedSurfaceConfig(fromSurfaceId: inheritingFromSurfaceId, context: context)
     let view = GhosttySurfaceView(
@@ -1822,8 +1820,8 @@ nonisolated func composeSetupAndCommand(
 /// POSIX single-quote escape: wrap in `'...'`, replace any embedded
 /// `'` with the `'\''` escape. Safe for any UTF-8 content, including
 /// newlines (preserved inside single quotes).
-private nonisolated func singleQuoteShell(_ s: String) -> String {
-  "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+private nonisolated func singleQuoteShell(_ value: String) -> String {
+  "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
 }
 
 nonisolated struct BlockingScriptLaunch {

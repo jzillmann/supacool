@@ -94,7 +94,10 @@ struct AppearanceSettingsView: View {
       if let onShowGettingStartedAgain {
         Section {
           Button("Show Getting Started Again", action: onShowGettingStartedAgain)
-            .help("Un-park skipped onboarding tasks. The carousel reappears on the board with every task still incomplete.")
+            .help(
+              "Un-park skipped onboarding tasks. "
+                + "The carousel reappears on the board with every task still incomplete."
+            )
         } header: {
           Text("Onboarding")
         }

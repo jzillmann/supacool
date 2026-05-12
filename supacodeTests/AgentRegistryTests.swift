@@ -30,10 +30,10 @@ struct AgentRegistryTests {
   // MARK: - Pi-specific shape
 
   @Test func piHasNoBypassFlagAndNoPlanMode() {
-    let pi = AgentType.pi
-    #expect(pi.bypassPermissionsFlag == nil)
-    #expect(pi.supportsPlanMode == false)
-    #expect(pi.skillSyntax == nil)
+    let piAgent = AgentType.pi
+    #expect(piAgent.bypassPermissionsFlag == nil)
+    #expect(piAgent.supportsPlanMode == false)
+    #expect(piAgent.skillSyntax == nil)
   }
 
   @Test func piResumeTemplatesUseSingleDashSession() {

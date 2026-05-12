@@ -88,17 +88,17 @@ struct AgentPIDSweepTests {
   /// Sweep must clear only dead PIDs. With pi alive and codex dead, the
   /// surface stays busy and pi stays registered.
   @Test(.dependencies) func sweepClearsDeadInnerPIDOnly() {
-    let pi: Int32 = 32196
+    let piPID: Int32 = 32196
     let codex: Int32 = 63935
     let fixture = makeFixture(deadPIDs: [codex])
 
-    fixture.fireBusy(active: true, pid: pi)
+    fixture.fireBusy(active: true, pid: piPID)
     fixture.fireBusy(active: true, pid: codex)
 
     fixture.manager.sweepAgentPIDs()
 
     #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
-    #expect(fixture.manager.registeredAgentPIDs(tabID: fixture.tabID.rawValue) == [pi])
+    #expect(fixture.manager.registeredAgentPIDs(tabID: fixture.tabID.rawValue) == [piPID])
   }
 
   @Test(.dependencies) func legacyHookWithoutPIDDoesNotRegister() {

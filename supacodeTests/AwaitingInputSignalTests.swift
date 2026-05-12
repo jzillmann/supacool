@@ -128,7 +128,7 @@ struct AwaitingInputSignalTests {
   /// make this edit…".
   @Test func sensitiveFilePromptMatchesFallbackClassifier() {
     let screen = """
-      Claude requested permissions to edit /Users/jz/Projects/centrumAI/centrum_backend/.claude/rules/ci which is a sensitive file.
+      Claude requested permissions to edit /tmp/project/.claude/rules/ci which is a sensitive file.
 
       Do you want to proceed?
       1. Yes

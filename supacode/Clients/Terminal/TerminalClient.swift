@@ -45,6 +45,13 @@ struct TerminalClient {
     case destroyTab(Worktree, tabID: TerminalTabID)
     case destroySurface(Worktree, tabID: TerminalTabID, surfaceID: UUID)
     case prune(Set<Worktree.ID>)
+    /// Supacool: SIGTERM every process the WorktreeOwnedProcessTracker
+    /// has attributed to the given worktree directory. Sent by AppFeature
+    /// when a worktree is archived / removed, and by BoardFeature when
+    /// every agent session for the worktree is parked. The argument is
+    /// the worktree's absolute filesystem path (matches the cwd-derived
+    /// key used by the tracker).
+    case releaseOwnedProcesses(worktreePath: String)
     case setNotificationsEnabled(Bool)
     case setSelectedWorktreeID(Worktree.ID?)
     case refreshTabBarVisibility

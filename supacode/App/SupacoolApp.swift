@@ -164,30 +164,9 @@ struct SupacoolApp: App {
     _ghosttyShortcuts = State(initialValue: shortcuts)
     let terminalManager = WorktreeTerminalManager(
       runtime: runtime,
-      orphanProcessReaper: WorktreeOrphanProcessReaper()
+      ownedProcessTracker: WorktreeOwnedProcessTracker()
     )
-    // Always persist layouts regardless of `restoreTerminalLayoutEnabled`, so enabling
-    // the setting retroactively restores the most recent session.
-    terminalManager.saveLayoutSnapshot = { worktreeID, snapshot in
-      @Shared(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
-      $layouts.withLock { dict in
-        if let snapshot {
-          dict[worktreeID] = snapshot
-        } else {
-          dict.removeValue(forKey: worktreeID)
-        }
-      }
-    }
-    let loadSavedLayoutSnapshot: (Worktree.ID) -> TerminalLayoutSnapshot? = { worktreeID in
-      @SharedReader(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
-      return layouts[worktreeID]
-    }
-    terminalManager.loadSavedLayoutSnapshot = loadSavedLayoutSnapshot
-    terminalManager.loadLayoutSnapshot = { worktreeID in
-      @SharedReader(.settingsFile) var settingsFile
-      guard settingsFile.global.restoreTerminalLayoutEnabled else { return nil }
-      return loadSavedLayoutSnapshot(worktreeID)
-    }
+    Self.configureLayoutPersistence(for: terminalManager)
     _terminalManager = State(initialValue: terminalManager)
     let worktreeInfoWatcher = WorktreeInfoWatcherManager()
     _worktreeInfoWatcher = State(initialValue: worktreeInfoWatcher)
@@ -242,6 +221,31 @@ struct SupacoolApp: App {
 
     appDelegate.appStore = appStore
     appDelegate.terminalManager = terminalManager
+  }
+
+  private static func configureLayoutPersistence(for terminalManager: WorktreeTerminalManager) {
+    // Always persist layouts regardless of `restoreTerminalLayoutEnabled`, so enabling
+    // the setting retroactively restores the most recent session.
+    terminalManager.saveLayoutSnapshot = { worktreeID, snapshot in
+      @Shared(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
+      $layouts.withLock { dict in
+        if let snapshot {
+          dict[worktreeID] = snapshot
+        } else {
+          dict.removeValue(forKey: worktreeID)
+        }
+      }
+    }
+    let loadSavedLayoutSnapshot: (Worktree.ID) -> TerminalLayoutSnapshot? = { worktreeID in
+      @SharedReader(.layouts) var layouts: [String: TerminalLayoutSnapshot] = [:]
+      return layouts[worktreeID]
+    }
+    terminalManager.loadSavedLayoutSnapshot = loadSavedLayoutSnapshot
+    terminalManager.loadLayoutSnapshot = { worktreeID in
+      @SharedReader(.settingsFile) var settingsFile
+      guard settingsFile.global.restoreTerminalLayoutEnabled else { return nil }
+      return loadSavedLayoutSnapshot(worktreeID)
+    }
   }
 
   var body: some Scene {

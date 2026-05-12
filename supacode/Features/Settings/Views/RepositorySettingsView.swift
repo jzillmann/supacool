@@ -143,6 +143,7 @@ struct RepositorySettingsView: View {
                 Image(systemName: "minus.circle")
               }
               .buttonStyle(.plain)
+              .accessibilityLabel("Remove remote target")
               .help("Remove this remote target")
             }
           }
@@ -150,7 +151,10 @@ struct RepositorySettingsView: View {
       } header: {
         Text("Remote Targets")
       } footer: {
-        Text("If this repo also exists remotely, New Terminal will ask whether to run locally or on one of these targets.")
+        Text(
+          "If this repo also exists remotely, "
+            + "New Terminal will ask whether to run locally or on one of these targets."
+        )
       }
       Section("Pull Requests") {
         Picker(selection: settings.pullRequestMergeStrategy) {

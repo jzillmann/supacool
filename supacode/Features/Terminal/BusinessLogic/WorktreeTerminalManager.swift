@@ -13,12 +13,12 @@ private let awaitingInputTTLDefault: Duration = .seconds(8)
 private let awaitingInputTransitionOnDebounceDefault: Duration = .milliseconds(750)
 /// Mirror debounce for turning the chip off. Kept tight so the card
 /// responds quickly when the user actually answers a prompt.
-private let awaitingInputTransitionOffDebounceDefault: Duration = .milliseconds(250)
+private let awaitingInputOffDebounceDefault: Duration = .milliseconds(250)
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
-private let awaitingInputPromptDetectionStableSamples = 2
+private let awaitingInputPromptStableSamples = 2
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
-private let orphanProcessReapIntervalDefault: Duration = .seconds(60)
+private let ownedProcessRefreshIntervalDefault: Duration = .seconds(60)
 nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
 nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
 
@@ -65,15 +65,17 @@ final class WorktreeTerminalManager {
   private let awaitingInputTransitionOffDebounce: Duration
   private let awaitingInputActivityPollInterval: Duration
   private let agentPIDSweepInterval: Duration
-  private let orphanProcessReapInterval: Duration
+  private let ownedProcessRefreshInterval: Duration
   private let deferredWorkFallbackTTL: Duration
   private let deferredWorkLeaseBuffer: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
-  /// Reaper for orphaned (`ppid == 1`) processes whose cwd is under
-  /// `~/.supacool/repos/`. Optional so tests can disable the live OS
-  /// scan; production wiring in `SupacoolApp` injects a real instance.
-  private let orphanProcessReaper: WorktreeOrphanProcessReaper?
-  private var orphanProcessReaperTickCount: Int = 0
+  /// Tracker that attributes orphaned (`ppid == 1`) processes whose cwd
+  /// is under `~/.supacool/repos/` to their owning worktree. Refresh is
+  /// non-destructive; `release(worktreePath:)` is what actually kills.
+  /// Optional so tests can disable the live OS scan; production wiring
+  /// in `SupacoolApp` injects a real instance.
+  private let ownedProcessTracker: WorktreeOwnedProcessTracker?
+  private var ownedProcessRefreshTickCount: Int = 0
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
@@ -111,14 +113,14 @@ final class WorktreeTerminalManager {
     socketServer: AgentHookSocketServer? = nil,
     awaitingInputTTL: Duration = awaitingInputTTLDefault,
     awaitingInputTransitionOnDebounce: Duration = awaitingInputTransitionOnDebounceDefault,
-    awaitingInputTransitionOffDebounce: Duration = awaitingInputTransitionOffDebounceDefault,
+    awaitingInputTransitionOffDebounce: Duration = awaitingInputOffDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
-    orphanProcessReapInterval: Duration = orphanProcessReapIntervalDefault,
+    ownedProcessRefreshInterval: Duration = ownedProcessRefreshIntervalDefault,
     deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
-    orphanProcessReaper: WorktreeOrphanProcessReaper? = nil,
+    ownedProcessTracker: WorktreeOwnedProcessTracker? = nil,
     startPromptScreenScanning: Bool = true,
     clock: C = ContinuousClock(),
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
@@ -129,11 +131,11 @@ final class WorktreeTerminalManager {
     self.awaitingInputTransitionOffDebounce = awaitingInputTransitionOffDebounce
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
     self.agentPIDSweepInterval = agentPIDSweepInterval
-    self.orphanProcessReapInterval = orphanProcessReapInterval
+    self.ownedProcessRefreshInterval = ownedProcessRefreshInterval
     self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.isProcessAlive = isProcessAlive
-    self.orphanProcessReaper = orphanProcessReaper
+    self.ownedProcessTracker = ownedProcessTracker
     self.sleep = { duration in
       try await clock.sleep(for: duration)
     }
@@ -297,10 +299,14 @@ final class WorktreeTerminalManager {
   /// "waiting on the user", but it also should not drop the card into
   /// Waiting on Me. Treat those Stop messages as a short, transient
   /// in-progress lease.
-  nonisolated static func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
+  nonisolated static func deferredWorkLeaseDuration(
+    for notification: AgentHookNotification
+  ) -> Duration? {
     guard isDeferredWorkSignal(notification) else { return nil }
-    return parsedDeferredWorkDuration(from: notification.body?.lowercased() ?? "", buffer: deferredWorkLeaseBufferDefault)
-      ?? deferredWorkFallbackTTLDefault
+    return parsedDeferredWorkDuration(
+      from: notification.body?.lowercased() ?? "",
+      buffer: deferredWorkLeaseBufferDefault
+    ) ?? deferredWorkFallbackTTLDefault
   }
 
   private func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
@@ -626,8 +632,9 @@ final class WorktreeTerminalManager {
       state(for: worktree).performBindingActionOnFocusedSurface("end_search")
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
-      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
-      .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
+      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune,
+      .releaseOwnedProcesses, .setNotificationsEnabled, .setSelectedWorktreeID,
+      .refreshTabBarVisibility, .sendText:
       return false
     }
     return true
@@ -640,8 +647,8 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch,
       .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab,
-      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .setNotificationsEnabled,
-      .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
+      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .releaseOwnedProcesses,
+      .setNotificationsEnabled, .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
       return false
     }
     return true
@@ -651,6 +658,8 @@ final class WorktreeTerminalManager {
     switch command {
     case .prune(let ids):
       prune(keeping: ids)
+    case .releaseOwnedProcesses(let worktreePath):
+      releaseOwnedProcesses(forWorktreePath: worktreePath)
     case .setNotificationsEnabled(let enabled):
       setNotificationsEnabled(enabled)
     case .refreshTabBarVisibility:
@@ -1140,7 +1149,7 @@ final class WorktreeTerminalManager {
   //      interleaves instead of waiting for the entire sweep.
   private func sampleAwaitingInputPromptScreens() async {
     tickAgentPIDSweepIfNeeded()
-    tickOrphanProcessReaperIfNeeded()
+    tickOwnedProcessRefreshIfNeeded()
     var openTabIDs = Set<UUID>()
 
     // Tabs that have ever received a hook event. These get accurate
@@ -1192,7 +1201,7 @@ final class WorktreeTerminalManager {
 
       awaitingInputPromptCandidates[rawTabID] = candidate
 
-      if candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples {
+      if candidate.stableSampleCount >= awaitingInputPromptStableSamples {
         markAwaitingInputSignal(
           worktreeID: candidate.worktreeID,
           tabID: rawTabID,
@@ -1266,20 +1275,33 @@ final class WorktreeTerminalManager {
     sweepAgentPIDs()
   }
 
-  /// Piggy-backs on the 1s prompt-scan loop and runs the orphan process
-  /// reaper every `orphanProcessReapInterval`. Same rationale as the
-  /// agent PID sweep above — a separate background Task was observed to
-  /// destabilise TestClock-driven tests under parallel Swift Testing.
-  /// No-op when `orphanProcessReaper` is nil (default in tests).
-  private func tickOrphanProcessReaperIfNeeded() {
-    guard let orphanProcessReaper else { return }
-    orphanProcessReaperTickCount &+= 1
-    let ticksPerReap = max(
+  /// Piggy-backs on the 1s prompt-scan loop and refreshes the owned-
+  /// process tracker every `ownedProcessRefreshInterval`. Same rationale
+  /// as the agent PID sweep above — a separate background Task was
+  /// observed to destabilise TestClock-driven tests under parallel
+  /// Swift Testing. No-op when `ownedProcessTracker` is nil (default in
+  /// tests). Refresh is non-destructive; actual termination happens
+  /// only via `releaseOwnedProcesses(forWorktreePath:)`.
+  private func tickOwnedProcessRefreshIfNeeded() {
+    guard let ownedProcessTracker else { return }
+    ownedProcessRefreshTickCount &+= 1
+    let ticksPerRefresh = max(
       1,
-      Int(orphanProcessReapInterval / awaitingInputActivityPollInterval)
+      Int(ownedProcessRefreshInterval / awaitingInputActivityPollInterval)
     )
-    guard orphanProcessReaperTickCount % ticksPerReap == 0 else { return }
-    orphanProcessReaper.reap()
+    guard ownedProcessRefreshTickCount % ticksPerRefresh == 0 else { return }
+    ownedProcessTracker.refresh()
+  }
+
+  /// SIGTERMs every process the tracker has attributed to the given
+  /// worktree path. Called by the AppFeature / BoardFeature reducers
+  /// when a worktree is archived, removed, or all its sessions are
+  /// parked. No-op when the tracker isn't wired (tests) or the
+  /// worktree has no tracked processes.
+  @discardableResult
+  func releaseOwnedProcesses(forWorktreePath worktreePath: String) -> [pid_t] {
+    guard let ownedProcessTracker else { return [] }
+    return ownedProcessTracker.release(worktreePath: worktreePath)
   }
 
   /// Walks registered agent PIDs and clears busy/awaiting state for any
@@ -1361,7 +1383,8 @@ final class WorktreeTerminalManager {
   }
 
   private func screenFingerprint(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
-    let contents = readScreenContentsOverride?(worktreeID, tabID) ?? states[worktreeID]?.readScreenContents(tabID: tabID)
+    let contents = readScreenContentsOverride?(worktreeID, tabID)
+      ?? states[worktreeID]?.readScreenContents(tabID: tabID)
     let screen = contents?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let screen, !screen.isEmpty else { return nil }
 

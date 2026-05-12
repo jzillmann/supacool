@@ -1364,14 +1364,14 @@ struct AppFeature {
   private func checkStaleHooksEffect() -> Effect<Action> {
     let claude = claudeSettingsClient
     let codex = codexSettingsClient
-    let pi = piSettingsClient
+    let piSettings = piSettingsClient
     let uuid = uuid
     return .run { send in
       async let claudeProgress = claude.checkInstallState(true)
       async let claudeNotifications = claude.checkInstallState(false)
       async let codexProgress = codex.checkInstallState(true)
       async let codexNotifications = codex.checkInstallState(false)
-      async let piExtension = pi.checkInstallState()
+      async let piExtension = piSettings.checkInstallState()
       let results: [(AgentHookSlot, AgentHookSettingsFileInstaller.InstallState)] = await [
         (.claudeProgress, claudeProgress),
         (.claudeNotifications, claudeNotifications),
@@ -1403,11 +1403,16 @@ struct AppFeature {
     let claude = claudeSettingsClient
     let codex = codexSettingsClient
     return .run { send in
-      async let cp = claude.checkInstalled(true)
-      async let cn = claude.checkInstalled(false)
-      async let xp = codex.checkInstalled(true)
-      async let xn = codex.checkInstalled(false)
-      let hooks = await [cp, cn, xp, xn]
+      async let claudeProgressInstalled = claude.checkInstalled(true)
+      async let claudeNotificationsInstalled = claude.checkInstalled(false)
+      async let codexProgressInstalled = codex.checkInstalled(true)
+      async let codexNotificationsInstalled = codex.checkInstalled(false)
+      let hooks = await [
+        claudeProgressInstalled,
+        claudeNotificationsInstalled,
+        codexProgressInstalled,
+        codexNotificationsInstalled,
+      ]
       let hasAllHooksInstalled = hooks.allSatisfy { $0 }
       let pending = GettingStartedEvaluator.pending(
         hasRepositories: hasRepositories,
