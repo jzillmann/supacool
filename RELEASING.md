@@ -1,8 +1,10 @@
 # Releasing Supacool
 
-This doc describes how to cut a release, how auto-updates work, and the one-time migration steps for anyone moving from an older `~/.supacode` install.
+This doc describes how to cut signed releases, how unsigned previews work while we do not have Apple Developer Program credentials, how auto-updates work, and the one-time migration steps for anyone moving from an older `~/.supacode` install.
 
 ## TL;DR
+
+Signed public release, after Apple Developer Program + Sparkle setup is done:
 
 ```bash
 make bump-and-release        # bumps MARKETING_VERSION + BUILD, tags, pushes, opens release notes editor
@@ -11,6 +13,59 @@ make bump-and-release        # bumps MARKETING_VERSION + BUILD, tags, pushes, op
 That triggers [`.github/workflows/release.yml`](.github/workflows/release.yml) on `release: [published]`, which builds, notarizes, DMG-wraps, and uploads artifacts to the GitHub release it was fired from.
 
 Every push to `main` additionally triggers [`.github/workflows/release-tip.yml`](.github/workflows/release-tip.yml), which publishes a rolling pre-release under the `tip` tag.
+
+Until we have Apple Developer Program credentials, do **not** use the signed CI release flow. Publish clearly-labeled unsigned preview builds instead.
+
+## Unsigned previews before Apple Developer Program setup
+
+What works without a paid Apple Developer Program membership:
+
+- Local builds from source.
+- A zipped `.app` or DMG attached to a GitHub pre-release.
+- Ad-hoc/local code signing, which can make the bundle structurally valid but does **not** make Gatekeeper trust it.
+
+What does not work without the membership:
+
+- Developer ID Application signing.
+- Apple notarization.
+- App Store or TestFlight distribution.
+- A smooth first-launch UX for users who downloaded the app from the internet.
+
+Recommended preview flow:
+
+```bash
+make build-ghostty-xcframework
+
+DERIVED_DATA="$PWD/build/unsigned-derived-data"
+rm -rf "$DERIVED_DATA"
+xcodebuild \
+  -project supacool.xcodeproj \
+  -scheme supacool \
+  -configuration Release \
+  -derivedDataPath "$DERIVED_DATA" \
+  CODE_SIGN_STYLE=Manual \
+  CODE_SIGN_IDENTITY="-" \
+  DEVELOPMENT_TEAM="" \
+  -skipMacroValidation
+
+APP="$DERIVED_DATA/Build/Products/Release/Supacool.app"
+rm -f build/Supacool-unsigned.zip
+ditto -c -k --sequesterRsrc --keepParent "$APP" build/Supacool-unsigned.zip
+
+gh release create "unsigned-preview-$(date +%Y%m%d)" \
+  build/Supacool-unsigned.zip \
+  --prerelease \
+  --title "Supacool unsigned preview $(date +%Y-%m-%d)" \
+  --notes "Unsigned preview build. macOS Gatekeeper will warn on first launch; use Right-click → Open."
+```
+
+Installation note for testers: install to `/Applications`, then use **Right-click → Open** on first launch. If macOS still blocks it, remove quarantine for that app only:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Supacool.app
+```
+
+Do not ask users to disable Gatekeeper globally.
 
 ## Auto-update architecture
 
@@ -22,9 +77,9 @@ Supacool uses [Sparkle 2.9](https://sparkle-project.org) for in-app auto-updates
 - **Signature verification**: Sparkle validates each `<item>` in the appcast against an EdDSA signature, using `SUPublicEDKey` from `Info.plist`. The matching private key lives as the `SPARKLE_PRIVATE_KEY` secret on `jzillmann/supacool` in GitHub Actions.
 - **Channels**: stable releases live on tagged versions (`v0.9.0`, …). Tip builds live on a force-moved `tip` tag; the tip appcast is merged into the stable appcast on each tip build so clients subscribed to the tip channel (via UpdatesFeature) see new builds without a separate feed URL.
 
-## One-time setup: Sparkle EdDSA keypair (PENDING — Johannes must do this before the first Supacool release)
+## One-time setup: Sparkle EdDSA keypair (PENDING — Johannes must do this before the first signed Supacool release)
 
-The current `SUPublicEDKey` in `supacode/Info.plist` is **inherited from supabitapp/supacode**. We do not have the matching private key, so we cannot sign appcasts that Sparkle will accept. Before cutting the first Supacool release:
+The current `SUPublicEDKey` in `supacode/Info.plist` is a placeholder that does not match any private key configured for this repo. We cannot sign appcasts that Sparkle will accept until it is replaced. Before cutting the first signed Supacool release:
 
 1. Generate a fresh keypair using the Sparkle CLI:
    ```bash
@@ -34,16 +89,16 @@ The current `SUPublicEDKey` in `supacode/Info.plist` is **inherited from supabit
    generate_keys -p             # prints the public key again
    generate_keys -x private.key # exports the private key to a file
    ```
-2. Put the **public key** into `supacode/Info.plist` as the value of `<key>SUPublicEDKey</key>` (replacing the supabitapp placeholder and removing the TODO comment above it). Commit.
+2. Put the **public key** into `supacode/Info.plist` as the value of `<key>SUPublicEDKey</key>` (replacing the placeholder and removing the TODO comment above it). Commit.
 3. Put the **private key** into the `SPARKLE_PRIVATE_KEY` GitHub Actions secret on `jzillmann/supacool` (Settings → Secrets and variables → Actions → New repository secret).
 4. Back the private key up in 1Password (or whatever password vault you use). If it's ever lost, every installed client will have to be manually repointed at a new public key via a ship-a-new-release-from-a-new-codepath migration — there is no recovery.
 5. Delete `private.key` from disk.
 
 Until steps 2 and 3 are done, releases built by CI will produce an appcast signed with whatever is in `SPARKLE_PRIVATE_KEY`, and installed clients will reject the update because the signature won't match the stale public key in `Info.plist`. The only user-visible symptom is "Check for Updates" silently reporting up-to-date while Console shows a Sparkle signature error.
 
-## Other required GitHub Actions secrets
+## Required GitHub Actions secrets for signed CI releases
 
-Already configured on the upstream repo; copy over to `jzillmann/supacool` if CI fails with "secret not set":
+Configure these on `jzillmann/supacool` before using `make bump-and-release`:
 
 - `DEVELOPER_ID_CERT_P12` — base64-encoded Developer ID Application cert export.
 - `DEVELOPER_ID_CERT_PASSWORD` — password for the `.p12`.
@@ -51,7 +106,7 @@ Already configured on the upstream repo; copy over to `jzillmann/supacool` if CI
 - `KEYCHAIN_PASSWORD` — arbitrary, picks a password for the temporary CI keychain.
 - `APPLE_TEAM_ID`, `APPLE_NOTARIZATION_ISSUER`, `APPLE_NOTARIZATION_KEY_ID`, `APPLE_NOTARIZATION_KEY` — App Store Connect API key for `notarytool`.
 - `SPARKLE_PRIVATE_KEY` — see above.
-- `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `POSTHOG_API_KEY`, `POSTHOG_HOST` — telemetry. `SENTRY_PROJECT` is hardcoded in the workflow as `supacool`; make sure a matching Sentry project exists on the `supabit` org, or rename the project / update the workflow.
+- `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `POSTHOG_API_KEY`, `POSTHOG_HOST` — telemetry. dSYM upload is skipped unless `SENTRY_AUTH_TOKEN` and the `SENTRY_ORG` repository variable are configured; `SENTRY_PROJECT` is an optional repository variable and defaults to `supacool`.
 - `GH_RELEASE_TOKEN` — used by `release-tip.yml` to force-move the `tip` tag.
 
 ## Migration notes (one-time, per user)
@@ -78,7 +133,7 @@ Other things that changed (update any personal scripts / shortcuts):
 | `~/.supacode/` | `~/.supacool/` |
 | `supacode.json` per-repo settings | `supacool.json` |
 
-The app bundle is `Supacool.app` with executable `Contents/MacOS/Supacool` and bundle ID `io.morethan.supacool`. Source directories on disk are still named `supacode/` and `supacodeTests/` — deliberate historical markers for code originally derived from the upstream fork — but the Xcode project (`supacool.xcodeproj`), scheme, and targets (`supacool`, `supacoolTests`) are all renamed.
+The app bundle is `Supacool.app` with executable `Contents/MacOS/Supacool` and bundle ID `io.morethan.supacool`. Some legacy source directories on disk are still named `supacode/` and `supacodeTests/`, but the Xcode project (`supacool.xcodeproj`), scheme, and targets (`supacool`, `supacoolTests`) are renamed.
 
 ## Testing the update flow locally
 

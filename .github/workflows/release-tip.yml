@@ -226,8 +226,6 @@ jobs:
     needs: [check, build]
     if: needs.check.outputs.should_skip != 'true'
     steps:
-      - name: Install sentry-cli
-        run: curl -sL https://sentry.io/get-cli/ | sh
       - uses: actions/download-artifact@v7
         with:
           name: dsyms
@@ -235,9 +233,15 @@ jobs:
       - name: Upload dSYMs to Sentry
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-          SENTRY_ORG: supabit
-          SENTRY_PROJECT: supacool
-        run: sentry-cli debug-files upload --include-sources dsyms
+          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || 'supacool' }}
+        run: |
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ] || [ -z "${SENTRY_ORG:-}" ]; then
+            echo "Skipping Sentry dSYM upload; SENTRY_AUTH_TOKEN or SENTRY_ORG is not configured."
+            exit 0
+          fi
+          curl -sL https://sentry.io/get-cli/ | sh
+          sentry-cli debug-files upload --include-sources dsyms
 
   publish:
     runs-on: ubuntu-latest

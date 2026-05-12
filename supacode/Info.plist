@@ -43,10 +43,10 @@
 	<string>https://github.com/jzillmann/supacool/releases/latest/download/appcast.xml</string>
 	<!--
 		TODO: regenerate the Sparkle EdDSA keypair and replace SUPublicEDKey below.
-		The current value is inherited from supabitapp/supacode and does NOT match
-		the SPARKLE_PRIVATE_KEY used to sign appcasts from this repo. Until the key
-		is replaced, auto-updates will be rejected by Sparkle with a signature error.
-		See RELEASING.md for the regeneration procedure.
+		The current value does NOT match the SPARKLE_PRIVATE_KEY used to sign
+		appcasts from this repo. Until the key is replaced, auto-updates will be
+		rejected by Sparkle with a signature error. See RELEASING.md for the
+		regeneration procedure.
 	-->
 	<key>SUPublicEDKey</key>
 	<string>eBdTbl+6sR8gxO1zyzyvdQHuJrXMLxD31oCc+JoW5jo=</string>
