@@ -51,6 +51,10 @@ final class WorktreeTerminalState {
   /// PID keeps the surface busy. Legacy hooks without a PID share a
   /// sentinel slot (`0`) so paired on/off calls still balance.
   private var busyPIDsBySurface: [UUID: Set<Int32>] = [:]
+  #if DEBUG
+    private var testSurfaceIDsByTab: [TerminalTabID: Set<UUID>] = [:]
+    private var testBusySurfaceIDsByTab: [TerminalTabID: Set<UUID>] = [:]
+  #endif
   var hasUnseenNotification: Bool {
     notifications.contains { !$0.isRead }
   }
@@ -97,13 +101,20 @@ final class WorktreeTerminalState {
   }
 
   var taskStatus: WorktreeTaskStatus {
-    trees.keys.contains(where: { isTabBusy($0) }) ? .running : .idle
+    var hasBusyTab = trees.keys.contains(where: { isTabBusy($0) })
+    #if DEBUG
+      hasBusyTab = hasBusyTab || testBusySurfaceIDsByTab.keys.contains(where: { isTabBusy($0) })
+    #endif
+    return hasBusyTab ? .running : .idle
   }
 
   /// Whether the tab with the given ID is currently busy (agent running or
   /// long-running command in progress). Exposed for Supacool's Matrix Board
   /// classifier; used internally by `taskStatus`.
   func isTabBusy(_ tabId: TerminalTabID) -> Bool {
+    #if DEBUG
+      if testBusySurfaceIDsByTab[tabId]?.isEmpty == false { return true }
+    #endif
     guard let tree = trees[tabId] else { return false }
     return tree.leaves().contains { surface in
       isRunningProgressState(surface.bridge.state.progressState)
@@ -116,7 +127,12 @@ final class WorktreeTerminalState {
   /// sessions whose tab no longer exists (e.g. after an app restart
   /// where PTYs don't survive).
   func containsTabTree(_ tabId: TerminalTabID) -> Bool {
-    trees[tabId] != nil
+    if trees[tabId] != nil { return true }
+    #if DEBUG
+      return testSurfaceIDsByTab[tabId]?.isEmpty == false
+    #else
+      return false
+    #endif
   }
 
   func isBlockingScriptRunning(kind: BlockingScriptKind) -> Bool {
@@ -367,9 +383,29 @@ final class WorktreeTerminalState {
   }
 
   func hasSurface(_ surfaceId: UUID, in tabId: TerminalTabID) -> Bool {
-    guard let tree = trees[tabId] else { return false }
-    return tree.find(id: surfaceId) != nil
+    if let tree = trees[tabId], tree.find(id: surfaceId) != nil { return true }
+    #if DEBUG
+      return testSurfaceIDsByTab[tabId]?.contains(surfaceId) == true
+    #else
+      return false
+    #endif
   }
+
+  #if DEBUG
+    @discardableResult
+    func registerTestTab(tabID: UUID? = nil, surfaceID: UUID = UUID()) -> (tabId: TerminalTabID, surfaceID: UUID) {
+      let tabId = tabManager.createTab(
+        title: "\(worktree.name) \(nextTabIndex())",
+        icon: "terminal",
+        id: tabID,
+      )
+      tabIsRunningById[tabId] = false
+      testSurfaceIDsByTab[tabId, default: []].insert(surfaceID)
+      updateShouldHideTabBar()
+      onTabCreated?()
+      return (tabId, surfaceID)
+    }
+  #endif
 
   func selectTab(_ tabId: TerminalTabID) {
     guard tabManager.tabs.contains(where: { $0.id == tabId }) else {
@@ -388,6 +424,21 @@ final class WorktreeTerminalState {
   /// legacy hooks so paired on/off calls without PID balance correctly.
   func setAgentBusy(surfaceID: UUID, tabID: TerminalTabID, pid: Int32? = nil, active: Bool) {
     guard let surface = surfaces[surfaceID] else {
+      #if DEBUG
+        if testSurfaceIDsByTab[tabID]?.contains(surfaceID) == true {
+          if active {
+            testBusySurfaceIDsByTab[tabID, default: []].insert(surfaceID)
+          } else {
+            testBusySurfaceIDsByTab[tabID]?.remove(surfaceID)
+            if testBusySurfaceIDsByTab[tabID]?.isEmpty == true {
+              testBusySurfaceIDsByTab.removeValue(forKey: tabID)
+            }
+          }
+          tabManager.updateDirty(tabID, isDirty: isTabBusy(tabID))
+          emitTaskStatusIfChanged()
+          return
+        }
+      #endif
       terminalStateLogger.debug("Dropped busy update for unknown surface \(surfaceID) in worktree \(worktree.id)")
       return
     }
@@ -585,6 +636,10 @@ final class WorktreeTerminalState {
       lastBlockingScriptTabByKind.removeValue(forKey: kind)
     }
     removeTree(for: tabId)
+    #if DEBUG
+      testSurfaceIDsByTab.removeValue(forKey: tabId)
+      testBusySurfaceIDsByTab.removeValue(forKey: tabId)
+    #endif
     tabManager.closeTab(tabId)
     updateShouldHideTabBar()
     if let selected = tabManager.selectedTabId {
@@ -801,6 +856,10 @@ final class WorktreeTerminalState {
     trees.removeAll()
     focusedSurfaceIdByTab.removeAll()
     tabIsRunningById.removeAll()
+    #if DEBUG
+      testSurfaceIDsByTab.removeAll()
+      testBusySurfaceIDsByTab.removeAll()
+    #endif
     // Agent busy state lives on GhosttySurfaceState and is cleaned up
     // when surfaces are removed.
     let pendingKinds = Set(blockingScripts.values)
@@ -1400,7 +1459,7 @@ final class WorktreeTerminalState {
 
   /// Appends a notification from an agent hook on a specific surface.
   func appendHookNotification(title: String, body: String, surfaceID: UUID) {
-    guard surfaces[surfaceID] != nil else {
+    guard hasSurfaceForNotification(surfaceID) else {
       terminalStateLogger.debug("Dropped hook notification for unknown surface \(surfaceID) in worktree \(worktree.id)")
       return
     }
@@ -1409,6 +1468,15 @@ final class WorktreeTerminalState {
       recentHookBySurfaceID[surfaceID] = (text: normalized, recordedAt: now)
     }
     appendNotification(title: title, body: body, surfaceId: surfaceID, fromHook: true)
+  }
+
+  private func hasSurfaceForNotification(_ surfaceID: UUID) -> Bool {
+    if surfaces[surfaceID] != nil { return true }
+    #if DEBUG
+      return testSurfaceIDsByTab.values.contains { $0.contains(surfaceID) }
+    #else
+      return false
+    #endif
   }
 
   private func appendNotification(
@@ -1489,6 +1557,10 @@ final class WorktreeTerminalState {
     }
     focusedSurfaceIdByTab.removeValue(forKey: tabId)
     tabIsRunningById.removeValue(forKey: tabId)
+    #if DEBUG
+      testSurfaceIDsByTab.removeValue(forKey: tabId)
+      testBusySurfaceIDsByTab.removeValue(forKey: tabId)
+    #endif
   }
 
   private func tabId(containing surfaceId: UUID) -> TerminalTabID? {

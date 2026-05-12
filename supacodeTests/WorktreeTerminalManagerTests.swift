@@ -146,22 +146,18 @@ struct WorktreeTerminalManagerTests {
   }
 
   @Test func socketBusyRoutesToDecodedWorktreeState() {
-    let server = AgentHookSocketServer()
+    let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-socket-busy")
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), socketServer: server)
     let worktree = makeWorktree(id: "/tmp/repo/wt with spaces")
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-    guard let state = manager.stateIfExists(for: worktree.id),
-      let tabId = state.tabManager.selectedTabId,
-      let surface = state.splitTree(for: tabId).root?.leftmostLeaf(),
+    guard let tab = makeTab(in: manager, for: worktree),
       let encodedID = worktree.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
     else {
-      Issue.record("Expected blocking script tab and socket server")
+      Issue.record("Expected tab and socket server")
       return
     }
 
-    server.onBusy?(encodedID, tabId.rawValue, surface.id, true, nil)
+    server.onBusy?(encodedID, tab.tabId.rawValue, tab.surfaceID, true, nil)
 
     #expect(manager.taskStatus(for: worktree.id) == .running)
   }
@@ -170,25 +166,22 @@ struct WorktreeTerminalManagerTests {
     withDependencies {
       $0.date.now = Date(timeIntervalSince1970: 1_234)
     } operation: {
-      let server = AgentHookSocketServer()
+      let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-socket-notification")
       let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), socketServer: server)
       let worktree = makeWorktree(id: "/tmp/repo/wt with spaces")
 
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId,
-        let surface = state.splitTree(for: tabId).root?.leftmostLeaf(),
-        let encodedID = worktree.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)
+      guard let tab = makeTab(in: manager, for: worktree),
+        let encodedID = worktree.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+        let state = manager.stateIfExists(for: worktree.id)
       else {
-        Issue.record("Expected blocking script tab and socket server")
+        Issue.record("Expected tab and socket server")
         return
       }
 
       server.onNotification?(
         encodedID,
-        tabId.rawValue,
-        surface.id,
+        tab.tabId.rawValue,
+        tab.surfaceID,
         AgentHookNotification(agent: "codex", event: "Stop", title: "Done", body: "All complete", sessionID: nil)
       )
 
@@ -289,7 +282,7 @@ struct WorktreeTerminalManagerTests {
         $0.date.now = Date(timeIntervalSince1970: 1234)
       } operation: {
         let clock = TestClock()
-        let server = AgentHookSocketServer()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-awaiting-input")
         let manager = WorktreeTerminalManager(
           runtime: GhosttyRuntime(),
           socketServer: server,
@@ -301,20 +294,16 @@ struct WorktreeTerminalManagerTests {
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId,
-          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-        else {
-          Issue.record("Expected blocking script tab and surface")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "claude",
             event: "Notification",
@@ -323,13 +312,14 @@ struct WorktreeTerminalManagerTests {
             sessionID: nil
           )
         )
+        await Task.yield()
 
         #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         await clock.advance(by: .milliseconds(250))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
-        await clock.advance(by: .seconds(8))
+        await clock.advance(by: .seconds(7) + .milliseconds(750))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         await clock.advance(by: .milliseconds(250))
@@ -378,7 +368,7 @@ struct WorktreeTerminalManagerTests {
       } operation: {
         let clock = TestClock()
         let screenContents = LockIsolated("Running make build-app\n…")
-        let server = AgentHookSocketServer()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-codex-awaiting-input")
         let manager = WorktreeTerminalManager(
           runtime: GhosttyRuntime(),
           socketServer: server,
@@ -391,20 +381,16 @@ struct WorktreeTerminalManagerTests {
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId,
-          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-        else {
-          Issue.record("Expected blocking script tab and surface")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "codex",
             event: "PermissionRequest",
@@ -413,6 +399,7 @@ struct WorktreeTerminalManagerTests {
             sessionID: nil
           )
         )
+        await Task.yield()
 
         await clock.advance(by: .milliseconds(250))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
@@ -447,7 +434,7 @@ struct WorktreeTerminalManagerTests {
         // activity-poll's existing clear path takes over.
         screenContents.setValue("Approved. Running make build-app...\nbuilding…")
 
-        await clock.advance(by: .seconds(1))
+        await clock.advance(by: .milliseconds(750))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         await clock.advance(by: .milliseconds(250))
@@ -463,7 +450,7 @@ struct WorktreeTerminalManagerTests {
       } operation: {
         let clock = TestClock()
         let screenContents = LockIsolated("Claude needs your permission\n1. Allow")
-        let server = AgentHookSocketServer()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-clear-awaiting-input")
         let manager = WorktreeTerminalManager(
           runtime: GhosttyRuntime(),
           socketServer: server,
@@ -476,20 +463,16 @@ struct WorktreeTerminalManagerTests {
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId,
-          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-        else {
-          Issue.record("Expected blocking script tab and surface")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "claude",
             event: "Notification",
@@ -498,13 +481,14 @@ struct WorktreeTerminalManagerTests {
             sessionID: nil
           )
         )
+        await Task.yield()
 
         await clock.advance(by: .milliseconds(250))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         screenContents.setValue("Streaming output resumed\nEdited BoardRootView.swift")
 
-        await clock.advance(by: .seconds(1))
+        await clock.advance(by: .milliseconds(750))
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         await clock.advance(by: .milliseconds(250))
@@ -535,35 +519,31 @@ struct WorktreeTerminalManagerTests {
           awaitingInputTransitionOnDebounce: .milliseconds(250),
           awaitingInputTransitionOffDebounce: .milliseconds(250),
           awaitingInputActivityPollInterval: .seconds(1),
+          startPromptScreenScanning: false,
           clock: clock,
           readScreenContents: { _, _ in screenContents.value }
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId
-        else {
-          Issue.record("Expected blocking script tab")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
-        await clock.advance(by: .seconds(1))
+        await manager.sampleAwaitingInputPromptScreensForTesting()
         #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
-        await clock.advance(by: .seconds(1))
-        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
-
-        await clock.advance(by: .milliseconds(250))
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        manager.commitAwaitingInputPresentationForTesting(tabID: tabId, desiredState: true)
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
         screenContents.setValue("Waiting for the next instruction")
 
-        await clock.advance(by: .seconds(1))
+        manager.sampleAwaitingInputActivityForTesting(tabID: tabId)
         #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
 
-        await clock.advance(by: .milliseconds(250))
+        manager.commitAwaitingInputPresentationForTesting(tabID: tabId, desiredState: false)
         #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
       }
     }
@@ -574,7 +554,7 @@ struct WorktreeTerminalManagerTests {
       $0.date.now = Date(timeIntervalSince1970: 1234)
     } operation: {
       let clock = TestClock()
-      let server = AgentHookSocketServer()
+      let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-busy-suppresses-awaiting-input")
       let manager = WorktreeTerminalManager(
         runtime: GhosttyRuntime(),
         socketServer: server,
@@ -586,20 +566,16 @@ struct WorktreeTerminalManagerTests {
       )
       let worktree = makeWorktree()
 
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId,
-        let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-      else {
-        Issue.record("Expected blocking script tab and surface")
+      guard let tab = makeTab(in: manager, for: worktree) else {
+        Issue.record("Expected tab and surface")
         return
       }
+      let tabId = tab.tabId
 
       server.onNotification?(
         worktree.id,
         tabId.rawValue,
-        surface.id,
+        tab.surfaceID,
         AgentHookNotification(
           agent: "claude",
           event: "Notification",
@@ -608,7 +584,8 @@ struct WorktreeTerminalManagerTests {
           sessionID: nil
         )
       )
-      server.onBusy?(worktree.id, tabId.rawValue, surface.id, true, nil)
+      await Task.yield()
+      server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, nil)
 
       await clock.advance(by: .seconds(1))
       #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
@@ -623,7 +600,7 @@ struct WorktreeTerminalManagerTests {
       $0.date.now = Date(timeIntervalSince1970: 1234)
     } operation: {
       let clock = TestClock()
-      let server = AgentHookSocketServer()
+      let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-codex-auto-approve")
       let manager = WorktreeTerminalManager(
         runtime: GhosttyRuntime(),
         socketServer: server,
@@ -634,21 +611,18 @@ struct WorktreeTerminalManagerTests {
         clock: clock
       )
       let worktree = makeWorktree()
-      manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
 
-      guard let state = manager.stateIfExists(for: worktree.id),
-        let tabId = state.tabManager.selectedTabId,
-        let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-      else {
-        Issue.record("Expected blocking script tab and surface")
+      guard let tab = makeTab(in: manager, for: worktree) else {
+        Issue.record("Expected tab and surface")
         return
       }
+      let tabId = tab.tabId
 
       // Codex: PermissionRequest then auto-approved PreToolUse ~400ms later.
       server.onNotification?(
         worktree.id,
         tabId.rawValue,
-        surface.id,
+        tab.surfaceID,
         AgentHookNotification(
           agent: "codex",
           event: "PermissionRequest",
@@ -657,10 +631,11 @@ struct WorktreeTerminalManagerTests {
           sessionID: nil
         )
       )
+      await Task.yield()
       await clock.advance(by: .milliseconds(400))
       // Before on-debounce fires, the busy signal arrives and clears
       // the awaiting lease. The chip must never become visible.
-      server.onBusy?(worktree.id, tabId.rawValue, surface.id, true, nil)
+      server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, nil)
       await clock.advance(by: .milliseconds(500))
 
       #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
@@ -673,7 +648,7 @@ struct WorktreeTerminalManagerTests {
         $0.date.now = Date(timeIntervalSince1970: 1234)
       } operation: {
         let clock = TestClock()
-        let server = AgentHookSocketServer()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-deferred-work")
         let manager = WorktreeTerminalManager(
           runtime: GhosttyRuntime(),
           socketServer: server,
@@ -682,20 +657,16 @@ struct WorktreeTerminalManagerTests {
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId,
-          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-        else {
-          Issue.record("Expected blocking script tab and surface")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "claude",
             event: "Stop",
@@ -706,6 +677,7 @@ struct WorktreeTerminalManagerTests {
         )
 
         #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+        await Task.yield()
 
         await clock.advance(by: .seconds(7 * 60))
         #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
@@ -722,7 +694,7 @@ struct WorktreeTerminalManagerTests {
         $0.date.now = Date(timeIntervalSince1970: 1234)
       } operation: {
         let clock = TestClock()
-        let server = AgentHookSocketServer()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-final-stop")
         let manager = WorktreeTerminalManager(
           runtime: GhosttyRuntime(),
           socketServer: server,
@@ -731,20 +703,16 @@ struct WorktreeTerminalManagerTests {
         )
         let worktree = makeWorktree()
 
-        manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
-
-        guard let state = manager.stateIfExists(for: worktree.id),
-          let tabId = state.tabManager.selectedTabId,
-          let surface = state.splitTree(for: tabId).root?.leftmostLeaf()
-        else {
-          Issue.record("Expected blocking script tab and surface")
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
           return
         }
+        let tabId = tab.tabId
 
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "claude",
             event: "Stop",
@@ -758,7 +726,7 @@ struct WorktreeTerminalManagerTests {
         server.onNotification?(
           worktree.id,
           tabId.rawValue,
-          surface.id,
+          tab.surfaceID,
           AgentHookNotification(
             agent: "claude",
             event: "Stop",
@@ -859,7 +827,7 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
     let stream = manager.eventStream()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "exit 1"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -886,7 +854,7 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
     let stream = manager.eventStream()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -913,7 +881,7 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
     let stream = manager.eventStream()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -945,7 +913,7 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
     let stream = manager.eventStream()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -1011,7 +979,7 @@ struct WorktreeTerminalManagerTests {
     }
 
     // Re-run the same kind — old tab should close silently.
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let secondTabId = state.tabManager.selectedTabId else {
       Issue.record("Expected second blocking script tab")
@@ -1094,7 +1062,7 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
     let stream = manager.eventStream()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -1126,7 +1094,7 @@ struct WorktreeTerminalManagerTests {
 
     #expect(manager.isBlockingScriptRunning(kind: .run, for: worktree.id) == false)
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .run, script: "echo hi"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .run, script: "sleep 10"))
 
     #expect(manager.isBlockingScriptRunning(kind: .run, for: worktree.id) == true)
   }
@@ -1181,7 +1149,7 @@ struct WorktreeTerminalManagerTests {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "exit 1"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId,
@@ -1209,8 +1177,8 @@ struct WorktreeTerminalManagerTests {
     let worktree = makeWorktree()
 
     // Create two blocking script tabs so we have two tabs to switch between.
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo archive"))
-    manager.handleCommand(.runBlockingScript(worktree, kind: .delete, script: "echo delete"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .delete, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id) else {
       Issue.record("Expected worktree state")
@@ -1286,7 +1254,7 @@ struct WorktreeTerminalManagerTests {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()
 
-    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "echo ok"))
+    manager.handleCommand(.runBlockingScript(worktree, kind: .archive, script: "sleep 10"))
 
     guard let state = manager.stateIfExists(for: worktree.id),
       let tabId = state.tabManager.selectedTabId
@@ -1303,6 +1271,14 @@ struct WorktreeTerminalManagerTests {
 
     // Selection should not change.
     #expect(state.tabManager.selectedTabId == selectedBefore)
+  }
+
+  private func makeTab(
+    in manager: WorktreeTerminalManager,
+    for worktree: Worktree
+  ) -> (tabId: TerminalTabID, surfaceID: UUID)? {
+    let state = manager.state(for: worktree)
+    return state.registerTestTab()
   }
 
   private func makeWorktree(id: String = "/tmp/repo/wt-1") -> Worktree {

@@ -119,6 +119,7 @@ final class WorktreeTerminalManager {
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     orphanProcessReaper: WorktreeOrphanProcessReaper? = nil,
+    startPromptScreenScanning: Bool = true,
     clock: C = ContinuousClock(),
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
   ) {
@@ -137,7 +138,9 @@ final class WorktreeTerminalManager {
       try await clock.sleep(for: duration)
     }
     self.readScreenContentsOverride = readScreenContents
-    startAwaitingInputPromptScreenScanning()
+    if startPromptScreenScanning {
+      startAwaitingInputPromptScreenScanning()
+    }
     let resolvedServer = socketServer ?? AgentHookSocketServer()
     guard resolvedServer.socketPath != nil else {
       self.socketServer = nil
@@ -1169,7 +1172,9 @@ final class WorktreeTerminalManager {
         Self.isAwaitingInputPromptScreen(fingerprint)
       else {
         awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
-        await Task.yield()
+        if snapshot.count > 1 {
+          await Task.yield()
+        }
         continue
       }
 
@@ -1196,12 +1201,28 @@ final class WorktreeTerminalManager {
         )
       }
 
-      await Task.yield()
+      if snapshot.count > 1 {
+        await Task.yield()
+      }
     }
 
     cleanupAwaitingInputTracking(closedTabIDs: Set(awaitingInputByTab.keys).subtracting(openTabIDs))
     awaitingInputPromptCandidates = awaitingInputPromptCandidates.filter { openTabIDs.contains($0.key) }
   }
+
+  #if DEBUG
+    func sampleAwaitingInputPromptScreensForTesting() async {
+      await sampleAwaitingInputPromptScreens()
+    }
+
+    func sampleAwaitingInputActivityForTesting(tabID: TerminalTabID) {
+      sampleAwaitingInputActivity(tabID: tabID.rawValue)
+    }
+
+    func commitAwaitingInputPresentationForTesting(tabID: TerminalTabID, desiredState: Bool) {
+      commitAwaitingInputPresentation(for: tabID.rawValue, desiredState: desiredState)
+    }
+  #endif
 
   private func cleanupAwaitingInputTracking(closedTabIDs: Set<UUID>) {
     guard !closedTabIDs.isEmpty else { return }

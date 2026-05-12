@@ -47,6 +47,12 @@ final class AgentHookSocketServer {
     socketPath = path
   }
 
+  #if DEBUG
+    init(testingSocketPath path: String = "/tmp/supacool-test-\(UUID().uuidString)") {
+      socketPath = path
+    }
+  #endif
+
   /// Removes socket files left behind by processes that are no longer running.
   private nonisolated static func pruneStaleSocketFiles(in directory: String) {
     guard
