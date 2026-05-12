@@ -79,9 +79,10 @@ struct SessionReferenceScannerTests {
   }
 
   @Test func scanJSONLFromAssistantTextBlocks() {
-    let jsonl = """
-      {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I opened https://github.com/foo/bar/pull/7"}]}}
-      """
+    let jsonl = [
+      #"{"type":"assistant","message":{"role":"assistant","content":["#,
+      #"{"type":"text","text":"I opened https://github.com/foo/bar/pull/7"}]}}"#,
+    ].joined()
     let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
     #expect(
       refs == [.pullRequest(owner: "foo", repo: "bar", number: 7, state: nil)]
@@ -89,9 +90,11 @@ struct SessionReferenceScannerTests {
   }
 
   @Test func scanJSONLRecursesIntoToolResults() {
-    let jsonl = """
-      {"type":"user","message":{"role":"user","content":[{"tool_use_id":"abc","type":"tool_result","content":[{"type":"text","text":"Output mentions CEN-99"}]}]}}
-      """
+    let jsonl = [
+      #"{"type":"user","message":{"role":"user","content":["#,
+      #"{"tool_use_id":"abc","type":"tool_result","content":["#,
+      #"{"type":"text","text":"Output mentions CEN-99"}]}]}}"#,
+    ].joined()
     let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
     #expect(refs == [.ticket(id: "CEN-99")])
   }

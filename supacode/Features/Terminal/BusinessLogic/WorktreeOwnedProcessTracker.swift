@@ -118,9 +118,9 @@ final class WorktreeOwnedProcessTracker {
     // PIDs returned by `enumerate` stay; for everything else, fall
     // back to `kill(pid, 0)` (cheap) before deciding to drop.
     for (path, processes) in adoptedByWorktree {
-      let alive = processes.filter { p in
-        if livePIDs.contains(p.pid) { return true }
-        return kill(p.pid, 0) == 0
+      let alive = processes.filter { process in
+        if livePIDs.contains(process.pid) { return true }
+        return kill(process.pid, 0) == 0
       }
       if alive.isEmpty {
         adoptedByWorktree.removeValue(forKey: path)

@@ -7,13 +7,13 @@ struct TranscriptReaderTests {
   // MARK: - aggregatePrompts
 
   @Test func groupsAdjacentKeystrokesIntoSinglePrompt() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
-      .input(text: "h", at: t0),
-      .input(text: "e", at: t0.addingTimeInterval(0.1)),
-      .input(text: "l", at: t0.addingTimeInterval(0.2)),
-      .input(text: "l", at: t0.addingTimeInterval(0.3)),
-      .input(text: "o", at: t0.addingTimeInterval(0.4)),
+      .input(text: "h", at: start),
+      .input(text: "e", at: start.addingTimeInterval(0.1)),
+      .input(text: "l", at: start.addingTimeInterval(0.2)),
+      .input(text: "l", at: start.addingTimeInterval(0.3)),
+      .input(text: "o", at: start.addingTimeInterval(0.4)),
     ]
     let prompts = TranscriptReader.aggregatePrompts(from: entries)
     #expect(prompts.count == 1)
@@ -21,13 +21,13 @@ struct TranscriptReaderTests {
   }
 
   @Test func splitsPromptsOnIdleGap() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
-      .input(text: "first", at: t0),
-      .input(text: "more", at: t0.addingTimeInterval(0.3)),
+      .input(text: "first", at: start),
+      .input(text: "more", at: start.addingTimeInterval(0.3)),
       // 10-second gap — new prompt.
-      .input(text: "second", at: t0.addingTimeInterval(10.5)),
-      .input(text: "tail", at: t0.addingTimeInterval(10.8)),
+      .input(text: "second", at: start.addingTimeInterval(10.5)),
+      .input(text: "tail", at: start.addingTimeInterval(10.8)),
     ]
     let prompts = TranscriptReader.aggregatePrompts(from: entries)
     #expect(prompts.count == 2)
@@ -37,10 +37,10 @@ struct TranscriptReaderTests {
   }
 
   @Test func dropsPromptsBelowMinimumLength() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
-      .input(text: "y", at: t0),  // too short — probably a y/n reply
-      .input(text: "big prompt here", at: t0.addingTimeInterval(5.0)),
+      .input(text: "y", at: start),  // too short — probably a y/n reply
+      .input(text: "big prompt here", at: start.addingTimeInterval(5.0)),
     ]
     let prompts = TranscriptReader.aggregatePrompts(from: entries)
     #expect(prompts.count == 1)
@@ -48,11 +48,11 @@ struct TranscriptReaderTests {
   }
 
   @Test func trimsWhitespaceBeforeComparingToMinimum() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
       // All whitespace — should be treated as empty, dropped.
-      .input(text: "   \t  ", at: t0),
-      .input(text: "real prompt", at: t0.addingTimeInterval(5.0)),
+      .input(text: "   \t  ", at: start),
+      .input(text: "real prompt", at: start.addingTimeInterval(5.0)),
     ]
     let prompts = TranscriptReader.aggregatePrompts(from: entries)
     #expect(prompts.count == 1)
@@ -60,11 +60,11 @@ struct TranscriptReaderTests {
   }
 
   @Test func ignoresOutputTurnEntries() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
-      .input(text: "hello world", at: t0),
-      .outputTurn(fullText: "a lot of terminal content", delta: "delta", at: t0.addingTimeInterval(1)),
-      .input(text: "second prompt", at: t0.addingTimeInterval(10.0)),
+      .input(text: "hello world", at: start),
+      .outputTurn(fullText: "a lot of terminal content", delta: "delta", at: start.addingTimeInterval(1)),
+      .input(text: "second prompt", at: start.addingTimeInterval(10.0)),
     ]
     let prompts = TranscriptReader.aggregatePrompts(from: entries)
     #expect(prompts.count == 2)
@@ -76,10 +76,10 @@ struct TranscriptReaderTests {
   }
 
   @Test func customIdleBreakIsRespected() {
-    let t0 = Date(timeIntervalSinceReferenceDate: 100)
+    let start = Date(timeIntervalSinceReferenceDate: 100)
     let entries: [TranscriptEntry] = [
-      .input(text: "first", at: t0),
-      .input(text: "still same", at: t0.addingTimeInterval(3.0)),
+      .input(text: "first", at: start),
+      .input(text: "still same", at: start.addingTimeInterval(3.0)),
     ]
     // With default 2s break the 3s gap would split. Override to 5s so
     // both land in the same bucket — exercises the idleBreak param.

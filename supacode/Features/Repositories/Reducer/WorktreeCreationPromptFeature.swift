@@ -30,6 +30,7 @@ struct WorktreeCreationPromptFeature {
     case binding(BindingAction<State>)
     case cancelButtonTapped
     case createButtonTapped
+    case modeShortcutTapped(WorkspaceMode)
     case setValidationMessage(String?)
     case setValidating(Bool)
     case delegate(Delegate)
@@ -103,6 +104,11 @@ struct WorktreeCreationPromptFeature {
             )
           )
         }
+
+      case .modeShortcutTapped(let mode):
+        state.mode = mode
+        state.validationMessage = nil
+        return .none
 
       case .setValidationMessage(let message):
         state.validationMessage = message

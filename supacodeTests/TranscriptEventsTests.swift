@@ -14,15 +14,15 @@ struct TranscriptEventsTests {
   private let surfaceID = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
 
   private var encoder: JSONEncoder {
-    let e = JSONEncoder()
-    e.dateEncodingStrategy = .iso8601
-    return e
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    return encoder
   }
 
   private var decoder: JSONDecoder {
-    let d = JSONDecoder()
-    d.dateDecodingStrategy = .iso8601
-    return d
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return decoder
   }
 
   // MARK: - Round-trip per case
@@ -130,7 +130,7 @@ struct TranscriptEventsTests {
     // Older writer may have omitted optional fields. We should still
     // produce a valid entry with empty / default payloads rather than
     // throwing.
-    let json = #"{"kind":"hookEvent","agent":"claude"}"#.data(using: .utf8)!
+    let json = Data(#"{"kind":"hookEvent","agent":"claude"}"#.utf8)
     let decoded = try decoder.decode(TranscriptEntry.self, from: json)
     guard case let .hookEvent(agent, event, title, body, sessionID, awaiting, _, _) = decoded else {
       Issue.record("Expected .hookEvent, got \(decoded)")
@@ -145,7 +145,7 @@ struct TranscriptEventsTests {
   }
 
   @Test func sessionLifecycleWithMissingContextDecodes() throws {
-    let json = #"{"kind":"sessionLifecycle","lifecycleKind":"parked"}"#.data(using: .utf8)!
+    let json = Data(#"{"kind":"sessionLifecycle","lifecycleKind":"parked"}"#.utf8)
     let decoded = try decoder.decode(TranscriptEntry.self, from: json)
     guard case let .sessionLifecycle(kind, context, _) = decoded else {
       Issue.record("Expected .sessionLifecycle, got \(decoded)")
@@ -167,16 +167,16 @@ struct TranscriptEventsTests {
     var data = Data()
     data.append(try encoder.encode(good1))
     data.append(0x0A)
-    data.append(#"{"kind":"someUnknownFutureKind","x":42}"#.data(using: .utf8)!)
+    data.append(Data(#"{"kind":"someUnknownFutureKind","x":42}"#.utf8))
     data.append(0x0A)
     data.append(try encoder.encode(good2))
     data.append(0x0A)
 
-    let fm = FileManager.default
-    let tmpDir = fm.temporaryDirectory
+    let fileManager = FileManager.default
+    let tmpDir = fileManager.temporaryDirectory
       .appending(path: "TranscriptEventsTests-\(UUID().uuidString)", directoryHint: .isDirectory)
-    try fm.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-    defer { try? fm.removeItem(at: tmpDir) }
+    try fileManager.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? fileManager.removeItem(at: tmpDir) }
     let tmpFile = tmpDir.appending(path: "trace.jsonl", directoryHint: .notDirectory)
     try data.write(to: tmpFile)
 

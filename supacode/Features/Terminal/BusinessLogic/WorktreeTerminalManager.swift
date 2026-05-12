@@ -13,10 +13,10 @@ private let awaitingInputTTLDefault: Duration = .seconds(8)
 private let awaitingInputTransitionOnDebounceDefault: Duration = .milliseconds(750)
 /// Mirror debounce for turning the chip off. Kept tight so the card
 /// responds quickly when the user actually answers a prompt.
-private let awaitingInputTransitionOffDebounceDefault: Duration = .milliseconds(250)
+private let awaitingInputOffDebounceDefault: Duration = .milliseconds(250)
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
-private let awaitingInputPromptDetectionStableSamples = 2
+private let awaitingInputPromptStableSamples = 2
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
 private let ownedProcessRefreshIntervalDefault: Duration = .seconds(60)
 nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
@@ -113,7 +113,7 @@ final class WorktreeTerminalManager {
     socketServer: AgentHookSocketServer? = nil,
     awaitingInputTTL: Duration = awaitingInputTTLDefault,
     awaitingInputTransitionOnDebounce: Duration = awaitingInputTransitionOnDebounceDefault,
-    awaitingInputTransitionOffDebounce: Duration = awaitingInputTransitionOffDebounceDefault,
+    awaitingInputTransitionOffDebounce: Duration = awaitingInputOffDebounceDefault,
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
     ownedProcessRefreshInterval: Duration = ownedProcessRefreshIntervalDefault,
@@ -299,10 +299,14 @@ final class WorktreeTerminalManager {
   /// "waiting on the user", but it also should not drop the card into
   /// Waiting on Me. Treat those Stop messages as a short, transient
   /// in-progress lease.
-  nonisolated static func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
+  nonisolated static func deferredWorkLeaseDuration(
+    for notification: AgentHookNotification
+  ) -> Duration? {
     guard isDeferredWorkSignal(notification) else { return nil }
-    return parsedDeferredWorkDuration(from: notification.body?.lowercased() ?? "", buffer: deferredWorkLeaseBufferDefault)
-      ?? deferredWorkFallbackTTLDefault
+    return parsedDeferredWorkDuration(
+      from: notification.body?.lowercased() ?? "",
+      buffer: deferredWorkLeaseBufferDefault
+    ) ?? deferredWorkFallbackTTLDefault
   }
 
   private func deferredWorkLeaseDuration(for notification: AgentHookNotification) -> Duration? {
@@ -1197,7 +1201,7 @@ final class WorktreeTerminalManager {
 
       awaitingInputPromptCandidates[rawTabID] = candidate
 
-      if candidate.stableSampleCount >= awaitingInputPromptDetectionStableSamples {
+      if candidate.stableSampleCount >= awaitingInputPromptStableSamples {
         markAwaitingInputSignal(
           worktreeID: candidate.worktreeID,
           tabID: rawTabID,
@@ -1379,7 +1383,8 @@ final class WorktreeTerminalManager {
   }
 
   private func screenFingerprint(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
-    let contents = readScreenContentsOverride?(worktreeID, tabID) ?? states[worktreeID]?.readScreenContents(tabID: tabID)
+    let contents = readScreenContentsOverride?(worktreeID, tabID)
+      ?? states[worktreeID]?.readScreenContents(tabID: tabID)
     let screen = contents?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let screen, !screen.isEmpty else { return nil }
 

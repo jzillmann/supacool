@@ -83,12 +83,12 @@ struct BoardFeatureTests {
     session.lastActivityAt = session.referencesScannedAt!.addingTimeInterval(-1)
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
-    let lookups = LockIsolated<[(String, String, Int)]>([])
+    let lookups = LockIsolated<[String]>([])
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
       $0.githubCLI.viewPullRequest = { owner, repo, number in
-        lookups.withValue { $0.append((owner, repo, number)) }
+        lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
         return .open
       }
     }
@@ -98,9 +98,7 @@ struct BoardFeatureTests {
     await store.skipReceivedActions()
 
     #expect(lookups.value.count == 1)
-    #expect(lookups.value.first?.0 == "acme")
-    #expect(lookups.value.first?.1 == "widgets")
-    #expect(lookups.value.first?.2 == 42)
+    #expect(lookups.value.first == "acme/widgets#42")
     #expect(
       store.state.sessions.first?.references == [
         .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)

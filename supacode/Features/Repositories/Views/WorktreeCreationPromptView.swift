@@ -132,13 +132,13 @@ struct WorktreeCreationPromptView: View {
 
   private var modeShortcuts: some View {
     Group {
-      Button("") { store.mode = .directory }
+      Button("") { store.send(.modeShortcutTapped(.directory)) }
         .keyboardShortcut("1", modifiers: .command)
         .hidden()
-      Button("") { store.mode = .newWorktree }
+      Button("") { store.send(.modeShortcutTapped(.newWorktree)) }
         .keyboardShortcut("2", modifiers: .command)
         .hidden()
-      Button("") { store.mode = .existingWorktree }
+      Button("") { store.send(.modeShortcutTapped(.existingWorktree)) }
         .keyboardShortcut("3", modifiers: .command)
         .hidden()
     }
