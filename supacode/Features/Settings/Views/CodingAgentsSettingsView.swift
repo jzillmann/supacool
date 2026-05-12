@@ -7,7 +7,6 @@ struct CodingAgentsSettingsView: View {
   var body: some View {
     Form {
       AIAssistSettingsSection()
-      ReferencesSettingsSection()
       Section {
         AgentInstallRow(
           installAction: { store.send(.agentHookInstallTapped(.claudeProgress)) },
@@ -109,60 +108,6 @@ private struct AIAssistSettingsSection: View {
       } else {
         Text("Uses the Anthropic API directly. Charged to your API account.")
       }
-    }
-  }
-}
-
-// MARK: - References
-
-/// Supacool scans session transcripts for Linear tickets and GitHub PR
-/// URLs and surfaces them as clickable chips on board cards. This section
-/// configures the link destinations and optional prefix filter.
-private struct ReferencesSettingsSection: View {
-  @AppStorage("supacool.references.linearOrg") private var linearOrg: String = ""
-  @AppStorage("supacool.references.ticketPrefixes") private var ticketPrefixes: String = ""
-  @AppStorage("supacool.linear.apiKey") private var linearAPIKey: String = ""
-
-  var body: some View {
-    Section {
-      LabeledContent {
-        TextField("your-org", text: $linearOrg)
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: 240)
-      } label: {
-        Text("Linear org slug")
-        Text(
-          "Optional. When empty, ticket chips open the Linear desktop app by issue ID. "
-            + "Set this to build exact URLs like `linear.app/<slug>/issue/<id>`."
-        )
-      }
-      LabeledContent {
-        TextField("CEN, FOO", text: $ticketPrefixes)
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: 240)
-      } label: {
-        Text("Ticket prefix allowlist")
-        Text(
-          "Comma-separated list of team keys (e.g. `CEN`). "
-            + "Empty = any uppercase prefix matches, which can pick up noise like `HTTP-200`."
-        )
-      }
-      LabeledContent {
-        SecureField("lin_api_…", text: $linearAPIKey)
-          .textFieldStyle(.roundedBorder)
-          .frame(maxWidth: 240)
-      } label: {
-        Text("Linear API key")
-        Text(
-          "Optional. When set, typing a ticket id in the New Terminal prompt fetches the "
-            + "issue title and uses it for the suggested branch name and card title. "
-            + "Generate a personal key at linear.app/settings/api."
-        )
-      }
-    } header: {
-      Label("References", systemImage: "link")
-    } footer: {
-      Text("Parsed from Claude Code session transcripts. Codex sessions fall back to scanning just the initial prompt.")
     }
   }
 }

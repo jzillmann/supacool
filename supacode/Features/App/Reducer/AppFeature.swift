@@ -388,7 +388,7 @@ struct AppFeature {
             state.settings.pullRequestMergeStrategy
           state.settings.repositorySettings = repoSettingsState
         case .general, .notifications, .worktree, .codingAgents, .shortcuts, .updates, .github,
-          .remoteHosts:
+          .linear, .remoteHosts:
           state.settings.repositorySettings = nil
         }
         return .none

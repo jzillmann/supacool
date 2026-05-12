@@ -8,6 +8,7 @@ enum SettingsSection: Hashable, Sendable {
   case shortcuts
   case updates
   case github
+  case linear
   case remoteHosts
   case repository(Repository.ID)
 }
