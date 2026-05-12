@@ -794,14 +794,22 @@ struct BoardFeature {
           return .none
         }
         let worktree = Self.resumeWorktree(for: session, repository: repository)
+        let shouldReleaseOwnedProcesses = Self.allSessionsParked(
+          inWorkspace: session.currentWorkspacePath,
+          sessions: state.sessions
+        )
+        let releasePath = worktree.workingDirectory.path(percentEncoded: false)
         return .run { _ in
           await terminalClient.send(
             .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
           )
+          if shouldReleaseOwnedProcesses {
+            await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
+          }
         }
 
       case .parkActiveSession(let id):
-        guard state.sessions.contains(where: { $0.id == id }) else {
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
         let now = date.now
@@ -817,7 +825,16 @@ struct BoardFeature {
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
         }
-        return .none
+        guard Self.allSessionsParked(
+          inWorkspace: session.currentWorkspacePath,
+          sessions: state.sessions
+        ) else {
+          return .none
+        }
+        let releasePath = session.currentWorkspacePath
+        return .run { _ in
+          await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
+        }
 
       case .unparkSession(let id):
         guard state.sessions.contains(where: { $0.id == id }) else {
@@ -2129,6 +2146,19 @@ struct BoardFeature {
       workingDirectory: workingDirectory,
       repositoryRootURL: repository.rootURL.standardizedFileURL
     )
+  }
+
+  /// True when every session whose `currentWorkspacePath` matches the
+  /// given path is parked. Empty match (no sessions found) returns
+  /// false so we don't fire `releaseOwnedProcesses` for a worktree we
+  /// don't actually own.
+  fileprivate static func allSessionsParked(
+    inWorkspace path: String,
+    sessions: [AgentSession]
+  ) -> Bool {
+    let matching = sessions.filter { $0.currentWorkspacePath == path }
+    guard !matching.isEmpty else { return false }
+    return matching.allSatisfy(\.parked)
   }
 
   fileprivate static func resumeWorktree(

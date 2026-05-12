@@ -181,7 +181,7 @@ struct BoardFeatureTests {
     }
   }
 
-  @Test(.dependencies) func parkSessionMarksParkedAndDestroysTab() async throws {
+  @Test(.dependencies) func parkSessionMarksParkedDestroysTabAndReleasesOwnedProcesses() async throws {
     let now = Date(timeIntervalSince1970: 1_750_000_111)
     let transition = Date(timeIntervalSince1970: 1_750_000_000)
     var session = Self.sampleSession()
@@ -218,16 +218,69 @@ struct BoardFeatureTests {
     }
     await store.finish()
 
-    let command = try #require(sentCommands.value.first)
-    guard case .destroyTab(let worktree, let tabID) = command else {
-      Issue.record("Expected destroyTab command, got \(command)")
+    let commands = sentCommands.value
+    #expect(commands.count == 2)
+    let destroyCommand = try #require(commands.first)
+    guard case .destroyTab(let worktree, let tabID) = destroyCommand else {
+      Issue.record("Expected destroyTab command, got \(destroyCommand)")
       return
     }
     #expect(tabID.rawValue == session.id)
     #expect(worktree.id == session.worktreeID)
+    #expect(
+      commands.dropFirst().first == .releaseOwnedProcesses(worktreePath: session.currentWorkspacePath)
+    )
   }
 
-  @Test(.dependencies) func parkActiveSessionMarksParkedWithoutDestroyingTab() async {
+  @Test(.dependencies) func parkSessionKeepsOwnedProcessesWhenSiblingStillUnparked() async throws {
+    let now = Date(timeIntervalSince1970: 1_750_000_111)
+    let session = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+      worktreeID: "/tmp/repo/wt"
+    )
+    let sibling = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
+      worktreeID: session.worktreeID
+    )
+    let repo = Repository(
+      id: session.repositoryID,
+      rootURL: URL(fileURLWithPath: session.repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session, sibling] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+
+    await store.send(.parkSession(id: session.id, repositories: [repo])) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = true
+        sessions[0].lastKnownBusy = false
+        sessions[0].lastBusyTransitionAt = nil
+        sessions[0].lastActivityAt = now
+      }
+    }
+    await store.finish()
+
+    let commands = sentCommands.value
+    #expect(commands.count == 1)
+    guard case .destroyTab = try #require(commands.first) else {
+      Issue.record("Expected only destroyTab command, got \(commands)")
+      return
+    }
+  }
+
+  @Test(.dependencies)
+  func parkActiveSessionMarksParkedAndReleasesOwnedProcessesWithoutDestroyingTab() async throws {
     let now = Date(timeIntervalSince1970: 1_750_000_222)
     let transition = Date(timeIntervalSince1970: 1_750_000_000)
     var session = Self.sampleSession()
@@ -255,9 +308,13 @@ struct BoardFeatureTests {
       $0.focusedSessionID = nil
     }
 
+    await store.finish()
+
     #expect(store.state.sessions[0].lastKnownBusy)
     #expect(store.state.sessions[0].lastBusyTransitionAt == transition)
-    #expect(sentCommands.value.isEmpty)
+    #expect(
+      sentCommands.value == [.releaseOwnedProcesses(worktreePath: session.currentWorkspacePath)]
+    )
   }
 
   @Test(.dependencies) func unparkSessionOnlyClearsParkedBit() async {

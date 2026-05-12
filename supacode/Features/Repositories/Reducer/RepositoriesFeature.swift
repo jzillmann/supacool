@@ -324,6 +324,7 @@ struct RepositoriesFeature {
   @Dependency(GithubIntegrationClient.self) private var githubIntegration
   @Dependency(RepositoryPersistenceClient.self) private var repositoryPersistence
   @Dependency(ShellClient.self) private var shellClient
+  @Dependency(TerminalClient.self) private var terminalClient
   @Dependency(\.date.now) private var now
   @Dependency(\.uuid) private var uuid
 
@@ -1576,7 +1577,11 @@ struct RepositoriesFeature {
           selectedWorktreeID: state.selectedWorktreeID,
           selectedWorktree: selectedWorktree
         )
+        let worktreePathForRelease = worktree.workingDirectory.path(percentEncoded: false)
         var effects: [Effect<Action>] = [
+          .run { _ in
+            await terminalClient.send(.releaseOwnedProcesses(worktreePath: worktreePathForRelease))
+          },
           .send(.delegate(.repositoriesChanged(repositories))),
           .run { _ in
             await repositoryPersistence.saveArchivedWorktreeDates(archivedWorktreeDates)
@@ -1814,7 +1819,11 @@ struct RepositoriesFeature {
           : nil
         @Shared(.settingsFile) var settingsFile
         let deleteBranchOnDeleteWorktree = settingsFile.global.deleteBranchOnDeleteWorktree
+        let worktreePathForRelease = worktree.workingDirectory.path(percentEncoded: false)
         return .run { send in
+          // Stop adopted dev processes before the worktree directory
+          // disappears so they have a chance to shut down cleanly.
+          await terminalClient.send(.releaseOwnedProcesses(worktreePath: worktreePathForRelease))
           do {
             _ = try await gitClient.removeWorktree(
               worktree,
