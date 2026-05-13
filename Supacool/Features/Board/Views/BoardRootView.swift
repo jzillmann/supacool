@@ -592,13 +592,18 @@ struct BoardRootView: View {
 
   private func classify(_ session: AgentSession) -> BoardSessionStatus {
     let tabID = TerminalTabID(rawValue: session.id)
-    return BoardSessionStatus.classify(
+    let tabExists = sessionTabExists(session, tabID: tabID)
+    let status = BoardSessionStatus.classify(
       session: session,
-      tabExists: sessionTabExists(session, tabID: tabID),
+      tabExists: tabExists,
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
       deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID)
     )
+    if !tabExists, store.reinitializingSessionIDs.contains(session.id) {
+      return .inProgress
+    }
+    return status
   }
 
   private func sessionTabExists(_ session: AgentSession, tabID: TerminalTabID? = nil) -> Bool {
@@ -663,6 +668,9 @@ struct BoardRootView: View {
         },
         onStatusObserved: { status in
           store.send(.sessionStatusObserved(id: session.id, status: status))
+        },
+        onTabPresenceObserved: { exists in
+          store.send(.sessionTabPresenceObserved(id: session.id, exists: exists))
         }
       )
     }

@@ -15,6 +15,7 @@ struct SessionStateWatcher: View {
   let onAwaitingInputEntered: () -> Void
   let onPriorityTermination: (BoardSessionStatus) -> Void
   let onStatusObserved: (BoardSessionStatus) -> Void
+  let onTabPresenceObserved: (Bool) -> Void
 
   private var isBusyNow: Bool {
     terminalManager.isAgentBusy(
@@ -24,6 +25,13 @@ struct SessionStateWatcher: View {
   }
 
   private var status: BoardSessionStatus { classify(session) }
+
+  private var tabExistsNow: Bool {
+    terminalManager.sessionTabExists(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: session.id)
+    )
+  }
 
   var body: some View {
     Color.clear
@@ -47,7 +55,11 @@ struct SessionStateWatcher: View {
           onPriorityTermination(newValue)
         }
       }
+      .onChange(of: tabExistsNow) { _, newValue in
+        onTabPresenceObserved(newValue)
+      }
       .onAppear {
+        onTabPresenceObserved(tabExistsNow)
         onStatusObserved(status)
         // Reconcile: if our stored busy flag doesn't match reality at
         // mount time (e.g. freshly loaded), sync it once.

@@ -14,7 +14,9 @@ private nonisolated let boardLogger = SupaLogger("Board")
 ///
 /// Status bucketing (Waiting on Me vs In Progress) is DERIVED at render time
 /// from `WorktreeTerminalManager.isTabBusy(tabID:)`; this reducer doesn't
-/// track live agent-busy state.
+/// track live agent-busy state. It only keeps short-lived session ids that
+/// are being rehydrated so detached cards move to In Progress while their
+/// terminal tab is being recreated.
 @Reducer
 struct BoardFeature {
   @ObservableState
@@ -38,6 +40,12 @@ struct BoardFeature {
     /// until the spawn finishes (success or failure) so repeat-clicks
     /// don't fan out duplicate sessions.
     var bookmarkSpawnInFlight: Set<Bookmark.ID> = []
+
+    /// Detached/disconnected sessions whose terminal tab is currently
+    /// being recreated by Resume, Restore Layout, or Reconnect. The board
+    /// treats these as In Progress even before `WorktreeTerminalManager`
+    /// has a tab to report, then clears the id when a tab is observed.
+    var reinitializingSessionIDs: Set<AgentSession.ID> = []
 
     /// Whether the trash sheet is open (browse + restore + permanent delete).
     var isTrashSheetPresented: Bool = false
@@ -233,6 +241,10 @@ struct BoardFeature {
     /// Used as a fallback to clear "Starting session" cards when a
     /// session is already live but never emits busy=true (e.g. shell).
     case sessionStatusObserved(id: AgentSession.ID, status: BoardSessionStatus)
+    /// Fired by `SessionStateWatcher` on mount + tab-presence transitions.
+    /// Clears the transient Resume/Restore/Reconnect busy marker once the
+    /// terminal manager has recreated the tab backing the card.
+    case sessionTabPresenceObserved(id: AgentSession.ID, exists: Bool)
     case prioritySessionTerminated(id: AgentSession.ID, status: BoardSessionStatus)
     case dismissPriorityTerminationAlert
     /// Park: destroy the PTY to free resources, flag the session as
@@ -613,6 +625,7 @@ struct BoardFeature {
           trash.append(entry)
         }
         state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
+        state.reinitializingSessionIDs.remove(id)
         if state.focusedSessionID == id {
           state.focusedSessionID = nil
         }
@@ -745,6 +758,7 @@ struct BoardFeature {
         // Fast-path auto-dismiss: busy=true means the PTY is live and the
         // agent is actually running.
         if busy {
+          state.reinitializingSessionIDs.remove(id)
           state.trayCards.removeAll { card in
             if case .sessionCreating(let sessionID, _) = card.kind {
               return sessionID == id
@@ -768,6 +782,12 @@ struct BoardFeature {
         }
         return .none
 
+      case .sessionTabPresenceObserved(let id, let exists):
+        if exists {
+          state.reinitializingSessionIDs.remove(id)
+        }
+        return .none
+
       case .focusSession(let id):
         state.focusedSessionID = id
         return .none
@@ -784,6 +804,7 @@ struct BoardFeature {
           sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = now
         }
+        state.reinitializingSessionIDs.remove(id)
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "parked", context: "detached", at: now),
           tabID: TerminalTabID(rawValue: id)
@@ -824,6 +845,7 @@ struct BoardFeature {
           sessions[index].parked = true
           sessions[index].lastActivityAt = now
         }
+        state.reinitializingSessionIDs.remove(id)
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "parked", context: "active", at: now),
           tabID: TerminalTabID(rawValue: id)
@@ -1063,6 +1085,7 @@ struct BoardFeature {
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }
+        state.reinitializingSessionIDs.insert(id)
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "resumed", context: "captured-id", at: Date()),
           tabID: TerminalTabID(rawValue: id)
@@ -1115,6 +1138,7 @@ struct BoardFeature {
           sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
         }
+        state.reinitializingSessionIDs.insert(id)
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "resumed", context: "picker", at: Date()),
           tabID: TerminalTabID(rawValue: id)
@@ -1167,6 +1191,7 @@ struct BoardFeature {
           sessions[index].lastActivityAt = now
           sessions[index].parked = false
         }
+        state.reinitializingSessionIDs.insert(id)
         state.focusedSessionID = id
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "restored-shell-layout", context: nil, at: now),
@@ -1180,6 +1205,7 @@ struct BoardFeature {
         }
 
       case .resumeFailed(let id, let message):
+        state.reinitializingSessionIDs.remove(id)
         boardLogger.warning("Resume failed for session \(id): \(message)")
         return .none
 
@@ -1205,6 +1231,7 @@ struct BoardFeature {
           sessions[index].lastBusyTransitionAt = nil
           sessions[index].lastActivityAt = Date()
         }
+        state.reinitializingSessionIDs.insert(id)
         let invocation = RemoteSpawnInvocation(
           sshAlias: host.sshAlias,
           user: host.connection.user,
@@ -1235,6 +1262,7 @@ struct BoardFeature {
         }
 
       case ._reconnectFailed(let id, let message):
+        state.reinitializingSessionIDs.remove(id)
         boardLogger.warning("Remote reconnect failed for session \(id): \(message)")
         return .none
 

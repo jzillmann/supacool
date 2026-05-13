@@ -1326,6 +1326,7 @@ struct BoardFeatureTests {
         sessions[0].lastActivityAt = now
         sessions[0].parked = false
       }
+      $0.reinitializingSessionIDs = [sessionID]
       $0.focusedSessionID = sessionID
     }
     await store.finish()
@@ -1338,6 +1339,167 @@ struct BoardFeatureTests {
     #expect(tabID.rawValue == sessionID)
     #expect(worktree.id == "/tmp/repo")
     #expect(worktree.workingDirectory.path(percentEncoded: false) == "/tmp/repo/packages/api")
+  }
+
+  @Test(.dependencies) func resumeDetachedSessionMarksReinitializingUntilTabExists() async throws {
+    let sessionID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.agentNativeSessionID = "native-session-123"
+    session.parked = true
+    session.lastKnownBusy = true
+    let repo = Repository(
+      id: session.repositoryID,
+      rootURL: URL(fileURLWithPath: session.repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repo]))
+
+    #expect(store.state.reinitializingSessionIDs == [sessionID])
+    #expect(store.state.sessions.first?.parked == false)
+    #expect(store.state.sessions.first?.lastKnownBusy == false)
+    #expect(store.state.focusedSessionID == sessionID)
+
+    let command = try #require(sentCommands.value.first)
+    guard case .createTabWithInput(let worktree, let input, let runSetupScriptIfNew, let id) = command else {
+      Issue.record("Expected createTabWithInput command, got \(command)")
+      return
+    }
+    #expect(worktree.id == session.worktreeID)
+    #expect(input.contains("native-session-123"))
+    #expect(runSetupScriptIfNew == false)
+    #expect(id == sessionID)
+
+    await store.send(.sessionTabPresenceObserved(id: sessionID, exists: true)) {
+      $0.reinitializingSessionIDs = []
+    }
+    await store.finish()
+  }
+
+  @Test(.dependencies) func resumePickerMarksReinitializingUntilTabExists() async throws {
+    let sessionID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.agentNativeSessionID = nil
+    let repo = Repository(
+      id: session.repositoryID,
+      rootURL: URL(fileURLWithPath: session.repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSessionWithPicker(id: sessionID, repositories: [repo]))
+
+    #expect(store.state.reinitializingSessionIDs == [sessionID])
+    #expect(store.state.focusedSessionID == sessionID)
+    let command = try #require(sentCommands.value.first)
+    guard case .createTabWithInput(_, let input, let runSetupScriptIfNew, let id) = command else {
+      Issue.record("Expected createTabWithInput picker command, got \(command)")
+      return
+    }
+    #expect(input.contains("--resume"))
+    #expect(runSetupScriptIfNew == false)
+    #expect(id == sessionID)
+
+    await store.send(.sessionTabPresenceObserved(id: sessionID, exists: true)) {
+      $0.reinitializingSessionIDs = []
+    }
+    await store.finish()
+  }
+
+  @Test(.dependencies) func reconnectRemoteSessionMarksReinitializingUntilTabExists() async throws {
+    let sessionID = UUID()
+    let hostID = UUID()
+    let workspaceID = UUID()
+    var session = Self.sampleSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "remote://prod/app"
+    )
+    session.remoteWorkspaceID = workspaceID
+    session.remoteHostID = hostID
+    session.tmuxSessionName = "supacool-\(sessionID.uuidString.lowercased())"
+    session.remoteConnectionLost = true
+    let host = RemoteHost(
+      id: hostID,
+      sshAlias: "prod",
+      connection: .init(user: "deploy", hostname: "prod.example.com"),
+      deferToSSHConfig: false
+    )
+    let workspace = RemoteWorkspace(
+      id: workspaceID,
+      hostID: hostID,
+      remoteWorkingDirectory: "/srv/app"
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.$remoteHosts.withLock { $0 = [host] }
+    state.$remoteWorkspaces.withLock { $0 = [workspace] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.hookSocketPath = { "/tmp/supacool.sock" }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.reconnectRemoteSession(id: sessionID))
+
+    #expect(store.state.reinitializingSessionIDs == [sessionID])
+    #expect(store.state.sessions.first?.remoteConnectionLost == false)
+
+    let commands = sentCommands.value
+    #expect(commands.count == 2)
+    guard case .destroyTab(let destroyedWorktree, let destroyedTabID) = try #require(commands.first) else {
+      Issue.record("Expected destroyTab command, got \(String(describing: commands.first))")
+      return
+    }
+    #expect(destroyedWorktree.id == session.worktreeID)
+    #expect(destroyedTabID.rawValue == sessionID)
+
+    guard
+      case .createRemoteTab(let worktree, let command, let id, let surfaceID) = try #require(commands.last)
+    else {
+      Issue.record("Expected createRemoteTab command, got \(String(describing: commands.last))")
+      return
+    }
+    #expect(worktree.id == session.worktreeID)
+    #expect(!command.isEmpty)
+    #expect(id == sessionID)
+    #expect(surfaceID == sessionID)
+
+    await store.send(.sessionTabPresenceObserved(id: sessionID, exists: true)) {
+      $0.reinitializingSessionIDs = []
+    }
+    await store.finish()
   }
 
   @Test(.dependencies) func restoreShellSessionLayoutIgnoresAgentSessions() async {
