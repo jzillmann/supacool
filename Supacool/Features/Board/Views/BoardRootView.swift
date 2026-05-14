@@ -78,6 +78,8 @@ struct BoardRootView: View {
 
   var body: some View {
     currentContent
+    .toolbar(removing: .title)
+    .toolbar { rootToolbar }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
     .background(HorizontalSwipeNavigationBridge(onSwipe: handleNavigationSwipe))
@@ -104,19 +106,7 @@ struct BoardRootView: View {
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
-        // If a session is focused (full-screen terminal view), keep only
-        // its repository preference. Workspace/branch fields start blank
-        // so ⌘N never reuses the previous worktree.
-        if let focusedID = store.focusedSessionID {
-          store.send(
-            .openNewTerminalSheetFromSession(
-              id: focusedID,
-              repositories: Array(repositories)
-            )
-          )
-        } else {
-          store.send(.openNewTerminalSheet(repositories: Array(repositories)))
-        }
+        openNewTerminalFromCurrentContext()
       }
       .keyboardShortcut("n", modifiers: .command)
       .hidden()
@@ -516,6 +506,126 @@ struct BoardRootView: View {
     return selected.first
   }
 
+  @ToolbarContentBuilder
+  private var rootToolbar: some ToolbarContent {
+    ToolbarItem(placement: .navigation) {
+      HStack(spacing: 8) {
+        RepoPickerButton(
+          repositories: repositories,
+          filters: store.filters,
+          onToggleRepository: handleToggleRepository,
+          onFocusRepository: handleFocusRepository,
+          onShowAll: handleShowAllRepositories,
+          onAddRepository: onAddRepository,
+          onConfigureRepositories: onConfigureRepositories
+        )
+        if let footprintStore {
+          FootprintChip(store: footprintStore)
+        }
+      }
+    }
+    ToolbarItem(placement: .principal) {
+      if let statusRepository {
+        RepoStatusChip(repository: statusRepository)
+      }
+    }
+    // Push the + button to the far right so there's breathing room
+    // between the title/repo block and the action.
+    ToolbarSpacer(.flexible)
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        autoZoomBackOnPrompt.toggle()
+      } label: {
+        Label(
+          "Auto-return to board",
+          systemImage: autoZoomBackOnPrompt
+            ? "arrow.uturn.left.circle.fill"
+            : "arrow.uturn.left.circle"
+        )
+      }
+      .help(
+        autoZoomBackOnPrompt
+          ? "Auto-return to board after submitting a prompt (on) — click to disable"
+          : "Auto-return to board after submitting a prompt (off) — click to enable"
+      )
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        store.send(.openTrashSheet)
+      } label: {
+        let count = store.trashedSessions.count
+        if count > 0 {
+          Label("Archive (\(count))", systemImage: "archivebox")
+        } else {
+          Label("Archive", systemImage: "archivebox")
+        }
+      }
+      .help(
+        store.trashedSessions.isEmpty
+          ? "Open cleanup archive (removed cards + worktrees)"
+          : "Open cleanup archive — \(store.trashedSessions.count) recoverable card(s)"
+      )
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        openNewTerminalFromCurrentContext()
+      } label: {
+        Label("New Terminal", systemImage: "plus")
+      }
+      .help("New Terminal (⌘N)")
+      .disabled(repositories.isEmpty)
+    }
+  }
+
+  private func openNewTerminalFromCurrentContext() {
+    // If a session is focused (full-screen terminal view), keep only
+    // its repository preference. Workspace/branch fields start blank
+    // so ⌘N never reuses the previous worktree.
+    if let focusedID = store.focusedSessionID {
+      store.send(
+        .openNewTerminalSheetFromSession(
+          id: focusedID,
+          repositories: Array(repositories)
+        )
+      )
+    } else {
+      store.send(.openNewTerminalSheet(repositories: Array(repositories)))
+    }
+  }
+
+  private func handleToggleRepository(_ repositoryID: Repository.ID) {
+    store.send(.toggleRepository(id: repositoryID))
+    reconcileFocusedSessionAfterRepositoryFilterChange()
+  }
+
+  private func handleFocusRepository(_ repositoryID: Repository.ID) {
+    store.send(.focusRepository(id: repositoryID))
+    reconcileFocusedSessionAfterRepositoryFilterChange()
+  }
+
+  private func handleShowAllRepositories() {
+    store.send(.showAllRepositories)
+    reconcileFocusedSessionAfterRepositoryFilterChange()
+  }
+
+  /// When the shared toolbar changes repo filters from inside a focused
+  /// terminal, keep showing that terminal if it is still in scope; otherwise
+  /// jump to the first visible session for the newly selected repo, or the
+  /// board if that repo has no sessions yet.
+  private func reconcileFocusedSessionAfterRepositoryFilterChange() {
+    guard let focusedID = store.focusedSessionID else { return }
+    if let focusedSession = store.sessions.first(where: { $0.id == focusedID }),
+      store.filters.includes(repositoryID: focusedSession.repositoryID)
+    {
+      return
+    }
+    let destination = BoardNavOrder.order(
+      visibleSessions: store.visibleSessions,
+      classify: classify
+    ).first
+    store.send(.focusSession(id: destination))
+  }
+
   private var boardContents: some View {
     BoardView(
       store: store,
@@ -528,79 +638,6 @@ struct BoardRootView: View {
       highlightedSessionID: $highlightedSessionID,
       selectedSessionIDs: $selectedSessionIDs
     )
-    // The window title is still "Supacool" (visible in the menu bar
-    // and Window menu) but we hide it from the toolbar chrome — the
-    // leading item is just the repo picker.
-    .toolbar(removing: .title)
-    .toolbar {
-      ToolbarItem(placement: .navigation) {
-        HStack(spacing: 8) {
-          RepoPickerButton(
-            repositories: repositories,
-            filters: store.filters,
-            onToggleRepository: { store.send(.toggleRepository(id: $0)) },
-            onFocusRepository: { store.send(.focusRepository(id: $0)) },
-            onShowAll: { store.send(.showAllRepositories) },
-            onAddRepository: onAddRepository,
-            onConfigureRepositories: onConfigureRepositories
-          )
-          if let footprintStore {
-            FootprintChip(store: footprintStore)
-          }
-        }
-      }
-      ToolbarItem(placement: .principal) {
-        if let statusRepository {
-          RepoStatusChip(repository: statusRepository)
-        }
-      }
-      // Push the + button to the far right so there's breathing room
-      // between the title/repo block and the action.
-      ToolbarSpacer(.flexible)
-      ToolbarItem(placement: .primaryAction) {
-        Button {
-          autoZoomBackOnPrompt.toggle()
-        } label: {
-          Label(
-            "Auto-return to board",
-            systemImage: autoZoomBackOnPrompt
-              ? "arrow.uturn.left.circle.fill"
-              : "arrow.uturn.left.circle"
-          )
-        }
-        .help(
-          autoZoomBackOnPrompt
-            ? "Auto-return to board after submitting a prompt (on) — click to disable"
-            : "Auto-return to board after submitting a prompt (off) — click to enable"
-        )
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Button {
-          store.send(.openTrashSheet)
-        } label: {
-          let count = store.trashedSessions.count
-          if count > 0 {
-            Label("Trash (\(count))", systemImage: "trash")
-          } else {
-            Label("Trash", systemImage: "trash")
-          }
-        }
-        .help(
-          store.trashedSessions.isEmpty
-            ? "Open cleanup dialog (trash + worktrees)"
-            : "Open cleanup dialog — \(store.trashedSessions.count) recoverable card(s)"
-        )
-      }
-      ToolbarItem(placement: .primaryAction) {
-        Button {
-          store.send(.openNewTerminalSheet(repositories: Array(repositories)))
-        } label: {
-          Label("New Terminal", systemImage: "plus")
-        }
-        .help("New Terminal (⌘N)")
-        .disabled(repositories.isEmpty)
-      }
-    }
   }
 
   /// Classifier reads live busy state from WorktreeTerminalManager and the
