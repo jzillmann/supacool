@@ -444,7 +444,15 @@ struct BoardFeature {
     /// dialog still shows two" stale-snapshot bug.
     case _repositoriesUpdated(repositories: [Repository])
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
-    case resumeDetachedSession(id: AgentSession.ID, repositories: [Repository])
+    /// `focusOnComplete: true` (the default) leaves you in the full-screen
+    /// terminal view once the session reincarnates — matches the explicit
+    /// "Resume Session" context-menu intent. The board's dormant-card play
+    /// button passes `false` to resume in place and stay on the dashboard.
+    case resumeDetachedSession(
+      id: AgentSession.ID,
+      repositories: [Repository],
+      focusOnComplete: Bool = true
+    )
     /// Raw-shell sessions have no agent-native resume. This reopens the
     /// saved terminal split layout/folders under the same session tab ID.
     case restoreShellSessionLayout(id: AgentSession.ID, repositories: [Repository])
@@ -1262,7 +1270,7 @@ struct BoardFeature {
         state.$drafts.withLock { $0.removeAll { $0.id == id } }
         return .none
 
-      case .resumeDetachedSession(let id, let repositories):
+      case .resumeDetachedSession(let id, let repositories, let focusOnComplete):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
@@ -1307,7 +1315,9 @@ struct BoardFeature {
             .resumeFailed(id: id, message: "\(agent.displayName) doesn't support resume by id.")
           )
         }
-        state.focusedSessionID = id
+        if focusOnComplete {
+          state.focusedSessionID = id
+        }
         let command = resumeCommand + "\r"
         return .run { [terminalClient, piSettingsClient, agent] _ in
           if agent.id == "pi" {

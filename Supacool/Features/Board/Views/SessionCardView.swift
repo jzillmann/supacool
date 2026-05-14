@@ -25,6 +25,9 @@ struct SessionCardView: View {
   var onSetStatusOverride: ((BoardSessionStatus?) -> Void)? = nil
   var onRerun: (() -> Void)?
   var onResume: (() -> Void)?
+  /// Resume without setting the focused session — used by the dormant-card
+  /// hover play icon so the user stays on the dashboard.
+  var onResumeInPlace: (() -> Void)?
   var onResumePicker: (() -> Void)?
   var onResumeSelected: (() -> Void)?
   var selectedResumeCount: Int = 0
@@ -302,13 +305,13 @@ struct SessionCardView: View {
     return isDormant ? .orange : Color.secondary.opacity(0.6)
   }
 
-  /// "Best available" resume action for the hover play icon. Prefer the
-  /// direct in-place resume; fall back to unpark (which routes to direct
-  /// resume itself when the session id was captured). When neither is
-  /// available, the play icon is hidden — only the info icon stays, so
-  /// the user can still drop into the detail view for Rerun / Picker.
+  /// Resume action for the hover play icon. Only set when the caller can
+  /// guarantee an in-place resume (no navigation to the full-screen view),
+  /// so the dashboard stays put. When nil the play icon is hidden — only
+  /// the info icon stays, so the user can still drop into the detail view
+  /// for Rerun / Resume via Picker.
   private var dormantPlayAction: (() -> Void)? {
-    onResume ?? onUnpark
+    onResumeInPlace
   }
 
   /// Shown on hover for any dormant card — a play icon that resumes the

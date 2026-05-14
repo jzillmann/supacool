@@ -492,6 +492,22 @@ struct BoardView: View {
                         )
                       }
                       : nil,
+                    onResumeInPlace: BoardResumeEligibility.canDirectResume(
+                      session,
+                      status: sessionStatus,
+                      tabExists: sessionHasTab,
+                      includingParked: true
+                    )
+                      ? {
+                        store.send(
+                          .resumeDetachedSession(
+                            id: session.id,
+                            repositories: Array(repositories),
+                            focusOnComplete: false
+                          )
+                        )
+                      }
+                      : nil,
                     onResumePicker: canResumeWithPicker(session, status: sessionStatus)
                       ? {
                         store.send(
@@ -773,6 +789,7 @@ private struct SessionCardContainer: View {
   let onSetStatusOverride: (BoardSessionStatus?) -> Void
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
+  let onResumeInPlace: (() -> Void)?
   let onResumePicker: (() -> Void)?
   let onResumeSelected: (() -> Void)?
   let onPark: (() -> Void)?
@@ -809,6 +826,7 @@ private struct SessionCardContainer: View {
       onSetStatusOverride: onSetStatusOverride,
       onRerun: onRerun,
       onResume: onResume,
+      onResumeInPlace: onResumeInPlace,
       onResumePicker: onResumePicker,
       onResumeSelected: onResumeSelected,
       selectedResumeCount: selectedResumeCount,
