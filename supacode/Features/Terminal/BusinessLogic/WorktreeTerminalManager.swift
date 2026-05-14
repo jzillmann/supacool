@@ -281,19 +281,29 @@ final class WorktreeTerminalManager {
   /// informational ping that doesn't pause work.
   ///
   /// Claude Code fires `Notification` hooks for both blocking and
-  /// informational cases; the blocking ones use a short, stable set of
-  /// message prefixes. Codex fires a dedicated `PermissionRequest`
-  /// event for the blocking case, which is the clean signal we want.
+  /// informational cases. Historically we matched a small set of exact
+  /// prefixes; Claude release-to-release wording drift was causing stuck
+  /// "busy" cards (PreToolUse marked busy ON, but the follow-up
+  /// Notification's body had shifted enough that the prefix list missed,
+  /// so we never promoted the card to `.awaitingInput`).
+  ///
+  /// New rule: gate on `event == "Notification"` (the hook is already
+  /// only fired in attention-requesting cases), then do a lossier
+  /// case-insensitive contains-match on common indicator words. False-
+  /// positive cost is bounded — the card flips to "Wants Input" until
+  /// the next busy hook resets it (or the user clears via manual
+  /// override). False-negative cost is much higher: stuck cards the
+  /// user walks away from.
+  ///
+  /// Codex fires a dedicated `PermissionRequest` event for the blocking
+  /// case, which is the clean signal we want.
   nonisolated static func isAwaitingInputSignal(_ notification: AgentHookNotification) -> Bool {
     let agent = notification.agent.lowercased()
     if agent.contains("claude") {
       guard notification.event == "Notification" else { return false }
-      let body = notification.body ?? ""
-      let blockingPrefixes = [
-        "Claude needs your permission",
-        "Claude is waiting for your input",
-      ]
-      return blockingPrefixes.contains(where: { body.hasPrefix($0) })
+      let body = (notification.body ?? "").lowercased()
+      let indicators = ["permission", "waiting for", "input", "approval"]
+      return indicators.contains(where: { body.contains($0) })
     }
     if agent.contains("codex") {
       // PermissionRequest is the precise signal; keep the legacy
@@ -407,14 +417,24 @@ final class WorktreeTerminalManager {
     guard !lines.isEmpty else { return false }
 
     let normalized = lines.joined(separator: "\n")
-    let hasPrimaryPromptLead =
-      normalized.contains("do you want to make this edit")
-      || normalized.contains("claude needs your permission")
-      || normalized.contains("do you want to allow claude")
-      || normalized.contains("allow claude to edit its own settings")
-      || normalized.contains("claude requested permissions")
-      || normalized.contains("do you want to proceed")
-      || normalized.contains("would you like to run the following command")
+    // Lead phrases for known Claude/Codex prompts. The structural gates
+    // below (approval options + dismiss option + footer) keep this list
+    // safe from over-matching unrelated terminal output.
+    let promptLeadPhrases = [
+      "do you want to make this edit",
+      "claude needs your permission",
+      "do you want to allow claude",
+      "allow claude to edit its own settings",
+      "claude requested permissions",
+      "do you want to proceed",
+      "would you like to run the following command",
+      "do you want to allow this",
+      "do you trust",
+      "approve this command",
+      "allow this command",
+      "needs your approval",
+    ]
+    let hasPrimaryPromptLead = promptLeadPhrases.contains(where: { normalized.contains($0) })
     let hasApprovalOptions =
       lines.contains { $0 == "1. yes" || $0.hasPrefix("1. yes,") || $0.hasPrefix("1. allow") }
       && lines.contains {

@@ -30,6 +30,42 @@ struct AwaitingInputSignalTests {
     #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
   }
 
+  /// Reworded permission prompts (Claude release-to-release drift) used
+  /// to slip past the old hasPrefix list. Now matched by the indicator
+  /// keywords ("permission", "approval", "waiting for", "input").
+  @Test func claudeReWordedPermissionPromptMatches() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "Permission required to run this command",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
+  }
+
+  @Test func claudeApprovalPromptMatches() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "Claude requires your approval to proceed",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
+  }
+
+  @Test func claudeMidBodyWaitingPhraseMatches() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "I am waiting for your reply before continuing",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isAwaitingInputSignal(note))
+  }
+
   @Test func claudeInformationalNotificationIsNotAwaitingInput() {
     let note = AgentHookNotification(
       agent: "claude",
@@ -149,5 +185,36 @@ struct AwaitingInputSignalTests {
       Waiting for more output...
       """
     #expect(!WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
+
+  /// New Claude prompt variants — lead phrase changed but structural
+  /// gates (1/2/3 + footer) still hold. The broader phrase list catches
+  /// these where the old fixed-set didn't.
+  @Test func approveCommandVariantMatchesFallbackClassifier() {
+    let screen = """
+      Approve this command?
+
+      ls -la /tmp
+      1. Yes
+      2. Yes, allow all ls commands
+      3. No
+
+      Esc to cancel  Enter to confirm
+      """
+    #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
+  }
+
+  @Test func trustDirectoryVariantMatchesFallbackClassifier() {
+    let screen = """
+      Do you trust this directory?
+
+      /tmp/new-project
+      1. Yes, allow
+      2. Yes, allow all sessions
+      3. No
+
+      Esc to cancel  Tab to amend
+      """
+    #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
   }
 }
