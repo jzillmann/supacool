@@ -84,6 +84,7 @@ struct AppShortcutsTests {
   @Test func displayNameFromID() {
     #expect(AppShortcuts.newWorktree.displayName == "New Worktree")
     #expect(AppShortcuts.openPullRequest.displayName == "Open Pull Request")
+    #expect(AppShortcuts.nextTerminalInState.displayName == "Next Terminal in State")
     #expect(AppShortcuts.toggleLeftSidebar.displayName == "Toggle Left Sidebar")
     #expect(AppShortcuts.selectWorktree1.displayName == "Select Worktree 1")
     #expect(AppShortcuts.selectWorktree0.displayName == "Select Worktree 10")
@@ -122,6 +123,11 @@ struct AppShortcutsTests {
     let groupIDs = Set(AppShortcuts.groups.flatMap(\.shortcuts).map(\.id))
     let allIDs = Set(AppShortcuts.all.map(\.id))
     #expect(groupIDs == allIDs)
+  }
+
+  @Test func nextTerminalInStateUsesCommandSlash() {
+    #expect(AppShortcuts.nextTerminalInState.display == "⌘/")
+    #expect(AppShortcuts.nextTerminalInState.ghosttyUnbindArgument == "--keybind=super+/=unbind")
   }
 
   // MARK: - Effective shortcut disabled.
@@ -163,7 +169,7 @@ struct AppShortcutsTests {
   @Test func categoryDisplayNames() {
     expectNoDifference(
       AppShortcutCategory.allCases.map(\.displayName),
-      ["General", "Sidebar", "Worktrees", "Worktree Selection", "Actions"]
+      ["General", "Matrix Board", "Sidebar", "Worktrees", "Worktree Selection", "Actions"]
     )
   }
 

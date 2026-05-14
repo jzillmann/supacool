@@ -687,6 +687,12 @@ private struct BoardCardFramesKey: PreferenceKey {
 /// sync. Cursor order is waiting-on-me first, then in-progress — matches
 /// the on-screen section layout.
 enum BoardNavOrder {
+  private enum Bucket: Equatable {
+    case waiting
+    case inProgress
+    case parked
+  }
+
   static func isWaitingStatus(_ status: BoardSessionStatus) -> Bool {
     switch status {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted, .disconnected: true
@@ -705,6 +711,27 @@ enum BoardNavOrder {
     let waiting = live.filter { isWaitingStatus(classify($0)) }
     let inProgress = live.filter { !isWaitingStatus(classify($0)) }
     return waiting.map(\.id) + inProgress.map(\.id)
+  }
+
+  static func nextInSameState(
+    after currentID: AgentSession.ID,
+    visibleSessions: [AgentSession],
+    classify: (AgentSession) -> BoardSessionStatus
+  ) -> AgentSession.ID? {
+    guard let current = visibleSessions.first(where: { $0.id == currentID }) else { return nil }
+    let currentBucket = bucket(for: classify(current))
+    let matchingIDs = visibleSessions
+      .filter { bucket(for: classify($0)) == currentBucket }
+      .map(\.id)
+    guard let currentIndex = matchingIDs.firstIndex(of: currentID) else { return nil }
+    let nextIndex = matchingIDs.index(after: currentIndex)
+    guard nextIndex < matchingIDs.endIndex else { return nil }
+    return matchingIDs[nextIndex]
+  }
+
+  private static func bucket(for status: BoardSessionStatus) -> Bucket {
+    if status == .parked { return .parked }
+    return isWaitingStatus(status) ? .waiting : .inProgress
   }
 }
 

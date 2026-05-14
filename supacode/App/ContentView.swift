@@ -88,6 +88,7 @@ struct ContentView: View {
         repositories: store.repositories.repositories,
         worktreeInfoByID: store.repositories.worktreeInfoByID,
         terminalManager: terminalManager,
+        shortcutOverrides: store.settings.shortcutOverrides,
         onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
         onConfigureRepositories: {
           let firstRepo = store.repositories.repositories.first

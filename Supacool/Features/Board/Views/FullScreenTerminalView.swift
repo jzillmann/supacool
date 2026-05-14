@@ -7,7 +7,9 @@ import SwiftUI
 /// pane uses to render a worktree's tab+split tree), wrapped in a minimal
 /// Supacool header with a back button.
 ///
-/// `⌘.`, `⌘B`, or a two-finger swipe left returns to the board.
+/// `⌘.`, `⌘B`, or a two-finger swipe left returns to the board. `⌘/`
+/// advances to the next terminal in the same board state, or returns to
+/// the board when none remains.
 struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
@@ -55,6 +57,12 @@ struct FullScreenTerminalView: View {
   /// advance) the ⌘-Tab-style session switcher overlay. The overlay
   /// itself handles subsequent arrow keys once presented.
   let onSwitcherMove: (Int) -> Void
+
+  /// Advances to the next terminal in this session's current board state
+  /// (Waiting on Me / In Progress / Parked), or back to the board when
+  /// this is the last matching session.
+  let onNextInCurrentState: () -> Void
+  let nextInCurrentStateShortcut: AppShortcut?
 
   /// Mirrors the board card's auto-observer affordance so the user can
   /// flip the observer on/off without going back to the board.
@@ -139,6 +147,11 @@ struct FullScreenTerminalView: View {
       // the header's split button).
       Button("Toggle Shell Split") { toggleShellSplit() }
         .keyboardShortcut("e", modifiers: .command)
+        .hidden()
+    )
+    .background(
+      Button("Next Terminal in State") { onNextInCurrentState() }
+        .appKeyboardShortcut(nextInCurrentStateShortcut)
         .hidden()
     )
     // ⌘-Tab-style session switcher. ⌘⌥← / ⌘⌥↑ cycle backward, ⌘⌥→ /

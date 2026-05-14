@@ -1,0 +1,75 @@
+import Foundation
+import Testing
+
+@testable import Supacool
+
+@MainActor
+struct BoardNavOrderTests {
+  @Test func nextInSameStateSkipsOtherBucketsWithoutWrapping() {
+    let waitingA = makeSession(1)
+    let workingA = makeSession(2)
+    let waitingB = makeSession(3)
+    let parked = makeSession(4)
+    let workingB = makeSession(5)
+    let sessions = [waitingA, workingA, waitingB, parked, workingB]
+    let statuses: [AgentSession.ID: BoardSessionStatus] = [
+      waitingA.id: .waitingOnMe,
+      workingA.id: .inProgress,
+      waitingB.id: .awaitingInput,
+      parked.id: .parked,
+      workingB.id: .waitingForChecks,
+    ]
+
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waitingA.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == waitingB.id
+    )
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: workingA.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == workingB.id
+    )
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waitingB.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == nil
+    )
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: parked.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == nil
+    )
+  }
+
+  @Test func nextInSameStateReturnsNilWhenCurrentSessionIsNotVisible() {
+    let visible = makeSession(1)
+    let hidden = makeSession(2)
+
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: hidden.id,
+        visibleSessions: [visible],
+        classify: { _ in .waitingOnMe }
+      ) == nil
+    )
+  }
+
+  private func makeSession(_ suffix: Int) -> AgentSession {
+    AgentSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-00000000000\(suffix)")!,
+      repositoryID: "/repo",
+      worktreeID: "/repo/session-\(suffix)",
+      agent: .claude,
+      initialPrompt: "Session \(suffix)"
+    )
+  }
+}

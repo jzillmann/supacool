@@ -14,6 +14,7 @@ struct BoardRootView: View {
   let repositories: IdentifiedArrayOf<Repository>
   let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
   let terminalManager: WorktreeTerminalManager
+  let shortcutOverrides: [AppShortcutID: AppShortcutOverride]
   let onAddRepository: () -> Void
   let onConfigureRepositories: () -> Void
 
@@ -302,6 +303,8 @@ struct BoardRootView: View {
           )
         },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
+        onNextInCurrentState: { focusNextSessionInCurrentState(after: session.id) },
+        nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
@@ -489,6 +492,15 @@ struct BoardRootView: View {
     if let id = highlightedSessionID, id != store.focusedSessionID {
       store.send(.focusSession(id: id))
     }
+  }
+
+  private func focusNextSessionInCurrentState(after currentID: AgentSession.ID) {
+    let destination = BoardNavOrder.nextInSameState(
+      after: currentID,
+      visibleSessions: store.visibleSessions,
+      classify: classify
+    )
+    store.send(.focusSession(id: destination))
   }
 
   /// Repo shown by the center toolbar status chip. We only show this
