@@ -197,6 +197,7 @@ struct FullScreenTerminalView: View {
       Divider().frame(height: 18)
 
       repoChip
+      repoStatusChip
       pullRequestStatus
       referenceChips
       Text(session.displayName)
@@ -323,6 +324,20 @@ struct FullScreenTerminalView: View {
         }
         workspaceBadge
       }
+    }
+  }
+
+  @ViewBuilder
+  private var repoStatusChip: some View {
+    if !session.isRemote, let repo = repositories[id: session.repositoryID] {
+      RepoStatusChip(
+        repository: repo,
+        worktreeURL: URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL,
+        refreshID: "\(session.id.uuidString)#\(session.currentWorkspacePath)",
+        showsQuickDiffButton: false,
+        allowsSyncActions: false
+      )
+      .fixedSize()
     }
   }
 

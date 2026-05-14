@@ -27,6 +27,7 @@ enum GitOperation: String {
   case diffFile = "diff_file"
   case numstatFile = "numstat_file"
   case diffAgainstBase = "diff_against_base"
+  case commitHistory = "commit_history"
 }
 
 enum GitClientError: LocalizedError {
@@ -682,6 +683,54 @@ struct GitClient {
     }
     let arrowParts = raw.components(separatedBy: "=>")
     return arrowParts.last?.trimmingCharacters(in: .whitespaces) ?? raw
+  }
+
+  /// Recent commits reachable from HEAD in this worktree.
+  nonisolated func commitHistory(
+    at worktreeURL: URL,
+    limit: Int = 50
+  ) async throws -> [GitCommitHistoryEntry] {
+    let repoPath = worktreeURL.path(percentEncoded: false)
+    let boundedLimit = max(1, min(limit, 200))
+    let output = try await runGit(
+      operation: .commitHistory,
+      arguments: [
+        "-C",
+        repoPath,
+        "log",
+        "--max-count=\(boundedLimit)",
+        "--format=%H%x1f%h%x1f%cI%x1f%an%x1f%s%x1e",
+      ]
+    )
+    return Self.parseCommitHistory(output)
+  }
+
+  nonisolated static func parseCommitHistory(_ raw: String) -> [GitCommitHistoryEntry] {
+    raw
+      .split(separator: "\u{1E}")
+      .compactMap { record in
+        parseCommitHistoryRecord(String(record))
+      }
+  }
+
+  nonisolated private static func parseCommitHistoryRecord(_ raw: String) -> GitCommitHistoryEntry? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    let parts = trimmed.split(separator: "\u{1F}", maxSplits: 4, omittingEmptySubsequences: false)
+    guard parts.count == 5 else { return nil }
+    let hash = String(parts[0])
+    let shortHash = String(parts[1])
+    let dateString = String(parts[2])
+    let author = String(parts[3])
+    let subject = String(parts[4])
+    guard !hash.isEmpty, let date = try? Date(dateString, strategy: .iso8601) else { return nil }
+    return GitCommitHistoryEntry(
+      hash: hash,
+      shortHash: shortHash.isEmpty ? String(hash.prefix(7)) : shortHash,
+      date: date,
+      author: author,
+      subject: subject
+    )
   }
 
   /// Per-file added/removed line counts via `git diff HEAD --numstat`.

@@ -72,6 +72,9 @@ struct GitClientDependency: Sendable {
   /// list with per-file status + line counts already populated.
   var changedFilesAgainst:
     @Sendable (_ baseRef: String, _ worktreeURL: URL) async throws -> [ChangedFile]
+  /// Recent commits reachable from HEAD in the given worktree.
+  var commitHistory:
+    @Sendable (_ worktreeURL: URL, _ limit: Int) async throws -> [GitCommitHistoryEntry]
   /// Per-file added/removed counts via `git diff HEAD --numstat`.
   /// Returns `nil` for binary files or unparseable output.
   var numstatForFile:
@@ -149,6 +152,9 @@ extension GitClientDependency: DependencyKey {
     },
     changedFilesAgainst: { baseRef, worktreeURL in
       try await GitClient().changedFilesAgainst(baseRef: baseRef, at: worktreeURL)
+    },
+    commitHistory: { worktreeURL, limit in
+      try await GitClient().commitHistory(at: worktreeURL, limit: limit)
     },
     numstatForFile: { worktreeURL, path in
       await GitClient().numstatForFile(at: worktreeURL, path: path)
