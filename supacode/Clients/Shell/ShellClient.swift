@@ -182,6 +182,17 @@ nonisolated private func runProcessStream(
       let outputHandle = outputPipe.fileHandleForReading
       let errorHandle = errorPipe.fileHandleForReading
       let command = ([executableURL.path(percentEncoded: false)] + arguments).joined(separator: " ")
+      // `process.waitUntilExit()` is blocking and would park one
+      // cooperative-pool thread per in-flight subprocess. With N
+      // concurrent shell calls (worktree create, fetch, gh, …) the
+      // pool saturates and the drainers below can't be scheduled,
+      // leaving subprocesses blocked on a full stderr pipe. Bridge
+      // via `terminationHandler` + AsyncStream so the wait does not
+      // hold a thread. Handler is installed before `run()` to
+      // guarantee delivery (it only fires for exits that happen
+      // after install).
+      let (terminationStream, terminationContinuation) = AsyncStream.makeStream(of: Void.self)
+      process.terminationHandler = { _ in terminationContinuation.finish() }
       do {
         try process.run()
         let stdoutTask = Task.detached {
@@ -210,7 +221,7 @@ nonisolated private func runProcessStream(
             )
           }
         }
-        process.waitUntilExit()
+        for await _ in terminationStream {}
         await stdoutTask.value
         await stderrTask.value
         let output = await outputAccumulator.output(exitCode: process.terminationStatus)
