@@ -653,7 +653,7 @@ enum BoardNavOrder {
   static func isWaitingStatus(_ status: BoardSessionStatus) -> Bool {
     switch status {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted, .disconnected: true
-    case .inProgress, .fresh, .parked: false
+    case .inProgress, .waitingForChecks, .fresh, .parked: false
     }
   }
 

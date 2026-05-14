@@ -132,6 +132,64 @@ struct BoardSessionStatusTests {
     #expect(status == .waitingOnMe)
   }
 
+  @Test func startingSessionWinsOverPendingPullRequestChecks() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    let session = sampleSession(
+      createdAt: now.addingTimeInterval(-10),
+      hasCompletedAtLeastOnce: false,
+      lastKnownBusy: false
+    )
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      waitingForPullRequestChecks: true,
+      now: now
+    )
+    #expect(status == .fresh)
+  }
+
+  @Test func pendingPullRequestChecksUseExternalWaitingState() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    let session = sampleSession(
+      hasCompletedAtLeastOnce: true,
+      lastKnownBusy: false,
+      lastBusyTransitionAt: now.addingTimeInterval(-(BoardSessionStatus.idleRebucketDelay + 0.2))
+    )
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false,
+      waitingForPullRequestChecks: true,
+      now: now
+    )
+    #expect(status == .waitingForChecks)
+  }
+
+  @Test func busyAndAwaitingInputWinOverPendingPullRequestChecks() {
+    let session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
+    #expect(
+      BoardSessionStatus.classify(
+        session: session,
+        tabExists: true,
+        awaitingInput: false,
+        busy: true,
+        waitingForPullRequestChecks: true
+      ) == .inProgress
+    )
+    #expect(
+      BoardSessionStatus.classify(
+        session: session,
+        tabExists: true,
+        awaitingInput: true,
+        busy: true,
+        waitingForPullRequestChecks: true
+      ) == .awaitingInput
+    )
+  }
+
   @Test func awaitingInputWinsOverBusy() {
     let session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
     let status = BoardSessionStatus.classify(
@@ -174,6 +232,18 @@ struct BoardSessionStatusTests {
         busy: true
       ) == .parked
     )
+  }
+
+  @Test func missingTabWinsOverPendingPullRequestChecks() {
+    let session = sampleSession(lastKnownBusy: false)
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: false,
+      awaitingInput: false,
+      busy: false,
+      waitingForPullRequestChecks: true
+    )
+    #expect(status == .detached)
   }
 
   @Test func remoteSessionWithMissingTabIsDisconnected() {

@@ -770,7 +770,7 @@ struct BoardFeature {
 
       case .sessionStatusObserved(let id, let status):
         switch status {
-        case .fresh, .inProgress, .waitingOnMe, .awaitingInput:
+        case .fresh, .inProgress, .waitingForChecks, .waitingOnMe, .awaitingInput:
           state.trayCards.removeAll { card in
             if case .sessionCreating(let sessionID, _) = card.kind {
               return sessionID == id

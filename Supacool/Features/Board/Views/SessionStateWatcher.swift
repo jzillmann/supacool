@@ -76,7 +76,7 @@ struct SessionStateWatcher: View {
     guard oldValue != newValue else { return false }
     guard newValue == .detached || newValue == .interrupted else { return false }
     switch oldValue {
-    case .inProgress, .waitingOnMe, .awaitingInput, .fresh:
+    case .inProgress, .waitingForChecks, .waitingOnMe, .awaitingInput, .fresh:
       return true
     case .detached, .interrupted, .parked, .disconnected:
       return false

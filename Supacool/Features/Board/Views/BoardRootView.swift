@@ -598,12 +598,28 @@ struct BoardRootView: View {
       tabExists: tabExists,
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
-      deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID)
+      deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID),
+      waitingForPullRequestChecks: BoardPullRequestChecks.isWaiting(matchedPullRequest(for: session))
     )
     if !tabExists, store.reinitializingSessionIDs.contains(session.id) {
       return .inProgress
     }
     return status
+  }
+
+  private func matchedPullRequest(for session: AgentSession) -> GithubPullRequest? {
+    guard let repo = repositories[id: session.repositoryID] else { return nil }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    let workspacePath = session.currentWorkspacePath
+    guard workspacePath != rootPath else { return nil }
+    guard let worktree = repo.worktrees.first(where: { $0.id == workspacePath }) else {
+      return nil
+    }
+    guard let pullRequest = worktreeInfoByID[workspacePath]?.pullRequest else { return nil }
+    guard pullRequest.headRefName == nil || pullRequest.headRefName == worktree.name else {
+      return nil
+    }
+    return pullRequest
   }
 
   private func sessionTabExists(_ session: AgentSession, tabID: TerminalTabID? = nil) -> Bool {

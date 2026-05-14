@@ -3,6 +3,7 @@ import SwiftUI
 
 nonisolated enum BoardSessionStatus: Equatable, Sendable {
   case inProgress
+  case waitingForChecks
   case waitingOnMe
   case awaitingInput
   case detached
@@ -20,6 +21,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
   var label: String {
     switch self {
     case .inProgress: "Working"
+    case .waitingForChecks: "Checks Pending"
     case .waitingOnMe: "Waiting"
     case .awaitingInput: "Wants Input"
     case .detached: "Idle"
@@ -33,6 +35,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
   var color: Color {
     switch self {
     case .inProgress: .green
+    case .waitingForChecks: .blue
     case .waitingOnMe: .orange
     case .awaitingInput: .orange
     case .detached: .secondary
@@ -46,6 +49,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
   var systemImage: String {
     switch self {
     case .inProgress: "circle.fill"
+    case .waitingForChecks: "hourglass.circle.fill"
     case .waitingOnMe: "exclamationmark.circle.fill"
     case .awaitingInput: "hand.raised.fill"
     case .detached: "moon.zzz.fill"
@@ -62,6 +66,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
     awaitingInput: Bool,
     busy: Bool,
     deferredWork: Bool = false,
+    waitingForPullRequestChecks: Bool = false,
     now: Date = Date()
   ) -> Self {
     if session.parked {
@@ -95,7 +100,7 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
         return .fresh
       }
     }
-    return .waitingOnMe
+    return waitingForPullRequestChecks ? .waitingForChecks : .waitingOnMe
   }
 
   private static func shouldKeepInProgressWhileIdle(
