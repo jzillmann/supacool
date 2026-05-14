@@ -688,9 +688,9 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
-  @Test func finalStopClearsDeferredWorkLease() async {
-    await withMainSerialExecutor {
-      await withDependencies {
+  @Test func finalStopClearsDeferredWorkLease() {
+    withMainSerialExecutor {
+      withDependencies {
         $0.date.now = Date(timeIntervalSince1970: 1234)
       } operation: {
         let clock = TestClock()

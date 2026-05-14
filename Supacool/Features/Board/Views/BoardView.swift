@@ -456,6 +456,7 @@ struct BoardView: View {
                     repositoryName: repositories[id: session.repositoryID]?.name,
                     pullRequest: matchedPullRequest(for: session),
                     status: sessionStatus,
+                    serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
                     debugLinkTitle: debugLink?.title,
                     onDebugLinkTap: onDebugLinkTap,
                     dimmed: dimmed,
@@ -563,7 +564,19 @@ struct BoardView: View {
                         )
                       )
                     },
-                    onAppear: { store.send(.cardAppeared(id: session.id)) }
+                    onServerLifecycleRefresh: {
+                      store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+                    },
+                    onServerLifecycleStart: {
+                      store.send(.serverLifecycleStartTapped(sessionID: session.id))
+                    },
+                    onServerLifecycleStop: {
+                      store.send(.serverLifecycleStopTapped(sessionID: session.id))
+                    },
+                    onAppear: {
+                      store.send(.cardAppeared(id: session.id))
+                      store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+                    }
                   )
                   .frame(width: boardCardWidth)
                   .id(session.id)
@@ -744,6 +757,7 @@ private struct SessionCardContainer: View {
   let repositoryName: String?
   let pullRequest: GithubPullRequest?
   let status: BoardSessionStatus
+  let serverLifecycle: BoardFeature.ServerLifecycleViewState?
   let debugLinkTitle: String?
   let onDebugLinkTap: (() -> Void)?
   let dimmed: Bool
@@ -768,6 +782,9 @@ private struct SessionCardContainer: View {
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
   let onDebug: () -> Void
+  let onServerLifecycleRefresh: () -> Void
+  let onServerLifecycleStart: () -> Void
+  let onServerLifecycleStop: () -> Void
   let onAppear: (() -> Void)?
 
   @State private var isHovered: Bool = false
@@ -778,6 +795,10 @@ private struct SessionCardContainer: View {
       repositoryName: repositoryName,
       pullRequest: pullRequest,
       status: status,
+      serverLifecycle: serverLifecycle,
+      onServerLifecycleRefresh: onServerLifecycleRefresh,
+      onServerLifecycleStart: onServerLifecycleStart,
+      onServerLifecycleStop: onServerLifecycleStop,
       isActiveParked: isActiveParked,
       debugLinkTitle: debugLinkTitle,
       onDebugLinkTap: onDebugLinkTap,

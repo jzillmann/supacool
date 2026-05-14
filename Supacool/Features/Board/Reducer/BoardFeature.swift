@@ -99,6 +99,11 @@ struct BoardFeature {
     /// card is trashed and the worktree cleanup is dispatched.
     var dirtySessionRemovalConfirmation: DirtySessionRemovalConfirmationState?
 
+    /// Per-workspace status for configured server lifecycle scripts.
+    /// Keyed by `AgentSession.currentWorkspacePath`, so multiple cards
+    /// sharing a workspace show one coherent Start/Stop state.
+    var serverLifecycleByWorkspace: [String: ServerLifecycleViewState] = [:]
+
     /// Presented when the New Terminal create flow detected that the
     /// requested branch is already checked out at a *different* path —
     /// `git worktree add` would otherwise fail. The alert lets the user
@@ -208,6 +213,54 @@ struct BoardFeature {
     }
   }
 
+  nonisolated enum ServerLifecycleStatus: Equatable, Sendable {
+    case checking
+    case running
+    case stopped
+    case unknown
+    case starting
+    case stopping
+    case failed(String)
+
+    var label: String {
+      switch self {
+      case .checking: "Checking"
+      case .running: "Running"
+      case .stopped: "Stopped"
+      case .unknown: "Unknown"
+      case .starting: "Starting"
+      case .stopping: "Stopping"
+      case .failed: "Error"
+      }
+    }
+
+    var systemImage: String {
+      switch self {
+      case .checking, .starting, .stopping: "clock"
+      case .running: "play.circle.fill"
+      case .stopped: "stop.circle"
+      case .unknown: "questionmark.circle"
+      case .failed: "exclamationmark.triangle"
+      }
+    }
+
+    var isBusy: Bool {
+      switch self {
+      case .checking, .starting, .stopping: true
+      case .running, .stopped, .unknown, .failed: false
+      }
+    }
+  }
+
+  nonisolated struct ServerLifecycleViewState: Equatable, Identifiable, Sendable {
+    let workspacePath: String
+    var name: String
+    var status: ServerLifecycleStatus
+    var detail: String?
+
+    var id: String { workspacePath }
+  }
+
   /// One-shot summary shown after a prune attempt. Identifiable so we
   /// can drive SwiftUI's `.alert(item:)` off it.
   nonisolated struct PruneAlertState: Equatable, Identifiable, Sendable {
@@ -310,6 +363,15 @@ struct BoardFeature {
     )
     case confirmDirtySessionRemoval(id: AgentSession.ID)
     case dismissDirtySessionRemovalConfirmation
+    case serverLifecycleStatusRequested(sessionID: AgentSession.ID)
+    case serverLifecycleStartTapped(sessionID: AgentSession.ID)
+    case serverLifecycleStopTapped(sessionID: AgentSession.ID)
+    case _serverLifecycleResponse(
+      workspacePath: String,
+      name: String,
+      status: ServerLifecycleStatus,
+      detail: String?
+    )
     /// Internal removal path after dirty preflight has passed or the user
     /// confirmed the dirty-worktree warning.
     case removeSession(id: AgentSession.ID)
@@ -617,6 +679,7 @@ struct BoardFeature {
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(PiSettingsClient.self) var piSettingsClient
   @Dependency(GitClientDependency.self) var gitClient
+  @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
 
@@ -744,6 +807,33 @@ struct BoardFeature {
 
       case .dismissDirtySessionRemovalConfirmation:
         state.dirtySessionRemovalConfirmation = nil
+        return .none
+
+      case .serverLifecycleStatusRequested(let sessionID):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
+          return .none
+        }
+        return requestServerLifecycleStatus(&state, session: session)
+
+      case .serverLifecycleStartTapped(let sessionID):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
+          return .none
+        }
+        return runServerLifecycleCommand(&state, session: session, kind: .start)
+
+      case .serverLifecycleStopTapped(let sessionID):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
+          return .none
+        }
+        return runServerLifecycleCommand(&state, session: session, kind: .stop)
+
+      case ._serverLifecycleResponse(let workspacePath, let name, let status, let detail):
+        state.serverLifecycleByWorkspace[workspacePath] = ServerLifecycleViewState(
+          workspacePath: workspacePath,
+          name: name,
+          status: status,
+          detail: detail
+        )
         return .none
 
       case .removeSession(let id):
@@ -928,8 +1018,14 @@ struct BoardFeature {
           inWorkspace: session.currentWorkspacePath,
           sessions: state.sessions
         )
-        let releasePath = worktree.workingDirectory.path(percentEncoded: false)
-        return .run { _ in
+        let releasePath = session.currentWorkspacePath
+        let lifecycleEffect = prepareAutoStopLifecycleEffect(
+          &state,
+          session: session,
+          reason: .park,
+          sessions: state.sessions
+        )
+        let terminalEffect: Effect<Action> = .run { _ in
           await terminalClient.send(
             .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
           )
@@ -937,6 +1033,7 @@ struct BoardFeature {
             await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
           }
         }
+        return .merge(lifecycleEffect, terminalEffect)
 
       case .parkActiveSession(let id):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
@@ -963,12 +1060,19 @@ struct BoardFeature {
           return .none
         }
         let releasePath = session.currentWorkspacePath
-        return .run { _ in
+        let lifecycleEffect = prepareAutoStopLifecycleEffect(
+          &state,
+          session: session,
+          reason: .park,
+          sessions: state.sessions
+        )
+        let releaseEffect: Effect<Action> = .run { _ in
           await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
         }
+        return .merge(lifecycleEffect, releaseEffect)
 
       case .unparkSession(let id):
-        guard state.sessions.contains(where: { $0.id == id }) else {
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
         let now = date.now
@@ -981,7 +1085,7 @@ struct BoardFeature {
           event: .sessionLifecycle(kind: "unparked", context: nil, at: now),
           tabID: TerminalTabID(rawValue: id)
         )
-        return .none
+        return prepareAutoStartLifecycleEffect(&state, session: session)
 
       case .toggleRepository(let repositoryID):
         state.$filters.withLock { filters in
@@ -2235,6 +2339,261 @@ struct BoardFeature {
     )
   }
 
+  nonisolated fileprivate enum ServerLifecycleAutoStopReason {
+    case sessionRemove
+    case park
+  }
+
+  nonisolated fileprivate enum ServerLifecycleScriptEvent: String, Sendable {
+    case status = "status"
+    case manualStart = "manual_start"
+    case manualStop = "manual_stop"
+    case sessionRemoved = "session_removed"
+    case parked = "parked"
+    case unparked = "unparked"
+  }
+
+  fileprivate struct ServerLifecycleConfiguration: Equatable, Sendable {
+    let workspacePath: String
+    let name: String
+    let settings: ServerLifecycleSettings
+    let worktree: Worktree
+  }
+
+  fileprivate func serverLifecycleConfiguration(for session: AgentSession) -> ServerLifecycleConfiguration? {
+    guard !session.isRemote else { return nil }
+    let repositoryRootURL = URL(fileURLWithPath: session.repositoryID).standardizedFileURL
+    @Shared(.repositorySettings(repositoryRootURL)) var repositorySettings: RepositorySettings
+    let settings = repositorySettings.serverLifecycle
+    guard settings.isConfigured else { return nil }
+    let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
+    let trimmedName = settings.name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let worktree = Worktree(
+      id: session.currentWorkspacePath,
+      name: workspaceURL.lastPathComponent,
+      detail: "",
+      workingDirectory: workspaceURL,
+      repositoryRootURL: repositoryRootURL
+    )
+    return ServerLifecycleConfiguration(
+      workspacePath: session.currentWorkspacePath,
+      name: trimmedName.isEmpty ? ServerLifecycleSettings.default.name : trimmedName,
+      settings: settings,
+      worktree: worktree
+    )
+  }
+
+  fileprivate func requestServerLifecycleStatus(
+    _ state: inout State,
+    session: AgentSession
+  ) -> Effect<Action> {
+    guard let configuration = serverLifecycleConfiguration(for: session) else {
+      state.serverLifecycleByWorkspace.removeValue(forKey: session.currentWorkspacePath)
+      return .none
+    }
+    let script = configuration.settings.statusScript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !script.isEmpty else {
+      state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+        workspacePath: configuration.workspacePath,
+        name: configuration.name,
+        status: .unknown,
+        detail: "No status script configured"
+      )
+      return .none
+    }
+    state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+      workspacePath: configuration.workspacePath,
+      name: configuration.name,
+      status: .checking,
+      detail: nil
+    )
+    return serverLifecycleScriptEffect(
+      configuration: configuration,
+      kind: .status,
+      script: script,
+      successFallbackStatus: nil,
+      event: .status,
+      session: session
+    )
+  }
+
+  fileprivate func runServerLifecycleCommand(
+    _ state: inout State,
+    session: AgentSession,
+    kind: ServerLifecycleScriptKind
+  ) -> Effect<Action> {
+    guard let configuration = serverLifecycleConfiguration(for: session) else { return .none }
+    let script: String
+    let busyStatus: ServerLifecycleStatus
+    let successFallbackStatus: ServerLifecycleStatus
+    switch kind {
+    case .start:
+      script = configuration.settings.startScript.trimmingCharacters(in: .whitespacesAndNewlines)
+      busyStatus = .starting
+      successFallbackStatus = .running
+    case .stop:
+      script = configuration.settings.stopScript.trimmingCharacters(in: .whitespacesAndNewlines)
+      busyStatus = .stopping
+      successFallbackStatus = .stopped
+    case .status:
+      return requestServerLifecycleStatus(&state, session: session)
+    }
+    guard !script.isEmpty else {
+      state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+        workspacePath: configuration.workspacePath,
+        name: configuration.name,
+        status: .failed("No \(kind.rawValue) script configured"),
+        detail: nil
+      )
+      return .none
+    }
+    state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+      workspacePath: configuration.workspacePath,
+      name: configuration.name,
+      status: busyStatus,
+      detail: nil
+    )
+    return serverLifecycleScriptEffect(
+      configuration: configuration,
+      kind: kind,
+      script: script,
+      successFallbackStatus: successFallbackStatus,
+      event: kind == .start ? .manualStart : .manualStop,
+      session: session
+    )
+  }
+
+  fileprivate func prepareAutoStopLifecycleEffect(
+    _ state: inout State,
+    session: AgentSession,
+    reason: ServerLifecycleAutoStopReason,
+    sessions: [AgentSession]
+  ) -> Effect<Action> {
+    guard let configuration = serverLifecycleConfiguration(for: session) else { return .none }
+    switch reason {
+    case .sessionRemove:
+      guard configuration.settings.autoStopOnSessionRemove else { return .none }
+    case .park:
+      guard configuration.settings.autoStopOnPark else { return .none }
+    }
+    guard !Self.unparkedSessionsUsingWorkspace(
+      configuration.workspacePath,
+      excluding: session.id,
+      sessions: sessions
+    ) else {
+      return .none
+    }
+    let script = configuration.settings.stopScript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !script.isEmpty else { return .none }
+    state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+      workspacePath: configuration.workspacePath,
+      name: configuration.name,
+      status: .stopping,
+      detail: nil
+    )
+    return serverLifecycleScriptEffect(
+      configuration: configuration,
+      kind: .stop,
+      script: script,
+      successFallbackStatus: .stopped,
+      event: reason == .sessionRemove ? .sessionRemoved : .parked,
+      session: session
+    )
+  }
+
+  fileprivate func prepareAutoStartLifecycleEffect(
+    _ state: inout State,
+    session: AgentSession
+  ) -> Effect<Action> {
+    guard let configuration = serverLifecycleConfiguration(for: session),
+      configuration.settings.autoStartOnUnpark
+    else {
+      return .none
+    }
+    let script = configuration.settings.startScript.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !script.isEmpty else { return .none }
+    state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
+      workspacePath: configuration.workspacePath,
+      name: configuration.name,
+      status: .starting,
+      detail: nil
+    )
+    return serverLifecycleScriptEffect(
+      configuration: configuration,
+      kind: .start,
+      script: script,
+      successFallbackStatus: .running,
+      event: .unparked,
+      session: session
+    )
+  }
+
+  fileprivate func serverLifecycleScriptEffect(
+    configuration: ServerLifecycleConfiguration,
+    kind: ServerLifecycleScriptKind,
+    script: String,
+    successFallbackStatus: ServerLifecycleStatus?,
+    event: ServerLifecycleScriptEvent,
+    session: AgentSession
+  ) -> Effect<Action> {
+    let context = ServerLifecycleScriptContext(
+      event: event.rawValue,
+      sessionID: session.id.uuidString.lowercased(),
+      sessionName: session.displayName
+    )
+    return .run { send in
+      do {
+        let result = try await serverLifecycleClient.run(
+          configuration.worktree,
+          kind,
+          script,
+          context
+        )
+        let status: ServerLifecycleStatus
+        switch kind {
+        case .status:
+          status = result.exitCode == 0 ? .running : .stopped
+        case .start, .stop:
+          guard result.exitCode == 0 else {
+            await send(
+              ._serverLifecycleResponse(
+                workspacePath: configuration.workspacePath,
+                name: configuration.name,
+                status: .failed(
+                  result.firstOutputLine ?? "\(kind.rawValue.capitalized) script failed"
+                ),
+                detail: result.firstOutputLine
+              )
+            )
+            return
+          }
+          status = successFallbackStatus ?? .unknown
+        }
+        await send(
+          ._serverLifecycleResponse(
+            workspacePath: configuration.workspacePath,
+            name: configuration.name,
+            status: status,
+            detail: result.firstOutputLine
+          )
+        )
+      } catch {
+        await send(
+          ._serverLifecycleResponse(
+            workspacePath: configuration.workspacePath,
+            name: configuration.name,
+            status: .failed(error.localizedDescription),
+            detail: nil
+          )
+        )
+      }
+    }
+    .cancellable(
+      id: ServerLifecycleCancelID(workspacePath: configuration.workspacePath),
+      cancelInFlight: true
+    )
+  }
+
   fileprivate func removeSessionFromState(
     _ state: inout State,
     id: AgentSession.ID
@@ -2278,14 +2637,37 @@ struct BoardFeature {
       }
       return false
     }
-    return .send(
-      .delegate(
-        .sessionRemoved(
-          sessionID: session.id,
-          repositoryID: session.repositoryID,
-          worktreeID: session.worktreeID,
-          deleteBackingWorktree: cleanupPlan.deleteBackingWorktree,
-          additionalWorktreeIDsToDelete: cleanupPlan.additionalWorktreeIDsToDelete
+    let lifecycleEffect = prepareAutoStopLifecycleEffect(
+      &state,
+      session: session,
+      reason: .sessionRemove,
+      sessions: state.sessions + [session]
+    )
+    let shouldReleaseOwnedProcesses =
+      !session.isRemote
+      && !Self.unparkedSessionsUsingWorkspace(
+        session.currentWorkspacePath,
+        excluding: session.id,
+        sessions: state.sessions + [session]
+      )
+    let releasePath = session.currentWorkspacePath
+    let releaseEffect: Effect<Action> = shouldReleaseOwnedProcesses
+      ? .run { _ in
+        await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
+      }
+      : .none
+    return .merge(
+      lifecycleEffect,
+      releaseEffect,
+      .send(
+        .delegate(
+          .sessionRemoved(
+            sessionID: session.id,
+            repositoryID: session.repositoryID,
+            worktreeID: session.worktreeID,
+            deleteBackingWorktree: cleanupPlan.deleteBackingWorktree,
+            additionalWorktreeIDsToDelete: cleanupPlan.additionalWorktreeIDsToDelete
+          )
         )
       )
     )
@@ -2303,6 +2685,21 @@ struct BoardFeature {
     sessions.contains { other in
       other.id != excludedID
         && (other.worktreeID == path || other.currentWorkspacePath == path)
+    }
+  }
+
+  /// True when another non-parked session still treats `path` as its
+  /// current workspace. Server lifecycle stop/release hooks use this
+  /// narrower check so parked cards do not keep dev servers alive.
+  nonisolated fileprivate static func unparkedSessionsUsingWorkspace(
+    _ path: Worktree.ID,
+    excluding excludedID: AgentSession.ID,
+    sessions: [AgentSession]
+  ) -> Bool {
+    sessions.contains { other in
+      other.id != excludedID
+        && !other.parked
+        && other.currentWorkspacePath == path
     }
   }
 
@@ -2539,6 +2936,10 @@ struct BoardFeature {
 
 private nonisolated struct AutoDisplayNameCancelID: Hashable, Sendable {
   let sessionID: AgentSession.ID
+}
+
+private nonisolated struct ServerLifecycleCancelID: Hashable, Sendable {
+  let workspacePath: String
 }
 
 // MARK: - Worktree prune helpers

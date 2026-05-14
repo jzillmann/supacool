@@ -45,6 +45,10 @@ struct FullScreenTerminalView: View {
   /// header title (double-click) and its context menu.
   let onRename: () -> Void
   let onTogglePriority: () -> Void
+  let serverLifecycle: BoardFeature.ServerLifecycleViewState?
+  let onServerLifecycleRefresh: () -> Void
+  let onServerLifecycleStart: () -> Void
+  let onServerLifecycleStop: () -> Void
 
   /// Called when the user confirms the "convert to worktree" popover on
   /// the repo-root pill. The board reducer creates the worktree on disk
@@ -213,12 +217,79 @@ struct FullScreenTerminalView: View {
       debugButton
       splitButton
       Spacer()
+      if let serverLifecycle {
+        serverLifecycleControl(serverLifecycle)
+      }
       agentChip
       parkControl
       removeButton
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
+  }
+
+  private func serverLifecycleControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
+    Button {
+      switch lifecycle.status {
+      case .running:
+        onServerLifecycleStop()
+      case .stopped:
+        onServerLifecycleStart()
+      case .unknown, .failed:
+        onServerLifecycleRefresh()
+      case .checking, .starting, .stopping:
+        break
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: lifecycle.status.systemImage)
+          .font(.caption)
+        Text(lifecycle.name)
+          .font(.caption.weight(.medium))
+          .lineLimit(1)
+        Text(lifecycle.status.label)
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
+      }
+      .foregroundStyle(serverLifecycleColor(lifecycle.status))
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .background(serverLifecycleColor(lifecycle.status).opacity(0.12))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(lifecycle.status.isBusy)
+    .help(serverLifecycleHelp(lifecycle))
+    .fixedSize()
+  }
+
+  private func serverLifecycleHelp(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> String {
+    var parts = ["\(lifecycle.name): \(lifecycle.status.label)"]
+    if let detail = lifecycle.detail, !detail.isEmpty {
+      parts.append(detail)
+    }
+    switch lifecycle.status {
+    case .running:
+      parts.append("Click to stop.")
+    case .stopped:
+      parts.append("Click to start.")
+    case .unknown, .failed:
+      parts.append("Click to refresh status.")
+    case .checking, .starting, .stopping:
+      break
+    }
+    return parts.joined(separator: "\n")
+  }
+
+  private func serverLifecycleColor(_ status: BoardFeature.ServerLifecycleStatus) -> Color {
+    switch status {
+    case .running: .green
+    case .stopped: .secondary
+    case .unknown, .checking: .yellow
+    case .starting: .blue
+    case .stopping: .orange
+    case .failed: .red
+    }
   }
 
   private var agentChip: some View {

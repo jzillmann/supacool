@@ -70,15 +70,18 @@ nonisolated struct HorizontalSwipeDetector: Equatable, Sendable {
 /// into browser-style navigation. A local monitor is intentional: live Ghostty terminal panes consume
 /// scroll events before SwiftUI gestures can see them.
 struct HorizontalSwipeNavigationBridge: NSViewRepresentable {
+  var isEnabled = true
   let onSwipe: (HorizontalNavigationSwipe) -> Bool
 
   func makeNSView(context: Context) -> HorizontalSwipeNavigationView {
     let view = HorizontalSwipeNavigationView()
+    view.isSwipeNavigationEnabled = isEnabled
     view.onSwipe = onSwipe
     return view
   }
 
   func updateNSView(_ nsView: HorizontalSwipeNavigationView, context: Context) {
+    nsView.isSwipeNavigationEnabled = isEnabled
     nsView.onSwipe = onSwipe
   }
 
@@ -89,6 +92,11 @@ struct HorizontalSwipeNavigationBridge: NSViewRepresentable {
 
 @MainActor
 final class HorizontalSwipeNavigationView: NSView {
+  var isSwipeNavigationEnabled = true {
+    didSet {
+      if !isSwipeNavigationEnabled { detector.reset() }
+    }
+  }
   var onSwipe: ((HorizontalNavigationSwipe) -> Bool)?
 
   private var monitor: Any?
@@ -119,6 +127,10 @@ final class HorizontalSwipeNavigationView: NSView {
 
   private func handle(_ event: NSEvent) -> NSEvent? {
     guard let window, event.window === window, window.isKeyWindow else { return event }
+    guard isSwipeNavigationEnabled else {
+      detector.reset()
+      return event
+    }
     guard event.modifierFlags.isDisjoint(with: [.command, .control, .option, .shift]) else {
       detector.reset()
       return event

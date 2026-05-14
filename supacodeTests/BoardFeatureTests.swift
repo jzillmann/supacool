@@ -341,6 +341,440 @@ struct BoardFeatureTests {
     #expect(store.state.sessions[0].lastKnownBusy)
   }
 
+  @Test(.dependencies) func serverLifecycleStatusRequestedRunsStatusScript() async {
+    let repositoryID = "/tmp/repo-lifecycle-status-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API Server"
+    )
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      statusScript: "status"
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let calls = LockIsolated<[LifecycleCall]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.serverLifecycleClient.run = { worktree, kind, script, context in
+        let actualWorktreeID = await MainActor.run { worktree.id }
+        let actualWorkingDirectory = await MainActor.run {
+          worktree.workingDirectory.path(percentEncoded: false)
+        }
+        #expect(actualWorktreeID == worktreeID)
+        #expect(actualWorkingDirectory == worktreeID)
+        calls.withValue {
+          $0.append(LifecycleCall(kind: kind, script: script, context: context))
+        }
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "listening", stderr: "")
+      }
+    }
+
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .checking,
+        detail: nil
+      )
+    }
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "listening"
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "listening"
+      )
+    }
+
+    #expect(
+      calls.value == [
+        LifecycleCall(
+          kind: .status,
+          script: "status",
+          context: Self.lifecycleContext(for: session, event: "status")
+        ),
+      ]
+    )
+  }
+
+  @Test(.dependencies) func serverLifecycleStartTappedRunsStartScriptWithManualEvent() async {
+    let repositoryID = "/tmp/repo-lifecycle-start-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "Web"
+    )
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      startScript: "start"
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let calls = LockIsolated<[LifecycleCall]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.serverLifecycleClient.run = { _, kind, script, context in
+        calls.withValue {
+          $0.append(LifecycleCall(kind: kind, script: script, context: context))
+        }
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "started", stderr: "")
+      }
+    }
+
+    await store.send(.serverLifecycleStartTapped(sessionID: session.id)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .starting,
+        detail: nil
+      )
+    }
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "started"
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "started"
+      )
+    }
+
+    #expect(
+      calls.value == [
+        LifecycleCall(
+          kind: .start,
+          script: "start",
+          context: Self.lifecycleContext(for: session, event: "manual_start")
+        ),
+      ]
+    )
+  }
+
+  @Test(.dependencies) func removeSessionAutoStopsServerLifecycleWhenLastUnparkedSession() async {
+    let repositoryID = "/tmp/repo-lifecycle-remove-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API"
+    )
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      stopScript: "stop"
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.$trashedSessions.withLock { $0 = [] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let clock = TestClock()
+    let calls = LockIsolated<[LifecycleCall]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+      $0.serverLifecycleClient.run = { _, kind, script, context in
+        calls.withValue {
+          $0.append(LifecycleCall(kind: kind, script: script, context: context))
+        }
+        try await clock.sleep(for: .seconds(1))
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "stopped", stderr: "")
+      }
+    }
+
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
+    await store.send(.removeSession(id: session.id)) {
+      $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopping,
+        detail: nil
+      )
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: repositoryID,
+          worktreeID: worktreeID,
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+    await clock.advance(by: .seconds(1))
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopped"
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopped"
+      )
+    }
+
+    #expect(
+      calls.value == [
+        LifecycleCall(
+          kind: .stop,
+          script: "stop",
+          context: Self.lifecycleContext(for: session, event: "session_removed")
+        ),
+      ]
+    )
+  }
+
+  @Test(.dependencies) func removeSessionDoesNotAutoStopServerLifecycleWhenSiblingStillUnparked() async {
+    let repositoryID = "/tmp/repo-lifecycle-shared-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let removed = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "One"
+    )
+    let sibling = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000000102")!,
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "Two"
+    )
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      stopScript: "stop"
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [removed, sibling] }
+    state.$trashedSessions.withLock { $0 = [] }
+    let calls = LockIsolated<Int>(0)
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+      $0.serverLifecycleClient.run = { _, _, _, _ in
+        calls.withValue { $0 += 1 }
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "", stderr: "")
+      }
+    }
+
+    let expectedEntry = TrashedSession(
+      session: removed,
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
+    await store.send(.removeSession(id: removed.id)) {
+      $0.$sessions.withLock { $0 = [sibling] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: removed.id,
+          repositoryID: repositoryID,
+          worktreeID: worktreeID,
+          deleteBackingWorktree: false,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+    await store.finish()
+
+    #expect(calls.value == 0)
+  }
+
+  @Test(.dependencies) func parkSessionAutoStopsServerLifecycle() async throws {
+    let repositoryID = "/tmp/repo-lifecycle-park-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "Worker"
+    )
+    let repo = Repository(
+      id: repositoryID,
+      rootURL: URL(fileURLWithPath: repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      stopScript: "stop"
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let now = Date(timeIntervalSince1970: 1_750_000_123)
+    let clock = TestClock()
+    let calls = LockIsolated<[LifecycleCall]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.serverLifecycleClient.run = { _, kind, script, context in
+        calls.withValue {
+          $0.append(LifecycleCall(kind: kind, script: script, context: context))
+        }
+        try await clock.sleep(for: .seconds(1))
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "stopped", stderr: "")
+      }
+    }
+
+    await store.send(.parkSession(id: session.id, repositories: [repo])) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = true
+        sessions[0].lastKnownBusy = false
+        sessions[0].lastBusyTransitionAt = nil
+        sessions[0].lastActivityAt = now
+      }
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopping,
+        detail: nil
+      )
+    }
+    await clock.advance(by: .seconds(1))
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopped"
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopped"
+      )
+    }
+
+    #expect(
+      calls.value == [
+        LifecycleCall(
+          kind: .stop,
+          script: "stop",
+          context: Self.lifecycleContext(for: session, event: "parked")
+        ),
+      ]
+    )
+  }
+
+  @Test(.dependencies) func unparkSessionAutoStartsServerLifecycle() async {
+    let repositoryID = "/tmp/repo-lifecycle-unpark-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    var session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "Worker"
+    )
+    session.parked = true
+    Self.configureServerLifecycle(
+      repositoryID: repositoryID,
+      startScript: "start",
+      autoStartOnUnpark: true
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let now = Date(timeIntervalSince1970: 1_750_000_456)
+    let clock = TestClock()
+    let calls = LockIsolated<[LifecycleCall]>([])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.serverLifecycleClient.run = { _, kind, script, context in
+        calls.withValue {
+          $0.append(LifecycleCall(kind: kind, script: script, context: context))
+        }
+        try await clock.sleep(for: .seconds(1))
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "started", stderr: "")
+      }
+    }
+
+    await store.send(.unparkSession(id: session.id)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = false
+        sessions[0].lastActivityAt = now
+      }
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .starting,
+        detail: nil
+      )
+    }
+    await clock.advance(by: .seconds(1))
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "started"
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "started"
+      )
+    }
+
+    #expect(
+      calls.value == [
+        LifecycleCall(
+          kind: .start,
+          script: "start",
+          context: Self.lifecycleContext(for: session, event: "unparked")
+        ),
+      ]
+    )
+  }
+
   @Test(.dependencies) func removeSessionDropsItAndClearsFocusIfFocused() async {
     let session = Self.sampleSession()
     var state = BoardFeature.State()
@@ -2183,10 +2617,52 @@ struct BoardFeatureTests {
 
   // MARK: - Helpers
 
+  private struct LifecycleCall: Equatable, Sendable {
+    let kind: ServerLifecycleScriptKind
+    let script: String
+    let context: ServerLifecycleScriptContext
+  }
+
   private static func sessionCreatingCard(for session: AgentSession) -> TrayCard {
     TrayCard(
       id: session.id,
       kind: .sessionCreating(sessionID: session.id, displayName: session.displayName)
+    )
+  }
+
+  private static func configureServerLifecycle(
+    repositoryID: String,
+    name: String = "Dev server",
+    statusScript: String = "",
+    startScript: String = "",
+    stopScript: String = "",
+    autoStopOnSessionRemove: Bool = true,
+    autoStopOnPark: Bool = true,
+    autoStartOnUnpark: Bool = false
+  ) {
+    @Shared(.repositorySettings(URL(fileURLWithPath: repositoryID))) var settings: RepositorySettings
+    $settings.withLock {
+      $0 = .default
+      $0.serverLifecycle = ServerLifecycleSettings(
+        name: name,
+        statusScript: statusScript,
+        startScript: startScript,
+        stopScript: stopScript,
+        autoStopOnSessionRemove: autoStopOnSessionRemove,
+        autoStopOnPark: autoStopOnPark,
+        autoStartOnUnpark: autoStartOnUnpark
+      )
+    }
+  }
+
+  private static func lifecycleContext(
+    for session: AgentSession,
+    event: String
+  ) -> ServerLifecycleScriptContext {
+    ServerLifecycleScriptContext(
+      event: event,
+      sessionID: session.id.uuidString.lowercased(),
+      sessionName: session.displayName
     )
   }
 

@@ -178,6 +178,26 @@ struct RepositorySettingsView: View {
           name: "SUPACOOL_ROOT_PATH",
           description: "Path to the repository root."
         )
+        ScriptEnvironmentRow(
+          name: "SUPACOOL_REPOSITORY_PATH",
+          description: "Alias for the repository root path."
+        )
+        ScriptEnvironmentRow(
+          name: "SUPACOOL_SESSION_ID",
+          description: "Session UUID for lifecycle scripts."
+        )
+        ScriptEnvironmentRow(
+          name: "SUPACOOL_SESSION_NAME",
+          description: "Session display name for lifecycle scripts."
+        )
+        ScriptEnvironmentRow(
+          name: "SUPACOOL_EVENT",
+          description: "Lifecycle trigger, e.g. manual_start, parked, session_removed."
+        )
+        ScriptEnvironmentRow(
+          name: "SUPACOOL_LIFECYCLE_KIND",
+          description: "Lifecycle script kind: status, start, or stop."
+        )
       }
       ScriptSection(
         title: "Setup Script",
@@ -190,6 +210,37 @@ struct RepositorySettingsView: View {
         subtitle: "Launched on demand from the toolbar.",
         text: settings.runScript,
         placeholder: "npm run dev"
+      )
+      Section {
+        TextField("Name", text: settings.serverLifecycle.name)
+        Toggle("Auto-stop on session remove", isOn: settings.serverLifecycle.autoStopOnSessionRemove)
+          .help("Run the stop script when the last active session for a workspace is removed.")
+        Toggle("Auto-stop on park", isOn: settings.serverLifecycle.autoStopOnPark)
+          .help("Run the stop script when every session for a workspace is parked.")
+        Toggle("Auto-start on unpark", isOn: settings.serverLifecycle.autoStartOnUnpark)
+          .help("Run the start script when a parked session is unparked.")
+      } header: {
+        Text("Server Lifecycle")
+      } footer: {
+        Text("Status exit 0 means running; non-zero means stopped. The first output line is shown as detail.")
+      }
+      ScriptSection(
+        title: "Server Status Script",
+        subtitle: "Checks whether the workspace's server is running.",
+        text: settings.serverLifecycle.statusScript,
+        placeholder: "curl -fsS http://localhost:3000 >/dev/null"
+      )
+      ScriptSection(
+        title: "Server Start Script",
+        subtitle: "Starts the workspace's server. Should return after launch.",
+        text: settings.serverLifecycle.startScript,
+        placeholder: "nohup npm run dev >/tmp/supacool-dev.log 2>&1 &"
+      )
+      ScriptSection(
+        title: "Server Stop Script",
+        subtitle: "Stops the workspace's server without deleting files.",
+        text: settings.serverLifecycle.stopScript,
+        placeholder: "docker compose down"
       )
       ScriptSection(
         title: "Archive Script",

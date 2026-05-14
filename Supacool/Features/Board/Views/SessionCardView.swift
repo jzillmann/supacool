@@ -9,6 +9,10 @@ struct SessionCardView: View {
   let repositoryName: String?
   var pullRequest: GithubPullRequest? = nil
   let status: BoardSessionStatus
+  var serverLifecycle: BoardFeature.ServerLifecycleViewState? = nil
+  var onServerLifecycleRefresh: (() -> Void)? = nil
+  var onServerLifecycleStart: (() -> Void)? = nil
+  var onServerLifecycleStop: (() -> Void)? = nil
   /// True for "Park as Active": parked in the board, but its PTY/tab is still alive.
   var isActiveParked: Bool = false
   var debugLinkTitle: String? = nil
@@ -60,6 +64,9 @@ struct SessionCardView: View {
         infoButton
         if onAutoObserverToggle != nil {
           autoObserverButton
+        }
+        if let serverLifecycle {
+          serverLifecycleChip(serverLifecycle)
         }
         statusChip
       }
@@ -390,6 +397,67 @@ struct SessionCardView: View {
     .background(status.color.opacity(0.12))
     .clipShape(Capsule())
     .fixedSize()
+  }
+
+  private func serverLifecycleChip(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
+    Button {
+      switch lifecycle.status {
+      case .running:
+        onServerLifecycleStop?()
+      case .stopped:
+        onServerLifecycleStart?()
+      case .unknown, .failed:
+        onServerLifecycleRefresh?()
+      case .checking, .starting, .stopping:
+        break
+      }
+    } label: {
+      HStack(spacing: 4) {
+        Image(systemName: lifecycle.status.systemImage)
+          .font(.caption2)
+        Text(lifecycle.status.label)
+          .font(.caption2.weight(.semibold))
+          .lineLimit(1)
+      }
+      .foregroundStyle(serverLifecycleColor(lifecycle.status))
+      .padding(.horizontal, 6)
+      .padding(.vertical, 2)
+      .background(serverLifecycleColor(lifecycle.status).opacity(0.12))
+      .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .disabled(lifecycle.status.isBusy)
+    .help(serverLifecycleHelp(lifecycle))
+    .fixedSize()
+  }
+
+  private func serverLifecycleHelp(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> String {
+    var parts = ["\(lifecycle.name): \(lifecycle.status.label)"]
+    if let detail = lifecycle.detail, !detail.isEmpty {
+      parts.append(detail)
+    }
+    switch lifecycle.status {
+    case .running:
+      parts.append("Click to stop.")
+    case .stopped:
+      parts.append("Click to start.")
+    case .unknown, .failed:
+      parts.append("Click to refresh status.")
+    case .checking, .starting, .stopping:
+      break
+    }
+    return parts.joined(separator: "\n")
+  }
+
+  private func serverLifecycleColor(_ status: BoardFeature.ServerLifecycleStatus) -> Color {
+    switch status {
+    case .running: .green
+    case .stopped: .secondary
+    case .unknown, .checking: .yellow
+    case .starting: .blue
+    case .stopping: .orange
+    case .failed: .red
+    }
   }
 
   /// Inline chips for parsed work references. Keeps the obvious Linear

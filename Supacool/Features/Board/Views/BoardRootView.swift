@@ -82,7 +82,14 @@ struct BoardRootView: View {
     .toolbar { rootToolbar }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
-    .background(HorizontalSwipeNavigationBridge(onSwipe: handleNavigationSwipe))
+    // Dashboard rows are horizontal carousels, so only reserve two-finger
+    // horizontal swipes for terminal → board navigation.
+    .background(
+      HorizontalSwipeNavigationBridge(
+        isEnabled: store.focusedSessionID != nil,
+        onSwipe: handleNavigationSwipe
+      )
+    )
     // Floating tray (stale hooks, draft cards, etc.) hovers over whichever
     // mode is active — board grid or full-screen terminal.
     .overlay(alignment: .bottomTrailing) {
@@ -283,6 +290,16 @@ struct BoardRootView: View {
           : nil,
         onRename: { beginRename(session) },
         onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+        serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
+        onServerLifecycleRefresh: {
+          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        },
+        onServerLifecycleStart: {
+          store.send(.serverLifecycleStartTapped(sessionID: session.id))
+        },
+        onServerLifecycleStop: {
+          store.send(.serverLifecycleStopTapped(sessionID: session.id))
+        },
         onConvertToWorktree: { branchName in
           store.send(
             .convertSessionToWorktree(
@@ -311,6 +328,9 @@ struct BoardRootView: View {
       )
       .task(id: session.lastActivityAt) {
         store.send(.cardAppeared(id: session.id))
+      }
+      .task(id: session.id) {
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
       }
       .overlay {
         if isSessionSwitcherPresented {

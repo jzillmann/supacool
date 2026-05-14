@@ -1,10 +1,83 @@
 import Foundation
 
+nonisolated struct ServerLifecycleSettings: Codable, Equatable, Sendable {
+  var name: String
+  var statusScript: String
+  var startScript: String
+  var stopScript: String
+  var autoStopOnSessionRemove: Bool
+  var autoStopOnPark: Bool
+  var autoStartOnUnpark: Bool
+
+  private enum CodingKeys: String, CodingKey {
+    case name
+    case statusScript
+    case startScript
+    case stopScript
+    case autoStopOnSessionRemove
+    case autoStopOnPark
+    case autoStartOnUnpark
+  }
+
+  static let `default` = ServerLifecycleSettings(
+    name: "Dev server",
+    statusScript: "",
+    startScript: "",
+    stopScript: "",
+    autoStopOnSessionRemove: true,
+    autoStopOnPark: true,
+    autoStartOnUnpark: false
+  )
+
+  var isConfigured: Bool {
+    !statusScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !startScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !stopScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  init(
+    name: String,
+    statusScript: String,
+    startScript: String,
+    stopScript: String,
+    autoStopOnSessionRemove: Bool,
+    autoStopOnPark: Bool,
+    autoStartOnUnpark: Bool
+  ) {
+    self.name = name
+    self.statusScript = statusScript
+    self.startScript = startScript
+    self.stopScript = stopScript
+    self.autoStopOnSessionRemove = autoStopOnSessionRemove
+    self.autoStopOnPark = autoStopOnPark
+    self.autoStartOnUnpark = autoStartOnUnpark
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    name = try container.decodeIfPresent(String.self, forKey: .name) ?? Self.default.name
+    statusScript =
+      try container.decodeIfPresent(String.self, forKey: .statusScript) ?? Self.default.statusScript
+    startScript =
+      try container.decodeIfPresent(String.self, forKey: .startScript) ?? Self.default.startScript
+    stopScript =
+      try container.decodeIfPresent(String.self, forKey: .stopScript) ?? Self.default.stopScript
+    autoStopOnSessionRemove =
+      try container.decodeIfPresent(Bool.self, forKey: .autoStopOnSessionRemove)
+      ?? Self.default.autoStopOnSessionRemove
+    autoStopOnPark =
+      try container.decodeIfPresent(Bool.self, forKey: .autoStopOnPark) ?? Self.default.autoStopOnPark
+    autoStartOnUnpark =
+      try container.decodeIfPresent(Bool.self, forKey: .autoStartOnUnpark) ?? Self.default.autoStartOnUnpark
+  }
+}
+
 nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
   var setupScript: String
   var archiveScript: String
   var deleteScript: String
   var runScript: String
+  var serverLifecycle: ServerLifecycleSettings
   var openActionID: String
   var remoteTargets: [RepositoryRemoteTarget]
   var worktreeBaseRef: String?
@@ -18,6 +91,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     case archiveScript
     case deleteScript
     case runScript
+    case serverLifecycle
     case openActionID
     case remoteTargets
     case worktreeBaseRef
@@ -32,6 +106,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     archiveScript: "",
     deleteScript: "",
     runScript: "",
+    serverLifecycle: .default,
     openActionID: OpenWorktreeAction.automaticSettingsID,
     remoteTargets: [],
     worktreeBaseRef: nil,
@@ -46,6 +121,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     archiveScript: String,
     deleteScript: String,
     runScript: String,
+    serverLifecycle: ServerLifecycleSettings = .default,
     openActionID: String,
     remoteTargets: [RepositoryRemoteTarget] = [],
     worktreeBaseRef: String?,
@@ -58,6 +134,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     self.archiveScript = archiveScript
     self.deleteScript = deleteScript
     self.runScript = runScript
+    self.serverLifecycle = serverLifecycle
     self.openActionID = openActionID
     self.remoteTargets = remoteTargets
     self.worktreeBaseRef = worktreeBaseRef
@@ -81,6 +158,9 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     runScript =
       try container.decodeIfPresent(String.self, forKey: .runScript)
       ?? Self.default.runScript
+    serverLifecycle =
+      try container.decodeIfPresent(ServerLifecycleSettings.self, forKey: .serverLifecycle)
+      ?? Self.default.serverLifecycle
     openActionID =
       try container.decodeIfPresent(String.self, forKey: .openActionID)
       ?? Self.default.openActionID

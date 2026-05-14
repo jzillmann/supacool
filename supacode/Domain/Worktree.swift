@@ -32,10 +32,11 @@ struct Worktree: Identifiable, Hashable, Sendable {
 
 extension Worktree {
   /// Base environment variables for Supacool scripts (supplemented per-surface).
-  var scriptEnvironment: [String: String] {
+  nonisolated var scriptEnvironment: [String: String] {
     [
       "SUPACOOL_WORKTREE_PATH": workingDirectory.path(percentEncoded: false),
       "SUPACOOL_ROOT_PATH": repositoryRootURL.path(percentEncoded: false),
+      "SUPACOOL_REPOSITORY_PATH": repositoryRootURL.path(percentEncoded: false),
     ]
   }
 
