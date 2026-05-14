@@ -103,9 +103,22 @@ struct RepoPickerButton: View {
           Button {
             onToggleRepository(repo.id)
           } label: {
+            Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
+              .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
+              .padding(.leading, 12)
+              .padding(.trailing, 8)
+              .padding(.vertical, 6)
+              .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .help("Toggle \(repo.name)")
+          .accessibilityLabel("Toggle \(repo.name)")
+
+          Button {
+            onFocusRepository(repo.id)
+            isPresented = false
+          } label: {
             HStack {
-              Image(systemName: isIncluded(repo) ? "checkmark.circle.fill" : "circle")
-                .foregroundStyle(isIncluded(repo) ? Color.accentColor : Color.secondary)
               Image(systemName: "folder.fill")
                 .font(.caption)
                 .foregroundStyle(.yellow)
@@ -113,33 +126,21 @@ struct RepoPickerButton: View {
                 .font(.callout)
                 .lineLimit(1)
               Spacer()
+              Image(systemName: "scope")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .opacity(hoveredRepositoryID == repo.id ? 1 : 0)
             }
-            .padding(.leading, 12)
             .padding(.vertical, 6)
+            .padding(.trailing, 12)
             .contentShape(Rectangle())
           }
           .buttonStyle(.plain)
-
-          Button {
-            onFocusRepository(repo.id)
-            isPresented = false
-          } label: {
-            Image(systemName: "scope")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(isFocused(repo) ? Color.accentColor : Color.secondary)
-              .frame(width: 28, height: 28)
-              .opacity(shouldShowFocusButton(for: repo) ? 1 : 0)
+          .help("Show only \(repo.name)")
+          .accessibilityLabel("Show only \(repo.name)")
+          .onHover { isHovering in
+            hoveredRepositoryID = isHovering ? repo.id : nil
           }
-          .buttonStyle(.plain)
-          .help("Focus \(repo.name) only")
-          .accessibilityLabel("Focus \(repo.name) only")
-          .accessibilityHidden(!shouldShowFocusButton(for: repo))
-          .disabled(!shouldShowFocusButton(for: repo))
-        }
-        .padding(.trailing, 6)
-        .contentShape(Rectangle())
-        .onHover { isHovering in
-          hoveredRepositoryID = isHovering ? repo.id : nil
         }
       }
 
@@ -189,13 +190,5 @@ struct RepoPickerButton: View {
   private func isIncluded(_ repo: Repository) -> Bool {
     filters.selectedRepositoryIDs.contains(repo.id)
       && !filters.showsAllRepositories
-  }
-
-  private func isFocused(_ repo: Repository) -> Bool {
-    filters.selectedRepositoryIDs == [repo.id]
-  }
-
-  private func shouldShowFocusButton(for repo: Repository) -> Bool {
-    hoveredRepositoryID == repo.id || isFocused(repo)
   }
 }
