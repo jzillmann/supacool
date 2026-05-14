@@ -2,7 +2,21 @@ import Foundation
 
 enum GitWorktreeHeadResolver {
   static func headURL(for worktreeURL: URL, fileManager: FileManager) -> URL? {
-    let gitURL = worktreeURL.appending(path: ".git")
+    var candidate = worktreeURL.standardizedFileURL
+    while true {
+      if let headURL = directHeadURL(at: candidate, fileManager: fileManager) {
+        return headURL
+      }
+      let parent = candidate.deletingLastPathComponent().standardizedFileURL
+      if parent.path(percentEncoded: false) == candidate.path(percentEncoded: false) {
+        return nil
+      }
+      candidate = parent
+    }
+  }
+
+  private static func directHeadURL(at directoryURL: URL, fileManager: FileManager) -> URL? {
+    let gitURL = directoryURL.appending(path: ".git")
     var isDirectory = ObjCBool(false)
     guard
       fileManager.fileExists(
@@ -30,7 +44,7 @@ enum GitWorktreeHeadResolver {
     guard !pathPart.isEmpty else {
       return nil
     }
-    let gitdirURL = URL(fileURLWithPath: String(pathPart), relativeTo: worktreeURL)
+    let gitdirURL = URL(fileURLWithPath: String(pathPart), relativeTo: directoryURL)
       .standardizedFileURL
     return gitdirURL.appending(path: "HEAD")
   }

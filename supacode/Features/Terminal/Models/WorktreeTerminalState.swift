@@ -1459,6 +1459,22 @@ final class WorktreeTerminalState {
     focusedSurfaceIdByTab[tabId]
   }
 
+  /// Current PWD for the tab's active pane. Supacool's full-screen
+  /// header uses this so branch/status chips follow the actual terminal
+  /// the user is looking at, not just the session's original worktree.
+  func activeWorkingDirectory(for tabId: TerminalTabID) -> URL? {
+    let focusedPWD = focusedSurfaceIdByTab[tabId].flatMap { surfaceID in
+      surfaces[surfaceID]?.bridge.state.pwd
+    }
+    let fallbackPWD = trees[tabId]?.leaves().first?.bridge.state.pwd
+    guard let path = (focusedPWD ?? fallbackPWD)?.trimmingCharacters(in: .whitespacesAndNewlines),
+      !path.isEmpty
+    else {
+      return nil
+    }
+    return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+  }
+
   /// Appends a notification from an agent hook on a specific surface.
   func appendHookNotification(title: String, body: String, surfaceID: UUID) {
     guard hasSurfaceForNotification(surfaceID) else {
