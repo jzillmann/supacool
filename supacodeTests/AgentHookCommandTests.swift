@@ -65,6 +65,47 @@ struct AgentHookCommandTests {
     #expect(command.contains("$SUPACOOL_SURFACE_ID"))
   }
 
+  // MARK: - preToolUseCommand.
+
+  @Test func preToolUseCommandBranchesOnBlockingTools() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    #expect(command.contains("AskUserQuestion"))
+    #expect(command.contains("ExitPlanMode"))
+  }
+
+  @Test func preToolUseCommandFallsBackToBusyForOtherTools() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    // The default branch sends the same busy=1 + PPID line as busyCommand.
+    #expect(command.contains("$SUPACOOL_SURFACE_ID 1 $PPID"))
+  }
+
+  @Test func preToolUseCommandSendsSyntheticAwaitingInputNotification() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    // Blocking-tool branch must produce a Notification-event JSON body
+    // whose "message" matches the awaiting-input keyword list (see
+    // WorktreeTerminalManager.isAwaitingInputSignal).
+    #expect(command.contains(#""hook_event_name":"Notification""#))
+    #expect(command.contains("waiting for your input"))
+  }
+
+  @Test func preToolUseCommandIsSupacoolManaged() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(command))
+  }
+
+  @Test func preToolUseCommandChecksAllFourEnvVars() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    #expect(command.contains("SUPACOOL_SOCKET_PATH"))
+    #expect(command.contains("SUPACOOL_WORKTREE_ID"))
+    #expect(command.contains("SUPACOOL_TAB_ID"))
+    #expect(command.contains("SUPACOOL_SURFACE_ID"))
+  }
+
+  @Test func preToolUseCommandSuppressesErrors() {
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    #expect(command.hasSuffix("2>/dev/null || true"))
+  }
+
   // MARK: - Command ownership.
 
   @Test func currentCommandIsRecognized() {

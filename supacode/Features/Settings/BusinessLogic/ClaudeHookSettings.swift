@@ -3,6 +3,7 @@ import Foundation
 nonisolated enum ClaudeHookSettings {
   fileprivate static let busyOn = AgentHookSettingsCommand.busyCommand(active: true)
   fileprivate static let busyOff = AgentHookSettingsCommand.busyCommand(active: false)
+  fileprivate static let preToolUse = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
   fileprivate static let notify = AgentHookSettingsCommand.notificationCommand(agent: "claude")
 
   static func progressHookGroupsByEvent() throws -> [String: [JSONValue]] {
@@ -31,6 +32,10 @@ nonisolated enum ClaudeHookSettingsError: Error {
 // grant — without it "Wants Input" lingers until the screen-fingerprint poll or
 // the 8s TTL clears it. The socket send is a ~30-byte echo through nc -U -w1,
 // so the 5s timeout is ample even under load.
+//
+// PreToolUse uses `preToolUseCommand` (not plain `busyOn`) so blocking tools
+// like AskUserQuestion / ExitPlanMode flip the card to "Wants Input" instead
+// of marking it busy. See AgentHookSettingsCommand.preToolUseCommand.
 private nonisolated struct ClaudeProgressPayload: Encodable {
   let hooks: [String: [AgentHookGroup]] = [
     "UserPromptSubmit": [
@@ -39,7 +44,7 @@ private nonisolated struct ClaudeProgressPayload: Encodable {
       ]),
     ],
     "PreToolUse": [
-      .init(matcher: "", hooks: [.init(command: ClaudeHookSettings.busyOn, timeout: 5)])
+      .init(matcher: "", hooks: [.init(command: ClaudeHookSettings.preToolUse, timeout: 5)])
     ],
     "Stop": [
       .init(hooks: [.init(command: ClaudeHookSettings.busyOff, timeout: 10)])

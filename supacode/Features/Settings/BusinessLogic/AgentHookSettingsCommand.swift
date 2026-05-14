@@ -54,4 +54,43 @@ nonisolated enum AgentHookSettingsCommand {
       + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
     return "\(envCheck) && \(send) 2>/dev/null || true"
   }
+
+  /// PreToolUse hook command that distinguishes blocking tools from
+  /// regular ones.
+  ///
+  /// Stock `busyCommand(active: true)` marks the session busy regardless
+  /// of which tool is about to run. That misclassifies tools that block
+  /// for user input (AskUserQuestion, ExitPlanMode) — Claude is "busy"
+  /// from its own perspective but actually waiting on the user, so the
+  /// card stays on green/working until the user answers. With no
+  /// follow-up Notification event for these tools, the auto-classifier
+  /// has no way to recover.
+  ///
+  /// This command reads the PreToolUse JSON payload from stdin, matches
+  /// `tool_name` against the blocking-tool list, and either:
+  ///   - emits a synthetic Notification with body containing "waiting
+  ///     for your input" (the awaiting-input keywords from B), so
+  ///     `isAwaitingInputSignal` promotes the card to `.awaitingInput`
+  ///   - falls back to the regular busy=1 line for non-blocking tools
+  ///
+  /// Pure shell, POSIX `case` + `printf`; no jq dependency.
+  static func preToolUseCommand(agent: String) -> String {
+    let blockingPatterns = [
+      #"*'"tool_name":"AskUserQuestion"'*"#,
+      #"*'"tool_name":"ExitPlanMode"'*"#,
+    ].joined(separator: "|")
+    let header = #"printf '%s \#(agent)\n' "\#(ids)""#
+    let body =
+      #"printf '%s\n' '{"hook_event_name":"Notification","message":"#
+      + #"Claude is waiting for your input"}'"#
+    let sendNotification =
+      #"{ \#(header); \#(body); } | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
+    let sendBusy =
+      #"echo "\#(ids) 1 $PPID""#
+      + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
+    let pipeline =
+      #"{ input=$(cat); case "$input" in \#(blockingPatterns)) "#
+      + #"\#(sendNotification) ;; *) \#(sendBusy) ;; esac; }"#
+    return "\(envCheck) && \(pipeline) 2>/dev/null || true"
+  }
 }

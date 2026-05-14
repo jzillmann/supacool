@@ -8,7 +8,7 @@ import Testing
 /// Claude resumes after a permission grant, instead of waiting on the
 /// screen-fingerprint poll (1s) or the 8s awaiting-input TTL.
 struct ClaudeProgressHookTests {
-  @Test func progressPayloadIncludesPreToolUseBusyOn() throws {
+  @Test func progressPayloadPreToolUseUsesBlockingToolAwareCommand() throws {
     let groups = try ClaudeHookSettings.progressHookGroupsByEvent()
     guard let entries = groups["PreToolUse"], let group = entries.first else {
       Issue.record("Expected PreToolUse entry in progress hooks")
@@ -16,7 +16,15 @@ struct ClaudeProgressHookTests {
     }
     let hooks = group.objectValue?["hooks"]?.arrayValue ?? []
     let commands = hooks.compactMap { $0.objectValue?["command"]?.stringValue }
-    #expect(commands == [AgentHookSettingsCommand.busyCommand(active: true)])
+    #expect(commands == [AgentHookSettingsCommand.preToolUseCommand(agent: "claude")])
+  }
+
+  /// The new PreToolUse command must NOT be a plain busy=1 echo — that
+  /// would lose the blocking-tool branch and bring back the "stuck busy"
+  /// regression. Guards against accidental rollback.
+  @Test func preToolUseCommandIsNotPlainBusyOn() throws {
+    let preToolUseCmd = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    #expect(preToolUseCmd != AgentHookSettingsCommand.busyCommand(active: true))
   }
 
   @Test func preToolUseUsesExplicitEmptyMatcher() throws {
