@@ -515,8 +515,10 @@ struct BoardRootView: View {
 
   /// Repo shown by the center toolbar status chip. We only show this
   /// when exactly one repo is in context (single registered repo, or a
-  /// single explicit filter selection).
+  /// single explicit filter selection), and only on the board. The
+  /// full-screen terminal header owns its own active-pane status chip.
   private var statusRepository: Repository? {
+    guard store.focusedSessionID == nil else { return nil }
     if repositories.count == 1 {
       return repositories.first
     }
