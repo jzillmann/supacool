@@ -331,6 +331,8 @@ struct BoardFeature {
     /// permanent-deletes anything past `retentionWindow`.
     case _sweepExpiredTrash
     case togglePriority(id: AgentSession.ID)
+    /// User-pinned status override. `nil` clears the override.
+    case setManualStatusOverride(id: AgentSession.ID, status: BoardSessionStatus?)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
     case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
@@ -676,6 +678,13 @@ struct BoardFeature {
         }
         return .none
 
+      case .setManualStatusOverride(let id, let status):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].manualStatusOverride = status
+        }
+        return .none
+
       case .requestRemoveSession(let id):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -845,6 +854,9 @@ struct BoardFeature {
           sessions[index].lastKnownBusy = busy
           sessions[index].lastBusyTransitionAt = Date()
           sessions[index].lastActivityAt = Date()
+          // Hook gave us a definitive signal — drop the user's override
+          // so auto-classification takes over again.
+          sessions[index].manualStatusOverride = nil
         }
         // Fast-path auto-dismiss: busy=true means the PTY is live and the
         // agent is actually running.

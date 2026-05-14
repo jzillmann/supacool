@@ -156,6 +156,14 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// Cleared on successful reconnect.
   var remoteConnectionLost: Bool
 
+  /// User-pinned status that overrides the auto-classifier. Set via the
+  /// card context menu when detection is wrong (e.g. card stuck "busy"
+  /// while Claude is actually blocked on a question whose Notification
+  /// payload didn't match our known prefixes). Auto-clears on the next
+  /// definitive hook event (`updateSessionBusyState` transitions).
+  /// Only applies while the tab exists; parked sessions ignore it.
+  var manualStatusOverride: BoardSessionStatus?
+
   /// Is this a remote session?
   var isRemote: Bool { remoteWorkspaceID != nil }
 
@@ -188,7 +196,8 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     remoteHostID: RemoteHost.ID? = nil,
     repositoryRemoteTargetID: RepositoryRemoteTarget.ID? = nil,
     tmuxSessionName: String? = nil,
-    remoteConnectionLost: Bool = false
+    remoteConnectionLost: Bool = false,
+    manualStatusOverride: BoardSessionStatus? = nil
   ) {
     self.id = id
     self.repositoryID = repositoryID
@@ -219,6 +228,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.repositoryRemoteTargetID = repositoryRemoteTargetID
     self.tmuxSessionName = tmuxSessionName
     self.remoteConnectionLost = remoteConnectionLost
+    self.manualStatusOverride = manualStatusOverride
   }
 
   // Forward-compatible Codable — convention documented in
@@ -243,6 +253,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case references, referencesScannedAt
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
+    case manualStatusOverride
   }
 
   init(from decoder: Decoder) throws {
@@ -282,6 +293,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     tmuxSessionName = try c.decodeIfPresent(String.self, forKey: .tmuxSessionName)
     remoteConnectionLost =
       try c.decodeIfPresent(Bool.self, forKey: .remoteConnectionLost) ?? false
+    // `try?` (not `try`) so an unknown future case decodes to nil rather
+    // than failing the whole record. Worst case: user's override silently
+    // resets after a downgrade — acceptable.
+    manualStatusOverride = try? c.decodeIfPresent(BoardSessionStatus.self, forKey: .manualStatusOverride)
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,

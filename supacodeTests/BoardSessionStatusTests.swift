@@ -276,6 +276,56 @@ struct BoardSessionStatusTests {
     )
   }
 
+  @Test func manualOverrideWinsOverBusy() {
+    var session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
+    session.manualStatusOverride = .waitingOnMe
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: true
+    )
+    #expect(status == .waitingOnMe)
+  }
+
+  @Test func manualOverrideWinsOverAwaitingInput() {
+    var session = sampleSession(hasCompletedAtLeastOnce: true)
+    session.manualStatusOverride = .inProgress
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: true,
+      busy: false
+    )
+    #expect(status == .inProgress)
+  }
+
+  @Test func manualOverrideIgnoredWhenTabMissing() {
+    var session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
+    session.manualStatusOverride = .inProgress
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: false,
+      awaitingInput: false,
+      busy: false
+    )
+    // Tab is gone → interrupted/detached path runs, override is irrelevant.
+    #expect(status == .interrupted)
+  }
+
+  @Test func manualOverrideIgnoredWhenParked() {
+    var session = sampleSession(hasCompletedAtLeastOnce: true)
+    session.parked = true
+    session.manualStatusOverride = .inProgress
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: false
+    )
+    #expect(status == .parked)
+  }
+
   private func sampleSession(
     createdAt: Date = Date(timeIntervalSinceReferenceDate: 0),
     hasCompletedAtLeastOnce: Bool = false,

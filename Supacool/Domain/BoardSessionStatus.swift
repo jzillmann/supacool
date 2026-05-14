@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-nonisolated enum BoardSessionStatus: Equatable, Sendable {
+nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
   case inProgress
   case waitingForChecks
   case waitingOnMe
@@ -80,6 +80,12 @@ nonisolated enum BoardSessionStatus: Equatable, Sendable {
         return .disconnected
       }
       return session.lastKnownBusy ? .interrupted : .detached
+    }
+    // Manual override wins over auto-classification while the tab is
+    // alive. The reducer auto-clears it on the next busy-state transition,
+    // so a real hook signal will always retake control.
+    if let override = session.manualStatusOverride {
+      return override
     }
     if awaitingInput {
       return .awaitingInput

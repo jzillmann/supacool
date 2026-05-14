@@ -870,6 +870,43 @@ struct BoardFeatureTests {
     #expect(store.state.priorityTerminationAlert == nil)
   }
 
+  @Test(.dependencies) func setManualStatusOverridePersists() async {
+    let session = Self.sampleSession()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.setManualStatusOverride(id: session.id, status: .waitingOnMe)) {
+      $0.$sessions.withLock { $0[0].manualStatusOverride = .waitingOnMe }
+    }
+
+    await store.send(.setManualStatusOverride(id: session.id, status: nil)) {
+      $0.$sessions.withLock { $0[0].manualStatusOverride = nil }
+    }
+  }
+
+  @Test(.dependencies) func busyTransitionClearsManualOverride() async {
+    var session = Self.sampleSession()
+    session.manualStatusOverride = .waitingOnMe
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].lastKnownBusy = true
+        sessions[0].manualStatusOverride = nil
+      }
+    }
+  }
+
   @Test(.dependencies) func updateSessionBusyStatePersistsTransitionTimestamp() async {
     let session = Self.sampleSession()
     let state = BoardFeature.State()

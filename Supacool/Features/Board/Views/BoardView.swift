@@ -466,6 +466,9 @@ struct BoardView: View {
               onRemove: { store.send(.requestRemoveSession(id: session.id)) },
               onRename: { onRenameSession(session) },
               onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+              onSetStatusOverride: { status in
+                store.send(.setManualStatusOverride(id: session.id, status: status))
+              },
               onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
                 ? {
                   store.send(
@@ -692,6 +695,7 @@ private struct SessionCardContainer: View {
   let onRemove: () -> Void
   let onRename: () -> Void
   let onTogglePriority: () -> Void
+  let onSetStatusOverride: (BoardSessionStatus?) -> Void
   let onRerun: (() -> Void)?
   let onResume: (() -> Void)?
   let onResumePicker: (() -> Void)?
@@ -720,6 +724,7 @@ private struct SessionCardContainer: View {
       onRemove: onRemove,
       onRename: onRename,
       onTogglePriority: onTogglePriority,
+      onSetStatusOverride: onSetStatusOverride,
       onRerun: onRerun,
       onResume: onResume,
       onResumePicker: onResumePicker,

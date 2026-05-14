@@ -17,6 +17,8 @@ struct SessionCardView: View {
   let onRemove: () -> Void
   var onRename: (() -> Void)?
   var onTogglePriority: (() -> Void)? = nil
+  /// Sets the session's manual status override. Pass `nil` to clear.
+  var onSetStatusOverride: ((BoardSessionStatus?) -> Void)? = nil
   var onRerun: (() -> Void)?
   var onResume: (() -> Void)?
   var onResumePicker: (() -> Void)?
@@ -141,6 +143,26 @@ struct SessionCardView: View {
           systemImage: session.isPriority ? "flag.slash" : "flag.fill",
           action: onTogglePriority
         )
+        Divider()
+      }
+      if let onSetStatusOverride {
+        Menu("Set Status", systemImage: "circle.dashed") {
+          Button("Working", systemImage: BoardSessionStatus.inProgress.systemImage) {
+            onSetStatusOverride(.inProgress)
+          }
+          Button("Waiting", systemImage: BoardSessionStatus.waitingOnMe.systemImage) {
+            onSetStatusOverride(.waitingOnMe)
+          }
+          Button("Wants Input", systemImage: BoardSessionStatus.awaitingInput.systemImage) {
+            onSetStatusOverride(.awaitingInput)
+          }
+          if session.manualStatusOverride != nil {
+            Divider()
+            Button("Clear Override", systemImage: "xmark.circle") {
+              onSetStatusOverride(nil)
+            }
+          }
+        }
         Divider()
       }
       if let onResume {
