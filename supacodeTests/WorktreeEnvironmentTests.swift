@@ -16,7 +16,8 @@ struct WorktreeEnvironmentTests {
     let env = worktree.scriptEnvironment
     #expect(env["SUPACOOL_WORKTREE_PATH"] == "/tmp/repo/wt-1")
     #expect(env["SUPACOOL_ROOT_PATH"] == "/tmp/repo")
-    #expect(env.count == 2)
+    #expect(env["SUPACOOL_REPOSITORY_PATH"] == "/tmp/repo")
+    #expect(env.count == 3)
   }
 
   @Test func blockingScriptLaunchWritesScriptAndMetadataFiles() throws {
