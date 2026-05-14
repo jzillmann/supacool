@@ -56,13 +56,20 @@ extension DependencyValues {
 private nonisolated let scannerLogger = SupaLogger("Supacool.SessionReferenceScanner")
 
 nonisolated enum SessionReferenceScannerLive {
-  /// Claude Code's project-path hash: replace every `/` with `-`.
-  /// E.g. `/Users/jz/Projects/foo` → `-Users-jz-Projects-foo`.
+  /// Claude Code's project-path hash: replace `/`, `.`, and `_` with `-`.
+  /// E.g. `/Users/jz/.supacool/repos/centrum_backend/foo`
+  ///   →  `-Users-jz--supacool-repos-centrum-backend-foo`.
+  /// Sampled from `~/.claude/projects/` — Claude Code transforms every
+  /// path separator, dot, and underscore into a dash. We learned this
+  /// the loud way when no PR ever got captured for sessions whose cwd
+  /// contained `.supacool/` or a `snake_case` repo name.
   static func hashProjectPath(_ path: String) -> String {
-    path.replacingOccurrences(of: "/", with: "-")
+    String(path.map { "/._".contains($0) ? Character("-") : $0 })
   }
 
-  /// Absolute path to the JSONL transcript file.
+  /// Absolute path to the JSONL transcript file (best guess from the
+  /// hash). Use `locateJSONLURL` for runtime reads — it falls back to a
+  /// `<sessionID>.jsonl` search when the hash misses.
   static func jsonlURL(cwdPath: String, agentNativeSessionID: String) -> URL {
     let home = FileManager.default.homeDirectoryForCurrentUser
     let hashed = hashProjectPath(cwdPath)
@@ -74,9 +81,41 @@ nonisolated enum SessionReferenceScannerLive {
       .appending(path: "\(agentNativeSessionID).jsonl", directoryHint: .notDirectory)
   }
 
+  /// Resolve the on-disk JSONL for a session, falling back to a directory
+  /// scan when the hashed path doesn't exist. `agentNativeSessionID` is
+  /// globally unique, so finding `<id>.jsonl` anywhere under
+  /// `~/.claude/projects/` is safe — and it keeps PR capture working if
+  /// Claude Code's path-hashing rules drift again.
+  static func locateJSONLURL(cwdPath: String, agentNativeSessionID: String) -> URL? {
+    let direct = jsonlURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
+    let fm = FileManager.default
+    if fm.fileExists(atPath: direct.path) { return direct }
+    let projectsRoot = fm.homeDirectoryForCurrentUser
+      .appending(path: ".claude", directoryHint: .isDirectory)
+      .appending(path: "projects", directoryHint: .isDirectory)
+    guard
+      let projectDirs = try? fm.contentsOfDirectory(
+        at: projectsRoot, includingPropertiesForKeys: nil
+      )
+    else { return nil }
+    let targetName = "\(agentNativeSessionID).jsonl"
+    for dir in projectDirs {
+      let candidate = dir.appending(path: targetName, directoryHint: .notDirectory)
+      if fm.fileExists(atPath: candidate.path) {
+        scannerLogger.info(
+          "Recovered JSONL via fallback scan: \(candidate.path) (hash miss for \(cwdPath))"
+        )
+        return candidate
+      }
+    }
+    return nil
+  }
+
   static func scan(cwdPath: String, agentNativeSessionID: String) -> [SessionReference] {
     guard !agentNativeSessionID.isEmpty else { return [] }
-    let url = jsonlURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
+    guard
+      let url = locateJSONLURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
+    else { return [] }
     guard let data = try? Data(contentsOf: url) else {
       return []
     }

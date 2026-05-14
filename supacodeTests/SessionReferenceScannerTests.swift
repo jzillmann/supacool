@@ -281,6 +281,18 @@ struct SessionReferenceScannerTests {
     )
   }
 
+  /// Regression for the CEN-6752 PR-capture miss: Claude Code transforms
+  /// `.` and `_` to `-` in addition to `/`. Before this fix Supacool only
+  /// handled slashes, so `~/.claude/projects/-Users-jz--supacool-repos-…`
+  /// was unreachable and PRs silently never appeared on the board.
+  @Test func hashProjectPathReplacesDotsAndUnderscores() {
+    #expect(
+      SessionReferenceScannerLive.hashProjectPath(
+        "/Users/jz/.supacool/repos/centrum_backend/cen-6752-foo"
+      ) == "-Users-jz--supacool-repos-centrum-backend-cen-6752-foo"
+    )
+  }
+
   @Test func jsonlURLBuildsExpectedPath() {
     let url = SessionReferenceScannerLive.jsonlURL(
       cwdPath: "/Users/jz/Projects/foo",
@@ -290,6 +302,17 @@ struct SessionReferenceScannerTests {
     #expect(url.pathComponents.contains("-Users-jz-Projects-foo"))
     #expect(url.pathComponents.contains(".claude"))
     #expect(url.pathComponents.contains("projects"))
+  }
+
+  @Test func jsonlURLEncodesDotsAndUnderscores() {
+    let url = SessionReferenceScannerLive.jsonlURL(
+      cwdPath: "/Users/jz/.supacool/repos/centrum_backend/foo",
+      agentNativeSessionID: "abcd-1234"
+    )
+    #expect(
+      url.pathComponents
+        .contains("-Users-jz--supacool-repos-centrum-backend-foo")
+    )
   }
 
   // MARK: - URL generation
