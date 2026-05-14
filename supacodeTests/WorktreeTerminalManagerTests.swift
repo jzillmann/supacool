@@ -1275,6 +1275,35 @@ struct WorktreeTerminalManagerTests {
     #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
   }
 
+  @Test func initialSubmittedInputMarksAgentSessionOptimisticallyBusy() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), startPromptScreenScanning: false)
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .pi,
+          initialPrompt: "x",
+        ),
+      ]
+    }
+
+    manager.markSubmittedInitialInputForTesting(
+      worktreeID: worktree.id,
+      tabID: tabID,
+      initialInput: "pi --resume abc\r",
+    )
+
+    #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+  }
+
   @Test func typedInputWithoutSubmissionDoesNotMarkOptimisticallyBusy() {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), startPromptScreenScanning: false)
     let worktree = makeWorktree()

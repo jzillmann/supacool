@@ -863,7 +863,14 @@ final class WorktreeTerminalManager {
       }
       setupScript = nil
     }
-    _ = state.createTab(setupScript: setupScript, initialInput: initialInput, tabID: tabID)
+    guard let createdTabID = state.createTab(setupScript: setupScript, initialInput: initialInput, tabID: tabID) else {
+      return
+    }
+    markSubmittedInitialInputIfNeeded(
+      worktreeID: worktree.id,
+      tabID: createdTabID,
+      initialInput: initialInput,
+    )
   }
 
   /// True when the worktree's working directory is actually the repo
@@ -1080,6 +1087,29 @@ final class WorktreeTerminalManager {
     deferredWorkExpiryTasks[tabID] = nil
     deferredWorkByTab.removeValue(forKey: tabID)
   }
+
+  private func markSubmittedInitialInputIfNeeded(
+    worktreeID: Worktree.ID,
+    tabID: TerminalTabID,
+    initialInput: String?
+  ) {
+    guard let initialInput, Self.isSubmittedInput(initialInput) else { return }
+    markOptimisticBusy(worktreeID: worktreeID, tabID: tabID)
+  }
+
+  #if DEBUG
+    func markSubmittedInitialInputForTesting(
+      worktreeID: Worktree.ID,
+      tabID: TerminalTabID,
+      initialInput: String?
+    ) {
+      markSubmittedInitialInputIfNeeded(
+        worktreeID: worktreeID,
+        tabID: tabID,
+        initialInput: initialInput,
+      )
+    }
+  #endif
 
   private func markOptimisticBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) {
     let rawTabID = tabID.rawValue
