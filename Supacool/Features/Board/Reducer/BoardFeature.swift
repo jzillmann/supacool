@@ -94,6 +94,11 @@ struct BoardFeature {
     /// detached card and decide whether to resume, rerun, or remove it.
     var priorityTerminationAlert: PriorityTerminationAlertState?
 
+    /// Presented when removing a session would also delete a dirty
+    /// backing worktree. The user must explicitly confirm before the
+    /// card is trashed and the worktree cleanup is dispatched.
+    var dirtySessionRemovalConfirmation: DirtySessionRemovalConfirmationState?
+
     /// Presented when the New Terminal create flow detected that the
     /// requested branch is already checked out at a *different* path —
     /// `git worktree add` would otherwise fail. The alert lets the user
@@ -121,6 +126,86 @@ struct BoardFeature {
     /// sets — the reducer treats it as a set via conversion.
     @Shared(.appStorage("gettingStartedSkippedTasks"))
     var skippedGettingStartedTasks: [String] = []
+  }
+
+  nonisolated struct DirtyRemovalWorkspace: Equatable, Identifiable, Sendable {
+    let path: String
+    let files: [ChangedFile]
+
+    var id: String { path }
+  }
+
+  nonisolated struct DirtyRemovalCheckFailure: Equatable, Identifiable, Sendable {
+    let path: String
+    let message: String
+
+    var id: String { path }
+  }
+
+  nonisolated struct DirtySessionRemovalConfirmationState: Equatable, Identifiable, Sendable {
+    let id: AgentSession.ID
+    let sessionID: AgentSession.ID
+    let displayName: String
+    let dirtyWorkspaces: [DirtyRemovalWorkspace]
+    let checkFailures: [DirtyRemovalCheckFailure]
+
+    init(
+      sessionID: AgentSession.ID,
+      displayName: String,
+      dirtyWorkspaces: [DirtyRemovalWorkspace],
+      checkFailures: [DirtyRemovalCheckFailure]
+    ) {
+      self.id = sessionID
+      self.sessionID = sessionID
+      self.displayName = displayName
+      self.dirtyWorkspaces = dirtyWorkspaces
+      self.checkFailures = checkFailures
+    }
+
+    var title: String {
+      dirtyWorkspaces.isEmpty ? "Remove without clean check?" : "Remove dirty worktree?"
+    }
+
+    var message: String {
+      var sections: [String] = []
+      if !dirtyWorkspaces.isEmpty {
+        sections.append(
+          "Removing \"\(displayName)\" will delete worktree files with uncommitted changes."
+        )
+        sections.append(Self.dirtyFilesMessage(for: dirtyWorkspaces))
+      }
+      if !checkFailures.isEmpty {
+        sections.append(
+          "Supacool could not verify whether these worktrees are clean:\n"
+            + checkFailures
+              .map { "• \($0.path): \($0.message)" }
+              .joined(separator: "\n")
+        )
+      }
+      sections.append("Are you sure you want to remove this session anyway?")
+      return sections.joined(separator: "\n\n")
+    }
+
+    private static func dirtyFilesMessage(for workspaces: [DirtyRemovalWorkspace]) -> String {
+      let maxFileLines = 12
+      var lines: [String] = []
+      var remaining = 0
+      for workspace in workspaces {
+        guard lines.count < maxFileLines else {
+          remaining += workspace.files.count
+          continue
+        }
+        lines.append(workspace.path)
+        let remainingSlots = max(0, maxFileLines - lines.count)
+        let displayedFiles = Array(workspace.files.prefix(remainingSlots))
+        lines.append(contentsOf: displayedFiles.map { "• [\($0.status.shortLabel)] \($0.path)" })
+        remaining += workspace.files.count - displayedFiles.count
+      }
+      if remaining > 0 {
+        lines.append("…and \(remaining) more")
+      }
+      return lines.joined(separator: "\n")
+    }
   }
 
   /// One-shot summary shown after a prune attempt. Identifiable so we
@@ -215,6 +300,18 @@ struct BoardFeature {
     // MARK: Session CRUD
     case createSession(AgentSession)
     case renameSession(id: AgentSession.ID, newName: String)
+    /// User-facing removal entrypoint. If the session owns worktree files,
+    /// checks for uncommitted changes before dispatching `removeSession`.
+    case requestRemoveSession(id: AgentSession.ID)
+    case _sessionRemovalDirtyCheckResponse(
+      id: AgentSession.ID,
+      dirtyWorkspaces: [DirtyRemovalWorkspace],
+      checkFailures: [DirtyRemovalCheckFailure]
+    )
+    case confirmDirtySessionRemoval(id: AgentSession.ID)
+    case dismissDirtySessionRemovalConfirmation
+    /// Internal removal path after dirty preflight has passed or the user
+    /// confirmed the dirty-worktree warning.
     case removeSession(id: AgentSession.ID)
     /// Browse / manage trashed sessions. Opens the trash sheet.
     case openTrashSheet
@@ -579,75 +676,69 @@ struct BoardFeature {
         }
         return .none
 
-      case .removeSession(let id):
+      case .requestRemoveSession(let id):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
-        // Compute cleanup metadata at trash-time so the eventual
-        // permanent-delete (sweep / "Delete now") can fan out
-        // verbatim — even after `state.sessions` no longer contains
-        // this session and ref-count checks would silently flip.
-        let deleteBackingWorktree =
-          session.removeBackingWorktreeOnDelete
-          && session.worktreeID != session.repositoryID
-          && !Self.sessionsUsingWorkspace(
-            session.worktreeID, excluding: id, sessions: state.sessions
-          )
-        let convertedPath = session.currentWorkspacePath
-        let hasConvertedWorkspace =
-          convertedPath != session.worktreeID
-          && convertedPath != session.repositoryID
-        let deleteConvertedWorkspace =
-          hasConvertedWorkspace
-          && !Self.sessionsUsingWorkspace(
-            convertedPath, excluding: id, sessions: state.sessions
-          )
-        let additionalDeletes: [Worktree.ID] =
-          deleteConvertedWorkspace ? [convertedPath] : []
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(
-            kind: "trashed",
-            context: deleteBackingWorktree ? "owns-worktree" : "shares-worktree",
-            at: Date()
-          ),
-          tabID: TerminalTabID(rawValue: id)
-        )
-        let entry = TrashedSession(
-          session: session,
-          repositoryID: session.repositoryID,
-          worktreeID: session.worktreeID,
-          deleteBackingWorktree: deleteBackingWorktree,
-          additionalWorktreeIDsToDelete: additionalDeletes,
-          trashedAt: date.now
-        )
-        state.$trashedSessions.withLock { trash in
-          trash.removeAll { $0.id == id }
-          trash.append(entry)
+        let cleanupPlan = Self.cleanupPlan(for: session, sessions: state.sessions)
+        let worktreeIDsToCheck = cleanupPlan.worktreeIDsToDelete
+        guard !worktreeIDsToCheck.isEmpty, !session.isRemote else {
+          return removeSessionFromState(&state, id: id)
         }
-        state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
-        state.reinitializingSessionIDs.remove(id)
-        if state.focusedSessionID == id {
-          state.focusedSessionID = nil
-        }
-        state.trayCards.removeAll { card in
-          if case .sessionCreating(let sessionID, _) = card.kind {
-            return sessionID == id
+        return .run { send in
+          var dirtyWorkspaces: [DirtyRemovalWorkspace] = []
+          var checkFailures: [DirtyRemovalCheckFailure] = []
+          for worktreeID in worktreeIDsToCheck {
+            let url = URL(fileURLWithPath: worktreeID, isDirectory: true)
+            do {
+              let porcelain = try await gitClient.statusPorcelain(url)
+              let files = PorcelainStatusParser.parse(porcelain)
+              if !files.isEmpty {
+                dirtyWorkspaces.append(DirtyRemovalWorkspace(path: worktreeID, files: files))
+              }
+            } catch {
+              checkFailures.append(
+                DirtyRemovalCheckFailure(path: worktreeID, message: error.localizedDescription)
+              )
+            }
           }
-          return false
-        }
-        // Tab destroy still fires; worktree cleanup is deferred to
-        // either explicit "Delete now" or the 3-day sweeper.
-        return .send(
-          .delegate(
-            .sessionRemoved(
-              sessionID: session.id,
-              repositoryID: session.repositoryID,
-              worktreeID: session.worktreeID,
-              deleteBackingWorktree: false,
-              additionalWorktreeIDsToDelete: []
+          await send(
+            ._sessionRemovalDirtyCheckResponse(
+              id: id,
+              dirtyWorkspaces: dirtyWorkspaces,
+              checkFailures: checkFailures
             )
           )
+        }
+
+      case ._sessionRemovalDirtyCheckResponse(let id, let dirtyWorkspaces, let checkFailures):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard !dirtyWorkspaces.isEmpty || !checkFailures.isEmpty else {
+          return removeSessionFromState(&state, id: id)
+        }
+        state.dirtySessionRemovalConfirmation = DirtySessionRemovalConfirmationState(
+          sessionID: id,
+          displayName: session.displayName,
+          dirtyWorkspaces: dirtyWorkspaces,
+          checkFailures: checkFailures
         )
+        return .none
+
+      case .confirmDirtySessionRemoval(let id):
+        guard state.dirtySessionRemovalConfirmation?.sessionID == id else {
+          return .none
+        }
+        state.dirtySessionRemovalConfirmation = nil
+        return removeSessionFromState(&state, id: id)
+
+      case .dismissDirtySessionRemovalConfirmation:
+        state.dirtySessionRemovalConfirmation = nil
+        return .none
+
+      case .removeSession(let id):
+        return removeSessionFromState(&state, id: id)
 
       case .openTrashSheet:
         state.isTrashSheetPresented = true
@@ -2082,9 +2173,112 @@ struct BoardFeature {
     }
   }
 
-  /// Build the `Worktree` value handed to `TerminalClient` when resuming. The
-  /// returned `worktree.id` is pinned to `session.worktreeID` verbatim so the
-  /// new tab lands under the same key the detached view probes for.
+  nonisolated fileprivate struct SessionRemovalCleanupPlan: Equatable, Sendable {
+    let worktreeID: Worktree.ID
+    let deleteBackingWorktree: Bool
+    let additionalWorktreeIDsToDelete: [Worktree.ID]
+
+    var hasWorktreeCleanup: Bool {
+      deleteBackingWorktree || !additionalWorktreeIDsToDelete.isEmpty
+    }
+
+    var worktreeIDsToDelete: [Worktree.ID] {
+      var ids: [Worktree.ID] = []
+      if deleteBackingWorktree {
+        ids.append(worktreeID)
+      }
+      ids.append(contentsOf: additionalWorktreeIDsToDelete)
+      var seen = Set<Worktree.ID>()
+      return ids.filter { seen.insert($0).inserted }
+    }
+  }
+
+  nonisolated fileprivate static func cleanupPlan(
+    for session: AgentSession,
+    sessions: [AgentSession]
+  ) -> SessionRemovalCleanupPlan {
+    let deleteBackingWorktree =
+      session.removeBackingWorktreeOnDelete
+      && session.worktreeID != session.repositoryID
+      && !sessionsUsingWorkspace(
+        session.worktreeID,
+        excluding: session.id,
+        sessions: sessions
+      )
+    let convertedPath = session.currentWorkspacePath
+    let hasConvertedWorkspace =
+      convertedPath != session.worktreeID
+      && convertedPath != session.repositoryID
+    let deleteConvertedWorkspace =
+      hasConvertedWorkspace
+      && !sessionsUsingWorkspace(
+        convertedPath,
+        excluding: session.id,
+        sessions: sessions
+      )
+    return SessionRemovalCleanupPlan(
+      worktreeID: session.worktreeID,
+      deleteBackingWorktree: deleteBackingWorktree,
+      additionalWorktreeIDsToDelete: deleteConvertedWorkspace ? [convertedPath] : []
+    )
+  }
+
+  fileprivate func removeSessionFromState(
+    _ state: inout State,
+    id: AgentSession.ID
+  ) -> Effect<Action> {
+    guard let session = state.sessions.first(where: { $0.id == id }) else {
+      return .none
+    }
+    let cleanupPlan = Self.cleanupPlan(for: session, sessions: state.sessions)
+    TranscriptRecorder.shared.append(
+      event: .sessionLifecycle(
+        kind: "trashed",
+        context: cleanupPlan.hasWorktreeCleanup ? "owns-worktree" : "metadata-only",
+        at: Date()
+      ),
+      tabID: TerminalTabID(rawValue: id)
+    )
+    let entry = TrashedSession(
+      session: session,
+      repositoryID: session.repositoryID,
+      worktreeID: session.worktreeID,
+      // New removals dispatch worktree cleanup immediately. The trash
+      // entry keeps only recoverable session metadata; legacy entries
+      // decoded from disk may still carry cleanup flags and will be
+      // honored by `deleteFromTrash` / the expiry sweep.
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: date.now
+    )
+    state.$trashedSessions.withLock { trash in
+      trash.removeAll { $0.id == id }
+      trash.append(entry)
+    }
+    state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
+    state.reinitializingSessionIDs.remove(id)
+    if state.focusedSessionID == id {
+      state.focusedSessionID = nil
+    }
+    state.trayCards.removeAll { card in
+      if case .sessionCreating(let sessionID, _) = card.kind {
+        return sessionID == id
+      }
+      return false
+    }
+    return .send(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: session.repositoryID,
+          worktreeID: session.worktreeID,
+          deleteBackingWorktree: cleanupPlan.deleteBackingWorktree,
+          additionalWorktreeIDsToDelete: cleanupPlan.additionalWorktreeIDsToDelete
+        )
+      )
+    )
+  }
+
   /// True when any session other than the one being removed still has
   /// the given path as either its state anchor (`worktreeID`) or its
   /// current workspace. Used by `removeSession` to avoid deleting a

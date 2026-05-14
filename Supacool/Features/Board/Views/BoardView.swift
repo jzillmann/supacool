@@ -463,7 +463,7 @@ struct BoardView: View {
               selectedResumeCount: selectedResumeCount,
               selectedPickerResumeCount: selectedPickerResumeCount,
               onTap: { handleCardTap(session) },
-              onRemove: { store.send(.removeSession(id: session.id)) },
+              onRemove: { store.send(.requestRemoveSession(id: session.id)) },
               onRename: { onRenameSession(session) },
               onTogglePriority: { store.send(.togglePriority(id: session.id)) },
               onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)

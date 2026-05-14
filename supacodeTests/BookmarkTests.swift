@@ -137,7 +137,7 @@ struct BookmarkTests {
     let second = Self.sampleBookmark(name: "B")
     let store = TestStore(
       initialState: {
-        var state = BoardFeature.State()
+        let state = BoardFeature.State()
         state.$bookmarks.withLock { $0 = [first, second] }
         return state
       }()
@@ -162,7 +162,7 @@ struct BookmarkTests {
     let repo = Self.sampleRepository(id: bookmark.repositoryID)
     let store = TestStore(
       initialState: {
-        var state = BoardFeature.State()
+        let state = BoardFeature.State()
         state.$bookmarks.withLock { $0 = [bookmark] }
         return state
       }()
@@ -207,7 +207,7 @@ struct BookmarkTests {
 
     let store = TestStore(
       initialState: {
-        var state = BoardFeature.State()
+        let state = BoardFeature.State()
         state.$bookmarks.withLock { $0 = [bookmark] }
         state.$sessions.withLock { $0 = [active] }
         return state
@@ -238,7 +238,7 @@ struct BookmarkTests {
     )
     let store = TestStore(
       initialState: {
-        var state = BoardFeature.State()
+        let state = BoardFeature.State()
         state.$bookmarks.withLock { $0 = [bookmark] }
         return state
       }()

@@ -196,6 +196,7 @@ struct BoardRootView: View {
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
+    .modifier(DirtySessionRemovalConfirmationModifier(store: store))
     .modifier(WorktreeConflictAlertModifier(store: store))
     .sheet(
       isPresented: Binding(
@@ -284,7 +285,7 @@ struct BoardRootView: View {
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
           : nil,
-        onRemove: { store.send(.removeSession(id: session.id)) },
+        onRemove: { store.send(.requestRemoveSession(id: session.id)) },
         onReconnect: session.isRemote
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
@@ -715,6 +716,30 @@ private struct PriorityTerminationAlertModifier: ViewModifier {
       }
     } message: { alert in
       Text(alert.message)
+    }
+  }
+}
+
+private struct DirtySessionRemovalConfirmationModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+
+  func body(content: Content) -> some View {
+    content.alert(
+      store.dirtySessionRemovalConfirmation?.title ?? "Remove dirty worktree?",
+      isPresented: Binding(
+        get: { store.dirtySessionRemovalConfirmation != nil },
+        set: { if !$0 { store.send(.dismissDirtySessionRemovalConfirmation) } }
+      ),
+      presenting: store.dirtySessionRemovalConfirmation
+    ) { confirmation in
+      Button("Remove Anyway", role: .destructive) {
+        store.send(.confirmDirtySessionRemoval(id: confirmation.sessionID))
+      }
+      Button("Cancel", role: .cancel) {
+        store.send(.dismissDirtySessionRemovalConfirmation)
+      }
+    } message: { confirmation in
+      Text(confirmation.message)
     }
   }
 }

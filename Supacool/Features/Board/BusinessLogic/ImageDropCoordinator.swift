@@ -113,7 +113,7 @@ final class ImageDropCoordinator {
     clearTask = Task { [weak self] in
       try? await Task.sleep(for: delay)
       guard !Task.isCancelled else { return }
-      await self?.clearIfStillCurrent(id: id)
+      self?.clearIfStillCurrent(id: id)
     }
   }
 

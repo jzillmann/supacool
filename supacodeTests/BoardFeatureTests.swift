@@ -81,7 +81,7 @@ struct BoardFeatureTests {
     session.references = [ref]
     session.referencesScannedAt = Date()
     session.lastActivityAt = session.referencesScannedAt!.addingTimeInterval(-1)
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let lookups = LockIsolated<[String]>([])
     let store = TestStore(initialState: state) {
@@ -110,7 +110,7 @@ struct BoardFeatureTests {
     var session = Self.sampleSession()
     session.references = []
     session.referencesScannedAt = nil
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let store = TestStore(initialState: state) {
       BoardFeature()
@@ -134,7 +134,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {
     let session = Self.sampleSession(displayName: "Old Name")
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -150,7 +150,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func renameSessionIgnoresEmptyName() async {
     let session = Self.sampleSession(displayName: "Keep Me")
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -163,7 +163,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func togglePriorityFlipsPersistedBit() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -367,8 +367,7 @@ struct BoardFeatureTests {
       $0.$trashedSessions.withLock { $0 = [expectedEntry] }
       $0.focusedSessionID = nil
     }
-    // Trash-push always defers worktree cleanup to permanent-delete /
-    // sweep — delegate flags reflect that (false / empty).
+    // Repo-root sessions have no backing worktree cleanup.
     await store.receive(
       .delegate(
         .sessionRemoved(
@@ -382,13 +381,13 @@ struct BoardFeatureTests {
     )
   }
 
-  @Test(.dependencies) func removeSessionCapturesOwnedWorktreeForTrash() async {
+  @Test(.dependencies) func removeSessionDeletesOwnedWorktreeImmediately() async {
     let session = Self.sampleSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo/wt-1",
       removeBackingWorktreeOnDelete: true
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -402,7 +401,7 @@ struct BoardFeatureTests {
       session: session,
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo/wt-1",
-      deleteBackingWorktree: true,
+      deleteBackingWorktree: false,
       additionalWorktreeIDsToDelete: [],
       trashedAt: trashedAt
     )
@@ -416,7 +415,141 @@ struct BoardFeatureTests {
           sessionID: session.id,
           repositoryID: "/tmp/repo",
           worktreeID: "/tmp/repo/wt-1",
-          deleteBackingWorktree: false,
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func requestRemoveSessionChecksOwnedWorktreeAndProceedsWhenClean() async {
+    let session = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      removeBackingWorktreeOnDelete: true
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.$trashedSessions.withLock { $0 = [] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+      $0.gitClient.statusPorcelain = { url in
+        try await clock.sleep(for: .seconds(1))
+        var path = url.path(percentEncoded: false)
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        #expect(path == "/tmp/repo/wt-1")
+        return ""
+      }
+    }
+
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
+    await store.send(.requestRemoveSession(id: session.id))
+    await clock.advance(by: .seconds(1))
+    await store.receive(
+      ._sessionRemovalDirtyCheckResponse(
+        id: session.id,
+        dirtyWorkspaces: [],
+        checkFailures: []
+      )
+    ) {
+      $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/wt-1",
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+  }
+
+  @Test(.dependencies) func requestRemoveSessionPromptsWhenOwnedWorktreeIsDirty() async {
+    let session = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      removeBackingWorktreeOnDelete: true
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.$trashedSessions.withLock { $0 = [] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let dirtyWorkspace = BoardFeature.DirtyRemovalWorkspace(
+      path: "/tmp/repo/wt-1",
+      files: [
+        ChangedFile(path: "Sources/App.swift", status: .modified),
+        ChangedFile(path: "notes.md", status: .untracked),
+      ]
+    )
+
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+      $0.gitClient.statusPorcelain = { url in
+        try await clock.sleep(for: .seconds(1))
+        var path = url.path(percentEncoded: false)
+        while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
+        #expect(path == "/tmp/repo/wt-1")
+        return " M Sources/App.swift\0?? notes.md\0"
+      }
+    }
+
+    let expectedConfirmation = BoardFeature.DirtySessionRemovalConfirmationState(
+      sessionID: session.id,
+      displayName: session.displayName,
+      dirtyWorkspaces: [dirtyWorkspace],
+      checkFailures: []
+    )
+    let expectedEntry = TrashedSession(
+      session: session,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      deleteBackingWorktree: false,
+      additionalWorktreeIDsToDelete: [],
+      trashedAt: trashedAt
+    )
+
+    await store.send(.requestRemoveSession(id: session.id))
+    await clock.advance(by: .seconds(1))
+    await store.receive(
+      ._sessionRemovalDirtyCheckResponse(
+        id: session.id,
+        dirtyWorkspaces: [dirtyWorkspace],
+        checkFailures: []
+      )
+    ) {
+      $0.dirtySessionRemovalConfirmation = expectedConfirmation
+    }
+    await store.send(.confirmDirtySessionRemoval(id: session.id)) {
+      $0.dirtySessionRemovalConfirmation = nil
+      $0.$sessions.withLock { $0 = [] }
+      $0.$trashedSessions.withLock { $0 = [expectedEntry] }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/wt-1",
+          deleteBackingWorktree: true,
           additionalWorktreeIDsToDelete: []
         )
       )
@@ -435,7 +568,7 @@ struct BoardFeatureTests {
       worktreeID: worktreeID,
       removeBackingWorktreeOnDelete: true
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [removed, sibling] }
     let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -474,12 +607,11 @@ struct BoardFeatureTests {
     )
   }
 
-  @Test(.dependencies) func removeSessionCapturesConvertedWorktreeForTrash() async {
+  @Test(.dependencies) func removeSessionDeletesConvertedWorktreeImmediately() async {
     // A repo-root session that used the "convert to worktree" popover
     // has `worktreeID == repositoryID` but a divergent
-    // `currentWorkspacePath`. The trash entry must remember the
-    // converted path so the eventual sweep / "Delete now" cleans it up
-    // rather than leaving a dangling directory.
+    // `currentWorkspacePath`. The trash entry keeps recoverable card
+    // metadata only; cleanup is dispatched immediately.
     let session = AgentSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo",
@@ -487,7 +619,7 @@ struct BoardFeatureTests {
       agent: .claude,
       initialPrompt: "Work on feature X"
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -502,7 +634,7 @@ struct BoardFeatureTests {
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo",
       deleteBackingWorktree: false,
-      additionalWorktreeIDsToDelete: ["/tmp/repo/worktrees/feature-x"],
+      additionalWorktreeIDsToDelete: [],
       trashedAt: trashedAt
     )
     await store.send(.removeSession(id: session.id)) {
@@ -516,7 +648,7 @@ struct BoardFeatureTests {
           repositoryID: "/tmp/repo",
           worktreeID: "/tmp/repo",
           deleteBackingWorktree: false,
-          additionalWorktreeIDsToDelete: []
+          additionalWorktreeIDsToDelete: ["/tmp/repo/worktrees/feature-x"]
         )
       )
     )
@@ -537,7 +669,7 @@ struct BoardFeatureTests {
       agent: .claude,
       initialPrompt: "Sibling"
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [converter, sibling] }
     let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
 
@@ -585,7 +717,7 @@ struct BoardFeatureTests {
       additionalWorktreeIDsToDelete: [],
       trashedAt: trashedAt
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$trashedSessions.withLock { $0 = [entry] }
 
     let store = TestStore(initialState: state) {
@@ -613,7 +745,7 @@ struct BoardFeatureTests {
       additionalWorktreeIDsToDelete: ["/tmp/repo/extra"],
       trashedAt: trashedAt
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$trashedSessions.withLock { $0 = [entry] }
 
     let store = TestStore(initialState: state) {
@@ -657,7 +789,7 @@ struct BoardFeatureTests {
       additionalWorktreeIDsToDelete: [],
       trashedAt: now.addingTimeInterval(-1 * 24 * 60 * 60)
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$trashedSessions.withLock { $0 = [staleEntry, freshEntry] }
 
     let store = TestStore(initialState: state) {
@@ -679,7 +811,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func markCompletedOnceSetsFlag() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -698,7 +830,7 @@ struct BoardFeatureTests {
   @Test(.dependencies) func priorityTerminationPresentsAlertAndDelegates() async {
     let session = Self.sampleSession(displayName: "Deploy fix", isPriority: true)
     let alertID = UUID(uuidString: "12345678-1234-1234-1234-123456789ABC")!
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -727,7 +859,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func priorityTerminationIgnoresNonPrioritySessions() async {
     let session = Self.sampleSession(displayName: "Regular session", isPriority: false)
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -740,7 +872,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func updateSessionBusyStatePersistsTransitionTimestamp() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -797,7 +929,7 @@ struct BoardFeatureTests {
   }
 
   @Test(.dependencies) func showAllRepositoriesClearsFilter() async {
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$filters.withLock {
       $0.selectedRepositoryIDs = ["/tmp/a", "/tmp/b"]
     }
@@ -812,7 +944,7 @@ struct BoardFeatureTests {
   }
 
   @Test(.dependencies) func focusRepositoryReplacesFilterWithSingleRepo() async {
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$filters.withLock {
       $0.selectedRepositoryIDs = ["/tmp/a", "/tmp/b"]
     }
@@ -831,7 +963,7 @@ struct BoardFeatureTests {
   @Test(.dependencies) func visibleSessionsFiltersByRepo() {
     let sessionA = Self.sampleSession(repositoryID: "/tmp/a")
     let sessionB = Self.sampleSession(repositoryID: "/tmp/b")
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [sessionA, sessionB] }
     state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
 
@@ -843,7 +975,7 @@ struct BoardFeatureTests {
   @Test(.dependencies) func visibleSessionsShowsAllWhenFilterEmpty() {
     let sessionA = Self.sampleSession(repositoryID: "/tmp/a")
     let sessionB = Self.sampleSession(repositoryID: "/tmp/b")
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [sessionA, sessionB] }
 
     #expect(state.visibleSessions.count == 2)
@@ -881,7 +1013,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func toggleAutoObserverFlipsFlag() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -915,7 +1047,7 @@ struct BoardFeatureTests {
     // edge.
     let sessionID = UUID()
     let session = Self.sampleSession(id: sessionID)
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -939,7 +1071,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func setAutoObserverPromptPersists() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -953,7 +1085,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func autoObserverTriggeredSkipsWhenDisabled() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -969,10 +1101,9 @@ struct BoardFeatureTests {
     let session = Self.sampleSession(id: sessionID)
     var modifiedSession = session
     modifiedSession.autoObserver = true
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [modifiedSession] }
 
-    let tabID = TerminalTabID(rawValue: sessionID)
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
@@ -993,7 +1124,7 @@ struct BoardFeatureTests {
     let sessionID = UUID()
     var session = Self.sampleSession(id: sessionID)
     session.autoObserver = true
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -1210,7 +1341,7 @@ struct BoardFeatureTests {
       name: "Repo",
       worktrees: []
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [original] }
 
     let store = TestStore(initialState: state) {
@@ -1262,7 +1393,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func rerunDetachedSessionDropsOriginalOnCreate() async {
     let original = Self.sampleSession(displayName: "Original")
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [original] }
 
     let store = TestStore(initialState: state) {
@@ -1306,7 +1437,7 @@ struct BoardFeatureTests {
       worktrees: []
     )
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -1354,7 +1485,7 @@ struct BoardFeatureTests {
       worktrees: []
     )
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -1400,7 +1531,7 @@ struct BoardFeatureTests {
       worktrees: []
     )
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
 
     let store = TestStore(initialState: state) {
@@ -1456,7 +1587,7 @@ struct BoardFeatureTests {
       remoteWorkingDirectory: "/srv/app"
     )
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     state.$remoteHosts.withLock { $0 = [host] }
     state.$remoteWorkspaces.withLock { $0 = [workspace] }
@@ -1504,7 +1635,7 @@ struct BoardFeatureTests {
 
   @Test(.dependencies) func restoreShellSessionLayoutIgnoresAgentSessions() async {
     let session = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
 
@@ -1565,7 +1696,7 @@ struct BoardFeatureTests {
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo"
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [ghost, rootSession] }
 
     let store = TestStore(initialState: state) {
@@ -1595,7 +1726,7 @@ struct BoardFeatureTests {
   @Test(.dependencies) func pruneWorktreesConfirmOrphanRemovalDispatchesRemoveSession() async {
     let orphanA = Self.sampleSession()
     let orphanB = Self.sampleSession()
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [orphanA, orphanB] }
 
     let store = TestStore(initialState: state) {

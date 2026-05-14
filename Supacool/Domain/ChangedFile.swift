@@ -76,7 +76,7 @@ nonisolated enum ChangeStatus: Hashable, Sendable {
 /// Porcelain-v1 format per entry: `XY <path>\0` where `XY` is the two
 /// status chars followed by a space. Renames/copies carry an extra
 /// `\0<old-path>` after the new path; we skip the old path.
-enum PorcelainStatusParser {
+nonisolated enum PorcelainStatusParser {
   static func parse(_ output: String) -> [ChangedFile] {
     guard !output.isEmpty else { return [] }
     let entries = output.split(separator: "\0", omittingEmptySubsequences: true)

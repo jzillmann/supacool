@@ -1,10 +1,10 @@
 import Foundation
 
 /// A session the user removed from the board. Held for `retentionWindow`
-/// (3 days) before its backing worktree(s) get nuked for real. Captures
-/// the same cleanup metadata that `BoardFeature.Delegate.sessionRemoved`
-/// fans out, so a permanent-delete or expiry sweep can drive the
-/// existing `repositories(.deleteWorktreeConfirmed)` path verbatim.
+/// (3 days) as recoverable session metadata. New removals delete owned
+/// backing worktree(s) immediately after the dirty-worktree preflight;
+/// the cleanup metadata below is still honored for legacy trash entries
+/// decoded from disk.
 ///
 /// On restore: the `session` payload reanimates the original card. The
 /// PTY isn't restored — the user picks Rerun / Resume to get a fresh
@@ -25,14 +25,13 @@ nonisolated struct TrashedSession: Identifiable, Hashable, Codable, Sendable {
   let worktreeID: String
 
   /// Whether the backing worktree should be deleted on permanent
-  /// removal. Captured from `BoardFeature.removeSession`'s computation
-  /// so trash → expiry preserves the user-visible "this session owns
-  /// its worktree" intent.
+  /// removal. New trash entries set this to false because cleanup is
+  /// dispatched at removal time; legacy entries may still carry true.
   let deleteBackingWorktree: Bool
 
   /// Extra worktrees this session created during its lifetime (e.g. via
-  /// the convert-to-worktree popover). Cleaned up alongside the main
-  /// one on permanent removal.
+  /// the convert-to-worktree popover). New trash entries clean these at
+  /// removal time; legacy entries may still clean them on permanent delete.
   let additionalWorktreeIDsToDelete: [String]
 
   /// When the user moved this session to the trash. The sweeper uses

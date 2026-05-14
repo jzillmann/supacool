@@ -1000,7 +1000,7 @@ final class WorktreeTerminalManager {
         return
       }
       guard let self else { return }
-      await self.expireAwaitingInput(tabID: tabID)
+      self.expireAwaitingInput(tabID: tabID)
     }
   }
 
@@ -1024,7 +1024,7 @@ final class WorktreeTerminalManager {
         return
       }
       guard let self else { return }
-      await self.expireDeferredWork(tabID: tabID)
+      self.expireDeferredWork(tabID: tabID)
     }
   }
 
@@ -1050,7 +1050,7 @@ final class WorktreeTerminalManager {
           return
         }
         guard let self else { return }
-        await self.sampleAwaitingInputActivity(tabID: tabID)
+        self.sampleAwaitingInputActivity(tabID: tabID)
       }
     }
   }
@@ -1114,7 +1114,7 @@ final class WorktreeTerminalManager {
         return
       }
       guard let self else { return }
-      await self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState)
+      self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState)
     }
   }
 
