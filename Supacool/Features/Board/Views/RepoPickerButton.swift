@@ -138,8 +138,21 @@ struct RepoPickerButton: View {
           .buttonStyle(.plain)
           .help("Show only \(repo.name)")
           .accessibilityLabel("Show only \(repo.name)")
-          .onHover { isHovering in
-            hoveredRepositoryID = isHovering ? repo.id : nil
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .background {
+          if hoveredRepositoryID == repo.id {
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+              .fill(Color(nsColor: .unemphasizedSelectedContentBackgroundColor))
+              .padding(.horizontal, 4)
+          }
+        }
+        .onHover { isHovering in
+          if isHovering {
+            hoveredRepositoryID = repo.id
+          } else if hoveredRepositoryID == repo.id {
+            hoveredRepositoryID = nil
           }
         }
       }
