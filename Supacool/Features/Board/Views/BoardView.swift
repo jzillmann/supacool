@@ -30,16 +30,18 @@ struct BoardView: View {
 
   /// Per-card frames in the board's shared coordinate space. Populated by
   /// each card via `BoardCardFramesKey`; read by Up/Down navigation so
-  /// arrow keys jump to the card directly above/below (not the next one
-  /// in index order — the grid is multi-column).
+  /// arrow keys jump to the card directly above/below (not just the next
+  /// one in flat index order).
   @State private var cardFrames: [AgentSession.ID: CGRect] = [:]
 
   private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
+  private let boardCardWidth: CGFloat = 280
+  private let boardCarouselSpacing: CGFloat = 14
   private static let boardGridCoordSpace = "BoardGrid"
 
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
-    // to the window title. What's left here is just the grid body.
+    // to the window title. What's left here is just the board body.
     bodyContent
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .coordinateSpace(name: Self.boardGridCoordSpace)
@@ -433,152 +435,184 @@ struct BoardView: View {
             .padding(.vertical, 4)
         }
 
-        LazyVGrid(
-          columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)],
-          spacing: 14
-        ) {
-          let bulkResumeRoutes = selectedResumeRoutes
-          let selectedResumeCount = bulkResumeRoutes.count
-          let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
-          ForEach(sessions, id: \.id) { session in
-            let sessionStatus = classify(session)
-            let sessionHasTab = sessionTabExists(session)
-            let activeParked = session.parked && sessionHasTab
-            let debugLink = debugLinkDescriptor(for: session)
-            let onDebugLinkTap: (() -> Void)? = {
-              guard let targetID = debugLink?.targetID else { return nil }
-              return { store.send(.focusSession(id: targetID)) }
-            }()
-            SessionCardContainer(
-              session: session,
-              repositoryName: repositories[id: session.repositoryID]?.name,
-              pullRequest: matchedPullRequest(for: session),
-              status: sessionStatus,
-              debugLinkTitle: debugLink?.title,
-              onDebugLinkTap: onDebugLinkTap,
-              dimmed: dimmed,
-              isHighlighted: highlightedSessionID == session.id,
-              isActiveParked: activeParked,
-              isSelected: selectedSessionIDs.contains(session.id),
-              selectedResumeCount: selectedResumeCount,
-              selectedPickerResumeCount: selectedPickerResumeCount,
-              onTap: { handleCardTap(session) },
-              onRemove: { store.send(.requestRemoveSession(id: session.id)) },
-              onRename: { onRenameSession(session) },
-              onTogglePriority: { store.send(.togglePriority(id: session.id)) },
-              onSetStatusOverride: { status in
-                store.send(.setManualStatusOverride(id: session.id, status: status))
-              },
-              onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
-                ? {
-                  store.send(
-                    .rerunDetachedSession(
-                      id: session.id,
-                      repositories: Array(repositories)
-                    )
-                  )
-                }
-                : nil,
-              onResume: canDirectResume(session, status: sessionStatus)
-                ? {
-                  store.send(
-                    .resumeDetachedSession(
-                      id: session.id,
-                      repositories: Array(repositories)
-                    )
-                  )
-                }
-                : nil,
-              onResumePicker: canResumeWithPicker(session, status: sessionStatus)
-                ? {
-                  store.send(
-                    .resumeDetachedSessionWithPicker(
-                      id: session.id,
-                      repositories: Array(repositories)
-                    )
-                  )
-                }
-                : nil,
-              onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
-                ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
-                : nil,
-              onPark: (sessionStatus != .parked)
-                ? {
-                  store.send(
-                    .parkSession(
-                      id: session.id,
-                      repositories: Array(repositories)
-                    )
-                  )
-                }
-                : nil,
-              onParkActive: (sessionStatus != .parked && sessionHasTab)
-                ? {
-                  store.send(.parkActiveSession(id: session.id))
-                }
-                : nil,
-              // Unpark routing:
-              //   • Still has a live tab (Park as Active) → just clear
-              //     the parked bit; the running terminal stays untouched.
-              //   • Captured session id → one-click resume, same as
-              //     detached cards with the same state.
-              //   • No captured id (shell session, or agent whose id we
-              //     never learned) → focus the card. The full-screen
-              //     detached UI takes over with explicit Rerun / Resume
-              //     via Picker / Remove buttons, matching the behavior
-              //     of a non-parked detached card. This gives the user
-              //     a choice rather than picking for them.
-              onUnpark: (sessionStatus == .parked)
-                ? {
-                  if sessionHasTab {
-                    store.send(.unparkSession(id: session.id))
-                  } else if session.agent != nil && hasCapturedNativeSessionID(session) {
-                    store.send(
-                      .resumeDetachedSession(
-                        id: session.id,
-                        repositories: Array(repositories)
+        if !sessions.isEmpty {
+          ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: true) {
+              LazyHStack(alignment: .top, spacing: boardCarouselSpacing) {
+                let bulkResumeRoutes = selectedResumeRoutes
+                let selectedResumeCount = bulkResumeRoutes.count
+                let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
+                ForEach(sessions, id: \.id) { session in
+                  let sessionStatus = classify(session)
+                  let sessionHasTab = sessionTabExists(session)
+                  let activeParked = session.parked && sessionHasTab
+                  let debugLink = debugLinkDescriptor(for: session)
+                  let onDebugLinkTap: (() -> Void)? = {
+                    guard let targetID = debugLink?.targetID else { return nil }
+                    return { store.send(.focusSession(id: targetID)) }
+                  }()
+                  SessionCardContainer(
+                    session: session,
+                    repositoryName: repositories[id: session.repositoryID]?.name,
+                    pullRequest: matchedPullRequest(for: session),
+                    status: sessionStatus,
+                    debugLinkTitle: debugLink?.title,
+                    onDebugLinkTap: onDebugLinkTap,
+                    dimmed: dimmed,
+                    isHighlighted: highlightedSessionID == session.id,
+                    isActiveParked: activeParked,
+                    isSelected: selectedSessionIDs.contains(session.id),
+                    selectedResumeCount: selectedResumeCount,
+                    selectedPickerResumeCount: selectedPickerResumeCount,
+                    onTap: { handleCardTap(session) },
+                    onRemove: { store.send(.requestRemoveSession(id: session.id)) },
+                    onRename: { onRenameSession(session) },
+                    onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+                    onSetStatusOverride: { status in
+                      store.send(.setManualStatusOverride(id: session.id, status: status))
+                    },
+                    onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
+                      ? {
+                        store.send(
+                          .rerunDetachedSession(
+                            id: session.id,
+                            repositories: Array(repositories)
+                          )
+                        )
+                      }
+                      : nil,
+                    onResume: canDirectResume(session, status: sessionStatus)
+                      ? {
+                        store.send(
+                          .resumeDetachedSession(
+                            id: session.id,
+                            repositories: Array(repositories)
+                          )
+                        )
+                      }
+                      : nil,
+                    onResumePicker: canResumeWithPicker(session, status: sessionStatus)
+                      ? {
+                        store.send(
+                          .resumeDetachedSessionWithPicker(
+                            id: session.id,
+                            repositories: Array(repositories)
+                          )
+                        )
+                      }
+                      : nil,
+                    onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
+                      ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
+                      : nil,
+                    onPark: (sessionStatus != .parked)
+                      ? {
+                        store.send(
+                          .parkSession(
+                            id: session.id,
+                            repositories: Array(repositories)
+                          )
+                        )
+                      }
+                      : nil,
+                    onParkActive: (sessionStatus != .parked && sessionHasTab)
+                      ? {
+                        store.send(.parkActiveSession(id: session.id))
+                      }
+                      : nil,
+                    // Unpark routing:
+                    //   • Still has a live tab (Park as Active) → just clear
+                    //     the parked bit; the running terminal stays untouched.
+                    //   • Captured session id → one-click resume, same as
+                    //     detached cards with the same state.
+                    //   • No captured id (shell session, or agent whose id we
+                    //     never learned) → focus the card. The full-screen
+                    //     detached UI takes over with explicit Rerun / Resume
+                    //     via Picker / Remove buttons, matching the behavior
+                    //     of a non-parked detached card. This gives the user
+                    //     a choice rather than picking for them.
+                    onUnpark: (sessionStatus == .parked)
+                      ? {
+                        if sessionHasTab {
+                          store.send(.unparkSession(id: session.id))
+                        } else if session.agent != nil && hasCapturedNativeSessionID(session) {
+                          store.send(
+                            .resumeDetachedSession(
+                              id: session.id,
+                              repositories: Array(repositories)
+                            )
+                          )
+                        } else {
+                          store.send(.focusSession(id: session.id))
+                        }
+                      }
+                      : nil,
+                    onAutoObserverToggle: {
+                      store.send(.toggleAutoObserver(id: session.id))
+                    },
+                    onAutoObserverPromptChanged: { prompt in
+                      store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
+                    },
+                    onAutoObserverRunNow: {
+                      store.send(.autoObserverTriggered(id: session.id))
+                    },
+                    onDebug: {
+                      store.send(
+                        .debugSessionRequested(
+                          id: session.id,
+                          repositories: Array(repositories)
+                        )
                       )
-                    )
-                  } else {
-                    store.send(.focusSession(id: session.id))
-                  }
-                }
-                : nil,
-              onAutoObserverToggle: {
-                store.send(.toggleAutoObserver(id: session.id))
-              },
-              onAutoObserverPromptChanged: { prompt in
-                store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
-              },
-              onAutoObserverRunNow: {
-                store.send(.autoObserverTriggered(id: session.id))
-              },
-              onDebug: {
-                store.send(
-                  .debugSessionRequested(
-                    id: session.id,
-                    repositories: Array(repositories)
+                    },
+                    onAppear: { store.send(.cardAppeared(id: session.id)) }
                   )
-                )
-              },
-              onAppear: { store.send(.cardAppeared(id: session.id)) }
-            )
-            .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
-            .transition(.opacity.combined(with: .scale(scale: 0.98)))
-            .background(
-              // Publishes this card's frame in the board's shared
-              // coordinate space so Up/Down can jump spatially — see
-              // `moveVertical`.
-              GeometryReader { geo in
-                Color.clear.preference(
-                  key: BoardCardFramesKey.self,
-                  value: [session.id: geo.frame(in: .named(Self.boardGridCoordSpace))]
-                )
+                  .frame(width: boardCardWidth)
+                  .id(session.id)
+                  .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
+                  .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                  .background(
+                    // Publishes this card's frame in the board's shared
+                    // coordinate space so Up/Down can jump spatially — see
+                    // `moveVertical`.
+                    GeometryReader { geo in
+                      Color.clear.preference(
+                        key: BoardCardFramesKey.self,
+                        value: [session.id: geo.frame(in: .named(Self.boardGridCoordSpace))]
+                      )
+                    }
+                  )
+                }
               }
-            )
+              .scrollTargetLayout()
+              .padding(.vertical, 2)
+            }
+            .scrollTargetBehavior(.viewAligned)
+            .onAppear {
+              scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
+            }
+            .onChange(of: highlightedSessionID) { _, _ in
+              scrollHighlightedCard(in: sessions, proxy: proxy)
+            }
           }
         }
       }
+    }
+  }
+
+  private func scrollHighlightedCard(
+    in sessions: [AgentSession],
+    proxy: ScrollViewProxy,
+    animated: Bool = true
+  ) {
+    guard let highlightedSessionID,
+      sessions.contains(where: { $0.id == highlightedSessionID })
+    else { return }
+
+    if animated {
+      withAnimation(.easeOut(duration: 0.18)) {
+        proxy.scrollTo(highlightedSessionID, anchor: .center)
+      }
+    } else {
+      proxy.scrollTo(highlightedSessionID, anchor: .center)
     }
   }
 
@@ -637,7 +671,7 @@ struct BoardView: View {
 /// Per-card frame reporter. Each card publishes its frame in the board's
 /// shared coordinate space so `BoardView.moveVertical` can pick the card
 /// directly above/below the current one instead of stepping through the
-/// flat nav order (which gives the wrong result on a multi-column grid).
+/// flat nav order.
 private struct BoardCardFramesKey: PreferenceKey {
   static let defaultValue: [AgentSession.ID: CGRect] = [:]
   static func reduce(

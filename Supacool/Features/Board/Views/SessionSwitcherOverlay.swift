@@ -21,6 +21,9 @@ struct SessionSwitcherOverlay: View {
   @State private var flagsMonitor: Any?
   @FocusState private var hasFocus: Bool
 
+  private let cardWidth: CGFloat = 220
+  private let cardSpacing: CGFloat = 12
+
   var body: some View {
     ZStack {
       // Click-outside to cancel.
@@ -100,14 +103,44 @@ struct SessionSwitcherOverlay: View {
           .font(.caption2.monospacedDigit())
           .foregroundStyle(.tertiary)
       }
-      LazyVGrid(
-        columns: [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 12)],
-        spacing: 12,
-      ) {
-        ForEach(sessions) { session in
-          cardView(for: session)
+      ScrollViewReader { proxy in
+        ScrollView(.horizontal, showsIndicators: true) {
+          LazyHStack(alignment: .top, spacing: cardSpacing) {
+            ForEach(sessions) { session in
+              cardView(for: session)
+                .frame(width: cardWidth)
+                .id(session.id)
+            }
+          }
+          .scrollTargetLayout()
+          .padding(.vertical, 2)
+        }
+        .scrollTargetBehavior(.viewAligned)
+        .onAppear {
+          scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
+        }
+        .onChange(of: highlightedSessionID) { _, _ in
+          scrollHighlightedCard(in: sessions, proxy: proxy)
         }
       }
+    }
+  }
+
+  private func scrollHighlightedCard(
+    in sessions: [AgentSession],
+    proxy: ScrollViewProxy,
+    animated: Bool = true
+  ) {
+    guard let highlightedSessionID,
+      sessions.contains(where: { $0.id == highlightedSessionID })
+    else { return }
+
+    if animated {
+      withAnimation(.easeOut(duration: 0.12)) {
+        proxy.scrollTo(highlightedSessionID, anchor: .center)
+      }
+    } else {
+      proxy.scrollTo(highlightedSessionID, anchor: .center)
     }
   }
 
