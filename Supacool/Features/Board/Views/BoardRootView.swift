@@ -79,6 +79,7 @@ struct BoardRootView: View {
     currentContent
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.background)
+    .background(HorizontalSwipeNavigationBridge(onSwipe: handleNavigationSwipe))
     // Floating tray (stale hooks, draft cards, etc.) hovers over whichever
     // mode is active — board grid or full-screen terminal.
     .overlay(alignment: .bottomTrailing) {
@@ -351,6 +352,35 @@ struct BoardRootView: View {
   private func beginRename(_ session: AgentSession) {
     renameDraft = session.displayName
     renamingSessionID = session.id
+  }
+
+  private func handleNavigationSwipe(_ swipe: HorizontalNavigationSwipe) -> Bool {
+    guard !isSessionSwitcherPresented else { return false }
+
+    switch swipe {
+    case .left:
+      guard store.focusedSessionID != nil else { return false }
+      store.send(.focusSession(id: nil))
+      return true
+
+    case .right:
+      guard store.focusedSessionID == nil,
+        let id = forwardNavigationSessionID
+      else { return false }
+      selectedSessionIDs.removeAll()
+      store.send(.focusSession(id: id))
+      return true
+    }
+  }
+
+  private var forwardNavigationSessionID: AgentSession.ID? {
+    let visible = store.visibleSessions
+    if let highlightedSessionID,
+      visible.contains(where: { $0.id == highlightedSessionID })
+    {
+      return highlightedSessionID
+    }
+    return BoardNavOrder.order(visibleSessions: visible, classify: classify).first
   }
 
   private func armAutoZoomBack(for focusedID: AgentSession.ID?) {

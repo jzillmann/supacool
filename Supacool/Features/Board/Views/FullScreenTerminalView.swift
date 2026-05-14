@@ -7,7 +7,7 @@ import SwiftUI
 /// pane uses to render a worktree's tab+split tree), wrapped in a minimal
 /// Supacool header with a back button.
 ///
-/// `⌘.` or `⌘B` returns to the board.
+/// `⌘.`, `⌘B`, or a two-finger swipe left returns to the board.
 struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
@@ -175,7 +175,7 @@ struct FullScreenTerminalView: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
-      .help("Return to board (⌘B or ⌘.)")
+      .help("Return to board (⌘B, ⌘., or two-finger swipe left)")
 
       Divider().frame(height: 18)
 

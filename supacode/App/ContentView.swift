@@ -25,39 +25,7 @@ struct ContentView: View {
   }
 
   var body: some View {
-    let isRunScriptPromptPresented = Binding(
-      get: { store.isRunScriptPromptPresented },
-      set: { store.send(.runScriptPromptPresented($0)) }
-    )
-    let runScriptDraft = Binding(
-      get: { store.runScriptDraft },
-      set: { store.send(.runScriptDraftChanged($0)) }
-    )
-    Group {
-      if store.repositories.isInitialLoadComplete {
-        // Supacool: the Matrix Board is the primary (and only) root view.
-        // The old NavigationSplitView + SidebarView + WorktreeDetailView
-        // code remains on disk for reference but is no longer wired to any
-        // Scene. See Supacool/Features/Board/ for the new UI.
-        BoardRootView(
-          store: boardStore,
-          repositories: store.repositories.repositories,
-          worktreeInfoByID: store.repositories.worktreeInfoByID,
-          terminalManager: terminalManager,
-          onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
-          onConfigureRepositories: {
-            let firstRepo = store.repositories.repositories.first
-            let section: SettingsSection =
-              firstRepo.map { .repository($0.id) } ?? .general
-            store.send(.settings(.setSelection(section)))
-          }
-        )
-      } else {
-        AppLoadingView()
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-          .background(.background)
-      }
-    }
+    rootContent
     .environment(\.surfaceBackgroundOpacity, terminalManager.surfaceBackgroundOpacity())
     .onChange(of: scenePhase) { _, newValue in
       store.send(.scenePhaseChanged(newValue))
@@ -104,17 +72,60 @@ struct ContentView: View {
         }
       )
     }
-    .overlay {
-      CommandPaletteOverlayView(
-        store: store.scope(state: \.commandPalette, action: \.commandPalette),
-        items: CommandPaletteFeature.commandPaletteItems(
-          from: store.repositories,
-          sessions: store.board.sessions,
-          ghosttyCommands: ghosttyShortcuts.commandPaletteEntries
-        )
-      )
-    }
+    .overlay { commandPaletteOverlay }
     .background(WindowTabbingDisabler())
+  }
+
+  @ViewBuilder
+  private var rootContent: some View {
+    if store.repositories.isInitialLoadComplete {
+      // Supacool: the Matrix Board is the primary (and only) root view.
+      // The old NavigationSplitView + SidebarView + WorktreeDetailView
+      // code remains on disk for reference but is no longer wired to any
+      // Scene. See Supacool/Features/Board/ for the new UI.
+      BoardRootView(
+        store: boardStore,
+        repositories: store.repositories.repositories,
+        worktreeInfoByID: store.repositories.worktreeInfoByID,
+        terminalManager: terminalManager,
+        onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
+        onConfigureRepositories: {
+          let firstRepo = store.repositories.repositories.first
+          let section: SettingsSection =
+            firstRepo.map { .repository($0.id) } ?? .general
+          store.send(.settings(.setSelection(section)))
+        }
+      )
+    } else {
+      AppLoadingView()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+    }
+  }
+
+  private var isRunScriptPromptPresented: Binding<Bool> {
+    Binding(
+      get: { store.isRunScriptPromptPresented },
+      set: { store.send(.runScriptPromptPresented($0)) }
+    )
+  }
+
+  private var runScriptDraft: Binding<String> {
+    Binding(
+      get: { store.runScriptDraft },
+      set: { store.send(.runScriptDraftChanged($0)) }
+    )
+  }
+
+  private var commandPaletteOverlay: some View {
+    CommandPaletteOverlayView(
+      store: store.scope(state: \.commandPalette, action: \.commandPalette),
+      items: CommandPaletteFeature.commandPaletteItems(
+        from: store.repositories,
+        sessions: store.board.sessions,
+        ghosttyCommands: ghosttyShortcuts.commandPaletteEntries
+      )
+    )
   }
 
 }
