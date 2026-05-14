@@ -30,6 +30,11 @@ final class GhosttySurfaceBridge {
   /// — this bridge stays agnostic so the same hook can be used for other
   /// consumers (e.g. screen-reader feedback) if they want different gating.
   var onInputTap: ((String) -> Void)?
+  /// Invoked when the user submits a command via a control-only keypress
+  /// (Return/Enter). Kept separate from `onInputTap` so transcript logging
+  /// can continue to ignore low-signal control keys while status tracking
+  /// still sees prompt submissions.
+  var onInputSubmitted: (() -> Void)?
   private var progressResetTask: Task<Void, Never>?
 
   deinit {

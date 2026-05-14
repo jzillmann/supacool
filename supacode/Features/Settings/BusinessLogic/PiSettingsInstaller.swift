@@ -69,6 +69,7 @@ nonisolated struct PiSettingsInstaller {
     import { createConnection } from "node:net";
 
     const IDLE_DEBOUNCE_MS = 500;
+    const BUSY_HEARTBEAT_MS = 2000;
     const COMPACTION_FALLBACK_MS = 15 * 60 * 1000;
     const SOCKET_TIMEOUT_MS = 1000;
     const AGENT_NAME = "pi";
@@ -76,6 +77,7 @@ nonisolated struct PiSettingsInstaller {
     const busyReasons = new Set();
     let reportedBusy = false;
     let idleTimer = undefined;
+    let busyHeartbeatTimer = undefined;
     let compactionFallbackTimer = undefined;
 
     function supacoolEnv() {
@@ -117,11 +119,26 @@ nonisolated struct PiSettingsInstaller {
     function sendBusySnapshot(force = false) {
       const active = busyReasons.size > 0;
       if (!force && reportedBusy === active) return;
-      reportedBusy = active;
 
       const baseHeader = header();
       if (!baseHeader) return;
+      reportedBusy = active;
       sendToSupacool(`${baseHeader} ${active ? "1" : "0"} ${process.pid}\n`);
+    }
+
+    function startBusyHeartbeat() {
+      if (busyHeartbeatTimer !== undefined) return;
+      busyHeartbeatTimer = setInterval(() => {
+        if (busyReasons.size > 0) {
+          sendBusySnapshot(true);
+        }
+      }, BUSY_HEARTBEAT_MS);
+    }
+
+    function stopBusyHeartbeatIfIdle() {
+      if (busyReasons.size > 0) return;
+      if (busyHeartbeatTimer !== undefined) clearInterval(busyHeartbeatTimer);
+      busyHeartbeatTimer = undefined;
     }
 
     function setBusyReason(reason, active, force = false) {
@@ -131,6 +148,11 @@ nonisolated struct PiSettingsInstaller {
         busyReasons.delete(reason);
       }
       sendBusySnapshot(force);
+      if (busyReasons.size > 0) {
+        startBusyHeartbeat();
+      } else {
+        stopBusyHeartbeatIfIdle();
+      }
     }
 
     function scheduleCompactionFallbackClear() {
@@ -170,7 +192,15 @@ nonisolated struct PiSettingsInstaller {
       pi.on("agent_start", async (_event, ctx) => {
         clearIdleTimer();
         sendSessionID(ctx, "AgentStart");
-        setBusyReason("agent", true);
+        setBusyReason("agent", true, true);
+      });
+
+      pi.on("turn_start", async () => {
+        setBusyReason("agent", true, true);
+      });
+
+      pi.on("tool_execution_start", async () => {
+        setBusyReason("agent", true, true);
       });
 
       pi.on("agent_end", async () => {
@@ -184,7 +214,7 @@ nonisolated struct PiSettingsInstaller {
       pi.on("session_before_compact", async (event, ctx) => {
         clearIdleTimer();
         sendSessionID(ctx, "CompactionStart");
-        setBusyReason("compaction", true);
+        setBusyReason("compaction", true, true);
         scheduleCompactionFallbackClear();
         if (event.signal) {
           event.signal.addEventListener(
@@ -213,6 +243,7 @@ nonisolated struct PiSettingsInstaller {
         clearIdleTimer();
         clearCompactionFallbackTimer();
         busyReasons.clear();
+        stopBusyHeartbeatIfIdle();
         sendBusySnapshot(true);
       });
     }

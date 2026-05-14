@@ -1219,7 +1219,7 @@ struct WorktreeTerminalManagerTests {
     @Shared(.agentSessions) var sessions: [AgentSession]
     $sessions.withLock { $0 = [session] }
 
-    state.onInputObserved?(TerminalTabID(rawValue: sessionID))
+    state.onInputObserved?(TerminalTabID(rawValue: sessionID), "x")
 
     #expect(sessions.first?.parked == false)
   }
@@ -1241,13 +1241,132 @@ struct WorktreeTerminalManagerTests {
     $sessions.withLock { $0 = [session] }
     let beforeActivity = sessions.first?.lastActivityAt
 
-    state.onInputObserved?(TerminalTabID(rawValue: sessionID))
+    state.onInputObserved?(TerminalTabID(rawValue: sessionID), "x")
 
     // Non-parked sessions stay untouched — lastActivityAt isn't bumped on
     // every keystroke, so a quiet user typing in a live terminal doesn't
     // generate write churn against the persisted shared store.
     #expect(sessions.first?.parked == false)
     #expect(sessions.first?.lastActivityAt == beforeActivity)
+  }
+
+  @Test func submittedInputMarksAgentSessionOptimisticallyBusy() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), startPromptScreenScanning: false)
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .pi,
+          initialPrompt: "x",
+        ),
+      ]
+    }
+
+    state.onInputObserved?(tabID, "\r")
+
+    #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+  }
+
+  @Test func typedInputWithoutSubmissionDoesNotMarkOptimisticallyBusy() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), startPromptScreenScanning: false)
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .pi,
+          initialPrompt: "x",
+        ),
+      ]
+    }
+
+    state.onInputObserved?(tabID, "hello")
+
+    #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+  }
+
+  @Test func authoritativeBusyFalseClearsOptimisticBusy() {
+    let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-optimistic-clear")
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: server,
+      startPromptScreenScanning: false,
+    )
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    let tab = state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .pi,
+          initialPrompt: "x",
+        ),
+      ]
+    }
+
+    state.onInputObserved?(tabID, "\n")
+    #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+
+    server.onBusy?(worktree.id, tabID.rawValue, tab.surfaceID, false, 21955)
+
+    #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+  }
+
+  @Test func optimisticBusyExpiresIfHooksNeverArrive() async {
+    let clock = TestClock()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      optimisticBusyTTL: .seconds(5),
+      startPromptScreenScanning: false,
+      clock: clock,
+    )
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .pi,
+          initialPrompt: "x",
+        ),
+      ]
+    }
+
+    state.onInputObserved?(tabID, "\n")
+    #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+
+    await Task.yield()
+    await clock.advance(by: .seconds(5))
+    await Task.yield()
+
+    #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
   }
 
   @Test func selectTabWithStaleIdIsNoOp() {

@@ -19,6 +19,7 @@ private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptStableSamples = 2
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
 private let ownedProcessRefreshIntervalDefault: Duration = .seconds(60)
+private let optimisticBusyTTLDefault: Duration = .seconds(15)
 nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
 nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
 
@@ -49,6 +50,10 @@ final class WorktreeTerminalManager {
     let worktreeID: Worktree.ID
   }
 
+  private struct OptimisticBusyTracker {
+    let worktreeID: Worktree.ID
+  }
+
   /// Supacool-only. Per-tab registration of the agent process PID so a
   /// background sweep can clear stale busy/awaiting state if the agent
   /// crashes (SIGKILL, OOM) before a clean `Stop`/`SessionEnd` hook fires.
@@ -66,6 +71,7 @@ final class WorktreeTerminalManager {
   private let awaitingInputActivityPollInterval: Duration
   private let agentPIDSweepInterval: Duration
   private let ownedProcessRefreshInterval: Duration
+  private let optimisticBusyTTL: Duration
   private let deferredWorkFallbackTTL: Duration
   private let deferredWorkLeaseBuffer: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
@@ -91,6 +97,8 @@ final class WorktreeTerminalManager {
   private var awaitingInputPromptScanTickCount: Int = 0
   private var deferredWorkByTab: [UUID: DeferredWorkTracker] = [:]
   private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
+  private var optimisticBusyByTab: [UUID: OptimisticBusyTracker] = [:]
+  private var optimisticBusyExpiryTasks: [UUID: Task<Void, Never>] = [:]
   /// Per-tab PID registry, keyed by PID so a surface running multiple
   /// agents (pi spawning codex on the same PTY) keeps a registration for
   /// each. Without per-PID keying the inner agent's registration would
@@ -117,6 +125,7 @@ final class WorktreeTerminalManager {
     awaitingInputActivityPollInterval: Duration = awaitingInputActivityPollIntervalDefault,
     agentPIDSweepInterval: Duration = agentPIDSweepIntervalDefault,
     ownedProcessRefreshInterval: Duration = ownedProcessRefreshIntervalDefault,
+    optimisticBusyTTL: Duration = optimisticBusyTTLDefault,
     deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
@@ -132,6 +141,7 @@ final class WorktreeTerminalManager {
     self.awaitingInputActivityPollInterval = awaitingInputActivityPollInterval
     self.agentPIDSweepInterval = agentPIDSweepInterval
     self.ownedProcessRefreshInterval = ownedProcessRefreshInterval
+    self.optimisticBusyTTL = optimisticBusyTTL
     self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.isProcessAlive = isProcessAlive
@@ -193,8 +203,10 @@ final class WorktreeTerminalManager {
           }
         }
       }
-      // Any busy transition (resumed or finished) supersedes a prior
-      // "awaiting input" signal for this tab.
+      // Any authoritative busy transition (resumed or finished)
+      // supersedes local optimistic state and a prior "awaiting input"
+      // signal for this tab.
+      self?.clearOptimisticBusy(tabID: tabID)
       self?.clearAwaitingInput(tabID: tabID, reason: "busy-changed")
       if active {
         self?.clearDeferredWork(tabID: tabID)
@@ -459,6 +471,16 @@ final class WorktreeTerminalManager {
   /// re-engaging with the session moves it back into the live buckets.
   /// No-ops when the session isn't parked, so per-keystroke calls are
   /// effectively free after the first one.
+  private func handleInputObserved(worktreeID: Worktree.ID, tabID: TerminalTabID, text: String) {
+    unparkSessionIfNeeded(tabID: tabID)
+    guard Self.isSubmittedInput(text) else { return }
+    markOptimisticBusy(worktreeID: worktreeID, tabID: tabID)
+  }
+
+  private nonisolated static func isSubmittedInput(_ text: String) -> Bool {
+    text.contains("\r") || text.contains("\n")
+  }
+
   private func unparkSessionIfNeeded(tabID: TerminalTabID) {
     var didUnpark = false
     let now = Date()
@@ -496,7 +518,8 @@ final class WorktreeTerminalManager {
   /// active or long-running command in progress). Reads flow through the
   /// @Observable tracking so callers re-render when state changes.
   func isAgentBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
-    states[worktreeID]?.isTabBusy(tabID) ?? false
+    if states[worktreeID]?.isTabBusy(tabID) == true { return true }
+    return optimisticBusyByTab[tabID.rawValue]?.worktreeID == worktreeID
   }
 
   /// Whether the agent in this tab is paused on user input (permission
@@ -760,8 +783,8 @@ final class WorktreeTerminalManager {
     state.onSetupScriptConsumed = { [weak self] in
       self?.emit(.setupScriptConsumed(worktreeID: worktree.id))
     }
-    state.onInputObserved = { [weak self] tabID in
-      self?.unparkSessionIfNeeded(tabID: tabID)
+    state.onInputObserved = { [weak self] tabID, text in
+      self?.handleInputObserved(worktreeID: worktree.id, tabID: tabID, text: text)
     }
     states[worktree.id] = state
     terminalLogger.info("Created terminal state for worktree \(worktree.id)")
@@ -1038,6 +1061,39 @@ final class WorktreeTerminalManager {
     deferredWorkByTab.removeValue(forKey: tabID)
   }
 
+  private func markOptimisticBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) {
+    let rawTabID = tabID.rawValue
+    guard states[worktreeID]?.containsTabTree(tabID) == true else { return }
+    guard agentSessions.contains(where: { $0.id == rawTabID && $0.agent != nil }) else { return }
+
+    optimisticBusyByTab[rawTabID] = OptimisticBusyTracker(worktreeID: worktreeID)
+    optimisticBusyExpiryTasks.removeValue(forKey: rawTabID)?.cancel()
+    clearAwaitingInput(tabID: rawTabID, reason: "activity-resumed")
+    clearDeferredWork(tabID: rawTabID)
+
+    let sleep = self.sleep
+    let optimisticBusyTTL = self.optimisticBusyTTL
+    optimisticBusyExpiryTasks[rawTabID] = Task { [weak self, sleep, optimisticBusyTTL] in
+      do {
+        try await sleep(optimisticBusyTTL)
+      } catch {
+        return
+      }
+      guard let self else { return }
+      self.expireOptimisticBusy(tabID: rawTabID)
+    }
+  }
+
+  private func clearOptimisticBusy(tabID: UUID) {
+    optimisticBusyExpiryTasks.removeValue(forKey: tabID)?.cancel()
+    optimisticBusyByTab.removeValue(forKey: tabID)
+  }
+
+  private func expireOptimisticBusy(tabID: UUID) {
+    optimisticBusyExpiryTasks[tabID] = nil
+    optimisticBusyByTab.removeValue(forKey: tabID)
+  }
+
   private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
     let sleep = self.sleep
@@ -1215,7 +1271,11 @@ final class WorktreeTerminalManager {
       }
     }
 
-    cleanupAwaitingInputTracking(closedTabIDs: Set(awaitingInputByTab.keys).subtracting(openTabIDs))
+    let trackedTabIDs = Set(awaitingInputByTab.keys)
+      .union(deferredWorkByTab.keys)
+      .union(agentPIDByTab.keys)
+      .union(optimisticBusyByTab.keys)
+    cleanupAwaitingInputTracking(closedTabIDs: trackedTabIDs.subtracting(openTabIDs))
     awaitingInputPromptCandidates = awaitingInputPromptCandidates.filter { openTabIDs.contains($0.key) }
   }
 
@@ -1241,6 +1301,8 @@ final class WorktreeTerminalManager {
       awaitingInputDebounceTasks.removeValue(forKey: tabID)?.cancel()
       deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
       awaitingInputPromptCandidates.removeValue(forKey: tabID)
+      optimisticBusyExpiryTasks.removeValue(forKey: tabID)?.cancel()
+      optimisticBusyByTab.removeValue(forKey: tabID)
       // Trace: if the tab is being cleaned up while raw-active, record
       // the implicit clear so the session file shows the true→false
       // edge with a meaningful reason rather than a phantom stuck-on.
@@ -1332,6 +1394,7 @@ final class WorktreeTerminalManager {
       // Awaiting / deferred state belongs to the tab as a whole — only
       // clear it once the last registered agent dies.
       if agentPIDByTab[tabID] == nil {
+        clearOptimisticBusy(tabID: tabID)
         clearAwaitingInput(tabID: tabID, reason: "pid-gone")
         clearDeferredWork(tabID: tabID)
       }

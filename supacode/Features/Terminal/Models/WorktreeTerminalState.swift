@@ -75,8 +75,9 @@ final class WorktreeTerminalState {
   var onSetupScriptConsumed: (() -> Void)?
   /// Fires when any input (keystroke, paste, programmatic `sendText`)
   /// reaches a tab's PTY. Supacool uses it to auto-unpark a session that
-  /// the user is engaging with again.
-  var onInputObserved: ((TerminalTabID) -> Void)?
+  /// the user is engaging with again and to optimistically mark submitted
+  /// prompts as busy while waiting for agent hooks to catch up.
+  var onInputObserved: ((TerminalTabID, String) -> Void)?
 
   init(
     runtime: GhosttyRuntime,
@@ -1362,9 +1363,12 @@ final class WorktreeTerminalState {
     // is fired regardless: re-engaging with a parked session via input
     // (even a sudo password) should still bring the card back.
     view.bridge.onInputTap = { [weak self, weak view] text in
-      self?.onInputObserved?(tabId)
+      self?.onInputObserved?(tabId, text)
       guard let view, view.bridge.state.secureInput != GHOSTTY_SECURE_INPUT_ON else { return }
       TranscriptRecorder.shared.appendInput(tabID: tabId, text: text)
+    }
+    view.bridge.onInputSubmitted = { [weak self] in
+      self?.onInputObserved?(tabId, "\r")
     }
     view.bridge.onCloseRequest = { [weak self, weak view] processAlive in
       guard let self, let view else { return }

@@ -1277,6 +1277,11 @@ final class GhosttySurfaceView: NSView, Identifiable {
       composing: composing
     )
     let finalText = text ?? ghosttyCharacters(resolvedEvent)
+    if let finalText, Self.isSubmissionText(finalText),
+      action == GHOSTTY_ACTION_PRESS || action == GHOSTTY_ACTION_REPEAT
+    {
+      bridge.onInputSubmitted?()
+    }
     if let finalText, !finalText.isEmpty,
       let codepoint = finalText.utf8.first, codepoint >= 0x20
     {
@@ -1371,6 +1376,10 @@ final class GhosttySurfaceView: NSView, Identifiable {
       return true
     }
     return false
+  }
+
+  private static func isSubmissionText(_ text: String) -> Bool {
+    text.contains("\r") || text.contains("\n")
   }
 
   private func ghosttyCharacters(_ event: NSEvent) -> String? {

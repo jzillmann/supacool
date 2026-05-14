@@ -33,7 +33,7 @@ struct PiSettingsInstallerTests {
     #expect(source.contains("pi.on(\"session_compact\""))
     #expect(source.contains("sendSessionID(ctx, \"CompactionStart\")"))
     #expect(source.contains("sendSessionID(ctx, \"CompactionEnd\")"))
-    #expect(source.contains("setBusyReason(\"compaction\", true)"))
+    #expect(source.contains("setBusyReason(\"compaction\", true, true)"))
     #expect(source.contains("setBusyReason(\"compaction\", false)"))
     #expect(source.contains("setBusyReason(\"compaction\", false, true)"))
     #expect(source.contains("busyReasons.delete(\"agent\");"))
@@ -48,9 +48,21 @@ struct PiSettingsInstallerTests {
     #expect(source.contains("const active = busyReasons.size > 0;"))
     #expect(source.contains("busyReasons.add(reason);"))
     #expect(source.contains("busyReasons.delete(reason);"))
-    #expect(source.contains("setBusyReason(\"agent\", true)"))
+    #expect(source.contains("setBusyReason(\"agent\", true, true)"))
     #expect(source.contains("setBusyReason(\"agent\", false)"))
     #expect(source.contains("busyReasons.clear();"))
+  }
+
+  @Test func extensionRefreshesBusyStateWhilePiIsRunning() {
+    let source = PiSettingsInstaller.extensionSource
+
+    #expect(source.contains("const BUSY_HEARTBEAT_MS = 2000;"))
+    #expect(source.contains("startBusyHeartbeat();"))
+    #expect(source.contains("stopBusyHeartbeatIfIdle();"))
+    #expect(source.contains("sendBusySnapshot(true);"))
+    #expect(source.contains("pi.on(\"turn_start\""))
+    #expect(source.contains("pi.on(\"tool_execution_start\""))
+    #expect(source.contains("setBusyReason(\"compaction\", true, true)"))
   }
 
   @Test func staleWhenExistingExtensionDiffers() throws {
