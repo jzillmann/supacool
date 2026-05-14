@@ -109,13 +109,13 @@ struct SessionCardView: View {
     // makes macOS click routing flaky. Keep the card tap as a gesture instead.
     .onTapGesture(perform: onTap)
     .overlay {
-      // Show the play overlay for ANY dormant card — parked, idle (detached),
-      // interrupted, or disconnected. Clicking always routes through `onTap`
-      // (i.e. focusSession → FullScreenTerminalView), which renders the
-      // detached state with the "Last response" preview, Rerun, and Resume
-      // affordances. Direct-resume / unpark stays available via right-click.
+      // Show the hover overlay for ANY dormant card — parked, idle (detached),
+      // interrupted, or disconnected. The play icon (when available) resumes
+      // the session in place; the info icon routes through `onTap` (i.e.
+      // focusSession → FullScreenTerminalView) for the full detail view with
+      // Rerun / Resume via Picker / Last response preview.
       if isDormant, isHovered {
-        dormantHoverOverlay(onPlay: onTap)
+        dormantHoverOverlay(onPlay: dormantPlayAction, onInfo: onTap)
       }
     }
     .animation(.spring(response: 0.28, dampingFraction: 0.86), value: status)
@@ -295,24 +295,56 @@ struct SessionCardView: View {
     return isDormant ? .orange : Color.secondary.opacity(0.6)
   }
 
-  /// Shown on hover for any dormant card — a big centered play symbol over
-  /// a translucent scrim signalling "the tab is gone, click to open".
-  /// Clicking forwards to the regular tap handler so the user lands in the
-  /// detached session view (Rerun / Resume / Last response preview).
-  private func dormantHoverOverlay(onPlay: @escaping () -> Void) -> some View {
-    Button(action: onPlay) {
-      ZStack {
-        RoundedRectangle(cornerRadius: 10, style: .continuous)
-          .fill(.background.opacity(0.55))
-        Image(systemName: "play.circle.fill")
-          .font(.system(size: 44, weight: .semibold))
-          .foregroundStyle(.primary, .background)
-          .symbolRenderingMode(.palette)
+  /// "Best available" resume action for the hover play icon. Prefer the
+  /// direct in-place resume; fall back to unpark (which routes to direct
+  /// resume itself when the session id was captured). When neither is
+  /// available, the play icon is hidden — only the info icon stays, so
+  /// the user can still drop into the detail view for Rerun / Picker.
+  private var dormantPlayAction: (() -> Void)? {
+    onResume ?? onUnpark
+  }
+
+  /// Shown on hover for any dormant card — a play icon that resumes the
+  /// session in place (when possible), and an info icon that opens the
+  /// detail view with Rerun / Resume via Picker / Last response preview.
+  private func dormantHoverOverlay(
+    onPlay: (() -> Void)?,
+    onInfo: @escaping () -> Void
+  ) -> some View {
+    ZStack {
+      RoundedRectangle(cornerRadius: 10, style: .continuous)
+        .fill(.background.opacity(0.55))
+      HStack(spacing: 24) {
+        if let onPlay {
+          dormantHoverButton(
+            systemImage: "play.circle.fill",
+            help: "Resume session",
+            action: onPlay
+          )
+        }
+        dormantHoverButton(
+          systemImage: "info.circle.fill",
+          help: "Open session details",
+          action: onInfo
+        )
       }
     }
-    .buttonStyle(.plain)
-    .help("Open session")
     .transition(.opacity)
+  }
+
+  private func dormantHoverButton(
+    systemImage: String,
+    help: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: systemImage)
+        .font(.system(size: 44, weight: .semibold))
+        .foregroundStyle(.primary, .background)
+        .symbolRenderingMode(.palette)
+    }
+    .buttonStyle(.plain)
+    .help(help)
   }
 
   private var footer: some View {
