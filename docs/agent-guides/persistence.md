@@ -71,9 +71,23 @@ No. Synthesized `encode(to:)` is fine because it writes every declared field. Th
 Files following this pattern:
 
 - `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacool/agent-sessions.json`
+- `Supacool/Domain/SessionTerminal.swift` → embedded inside each `AgentSession.terminals[]`
 - `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacool/board-filters.json`
+- `supacode/Features/Terminal/Models/TerminalLayoutSnapshot.swift` (types `TerminalLayoutSnapshot` and `TabSnapshot`) → `~/.supacool/layouts.json`
 
 If you add another `@Shared`-backed Codable, append it here.
+
+### Special case: schema-shape migrations
+
+`AgentSession` itself did a one-time schema reshape: the per-terminal fields
+(`agent`, `initialPrompt`, `agentNativeSessionID`, `lastKnownBusy`,
+`hasObservedInitialAgentEvent`, `hasCompletedAtLeastOnce`,
+`lastActivityAt`, `lastBusyTransitionAt`) moved into a new
+`terminals: [SessionTerminal]` array with `primaryTerminalID: UUID`.
+`init(from decoder:)` detects an absent `terminals` key and synthesizes a
+single primary terminal from the legacy top-level keys. Old files thus
+upgrade in place; new writes drop the legacy keys. The legacy keys remain
+in `CodingKeys` solely so the read path can find them — do not delete.
 
 ## On-disk location
 

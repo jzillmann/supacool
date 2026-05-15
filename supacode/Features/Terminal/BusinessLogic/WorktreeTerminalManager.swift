@@ -435,23 +435,42 @@ final class WorktreeTerminalManager {
   ) {
     guard let sessionID = notification.sessionID, !sessionID.isEmpty else { return }
     $agentSessions.withLock { sessions in
-      guard let index = sessions.firstIndex(where: { $0.id == tabID }) else { return }
-      let storedAgentID = sessions[index].agent?.id.lowercased()
+      guard let (sessionIndex, terminalIndex) =
+        Self.indices(for: tabID, in: sessions) else { return }
+      let storedAgentID = sessions[sessionIndex].terminals[terminalIndex].agent?.id.lowercased()
       let hookAgentID = notification.agent.lowercased()
       guard storedAgentID == hookAgentID else {
         terminalLogger.warning(
           "Ignoring \(hookAgentID) hook session id for tab \(tabID) — "
-            + "session is registered as \(storedAgentID ?? "shell")"
+            + "session terminal is registered as \(storedAgentID ?? "shell")"
         )
         return
       }
-      guard sessions[index].agentNativeSessionID != sessionID else { return }
-      sessions[index].agentNativeSessionID = sessionID
-      sessions[index].lastActivityAt = Date()
+      guard sessions[sessionIndex].terminals[terminalIndex].agentNativeSessionID != sessionID
+      else { return }
+      sessions[sessionIndex].updateTerminal(id: tabID) {
+        $0.agentNativeSessionID = sessionID
+        $0.lastActivityAt = Date()
+      }
       terminalLogger.info(
         "Captured \(notification.agent) session id \(sessionID) for tab \(tabID)"
       )
     }
+  }
+
+  /// Locate the (session, terminal) index pair owning a given tab id.
+  /// Supports both the primary agent tab (where `session.id == tabID`) and
+  /// auxiliary terminals living in the session's composition.
+  private static func indices(
+    for tabID: UUID,
+    in sessions: [AgentSession]
+  ) -> (sessionIndex: Int, terminalIndex: Int)? {
+    for (sessionIndex, session) in sessions.enumerated() {
+      if let terminalIndex = session.terminals.firstIndex(where: { $0.id == tabID }) {
+        return (sessionIndex, terminalIndex)
+      }
+    }
+    return nil
   }
 
   /// Auto-unpark: any input reaching the PTY (keystroke, paste,
@@ -463,10 +482,11 @@ final class WorktreeTerminalManager {
     var didUnpark = false
     let now = Date()
     $agentSessions.withLock { sessions in
-      guard let index = sessions.firstIndex(where: { $0.id == tabID.rawValue }) else { return }
-      guard sessions[index].parked else { return }
-      sessions[index].parked = false
-      sessions[index].lastActivityAt = now
+      guard let (sessionIndex, _) =
+        Self.indices(for: tabID.rawValue, in: sessions) else { return }
+      guard sessions[sessionIndex].parked else { return }
+      sessions[sessionIndex].parked = false
+      sessions[sessionIndex].updateTerminal(id: tabID.rawValue) { $0.lastActivityAt = now }
       didUnpark = true
     }
     guard didUnpark else { return }
@@ -483,10 +503,14 @@ final class WorktreeTerminalManager {
   /// fixed launch delay.
   private func markInitialAgentEventObserved(tabID: UUID) {
     $agentSessions.withLock { sessions in
-      guard let index = sessions.firstIndex(where: { $0.id == tabID }) else { return }
-      guard !sessions[index].hasObservedInitialAgentEvent else { return }
-      sessions[index].hasObservedInitialAgentEvent = true
-      sessions[index].lastActivityAt = Date()
+      guard let (sessionIndex, terminalIndex) =
+        Self.indices(for: tabID, in: sessions) else { return }
+      guard !sessions[sessionIndex].terminals[terminalIndex].hasObservedInitialAgentEvent
+      else { return }
+      sessions[sessionIndex].updateTerminal(id: tabID) {
+        $0.hasObservedInitialAgentEvent = true
+        $0.lastActivityAt = Date()
+      }
     }
   }
 
@@ -670,7 +694,7 @@ final class WorktreeTerminalManager {
       guard id != selectedWorktreeID else { return }
       if let previousID = selectedWorktreeID, let previousState = states[previousID] {
         previousState.setAllSurfacesOccluded()
-        saveLayoutSnapshot?(previousID, previousState.captureLayoutSnapshot())
+        saveLayoutSnapshot?(previousID, captureLayoutSnapshotWithSessionIDs(from: previousState))
       }
       selectedWorktreeID = id
       terminalLogger.info("Selected worktree \(id ?? "nil")")
@@ -850,7 +874,7 @@ final class WorktreeTerminalManager {
       removed.append((id, state))
     }
     for (id, state) in removed {
-      saveLayoutSnapshot?(id, state.captureLayoutSnapshot())
+      saveLayoutSnapshot?(id, captureLayoutSnapshotWithSessionIDs(from: state))
       state.closeAllSurfaces()
     }
     if !removed.isEmpty {
@@ -909,7 +933,77 @@ final class WorktreeTerminalManager {
       return
     }
     for (id, state) in states {
-      saveLayoutSnapshot(id, state.captureLayoutSnapshot())
+      saveLayoutSnapshot(id, captureLayoutSnapshotWithSessionIDs(from: state))
+    }
+  }
+
+  /// Wraps `WorktreeTerminalState.captureLayoutSnapshot()` and stamps each
+  /// `TabSnapshot.sessionID` from `@Shared(.agentSessions)`. The state
+  /// itself doesn't know about sessions; the manager owns that mapping.
+  /// Tabs whose UUID matches no session's terminals (worktree-mode tabs)
+  /// keep `sessionID == nil`.
+  private func captureLayoutSnapshotWithSessionIDs(
+    from state: WorktreeTerminalState
+  ) -> TerminalLayoutSnapshot? {
+    guard let snapshot = state.captureLayoutSnapshot() else { return nil }
+    let sessions = agentSessions
+    let enrichedTabs = snapshot.tabs.map { tab -> TerminalLayoutSnapshot.TabSnapshot in
+      guard let tabID = tab.id else { return tab }
+      let sessionID = sessions.first(where: { session in
+        session.terminals.contains(where: { $0.id == tabID })
+      })?.id
+      return tab.withSessionID(sessionID)
+    }
+    return TerminalLayoutSnapshot(tabs: enrichedTabs, selectedTabIndex: snapshot.selectedTabIndex)
+  }
+
+  /// Add a new shell terminal as an auxiliary of the given session. Mints
+  /// a fresh tab id, registers it on the session's `terminals` array,
+  /// spawns the Ghostty tab in `worktree`, and persists the new layout.
+  /// Returns the new tab id, or nil if no such session exists or no
+  /// snapshot store is configured.
+  @discardableResult
+  func addShellTerminal(
+    toSession sessionID: AgentSession.ID,
+    in worktree: Worktree
+  ) -> TerminalTabID? {
+    let newTabID = UUID()
+    var didAttach = false
+    $agentSessions.withLock { sessions in
+      guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+      let terminal = SessionTerminal(id: newTabID, role: .shell)
+      sessions[idx].terminals.append(terminal)
+      didAttach = true
+    }
+    guard didAttach else { return nil }
+    createTabAsync(in: worktree, runSetupScriptIfNew: false, tabID: newTabID)
+    if let state = states[worktree.id] {
+      saveLayoutSnapshot?(worktree.id, captureLayoutSnapshotWithSessionIDs(from: state))
+    }
+    return TerminalTabID(rawValue: newTabID)
+  }
+
+  /// Remove an auxiliary shell terminal from the session and destroy its
+  /// tab. Refuses to remove the primary terminal — that one is the session
+  /// itself; users delete the session to remove it.
+  func removeAuxiliaryTerminal(
+    sessionID: AgentSession.ID,
+    terminalID: UUID,
+    in worktree: Worktree
+  ) {
+    $agentSessions.withLock { sessions in
+      guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+      guard sessions[idx].primaryTerminalID != terminalID else {
+        terminalLogger.warning(
+          "Refusing to remove primary terminal \(terminalID) from session \(sessionID)"
+        )
+        return
+      }
+      sessions[idx].terminals.removeAll { $0.id == terminalID }
+    }
+    if let state = states[worktree.id] {
+      state.closeTab(TerminalTabID(rawValue: terminalID))
+      saveLayoutSnapshot?(worktree.id, captureLayoutSnapshotWithSessionIDs(from: state))
     }
   }
 

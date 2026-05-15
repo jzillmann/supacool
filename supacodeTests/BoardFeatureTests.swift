@@ -80,7 +80,8 @@ struct BoardFeatureTests {
     var session = Self.sampleSession()
     session.references = [ref]
     session.referencesScannedAt = Date()
-    session.lastActivityAt = session.referencesScannedAt!.addingTimeInterval(-1)
+    let staleActivity = session.referencesScannedAt!.addingTimeInterval(-1)
+    session.updatePrimaryTerminal { $0.lastActivityAt = staleActivity }
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let lookups = LockIsolated<[String]>([])
@@ -183,8 +184,10 @@ struct BoardFeatureTests {
     let now = Date(timeIntervalSince1970: 1_750_000_111)
     let transition = Date(timeIntervalSince1970: 1_750_000_000)
     var session = Self.sampleSession()
-    session.lastKnownBusy = true
-    session.lastBusyTransitionAt = transition
+    session.updatePrimaryTerminal {
+      $0.lastKnownBusy = true
+      $0.lastBusyTransitionAt = transition
+    }
     let repo = Repository(
       id: session.repositoryID,
       rootURL: URL(fileURLWithPath: session.repositoryID),
@@ -208,9 +211,11 @@ struct BoardFeatureTests {
     await store.send(.parkSession(id: session.id, repositories: [repo])) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = true
-        sessions[0].lastKnownBusy = false
-        sessions[0].lastBusyTransitionAt = nil
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal {
+          $0.lastKnownBusy = false
+          $0.lastBusyTransitionAt = nil
+          $0.lastActivityAt = now
+        }
       }
       $0.focusedSessionID = nil
     }
@@ -262,9 +267,11 @@ struct BoardFeatureTests {
     await store.send(.parkSession(id: session.id, repositories: [repo])) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = true
-        sessions[0].lastKnownBusy = false
-        sessions[0].lastBusyTransitionAt = nil
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal {
+          $0.lastKnownBusy = false
+          $0.lastBusyTransitionAt = nil
+          $0.lastActivityAt = now
+        }
       }
     }
     await store.finish()
@@ -282,8 +289,10 @@ struct BoardFeatureTests {
     let now = Date(timeIntervalSince1970: 1_750_000_222)
     let transition = Date(timeIntervalSince1970: 1_750_000_000)
     var session = Self.sampleSession()
-    session.lastKnownBusy = true
-    session.lastBusyTransitionAt = transition
+    session.updatePrimaryTerminal {
+      $0.lastKnownBusy = true
+      $0.lastBusyTransitionAt = transition
+    }
     let sentCommands = LockIsolated<[TerminalClient.Command]>([])
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
@@ -301,7 +310,7 @@ struct BoardFeatureTests {
     await store.send(.parkActiveSession(id: session.id)) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = true
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
       $0.focusedSessionID = nil
     }
@@ -319,7 +328,7 @@ struct BoardFeatureTests {
     let now = Date(timeIntervalSince1970: 1_750_000_333)
     var session = Self.sampleSession()
     session.parked = true
-    session.lastKnownBusy = true
+    session.updatePrimaryTerminal { $0.lastKnownBusy = true }
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     state.focusedSessionID = session.id
@@ -333,7 +342,7 @@ struct BoardFeatureTests {
     await store.send(.unparkSession(id: session.id)) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = false
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
     }
 
@@ -688,7 +697,9 @@ struct BoardFeatureTests {
     store.exhaustivity = .off
 
     await store.send(.markSessionCompletedOnce(id: session.id)) {
-      $0.$sessions.withLock { $0[0].hasCompletedAtLeastOnce = true }
+      $0.$sessions.withLock {
+        $0[0].updatePrimaryTerminal { $0.hasCompletedAtLeastOnce = true }
+      }
     }
 
     // Second call is a no-op — flag is already set and lastActivityAt stays.
@@ -750,14 +761,14 @@ struct BoardFeatureTests {
 
     await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
       $0.$sessions.withLock { sessions in
-        sessions[0].lastKnownBusy = true
+        sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = true }
         #expect(sessions[0].lastBusyTransitionAt != nil)
       }
     }
 
     await store.send(.updateSessionBusyState(id: session.id, busy: false)) {
       $0.$sessions.withLock { sessions in
-        sessions[0].lastKnownBusy = false
+        sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = false }
         #expect(sessions[0].lastBusyTransitionAt != nil)
       }
     }
@@ -1321,10 +1332,12 @@ struct BoardFeatureTests {
 
     await store.send(.restoreShellSessionLayout(id: sessionID, repositories: [repo])) {
       $0.$sessions.withLock { sessions in
-        sessions[0].lastKnownBusy = false
-        sessions[0].lastBusyTransitionAt = nil
-        sessions[0].lastActivityAt = now
         sessions[0].parked = false
+        sessions[0].updatePrimaryTerminal {
+          $0.lastKnownBusy = false
+          $0.lastBusyTransitionAt = nil
+          $0.lastActivityAt = now
+        }
       }
       $0.focusedSessionID = sessionID
     }
@@ -1594,7 +1607,7 @@ struct BoardFeatureTests {
     var state = BoardFeature.State()
     state.$sessions.withLock {
       $0 = [session]
-      $0[0].lastKnownBusy = true
+      $0[0].updatePrimaryTerminal { $0.lastKnownBusy = true }
     }
     let card = Self.sessionCreatingCard(for: session)
     state.trayCards = [card]

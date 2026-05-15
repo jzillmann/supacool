@@ -312,6 +312,27 @@ struct BoardRootView: View {
               repositories: Array(repositories)
             )
           )
+        },
+        activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
+        onSelectTerminal: { terminalID in
+          store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))
+        },
+        onAddShellTerminal: {
+          store.send(
+            .addShellTerminalToSession(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        },
+        onCloseTerminal: { terminalID in
+          store.send(
+            .removeAuxiliaryTerminal(
+              sessionID: session.id,
+              terminalID: terminalID,
+              repositories: Array(repositories)
+            )
+          )
         }
       )
       .task(id: session.lastActivityAt) {

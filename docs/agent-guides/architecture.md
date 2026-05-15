@@ -19,20 +19,35 @@ Mental model shift from supacode:
 
 ```
 AgentSession (Codable, persisted)
-├── id: UUID                       — ALSO the TerminalTabID.rawValue
+├── id: UUID                       — session identity; ALSO the primary terminal's TerminalTabID
 ├── repositoryID: String           — Repository.ID (repo root path)
 ├── worktreeID: String             — Worktree.ID (directory path)
-├── agent: AgentType               — .claude | .codex
+├── displayName: String            — user-editable, defaults to deriveDisplayName(primary prompt)
+├── createdAt                      — Date (session-level)
+├── isPriority / planMode / parked — session-scoped flags
+├── autoObserver / autoObserverPrompt — session-scoped observer config
+├── references / referencesScannedAt — work-item parse cache
+├── remoteWorkspaceID / remoteHostID / tmuxSessionName / remoteConnectionLost — remote-session metadata
+├── terminals: [SessionTerminal]   — the composition (always ≥ 1, see below)
+└── primaryTerminalID: UUID        — which terminal drives card status; defaults to terminals[0].id
+
+SessionTerminal (Codable, embedded in AgentSession.terminals)
+├── id: UUID                       — the Ghostty TerminalTabID.rawValue
+├── role: SessionTerminalRole      — .agent | .shell
+├── agent: AgentType?              — nil for .shell
 ├── initialPrompt: String          — verbatim, used for Rerun
-├── displayName: String            — user-editable, defaults to deriveDisplayName(prompt)
-├── createdAt / lastActivityAt     — Date
-├── hasCompletedAtLeastOnce: Bool  — flips true on first busy→idle
-├── hasObservedInitialAgentEvent   — flips true on first hook event
-├── lastKnownBusy: Bool            — persisted busy flag, used to distinguish .detached vs .interrupted on relaunch
-└── agentNativeSessionID: String?  — captured from the agent hook payload (claude's session_id); used for Resume
+├── agentNativeSessionID: String?  — captured per terminal (claude's session_id); used for Resume
+├── workingDirectoryHint: String?  — last observed cwd; spawned-into on restore
+├── createdAt / lastActivityAt     — per-terminal Date
+├── lastKnownBusy: Bool            — per-terminal persisted busy flag (drives .detached vs .interrupted)
+├── hasObservedInitialAgentEvent   — flips true on first hook event from this terminal
+├── hasCompletedAtLeastOnce        — flips true on first busy→idle of this terminal
+└── lastBusyTransitionAt: Date?    — most recent busy-state flip (drives classifier hysteresis)
 ```
 
-**Key invariant**: `AgentSession.id` equals the Ghostty tab ID. This is what lets `WorktreeTerminalManager.isAgentBusy(worktreeID:tabID:)` be looked up per-session without a separate mapping table. Don't break it.
+**Key invariant**: `session.id == session.primaryTerminalID == primaryTerminal.id == its Ghostty tab id`. Newly created sessions always satisfy this; the model permits decoupling in the future but no code path does so today. Don't break it casually.
+
+`AgentSession` exposes read-only forwarders (`session.agent`, `session.initialPrompt`, `session.lastKnownBusy`, `session.lastActivityAt`, …) that delegate to the primary terminal so the broad read surface stays terse. Writes must go through `session.updatePrimaryTerminal { … }` or `session.updateTerminal(id:) { … }` — there are no setters on the forwarders. Status (in-progress / waiting on me) is derived from the PRIMARY terminal only; shells in the composition appear as a `+N sh` pill on the card but never promote status.
 
 ## State hierarchy (TCA)
 

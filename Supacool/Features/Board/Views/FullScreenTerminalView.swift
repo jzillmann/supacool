@@ -66,6 +66,18 @@ struct FullScreenTerminalView: View {
   /// user can spawn a debug agent without leaving the terminal view.
   let onDebug: () -> Void
 
+  /// Which terminal in `session.terminals` is currently rendered. Pass
+  /// `session.primaryTerminalID` for single-terminal sessions.
+  let activeTerminalID: UUID
+  /// Switch the rendered terminal to the given id (from the session tab
+  /// strip). Only meaningful when `session.terminals.count > 1`.
+  let onSelectTerminal: (UUID) -> Void
+  /// `+` button in the session tab strip — append a new shell terminal.
+  let onAddShellTerminal: () -> Void
+  /// Close button on an auxiliary tab in the session tab strip. Refuses
+  /// to remove the primary terminal — the session owns that one.
+  let onCloseTerminal: (UUID) -> Void
+
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
   /// (or Fork, GitUp, SourceTree, etc.) until we surface a proper setting.
@@ -845,13 +857,25 @@ struct FullScreenTerminalView: View {
       // bar + all sibling tabs. The board is the tab-bar-equivalent in
       // Supacool; each card is one session, and clicking one should
       // show only that session's terminal tree.
-      SingleSessionTerminalView(
-        worktree: worktree,
-        tabID: TerminalTabID(rawValue: session.id),
-        manager: terminalManager
-      )
-      .id(session.id)
-      .frame(maxWidth: .infinity, maxHeight: .infinity)
+      VStack(spacing: 0) {
+        if session.terminals.count > 1 {
+          SessionTerminalTabStrip(
+            terminals: session.terminals,
+            primaryTerminalID: session.primaryTerminalID,
+            activeTerminalID: activeTerminalID,
+            onSelect: onSelectTerminal,
+            onClose: onCloseTerminal,
+            onAdd: onAddShellTerminal
+          )
+        }
+        SingleSessionTerminalView(
+          worktree: worktree,
+          tabID: TerminalTabID(rawValue: activeTerminalID),
+          manager: terminalManager
+        )
+        .id(activeTerminalID)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
       .ignoresSafeArea(.container, edges: .bottom)
     } else if session.isRemote {
       disconnectedRemoteState
