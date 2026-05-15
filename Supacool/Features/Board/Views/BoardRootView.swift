@@ -60,6 +60,12 @@ struct BoardRootView: View {
   /// looking like a fresh prompt submission.
   @State private var autoZoomBackArmedSessionID: AgentSession.ID?
 
+  /// Board status/bucket that `⌘/` should keep advancing through for the
+  /// focused session. Captured when the user enters a card and preserved
+  /// across idle → busy transitions so "answer this idle card, then next"
+  /// moves to the next idle card instead of jumping into the busy bucket.
+  @State private var nextInStateAnchor: FocusedSessionStatusSnapshot?
+
   /// Grace period after prompt submission before the auto-zoom-back fires.
   /// 3s feels long enough to watch the agent start without being in the way.
   private let pendingExitDelay: Duration = .seconds(3)
@@ -74,6 +80,11 @@ struct BoardRootView: View {
   private struct PendingExit: Equatable {
     let destination: AgentSession.ID?
     let startedAt: Date
+  }
+
+  private struct FocusedSessionStatusSnapshot: Equatable {
+    let sessionID: AgentSession.ID
+    let status: BoardSessionStatus
   }
 
   private struct ToolbarRepoStatus {
@@ -135,6 +146,7 @@ struct BoardRootView: View {
         highlightedSessionID = newValue
         selectedSessionIDs.removeAll()
       }
+      resetNextInStateAnchor()
       // Any manual focus change invalidates a queued auto-exit —
       // otherwise the countdown would commit on top of the user's own
       // navigation (⌘B, ⌘-arrow, card tap, etc.).
@@ -142,6 +154,9 @@ struct BoardRootView: View {
         cancelPendingExit()
         armAutoZoomBack(for: newValue)
       }
+    }
+    .onChange(of: focusedSessionStatusSnapshot) { _, newValue in
+      updateNextInStateAnchor(liveSnapshot: newValue)
     }
     // Auto-zoom-back scheduling. idle → busy means the user just
     // submitted a prompt; queue a timed hand-off instead of jumping
@@ -425,6 +440,45 @@ struct BoardRootView: View {
     return BoardNavOrder.order(visibleSessions: visible, classify: classify).first
   }
 
+  private var focusedSessionStatusSnapshot: FocusedSessionStatusSnapshot? {
+    guard let focusedID = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == focusedID })
+    else { return nil }
+    return FocusedSessionStatusSnapshot(sessionID: focusedID, status: classify(session))
+  }
+
+  private func resetNextInStateAnchor() {
+    nextInStateAnchor = focusedSessionStatusSnapshot
+  }
+
+  private func updateNextInStateAnchor(liveSnapshot: FocusedSessionStatusSnapshot?) {
+    guard let liveSnapshot else {
+      nextInStateAnchor = nil
+      return
+    }
+    guard let anchor = nextInStateAnchor,
+      anchor.sessionID == liveSnapshot.sessionID
+    else {
+      nextInStateAnchor = liveSnapshot
+      return
+    }
+    if shouldPreserveNextInStateAnchor(anchor.status, liveStatus: liveSnapshot.status) {
+      return
+    }
+    nextInStateAnchor = liveSnapshot
+  }
+
+  private func shouldPreserveNextInStateAnchor(
+    _ anchorStatus: BoardSessionStatus,
+    liveStatus: BoardSessionStatus
+  ) -> Bool {
+    isActionableNavigationStatus(anchorStatus) && !isActionableNavigationStatus(liveStatus)
+  }
+
+  private func isActionableNavigationStatus(_ status: BoardSessionStatus) -> Bool {
+    BoardNavOrder.isWaitingStatus(status) || status == .parked
+  }
+
   private func armAutoZoomBack(for focusedID: AgentSession.ID?) {
     guard let focusedID,
       let session = store.sessions.first(where: { $0.id == focusedID })
@@ -540,6 +594,9 @@ struct BoardRootView: View {
     let destination = BoardNavOrder.nextInSameState(
       after: currentID,
       visibleSessions: store.visibleSessions,
+      currentStatusOverride: nextInStateAnchor?.sessionID == currentID
+        ? nextInStateAnchor?.status
+        : nil,
       classify: classify
     )
     store.send(.focusSession(id: destination))

@@ -50,6 +50,27 @@ struct BoardNavOrderTests {
     )
   }
 
+  @Test func nextInSameStateCanUseCapturedStatusForCurrentSession() {
+    let waitingA = makeSession(1)
+    let working = makeSession(2)
+    let waitingB = makeSession(3)
+    let sessions = [waitingA, working, waitingB]
+    let liveStatuses: [AgentSession.ID: BoardSessionStatus] = [
+      waitingA.id: .inProgress,
+      working.id: .inProgress,
+      waitingB.id: .waitingOnMe,
+    ]
+
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waitingA.id,
+        visibleSessions: sessions,
+        currentStatusOverride: .waitingOnMe,
+        classify: { liveStatuses[$0.id]! }
+      ) == waitingB.id
+    )
+  }
+
   @Test func nextInSameStateAdvancesFromMiddleOfBucket() {
     let waitingA = makeSession(1)
     let working = makeSession(2)

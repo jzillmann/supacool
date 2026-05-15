@@ -760,12 +760,17 @@ enum BoardNavOrder {
   static func nextInSameState(
     after currentID: AgentSession.ID,
     visibleSessions: [AgentSession],
+    currentStatusOverride: BoardSessionStatus? = nil,
     classify: (AgentSession) -> BoardSessionStatus
   ) -> AgentSession.ID? {
     guard let current = visibleSessions.first(where: { $0.id == currentID }) else { return nil }
-    let currentBucket = bucket(for: classify(current))
+    let currentStatus = currentStatusOverride ?? classify(current)
+    let currentBucket = bucket(for: currentStatus)
     let matchingIDs = priorityFirst(
-      visibleSessions.filter { bucket(for: classify($0)) == currentBucket }
+      visibleSessions.filter { session in
+        let status = session.id == currentID ? currentStatus : classify(session)
+        return bucket(for: status) == currentBucket
+      }
     )
       .map(\.id)
     guard let currentIndex = matchingIDs.firstIndex(of: currentID) else { return nil }
