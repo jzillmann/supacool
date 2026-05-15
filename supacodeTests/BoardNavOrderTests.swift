@@ -50,6 +50,30 @@ struct BoardNavOrderTests {
     )
   }
 
+  @Test func nextInSameStateAdvancesFromMiddleOfBucket() {
+    let waitingA = makeSession(1)
+    let working = makeSession(2)
+    let waitingB = makeSession(3)
+    let parked = makeSession(4)
+    let waitingC = makeSession(5)
+    let sessions = [waitingA, working, waitingB, parked, waitingC]
+    let statuses: [AgentSession.ID: BoardSessionStatus] = [
+      waitingA.id: .waitingOnMe,
+      working.id: .inProgress,
+      waitingB.id: .awaitingInput,
+      parked.id: .parked,
+      waitingC.id: .detached,
+    ]
+
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waitingB.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == waitingC.id
+    )
+  }
+
   @Test func nextInSameStateReturnsNilWhenCurrentSessionIsNotVisible() {
     let visible = makeSession(1)
     let hidden = makeSession(2)

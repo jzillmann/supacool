@@ -310,7 +310,7 @@ struct BoardRootView: View {
           )
         },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
-        onNextInCurrentState: { focusNextSessionInCurrentState(after: session.id) },
+        onNextInCurrentState: { focusNextSessionInCurrentState() },
         nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in
@@ -504,7 +504,10 @@ struct BoardRootView: View {
     }
   }
 
-  private func focusNextSessionInCurrentState(after currentID: AgentSession.ID) {
+  private func focusNextSessionInCurrentState() {
+    // Read focus at invocation time; rapid ⌘/ repeats can arrive while SwiftUI still holds
+    // an older shortcut closure.
+    guard let currentID = store.focusedSessionID else { return }
     let destination = BoardNavOrder.nextInSameState(
       after: currentID,
       visibleSessions: store.visibleSessions,
