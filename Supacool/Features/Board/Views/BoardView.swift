@@ -250,9 +250,9 @@ struct BoardView: View {
       }
     } else {
       let live = visible.filter { classify($0) != .parked }
-      let waiting = live.filter { isWaitingStatus(classify($0)) }
-      let inProgress = live.filter { !isWaitingStatus(classify($0)) }
-      let parked = visible.filter { classify($0) == .parked }
+      let waiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(classify($0)) })
+      let inProgress = BoardNavOrder.priorityFirst(live.filter { !isWaitingStatus(classify($0)) })
+      let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           // Drafts row sits ABOVE bookmarks. Always rendered when there's
@@ -692,7 +692,7 @@ struct BoardView: View {
 
   private func boardLayoutSignature(visible: [AgentSession]) -> [String] {
     visible.map { session in
-      "\(session.id.uuidString):\(classify(session).label)"
+      "\(session.id.uuidString):\(classify(session).label):\(session.isPriority)"
     }
   }
 }
@@ -729,6 +729,21 @@ enum BoardNavOrder {
     }
   }
 
+  /// Stable in-row ordering: all priority cards first, preserving the
+  /// user's existing order within priority and regular groups.
+  static func priorityFirst(_ sessions: [AgentSession]) -> [AgentSession] {
+    var priority: [AgentSession] = []
+    var regular: [AgentSession] = []
+    for session in sessions {
+      if session.isPriority {
+        priority.append(session)
+      } else {
+        regular.append(session)
+      }
+    }
+    return priority + regular
+  }
+
   static func order(
     visibleSessions: [AgentSession],
     classify: (AgentSession) -> BoardSessionStatus
@@ -737,8 +752,8 @@ enum BoardNavOrder {
     // and the switcher's wrap-around — they live in the bottom bucket
     // and only come back into rotation after an unpark.
     let live = visibleSessions.filter { classify($0) != .parked }
-    let waiting = live.filter { isWaitingStatus(classify($0)) }
-    let inProgress = live.filter { !isWaitingStatus(classify($0)) }
+    let waiting = priorityFirst(live.filter { isWaitingStatus(classify($0)) })
+    let inProgress = priorityFirst(live.filter { !isWaitingStatus(classify($0)) })
     return waiting.map(\.id) + inProgress.map(\.id)
   }
 
@@ -749,8 +764,9 @@ enum BoardNavOrder {
   ) -> AgentSession.ID? {
     guard let current = visibleSessions.first(where: { $0.id == currentID }) else { return nil }
     let currentBucket = bucket(for: classify(current))
-    let matchingIDs = visibleSessions
-      .filter { bucket(for: classify($0)) == currentBucket }
+    let matchingIDs = priorityFirst(
+      visibleSessions.filter { bucket(for: classify($0)) == currentBucket }
+    )
       .map(\.id)
     guard let currentIndex = matchingIDs.firstIndex(of: currentID) else { return nil }
     let nextIndex = matchingIDs.index(after: currentIndex)

@@ -74,6 +74,58 @@ struct BoardNavOrderTests {
     )
   }
 
+  @Test func orderPutsPrioritySessionsFirstWithinEachLiveBucket() {
+    let waiting = makeSession(1)
+    let priorityWaiting = makeSession(2, isPriority: true)
+    let working = makeSession(3)
+    let priorityWorking = makeSession(4, isPriority: true)
+    let priorityParked = makeSession(5, isPriority: true)
+    let sessions = [waiting, priorityWaiting, working, priorityWorking, priorityParked]
+    let statuses: [AgentSession.ID: BoardSessionStatus] = [
+      waiting.id: .waitingOnMe,
+      priorityWaiting.id: .awaitingInput,
+      working.id: .inProgress,
+      priorityWorking.id: .waitingForChecks,
+      priorityParked.id: .parked,
+    ]
+
+    #expect(
+      BoardNavOrder.order(
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == [priorityWaiting.id, waiting.id, priorityWorking.id, working.id]
+    )
+  }
+
+  @Test func nextInSameStateFollowsPriorityFirstBucketOrder() {
+    let waiting = makeSession(1)
+    let priorityWaiting = makeSession(2, isPriority: true)
+    let waitingAfterPriority = makeSession(3)
+    let sessions = [waiting, priorityWaiting, waitingAfterPriority]
+
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: priorityWaiting.id,
+        visibleSessions: sessions,
+        classify: { _ in .waitingOnMe }
+      ) == waiting.id
+    )
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waiting.id,
+        visibleSessions: sessions,
+        classify: { _ in .waitingOnMe }
+      ) == waitingAfterPriority.id
+    )
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: waitingAfterPriority.id,
+        visibleSessions: sessions,
+        classify: { _ in .waitingOnMe }
+      ) == nil
+    )
+  }
+
   @Test func nextInSameStateReturnsNilWhenCurrentSessionIsNotVisible() {
     let visible = makeSession(1)
     let hidden = makeSession(2)
@@ -87,13 +139,14 @@ struct BoardNavOrderTests {
     )
   }
 
-  private func makeSession(_ suffix: Int) -> AgentSession {
+  private func makeSession(_ suffix: Int, isPriority: Bool = false) -> AgentSession {
     AgentSession(
       id: UUID(uuidString: "00000000-0000-0000-0000-00000000000\(suffix)")!,
       repositoryID: "/repo",
       worktreeID: "/repo/session-\(suffix)",
       agent: .claude,
-      initialPrompt: "Session \(suffix)"
+      initialPrompt: "Session \(suffix)",
+      isPriority: isPriority
     )
   }
 }
