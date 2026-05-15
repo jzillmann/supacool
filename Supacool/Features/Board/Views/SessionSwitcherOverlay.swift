@@ -109,12 +109,15 @@ struct SessionSwitcherOverlay: View {
             ForEach(sessions) { session in
               cardView(for: session)
                 .frame(width: cardWidth)
+                // The full-screen overlay can offer the whole window height; keep cards at their intrinsic height.
+                .fixedSize(horizontal: false, vertical: true)
                 .id(session.id)
             }
           }
           .scrollTargetLayout()
           .padding(.vertical, 2)
         }
+        .fixedSize(horizontal: false, vertical: true)
         .scrollTargetBehavior(.viewAligned)
         .onAppear {
           scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
