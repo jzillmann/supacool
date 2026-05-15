@@ -88,6 +88,36 @@ struct AgentHookCommandTests {
     #expect(command.contains("waiting for your input"))
   }
 
+  @Test func preToolUseCommandEmitsValidJSONBody() throws {
+    // Regression: the previous body string was missing the opening quote
+    // on `"message"` — the JSON failed to decode and the socket server
+    // silently dropped every synthetic Notification. Substring `contains`
+    // checks above would happily pass the broken version, so this test
+    // asserts the actual `printf '…'` payload decodes cleanly.
+    let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
+    let needle = #"printf '%s\n' '"#
+    let bodyStart = try #require(command.range(of: needle)).upperBound
+    let bodyEnd = try #require(command[bodyStart...].firstIndex(of: "'"))
+    let json = String(command[bodyStart..<bodyEnd])
+
+    struct Payload: Decodable {
+      let hook_event_name: String  // swiftlint:disable:this identifier_name
+      let message: String
+    }
+    let payload = try JSONDecoder().decode(Payload.self, from: Data(json.utf8))
+    #expect(payload.hook_event_name == "Notification")
+    #expect(payload.message.lowercased().contains("waiting for your input"))
+  }
+
+  @Test func historicalPreToolUseCommandsAreSupacoolManaged() {
+    // The historical (broken) variants must still register as Supacool-
+    // owned so re-install can prune them out of live settings.json.
+    for command in AgentHookSettingsCommand.historicalPreToolUseCommands {
+      #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(command))
+      #expect(command != AgentHookSettingsCommand.preToolUseCommand(agent: "claude"))
+    }
+  }
+
   @Test func preToolUseCommandIsSupacoolManaged() {
     let command = AgentHookSettingsCommand.preToolUseCommand(agent: "claude")
     #expect(AgentHookCommandOwnership.isSupacoolManagedCommand(command))

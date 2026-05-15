@@ -38,6 +38,36 @@ nonisolated enum AgentHookSettingsCommand {
     legacyBusyCommand(active: false),
   ]
 
+  /// Broken `preToolUseCommand` variants from before the missing-quote fix
+  /// (the synthetic Notification JSON had `"message":Claude…"` instead of
+  /// `"message":"Claude…"`, so the socket server failed to decode it and
+  /// every AskUserQuestion / ExitPlanMode turn left the card stuck busy).
+  /// Listed here so re-install replaces them rather than coexisting with
+  /// the fixed command.
+  static let historicalPreToolUseCommands: [String] = [
+    brokenPreToolUseCommand(agent: "claude")
+  ]
+
+  private static func brokenPreToolUseCommand(agent: String) -> String {
+    let blockingPatterns = [
+      #"*'"tool_name":"AskUserQuestion"'*"#,
+      #"*'"tool_name":"ExitPlanMode"'*"#,
+    ].joined(separator: "|")
+    let header = #"printf '%s \#(agent)\n' "\#(ids)""#
+    let body =
+      #"printf '%s\n' '{"hook_event_name":"Notification","message":"#
+      + #"Claude is waiting for your input"}'"#
+    let sendNotification =
+      #"{ \#(header); \#(body); } | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
+    let sendBusy =
+      #"echo "\#(ids) 1 $PPID""#
+      + #" | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#
+    let pipeline =
+      #"{ input=$(cat); case "$input" in \#(blockingPatterns)) "#
+      + #"\#(sendNotification) ;; *) \#(sendBusy) ;; esac; }"#
+    return "\(envCheck) && \(pipeline) 2>/dev/null || true"
+  }
+
   private static func legacyBusyCommand(active: Bool) -> String {
     let flag = active ? "1" : "0"
     let send =
@@ -80,8 +110,13 @@ nonisolated enum AgentHookSettingsCommand {
       #"*'"tool_name":"ExitPlanMode"'*"#,
     ].joined(separator: "|")
     let header = #"printf '%s \#(agent)\n' "\#(ids)""#
+    // The opening quote on the message value lives at the end of the first
+    // raw string (`message":""#` evaluates to `message":"`) — without it the
+    // emitted JSON is malformed and the socket server silently drops every
+    // synthetic Notification, leaving cards stuck on `.inProgress` whenever
+    // a turn ends on AskUserQuestion / ExitPlanMode.
     let body =
-      #"printf '%s\n' '{"hook_event_name":"Notification","message":"#
+      #"printf '%s\n' '{"hook_event_name":"Notification","message":""#
       + #"Claude is waiting for your input"}'"#
     let sendNotification =
       #"{ \#(header); \#(body); } | /usr/bin/nc -U -w1 "$SUPACOOL_SOCKET_PATH""#

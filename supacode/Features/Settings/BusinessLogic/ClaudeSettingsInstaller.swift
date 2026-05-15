@@ -50,7 +50,7 @@ nonisolated struct ClaudeSettingsInstaller {
     try fileInstaller.install(
       settingsURL: settingsURL,
       hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent(),
-      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
+      additionalHistoricalCommands: Self.historicalProgressCommands
     )
   }
 
@@ -65,9 +65,13 @@ nonisolated struct ClaudeSettingsInstaller {
     try fileInstaller.uninstall(
       settingsURL: settingsURL,
       hookGroupsByEvent: try ClaudeHookSettings.progressHookGroupsByEvent(),
-      additionalHistoricalCommands: Set(AgentHookSettingsCommand.historicalBusyCommands)
+      additionalHistoricalCommands: Self.historicalProgressCommands
     )
   }
+
+  private static let historicalProgressCommands: Set<String> =
+    Set(AgentHookSettingsCommand.historicalBusyCommands)
+    .union(AgentHookSettingsCommand.historicalPreToolUseCommands)
 
   func uninstallNotificationHooks() throws {
     try fileInstaller.uninstall(
