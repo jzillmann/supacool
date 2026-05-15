@@ -201,6 +201,10 @@ struct SupacoolApp: App {
         removeAuxiliaryTerminal: { sessionID, terminalID, worktree in
           terminalManager.removeAuxiliaryTerminal(
             sessionID: sessionID, terminalID: terminalID, in: worktree)
+        },
+        pruneLayoutsForRemovedSession: { sessionID, worktreeID in
+          terminalManager.pruneLayoutsForRemovedSession(
+            sessionID: sessionID, worktreeID: worktreeID)
         }
       )
       values.worktreeInfoWatcher = WorktreeInfoWatcherClient(

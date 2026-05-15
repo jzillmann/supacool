@@ -26,6 +26,12 @@ struct TerminalClient {
   /// terminal (delete the session instead).
   var removeAuxiliaryTerminal: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Void
 
+  /// Supacool: drop a deleted session's TabSnapshots from layouts.json
+  /// for the given worktree. Other sessions sharing the worktree keep
+  /// their tabs. No-op if no snapshot exists for the worktree.
+  var pruneLayoutsForRemovedSession:
+    @MainActor @Sendable (AgentSession.ID, Worktree.ID) -> Void
+
   enum Command: Equatable {
     case createTab(Worktree, runSetupScriptIfNew: Bool, id: UUID? = nil)
     case createTabWithInput(Worktree, input: String, runSetupScriptIfNew: Bool, id: UUID? = nil)
@@ -94,7 +100,8 @@ extension TerminalClient: DependencyKey {
     readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") },
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
-    removeAuxiliaryTerminal: { _, _, _ in }
+    removeAuxiliaryTerminal: { _, _, _ in },
+    pruneLayoutsForRemovedSession: { _, _ in }
   )
 
   static let testValue = TerminalClient(
@@ -105,7 +112,8 @@ extension TerminalClient: DependencyKey {
     readScreenContents: { _, _ in nil },
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
-    removeAuxiliaryTerminal: { _, _, _ in }
+    removeAuxiliaryTerminal: { _, _, _ in },
+    pruneLayoutsForRemovedSession: { _, _ in }
   )
 }
 

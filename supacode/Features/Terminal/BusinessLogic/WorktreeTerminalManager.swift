@@ -1057,6 +1057,31 @@ final class WorktreeTerminalManager {
     }
   }
 
+  /// Drop a deleted session's tabs from the persisted layout snapshot for
+  /// `worktreeID`, leaving any other sessions sharing the worktree
+  /// untouched. Called from BoardFeature's `removeSessionFromState` after
+  /// the session is moved to trash. Matching is by `TabSnapshot.sessionID`,
+  /// which the capture path stamps in `captureLayoutSnapshotWithSessionIDs`.
+  func pruneLayoutsForRemovedSession(
+    sessionID: AgentSession.ID,
+    worktreeID: Worktree.ID
+  ) {
+    guard let snapshot = loadSavedLayoutSnapshot?(worktreeID) else { return }
+    let filtered = snapshot.tabs.filter { $0.sessionID != sessionID }
+    guard filtered.count != snapshot.tabs.count else { return }
+    if filtered.isEmpty {
+      saveLayoutSnapshot?(worktreeID, nil)
+      return
+    }
+    // Clamp selectedTabIndex so it still points at a real tab.
+    let selectedIndex = min(max(0, snapshot.selectedTabIndex), filtered.count - 1)
+    let updated = TerminalLayoutSnapshot(
+      tabs: filtered,
+      selectedTabIndex: selectedIndex
+    )
+    saveLayoutSnapshot?(worktreeID, updated)
+  }
+
   func surfaceBackgroundOpacity() -> Double {
     runtime.backgroundOpacity()
   }

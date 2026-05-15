@@ -52,6 +52,91 @@ struct WorktreeTerminalManagerTests {
     #expect(reusedState.pendingLayoutSnapshot == nil)
   }
 
+  @Test func pruneLayoutsForRemovedSessionDropsOnlyMatchingTabs() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let sessionAID = UUID()
+    let sessionBID = UUID()
+    let aPrimaryTab = UUID()
+    let aShellTab = UUID()
+    let bTab = UUID()
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        Self.simpleTabSnapshot(id: aPrimaryTab, sessionID: sessionAID),
+        Self.simpleTabSnapshot(id: aShellTab, sessionID: sessionAID),
+        Self.simpleTabSnapshot(id: bTab, sessionID: sessionBID),
+      ],
+      selectedTabIndex: 2
+    )
+    let loaded = LockIsolated(snapshot)
+    let saved = LockIsolated<(Worktree.ID, TerminalLayoutSnapshot?)?>(nil)
+    manager.loadSavedLayoutSnapshot = { _ in loaded.value }
+    manager.saveLayoutSnapshot = { id, snap in saved.setValue((id, snap)) }
+
+    manager.pruneLayoutsForRemovedSession(sessionID: sessionAID, worktreeID: worktree.id)
+
+    let writeTuple = try? #require(saved.value)
+    #expect(writeTuple?.0 == worktree.id)
+    let writtenSnapshot = try? #require(writeTuple?.1)
+    #expect(writtenSnapshot?.tabs.count == 1)
+    #expect(writtenSnapshot?.tabs.first?.sessionID == sessionBID)
+    #expect(writtenSnapshot?.tabs.first?.id == bTab)
+    // selectedTabIndex was 2 but only 1 tab remains — should clamp.
+    #expect(writtenSnapshot?.selectedTabIndex == 0)
+  }
+
+  @Test func pruneLayoutsForLastSessionInWorktreeDropsTheEntireSnapshot() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let sessionID = UUID()
+    let snapshot = TerminalLayoutSnapshot(
+      tabs: [
+        Self.simpleTabSnapshot(id: UUID(), sessionID: sessionID),
+        Self.simpleTabSnapshot(id: UUID(), sessionID: sessionID),
+      ],
+      selectedTabIndex: 0
+    )
+    let saved = LockIsolated<(Worktree.ID, TerminalLayoutSnapshot?)?>(nil)
+    manager.loadSavedLayoutSnapshot = { _ in snapshot }
+    manager.saveLayoutSnapshot = { id, snap in saved.setValue((id, snap)) }
+
+    manager.pruneLayoutsForRemovedSession(sessionID: sessionID, worktreeID: worktree.id)
+
+    let writeTuple = try? #require(saved.value)
+    #expect(writeTuple?.0 == worktree.id)
+    // All tabs belonged to the deleted session — entry is wiped.
+    #expect(writeTuple?.1 == nil)
+  }
+
+  @Test func pruneLayoutsForUnknownWorktreeIsNoOp() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let saved = LockIsolated<(Worktree.ID, TerminalLayoutSnapshot?)?>(nil)
+    manager.loadSavedLayoutSnapshot = { _ in nil }
+    manager.saveLayoutSnapshot = { id, snap in saved.setValue((id, snap)) }
+
+    manager.pruneLayoutsForRemovedSession(sessionID: UUID(), worktreeID: worktree.id)
+
+    #expect(saved.value == nil)
+  }
+
+  /// Minimal `TabSnapshot` fixture for prune tests — the layout shape
+  /// doesn't matter, only the id + sessionID.
+  private static func simpleTabSnapshot(
+    id: UUID,
+    sessionID: UUID
+  ) -> TerminalLayoutSnapshot.TabSnapshot {
+    TerminalLayoutSnapshot.TabSnapshot(
+      id: id,
+      title: "",
+      icon: nil,
+      tintColor: nil,
+      layout: .leaf(TerminalLayoutSnapshot.SurfaceSnapshot(id: UUID(), workingDirectory: nil)),
+      focusedLeafIndex: 0,
+      sessionID: sessionID
+    )
+  }
+
   @Test func restoreShellLayoutCommandRestoresSavedTabWithoutAutoRestoreSetting() {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

@@ -2776,9 +2776,21 @@ struct BoardFeature {
         await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
       }
       : .none
+    // Drop this session's tabs from the persisted layout snapshot for
+    // the worktree, so a shared-worktree neighbour session doesn't pick
+    // them up as orphans on its next snapshot capture. The Worktree.ID
+    // here is `session.worktreeID` (immutable) — the same key the
+    // capture path uses, even if the user later did "convert to worktree"
+    // and the live shell is `cd`'d elsewhere.
+    let pruneSessionID = session.id
+    let pruneWorktreeID = session.worktreeID
+    let prunePersistedLayoutsEffect: Effect<Action> = .run { _ in
+      await terminalClient.pruneLayoutsForRemovedSession(pruneSessionID, pruneWorktreeID)
+    }
     return .merge(
       lifecycleEffect,
       releaseEffect,
+      prunePersistedLayoutsEffect,
       .send(
         .delegate(
           .sessionRemoved(
