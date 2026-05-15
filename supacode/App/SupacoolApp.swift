@@ -194,7 +194,14 @@ struct SupacoolApp: App {
         readScreenContents: { worktreeID, tabID in
           terminalManager.readScreenContents(worktreeID: worktreeID, tabID: tabID)
         },
-        hookSocketPath: { terminalManager.socketServer?.socketPath }
+        hookSocketPath: { terminalManager.socketServer?.socketPath },
+        addSessionShellTerminal: { sessionID, worktree in
+          terminalManager.addShellTerminal(toSession: sessionID, in: worktree)
+        },
+        removeAuxiliaryTerminal: { sessionID, terminalID, worktree in
+          terminalManager.removeAuxiliaryTerminal(
+            sessionID: sessionID, terminalID: terminalID, in: worktree)
+        }
       )
       values.worktreeInfoWatcher = WorktreeInfoWatcherClient(
         send: { command in

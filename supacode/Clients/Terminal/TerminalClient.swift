@@ -15,6 +15,17 @@ struct TerminalClient {
   /// the reverse socket forward (`ssh -R <remote>:<local>`).
   var hookSocketPath: @MainActor @Sendable () -> String?
 
+  /// Supacool: append a fresh shell terminal to the given session's
+  /// composition and spawn its Ghostty tab. Returns the new tab id, or
+  /// nil if the session no longer exists. Used by the session-scoped tab
+  /// strip's `+` button.
+  var addSessionShellTerminal: @MainActor @Sendable (AgentSession.ID, Worktree) -> TerminalTabID?
+
+  /// Supacool: remove an auxiliary terminal from the session's
+  /// composition and destroy its Ghostty tab. No-op for the primary
+  /// terminal (delete the session instead).
+  var removeAuxiliaryTerminal: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Void
+
   enum Command: Equatable {
     case createTab(Worktree, runSetupScriptIfNew: Bool, id: UUID? = nil)
     case createTabWithInput(Worktree, input: String, runSetupScriptIfNew: Bool, id: UUID? = nil)
@@ -81,7 +92,9 @@ extension TerminalClient: DependencyKey {
     tabExists: { _, _ in fatalError("TerminalClient.tabExists not configured") },
     surfaceExists: { _, _, _ in fatalError("TerminalClient.surfaceExists not configured") },
     readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") },
-    hookSocketPath: { nil }
+    hookSocketPath: { nil },
+    addSessionShellTerminal: { _, _ in nil },
+    removeAuxiliaryTerminal: { _, _, _ in }
   )
 
   static let testValue = TerminalClient(
@@ -90,7 +103,9 @@ extension TerminalClient: DependencyKey {
     tabExists: unimplemented("TerminalClient.tabExists", placeholder: true),
     surfaceExists: unimplemented("TerminalClient.surfaceExists", placeholder: true),
     readScreenContents: { _, _ in nil },
-    hookSocketPath: { nil }
+    hookSocketPath: { nil },
+    addSessionShellTerminal: { _, _ in nil },
+    removeAuxiliaryTerminal: { _, _, _ in }
   )
 }
 

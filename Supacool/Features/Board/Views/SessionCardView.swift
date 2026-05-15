@@ -63,6 +63,9 @@ struct SessionCardView: View {
         if let onTogglePriority {
           priorityButton(action: onTogglePriority)
         }
+        if !session.auxiliaryTerminals.isEmpty {
+          shellCompositionPill
+        }
         Spacer()
         infoButton
         if onAutoObserverToggle != nil {
@@ -264,6 +267,25 @@ struct SessionCardView: View {
         onRunNow: { onAutoObserverRunNow?() }
       )
     }
+  }
+
+  /// Compact "+N sh" pill — shows when the session has auxiliary shell
+  /// terminals beyond its agent. Purely informational; opening the card
+  /// still routes straight to the agent terminal.
+  private var shellCompositionPill: some View {
+    let count = session.auxiliaryTerminals.count
+    return HStack(spacing: 2) {
+      Image(systemName: "terminal.fill")
+        .font(.system(size: 9, weight: .semibold))
+      Text("+\(count)")
+        .font(.caption2.weight(.semibold).monospacedDigit())
+    }
+    .foregroundStyle(.secondary)
+    .padding(.horizontal, 5)
+    .padding(.vertical, 1)
+    .background(Color.secondary.opacity(0.12))
+    .clipShape(Capsule())
+    .help("\(count) auxiliary shell tab\(count == 1 ? "" : "s") in this session")
   }
 
   /// Small bookmark glyph signalling whether the agent's native session id

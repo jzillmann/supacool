@@ -1,17 +1,22 @@
 import Foundation
 
-/// A persistent agent-driven terminal session: one PTY inside a tab, running
-/// claude-code or codex in interactive mode with an initial prompt.
+/// A persistent agent-driven board session that owns one or more terminals.
 ///
-/// Each session shows up as a card on the board. Status (in-progress / waiting
-/// on me) is DERIVED at render time from the underlying terminal's agent-busy
-/// signal — not stored here. What IS stored is the identity of the session,
-/// its backing directory, and a lightweight flag that records whether it's
-/// ever gone busy-then-idle (so we can tell "just created" apart from
-/// "finished and waiting").
+/// A session shows up as a single card on the Matrix Board. Originally it
+/// was a 1:1 wrapper around a single agent terminal — that role is now
+/// played by `terminals[primaryTerminalID]`. The session itself holds the
+/// shared identity (repository, worktree, displayName, priority, parked
+/// flag, remote metadata, etc.) and an ordered list of terminals.
+///
+/// Status (in-progress / waiting on me) is DERIVED at render time from the
+/// PRIMARY terminal's agent-busy signal — shells in the composition do not
+/// promote status. See `BoardSessionStatus.classify`.
 nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
-  /// Stable session identity. Also used as the Ghostty tab ID so the
-  /// underlying `WorktreeTerminalState` tab is addressable by session ID.
+  /// Stable session identity. By convention also the `id` of the primary
+  /// terminal (so the Ghostty tab for the canonical agent is addressable
+  /// by `session.id`). Newly created sessions always satisfy
+  /// `id == primaryTerminalID`, but the model no longer requires it so
+  /// future flows can decouple them.
   let id: UUID
 
   /// The registered repo this session belongs to (its `Repository.ID`,
@@ -24,136 +29,69 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   ///
   /// IMMUTABLE once the session is created. Used as the state-lookup key
   /// everywhere terminal state is accessed: `states[worktreeID]`, hook
-  /// socket routing, `sessionTabExists`, `isAgentBusy`, etc. Conceptually:
-  /// "where this tab was born and where its state is anchored". A tab's
-  /// underlying shell process can `cd` anywhere without this moving.
+  /// socket routing, `sessionTabExists`, `isAgentBusy`, etc.
   let worktreeID: String
 
   /// The worktree the user currently thinks of the session as running in.
   /// Mutable. Diverges from `worktreeID` after the "convert to worktree"
-  /// popover: the shell physically `cd`s into the new worktree but the
-  /// terminal state container stays put, so hooks and running agents are
-  /// never disrupted. UI-level readers (header badge, PR lookup, diff
-  /// button, new-terminal inheritance) use this field.
+  /// popover.
   var currentWorkspacePath: String
 
-  /// The coding-agent CLI this session was spawned with. `nil` means a raw
-   /// shell session — no agent CLI was invoked, just a terminal tab (with an
-   /// optional initial command piped in).
-   let agent: AgentType?
-
-  /// What the user typed when creating the session. We keep this verbatim
-  /// so "rerun" can replay it after a relaunch.
-  let initialPrompt: String
-
   /// If non-nil, this session was created by tapping the matching bookmark
-  /// pill. Used to keep that bookmark disabled while this session
-  /// incarnation still exists on the board.
+  /// pill.
   var sourceBookmarkID: Bookmark.ID?
 
   /// If non-nil, this session was spawned via "Debug session…" from the
-  /// referenced source session id. Used to couple source/debug cards.
+  /// referenced source session id.
   var debugSourceSessionID: AgentSession.ID?
 
-  /// Human-readable card title. Defaults to a derivation of `initialPrompt`;
-  /// user can rename.
+  /// Human-readable card title. Defaults to a derivation of the primary
+  /// terminal's initial prompt; user can rename.
   var displayName: String
 
   let createdAt: Date
-  var lastActivityAt: Date
-
-  /// Becomes true the first time the session transitions busy → idle. Used
-  /// to distinguish "just spawned, first prompt still running" (stays in
-  /// In Progress) from "agent finished, waiting on me" (moves to Waiting on Me).
-  var hasCompletedAtLeastOnce: Bool
-
-  /// Becomes true when any agent hook event arrives for this tab. Before
-  /// this, the CLI may still be booting and loading its hook config, so
-  /// an idle terminal does not yet mean the agent is waiting on the user.
-  var hasObservedInitialAgentEvent: Bool
-
-  /// The last busy state we observed for this session, persisted. Used on
-  /// relaunch to distinguish "the session was idle when the app went away"
-  /// (`.detached` — safe) from "the agent was actively working when the
-  /// app died" (`.interrupted` — its turn was lost).
-  var lastKnownBusy: Bool
-
-  /// Timestamp of the most recent busy-state flip. Used by the board
-  /// classifier to keep cards in the working bucket for a brief moment
-  /// after a busy → idle transition so transient hook gaps don't cause
-  /// visible flicker.
-  var lastBusyTransitionAt: Date?
 
   /// Whether this session owns a dedicated backing worktree that Supacool
   /// created for it and should delete when the session itself is removed.
-  /// False for repo-root sessions and sessions attached to a pre-existing
-  /// worktree.
   var removeBackingWorktreeOnDelete: Bool
 
-  /// User-marked "pay extra attention" bit. Priority sessions get a
-  /// stronger card treatment on the board and surface a termination
-  /// alert if their terminal disappears.
+  /// User-marked "pay extra attention" bit.
   var isPriority: Bool
 
-  /// Launches the agent in "plan mode" when the selected CLI supports
-  /// it. Persisted so rerun can prefill the same launch behavior.
+  /// Launches the agent in "plan mode" when the selected CLI supports it.
+  /// Session-level for now: a session's primary terminal is the only one
+  /// that respects this on spawn / rerun.
   var planMode: Bool
 
-  /// Agent-native session identifier captured from the hook payload:
-  /// Claude Code's `session_id`, or the Codex equivalent. Absent until the
-  /// first hook event arrives. Used to auto-resume (`claude --resume <id>` /
-  /// `codex resume <id>`) across app relaunches.
-  var agentNativeSessionID: String?
-
-  /// User explicitly parked this session: its PTY was destroyed to free
-  /// resources, but the metadata (prompt, captured resume id) is
-  /// preserved so the user can resume later. Differs from `.detached`
-  /// only in *intent* — parked sessions live in their own bottom bucket
-  /// and stay out of keyboard-nav cycling until resumed.
+  /// User explicitly parked this session.
   var parked: Bool
 
-  /// When true, the Auto-Observer monitors this session: on each idle
-  /// transition it reads the terminal screen, decides if there's an
-  /// obvious response, and types it automatically.
+  /// When true, the Auto-Observer monitors this session.
   var autoObserver: Bool
 
-  /// Free-form instructions for the Auto-Observer: acceptance criteria,
-  /// things to allow or deny, conditions to stop on, etc. Empty string
-  /// means "use default heuristics only."
+  /// Free-form instructions for the Auto-Observer.
   var autoObserverPrompt: String
 
-  /// External work-item references parsed from the session's conversation
-  /// (Linear tickets, GitHub PRs). Populated lazily by the scanner on
-  /// card appearance and refreshed on hook activity.
+  /// External work-item references parsed from the session's conversation.
   var references: [SessionReference]
 
-  /// When the references list was last computed. Used to decide whether
-  /// a re-scan is needed: if `lastActivityAt > referencesScannedAt` the
-  /// next card-appearance triggers a refresh.
+  /// When the references list was last computed.
   var referencesScannedAt: Date?
 
-  /// Non-nil when this session runs on a remote host. Points at the
-  /// `RemoteWorkspace` that supplies `hostID` + `remoteWorkingDirectory`.
+  /// Non-nil when this session runs on a remote host.
   var remoteWorkspaceID: RemoteWorkspace.ID?
 
-  /// Denormalized cache of `RemoteWorkspace.hostID` so the board card can
-  /// render a host badge without looking up the workspace every frame.
-  /// Stays in sync by being written together with `remoteWorkspaceID`.
+  /// Denormalized cache of `RemoteWorkspace.hostID`.
   var remoteHostID: RemoteHost.ID?
 
-  /// Repository-linked remote target used to launch this session, when
-  /// present. Lets rerun restore the same repository destination.
+  /// Repository-linked remote target used to launch this session.
   var repositoryRemoteTargetID: RepositoryRemoteTarget.ID?
 
-  /// Deterministic tmux session name used on the remote host. Fixed at
-  /// creation time so reconnects re-attach the same session
-  /// (`tmux new-session -A -s <name>`). Conventionally
-  /// `"supacool-" + id.uuidString.lowercased()`.
+  /// Deterministic tmux session name used on the remote host.
   var tmuxSessionName: String?
 
   /// True when ssh to the remote host died and the user hasn't clicked
-  /// Reconnect yet. Board classifier flips the card to `.disconnected`.
-  /// Cleared on successful reconnect.
+  /// Reconnect yet.
   var remoteConnectionLost: Bool
 
   /// User-pinned status that overrides the auto-classifier. Set via the
@@ -163,6 +101,18 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// definitive hook event (`updateSessionBusyState` transitions).
   /// Only applies while the tab exists; parked sessions ignore it.
   var manualStatusOverride: BoardSessionStatus?
+
+  // MARK: Composition
+
+  /// The terminals making up this session, in tab-strip order. Always at
+  /// least one (the primary agent terminal). Additional `.shell` entries
+  /// are the user's auxiliary tabs.
+  var terminals: [SessionTerminal]
+
+  /// Which terminal in `terminals` is the canonical agent — drives the
+  /// board card's status, the displayName, the rerun/resume affordances.
+  /// Defaults to `terminals[0].id` for new sessions.
+  var primaryTerminalID: UUID
 
   /// Is this a remote session?
   var isRemote: Bool { remoteWorkspaceID != nil }
@@ -203,21 +153,13 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.repositoryID = repositoryID
     self.worktreeID = worktreeID
     self.currentWorkspacePath = currentWorkspacePath ?? worktreeID
-    self.agent = agent
-    self.initialPrompt = initialPrompt
     self.displayName = displayName ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
     self.sourceBookmarkID = sourceBookmarkID
     self.debugSourceSessionID = debugSourceSessionID
     self.createdAt = createdAt
-    self.lastActivityAt = lastActivityAt
-    self.hasCompletedAtLeastOnce = hasCompletedAtLeastOnce
-    self.hasObservedInitialAgentEvent = hasObservedInitialAgentEvent
-    self.lastKnownBusy = lastKnownBusy
-    self.lastBusyTransitionAt = lastBusyTransitionAt
     self.removeBackingWorktreeOnDelete = removeBackingWorktreeOnDelete
     self.isPriority = isPriority
     self.planMode = planMode
-    self.agentNativeSessionID = agentNativeSessionID
     self.parked = parked
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
@@ -229,31 +171,52 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.tmuxSessionName = tmuxSessionName
     self.remoteConnectionLost = remoteConnectionLost
     self.manualStatusOverride = manualStatusOverride
+
+    let primary = SessionTerminal(
+      id: id,
+      role: agent == nil ? .shell : .agent,
+      agent: agent,
+      initialPrompt: initialPrompt,
+      agentNativeSessionID: agentNativeSessionID,
+      createdAt: createdAt,
+      lastActivityAt: lastActivityAt,
+      lastKnownBusy: lastKnownBusy,
+      hasObservedInitialAgentEvent: hasObservedInitialAgentEvent,
+      hasCompletedAtLeastOnce: hasCompletedAtLeastOnce,
+      lastBusyTransitionAt: lastBusyTransitionAt
+    )
+    self.terminals = [primary]
+    self.primaryTerminalID = primary.id
   }
 
   // Forward-compatible Codable — convention documented in
   // docs/agent-guides/persistence.md.
   //
-  // Missing fields decode to their struct default rather than failing the
-  // whole file. Prevents "all sessions disappeared" regressions any time
-  // we add a new field to AgentSession and relaunch against a previously-
-  // written sessions file.
-  //
-  // When adding a new field: bump CodingKeys, add one
-  // `decodeIfPresent ?? default` line below. Do NOT fall back to the
-  // synthesized init — it will break backward compat silently.
+  // Legacy single-terminal sessions (no `terminals` key) are migrated on
+  // read: a single `.agent` (or `.shell`) terminal is synthesized from the
+  // legacy top-level fields (`agent`, `initialPrompt`,
+  // `agentNativeSessionID`, busy/idle flags, …). On the next save the file
+  // is rewritten in the new shape; legacy keys are then dropped.
   enum CodingKeys: String, CodingKey {
-    case id, repositoryID, worktreeID, currentWorkspacePath, agent, initialPrompt, displayName
+    case id, repositoryID, worktreeID, currentWorkspacePath
+    case displayName
     case sourceBookmarkID, debugSourceSessionID
-    case createdAt, lastActivityAt, hasCompletedAtLeastOnce, hasObservedInitialAgentEvent
-    case lastKnownBusy, lastBusyTransitionAt
+    case createdAt
     case removeBackingWorktreeOnDelete, isPriority, planMode
-    case agentNativeSessionID, parked
+    case parked
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
     case manualStatusOverride
+
+    // New shape
+    case terminals, primaryTerminalID
+
+    // Legacy single-terminal keys — read-only path, kept for migration.
+    case agent, initialPrompt, agentNativeSessionID
+    case lastActivityAt, lastKnownBusy, lastBusyTransitionAt
+    case hasCompletedAtLeastOnce, hasObservedInitialAgentEvent
   }
 
   init(from decoder: Decoder) throws {
@@ -263,25 +226,13 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     worktreeID = try c.decode(String.self, forKey: .worktreeID)
     currentWorkspacePath =
       try c.decodeIfPresent(String.self, forKey: .currentWorkspacePath) ?? worktreeID
-    agent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
-    initialPrompt = try c.decode(String.self, forKey: .initialPrompt)
-    displayName = try c.decodeIfPresent(String.self, forKey: .displayName)
-      ?? Self.deriveDisplayName(from: initialPrompt, fallbackID: id)
     sourceBookmarkID = try c.decodeIfPresent(UUID.self, forKey: .sourceBookmarkID)
     debugSourceSessionID = try c.decodeIfPresent(UUID.self, forKey: .debugSourceSessionID)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
-    lastActivityAt = try c.decodeIfPresent(Date.self, forKey: .lastActivityAt) ?? Date()
-    hasCompletedAtLeastOnce =
-      try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
-    hasObservedInitialAgentEvent =
-      try c.decodeIfPresent(Bool.self, forKey: .hasObservedInitialAgentEvent) ?? false
-    lastKnownBusy = try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
-    lastBusyTransitionAt = try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
     removeBackingWorktreeOnDelete =
       try c.decodeIfPresent(Bool.self, forKey: .removeBackingWorktreeOnDelete) ?? false
     isPriority = try c.decodeIfPresent(Bool.self, forKey: .isPriority) ?? false
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
-    agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
@@ -296,7 +247,86 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     // `try?` (not `try`) so an unknown future case decodes to nil rather
     // than failing the whole record. Worst case: user's override silently
     // resets after a downgrade — acceptable.
-    manualStatusOverride = try? c.decodeIfPresent(BoardSessionStatus.self, forKey: .manualStatusOverride)
+    manualStatusOverride =
+      try? c.decodeIfPresent(BoardSessionStatus.self, forKey: .manualStatusOverride)
+
+    let storedDisplayName = try c.decodeIfPresent(String.self, forKey: .displayName)
+
+    if let storedTerminals = try c.decodeIfPresent([SessionTerminal].self, forKey: .terminals),
+       !storedTerminals.isEmpty {
+      let resolvedPrimaryID =
+        try c.decodeIfPresent(UUID.self, forKey: .primaryTerminalID) ?? storedTerminals[0].id
+      let primaryPrompt =
+        storedTerminals.first(where: { $0.id == resolvedPrimaryID })?.initialPrompt
+          ?? storedTerminals[0].initialPrompt
+      terminals = storedTerminals
+      primaryTerminalID = resolvedPrimaryID
+      displayName =
+        storedDisplayName ?? Self.deriveDisplayName(from: primaryPrompt, fallbackID: id)
+    } else {
+      // Legacy: synthesize a single primary terminal from the old top-level fields.
+      let legacyAgent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
+      let legacyInitialPrompt = try c.decodeIfPresent(String.self, forKey: .initialPrompt) ?? ""
+      let legacyAgentNative =
+        try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)
+      let legacyLastKnownBusy =
+        try c.decodeIfPresent(Bool.self, forKey: .lastKnownBusy) ?? false
+      let legacyHasObservedInitial =
+        try c.decodeIfPresent(Bool.self, forKey: .hasObservedInitialAgentEvent) ?? false
+      let legacyHasCompletedOnce =
+        try c.decodeIfPresent(Bool.self, forKey: .hasCompletedAtLeastOnce) ?? false
+      let legacyLastActivity =
+        try c.decodeIfPresent(Date.self, forKey: .lastActivityAt) ?? createdAt
+      let legacyLastBusyTransition =
+        try c.decodeIfPresent(Date.self, forKey: .lastBusyTransitionAt)
+
+      let legacy = SessionTerminal(
+        id: id,
+        role: legacyAgent == nil ? .shell : .agent,
+        agent: legacyAgent,
+        initialPrompt: legacyInitialPrompt,
+        agentNativeSessionID: legacyAgentNative,
+        createdAt: createdAt,
+        lastActivityAt: legacyLastActivity,
+        lastKnownBusy: legacyLastKnownBusy,
+        hasObservedInitialAgentEvent: legacyHasObservedInitial,
+        hasCompletedAtLeastOnce: legacyHasCompletedOnce,
+        lastBusyTransitionAt: legacyLastBusyTransition
+      )
+      terminals = [legacy]
+      primaryTerminalID = id
+      displayName =
+        storedDisplayName ?? Self.deriveDisplayName(from: legacyInitialPrompt, fallbackID: id)
+    }
+  }
+
+  // Encode emits only the new shape — the legacy keys are read-only.
+  func encode(to encoder: Encoder) throws {
+    var c = encoder.container(keyedBy: CodingKeys.self)
+    try c.encode(id, forKey: .id)
+    try c.encode(repositoryID, forKey: .repositoryID)
+    try c.encode(worktreeID, forKey: .worktreeID)
+    try c.encode(currentWorkspacePath, forKey: .currentWorkspacePath)
+    try c.encode(displayName, forKey: .displayName)
+    try c.encodeIfPresent(sourceBookmarkID, forKey: .sourceBookmarkID)
+    try c.encodeIfPresent(debugSourceSessionID, forKey: .debugSourceSessionID)
+    try c.encode(createdAt, forKey: .createdAt)
+    try c.encode(removeBackingWorktreeOnDelete, forKey: .removeBackingWorktreeOnDelete)
+    try c.encode(isPriority, forKey: .isPriority)
+    try c.encode(planMode, forKey: .planMode)
+    try c.encode(parked, forKey: .parked)
+    try c.encode(autoObserver, forKey: .autoObserver)
+    try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
+    try c.encode(references, forKey: .references)
+    try c.encodeIfPresent(referencesScannedAt, forKey: .referencesScannedAt)
+    try c.encodeIfPresent(remoteWorkspaceID, forKey: .remoteWorkspaceID)
+    try c.encodeIfPresent(remoteHostID, forKey: .remoteHostID)
+    try c.encodeIfPresent(repositoryRemoteTargetID, forKey: .repositoryRemoteTargetID)
+    try c.encodeIfPresent(tmuxSessionName, forKey: .tmuxSessionName)
+    try c.encode(remoteConnectionLost, forKey: .remoteConnectionLost)
+    try c.encodeIfPresent(manualStatusOverride, forKey: .manualStatusOverride)
+    try c.encode(terminals, forKey: .terminals)
+    try c.encode(primaryTerminalID, forKey: .primaryTerminalID)
   }
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,
@@ -306,7 +336,6 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     guard !trimmed.isEmpty else {
       return "Session " + String(fallbackID.uuidString.prefix(8))
     }
-    // Split on whitespace + punctuation, drop empties, take the first 5.
     let words = trimmed
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" && $0 != "_" })
       .prefix(5)
@@ -315,7 +344,64 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       return "Session " + String(fallbackID.uuidString.prefix(8))
     }
     let candidate = words.joined(separator: " ")
-    // Cap overall length so narrow cards don't explode.
     return String(candidate.prefix(60))
+  }
+}
+
+// MARK: - Composition convenience
+
+nonisolated extension AgentSession {
+  /// The canonical agent terminal — the one that drives card status and
+  /// is shown when the user taps the card. Falls back to the first
+  /// terminal if `primaryTerminalID` is somehow stale.
+  var primaryTerminal: SessionTerminal {
+    terminals.first(where: { $0.id == primaryTerminalID }) ?? terminals[0]
+  }
+
+  /// All non-primary terminals (the shells / secondary agents that show
+  /// up as auxiliary tabs in the session-scoped tab strip).
+  var auxiliaryTerminals: [SessionTerminal] {
+    terminals.filter { $0.id != primaryTerminalID }
+  }
+
+  /// Look up a terminal by id.
+  func terminal(id: UUID) -> SessionTerminal? {
+    terminals.first(where: { $0.id == id })
+  }
+
+  /// Mutate the primary terminal. Used by hook handlers and reducer paths
+  /// where the implied target is the session's canonical agent.
+  mutating func updatePrimaryTerminal(_ mutate: (inout SessionTerminal) -> Void) {
+    guard let idx = terminals.firstIndex(where: { $0.id == primaryTerminalID }) else { return }
+    mutate(&terminals[idx])
+  }
+
+  /// Mutate a specific terminal by id. Silently no-ops if no such terminal
+  /// exists in this session.
+  mutating func updateTerminal(id: UUID, _ mutate: (inout SessionTerminal) -> Void) {
+    guard let idx = terminals.firstIndex(where: { $0.id == id }) else { return }
+    mutate(&terminals[idx])
+  }
+
+  // MARK: Read-only forwarders to the primary terminal
+  //
+  // Kept so the broad surface of call sites that pre-date the composition
+  // refactor (`session.agent`, `session.initialPrompt`,
+  // `session.lastKnownBusy`, …) continue to compile and read the right
+  // value. Writes MUST go through `updatePrimaryTerminal` (or
+  // `updateTerminal(id:)`) so the move was meaningful.
+
+  var agent: AgentType? { primaryTerminal.agent }
+  var initialPrompt: String { primaryTerminal.initialPrompt }
+  var agentNativeSessionID: String? { primaryTerminal.agentNativeSessionID }
+  var lastKnownBusy: Bool { primaryTerminal.lastKnownBusy }
+  var hasObservedInitialAgentEvent: Bool { primaryTerminal.hasObservedInitialAgentEvent }
+  var hasCompletedAtLeastOnce: Bool { primaryTerminal.hasCompletedAtLeastOnce }
+  var lastBusyTransitionAt: Date? { primaryTerminal.lastBusyTransitionAt }
+
+  /// Newest activity across ALL terminals in the composition. Used by the
+  /// board card's "Recently" timestamp and reference-scan staleness check.
+  var lastActivityAt: Date {
+    terminals.map(\.lastActivityAt).max() ?? createdAt
   }
 }

@@ -55,6 +55,12 @@ struct BoardFeature {
     /// the board.
     var focusedSessionID: AgentSession.ID?
 
+    /// Per-session: which terminal in the composition is currently
+    /// rendered by the full-screen view's session tab strip. Defaults to
+    /// the session's `primaryTerminalID` when the user enters a session
+    /// or when no explicit selection has been made. Not persisted.
+    var activeTerminalBySession: [AgentSession.ID: UUID] = [:]
+
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
 
@@ -419,6 +425,25 @@ struct BoardFeature {
     case parkActiveSession(id: AgentSession.ID)
     /// Clears the parked bit for sessions whose tab is still alive.
     case unparkSession(id: AgentSession.ID)
+
+    // MARK: Composition (multi-terminal sessions)
+    /// User tapped the `+` in the session-scoped tab strip. Appends a
+    /// fresh `.shell` terminal to the session's composition and spawns
+    /// its tab in the worktree.
+    case addShellTerminalToSession(id: AgentSession.ID, repositories: [Repository])
+    /// User closed an auxiliary tab in the session-scoped tab strip.
+    /// Drops the terminal from the session's composition and destroys
+    /// its tab. No-op for the primary terminal — the session itself owns
+    /// that one; deleting it is "remove session".
+    case removeAuxiliaryTerminal(
+      sessionID: AgentSession.ID,
+      terminalID: UUID,
+      repositories: [Repository]
+    )
+    /// UI-only: changes which terminal in the session's composition the
+    /// full-screen view is currently rendering. Drives the tab strip
+    /// selection state.
+    case selectActiveTerminal(sessionID: AgentSession.ID, terminalID: UUID)
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -912,7 +937,7 @@ struct BoardFeature {
       case .markSessionActivity(let id):
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].lastActivityAt = Date()
+          sessions[index].updatePrimaryTerminal { $0.lastActivityAt = Date() }
         }
         return .none
 
@@ -920,8 +945,10 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           guard !sessions[index].hasCompletedAtLeastOnce else { return }
-          sessions[index].hasCompletedAtLeastOnce = true
-          sessions[index].lastActivityAt = Date()
+          sessions[index].updatePrimaryTerminal {
+            $0.hasCompletedAtLeastOnce = true
+            $0.lastActivityAt = Date()
+          }
         }
         return .none
 
@@ -949,9 +976,11 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           guard sessions[index].lastKnownBusy != busy else { return }
-          sessions[index].lastKnownBusy = busy
-          sessions[index].lastBusyTransitionAt = Date()
-          sessions[index].lastActivityAt = Date()
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = busy
+            $0.lastBusyTransitionAt = Date()
+            $0.lastActivityAt = Date()
+          }
           // Hook gave us a definitive signal — drop the user's override
           // so auto-classification takes over again.
           sessions[index].manualStatusOverride = nil
@@ -1001,9 +1030,11 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
-          sessions[index].lastKnownBusy = false
-          sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = now
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = false
+            $0.lastBusyTransitionAt = nil
+            $0.lastActivityAt = now
+          }
         }
         state.reinitializingSessionIDs.remove(id)
         TranscriptRecorder.shared.append(
@@ -1051,7 +1082,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
-          sessions[index].lastActivityAt = now
+          sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
         }
         state.reinitializingSessionIDs.remove(id)
         TranscriptRecorder.shared.append(
@@ -1087,13 +1118,55 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
-          sessions[index].lastActivityAt = now
+          sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
         }
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(kind: "unparked", context: nil, at: now),
           tabID: TerminalTabID(rawValue: id)
         )
         return prepareAutoStartLifecycleEffect(&state, session: session)
+
+      case .addShellTerminalToSession(let id, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          boardLogger.warning("addShellTerminalToSession: repo \(session.repositoryID) gone")
+          return .none
+        }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        return .run { _ in
+          _ = await terminalClient.addSessionShellTerminal(id, worktree)
+        }
+
+      case .removeAuxiliaryTerminal(let sessionID, let terminalID, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
+          return .none
+        }
+        guard session.primaryTerminalID != terminalID else {
+          boardLogger.info(
+            "removeAuxiliaryTerminal: refusing to remove primary terminal of \(sessionID)"
+          )
+          return .none
+        }
+        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
+          return .none
+        }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        if state.activeTerminalBySession[sessionID] == terminalID {
+          state.activeTerminalBySession[sessionID] = session.primaryTerminalID
+        }
+        return .run { _ in
+          await terminalClient.removeAuxiliaryTerminal(sessionID, terminalID, worktree)
+        }
+
+      case .selectActiveTerminal(let sessionID, let terminalID):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }),
+              session.terminals.contains(where: { $0.id == terminalID }) else {
+          return .none
+        }
+        state.activeTerminalBySession[sessionID] = terminalID
+        return .none
 
       case .toggleRepository(let repositoryID):
         state.$filters.withLock { filters in
@@ -1295,10 +1368,12 @@ struct BoardFeature {
         // Reset transient status so the card immediately reflects the new run.
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].lastKnownBusy = false
-          sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = false
+            $0.lastBusyTransitionAt = nil
+            $0.lastActivityAt = Date()
+          }
         }
         state.reinitializingSessionIDs.insert(id)
         TranscriptRecorder.shared.append(
@@ -1350,10 +1425,12 @@ struct BoardFeature {
         let worktree = Self.resumeWorktree(for: session, repository: repository)
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].lastKnownBusy = false
-          sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = Date()
           sessions[index].parked = false
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = false
+            $0.lastBusyTransitionAt = nil
+            $0.lastActivityAt = Date()
+          }
         }
         state.reinitializingSessionIDs.insert(id)
         TranscriptRecorder.shared.append(
@@ -1403,10 +1480,12 @@ struct BoardFeature {
         let now = date.now
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].lastKnownBusy = false
-          sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = now
           sessions[index].parked = false
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = false
+            $0.lastBusyTransitionAt = nil
+            $0.lastActivityAt = now
+          }
         }
         state.reinitializingSessionIDs.insert(id)
         state.focusedSessionID = id
@@ -1444,9 +1523,11 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].remoteConnectionLost = false
-          sessions[index].lastKnownBusy = false
-          sessions[index].lastBusyTransitionAt = nil
-          sessions[index].lastActivityAt = Date()
+          sessions[index].updatePrimaryTerminal {
+            $0.lastKnownBusy = false
+            $0.lastBusyTransitionAt = nil
+            $0.lastActivityAt = Date()
+          }
         }
         state.reinitializingSessionIDs.insert(id)
         let invocation = RemoteSpawnInvocation(
