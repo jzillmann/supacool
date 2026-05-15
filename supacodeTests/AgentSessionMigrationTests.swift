@@ -219,4 +219,99 @@ struct AgentSessionMigrationTests {
     #expect(session.auxiliaryTerminals.first?.id == shellID)
     #expect(session.primaryTerminal.id == sessionID)
   }
+
+  // MARK: Busy-state aggregation
+
+  /// `session.lastKnownBusy` is the read forwarder used by the board
+  /// classifier. It MUST reflect the primary (agent) terminal only — a
+  /// shell sitting on `htop` should not flip the card to Working.
+  @Test func lastKnownBusyForwardsFromPrimaryOnly() {
+    let sessionID = UUID()
+    let shellID = UUID()
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Work"
+    )
+    // Add a "busy" shell auxiliary — primary stays idle.
+    session.terminals.append(
+      SessionTerminal(id: shellID, role: .shell, lastKnownBusy: true)
+    )
+
+    #expect(session.primaryTerminal.lastKnownBusy == false)
+    #expect(session.lastKnownBusy == false)
+
+    // Mark the agent busy — forwarder now flips.
+    session.updatePrimaryTerminal { $0.lastKnownBusy = true }
+    #expect(session.lastKnownBusy == true)
+  }
+
+  /// `session.lastActivityAt` is the freshness signal for the board
+  /// card's relative timestamp and the reference-scanner staleness
+  /// check. It must reflect the *newest* activity across all terminals
+  /// — typing into a shell tab should bump the card's "Recently" stamp
+  /// even though the agent is idle.
+  @Test func lastActivityAtIsMaxAcrossAllTerminals() {
+    let sessionID = UUID()
+    let shellID = UUID()
+    let oldDate = Date(timeIntervalSinceReferenceDate: 0)
+    let newDate = Date(timeIntervalSinceReferenceDate: 1_000_000)
+
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Work",
+      lastActivityAt: oldDate
+    )
+    // A shell with much newer activity.
+    session.terminals.append(
+      SessionTerminal(id: shellID, role: .shell, lastActivityAt: newDate)
+    )
+
+    #expect(session.lastActivityAt == newDate)
+
+    // Primary catches up — still the max.
+    session.updatePrimaryTerminal { $0.lastActivityAt = newDate.addingTimeInterval(1) }
+    #expect(session.lastActivityAt == newDate.addingTimeInterval(1))
+  }
+
+  /// The classifier itself takes a single `busy: Bool`. Verifies the
+  /// invariant that auxiliary shells with their own busy flags do not
+  /// participate: classify is fed the primary terminal's signals only,
+  /// and the presence of busy auxiliaries does NOT change the result.
+  @Test func shellAuxiliariesDoNotPromoteCardStatus() {
+    let now = Date(timeIntervalSinceReferenceDate: 100)
+    var session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Work",
+      lastActivityAt: now,
+      hasCompletedAtLeastOnce: true,
+      hasObservedInitialAgentEvent: true,
+      lastKnownBusy: false
+    )
+    session.terminals.append(
+      SessionTerminal(id: UUID(), role: .shell, lastKnownBusy: true)
+    )
+    session.terminals.append(
+      SessionTerminal(id: UUID(), role: .shell, lastKnownBusy: true)
+    )
+
+    // Real call site reads `terminalManager.isAgentBusy(tabID: session.id)`
+    // which targets the primary. Mirror that here: feed classify the
+    // primary's busy state, not anything aggregated from auxiliaries.
+    let status = BoardSessionStatus.classify(
+      session: session,
+      tabExists: true,
+      awaitingInput: false,
+      busy: session.lastKnownBusy,
+      now: now
+    )
+    #expect(status == .waitingOnMe)
+  }
 }
