@@ -61,6 +61,14 @@ struct BoardFeature {
     /// or when no explicit selection has been made. Not persisted.
     var activeTerminalBySession: [AgentSession.ID: UUID] = [:]
 
+    /// One-shot guard: we re-spawn every session's auxiliary terminals on
+    /// the first repositories-loaded tick after app launch. Primary
+    /// (agent) terminals are intentionally left dormant so an
+    /// `.interrupted` card stays distinguishable from a live one — the
+    /// user reanimates the agent via Resume/Rerun explicitly. Not
+    /// persisted; resets to false on every fresh launch.
+    var didEagerReattachAuxiliaries: Bool = false
+
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
 
@@ -1209,20 +1217,41 @@ struct BoardFeature {
         return .none
 
       case ._repositoriesUpdated(let repositories):
-        guard state.newTerminalSheet != nil else { return .none }
         let updated = IdentifiedArray(uniqueElements: repositories)
-        let currentSelection = state.newTerminalSheet?.selectedRepositoryID
-        let filtersSnapshot = state.filters
-        state.newTerminalSheet?.availableRepositories = updated
-        // Heal a stale selection (repo was removed) or fill in a freshly
-        // valid one (sheet was opened mid-load with no repos available).
-        if let currentSelection, updated[id: currentSelection] != nil {
-          // Selection still valid — leave it alone.
-        } else {
-          state.newTerminalSheet?.selectedRepositoryID = filteredPreferredRepositoryID(
-            in: repositories,
-            filters: filtersSnapshot
-          ) ?? updated.first?.id
+        if state.newTerminalSheet != nil {
+          let currentSelection = state.newTerminalSheet?.selectedRepositoryID
+          let filtersSnapshot = state.filters
+          state.newTerminalSheet?.availableRepositories = updated
+          // Heal a stale selection (repo was removed) or fill in a freshly
+          // valid one (sheet was opened mid-load with no repos available).
+          if let currentSelection, updated[id: currentSelection] != nil {
+            // Selection still valid — leave it alone.
+          } else {
+            state.newTerminalSheet?.selectedRepositoryID = filteredPreferredRepositoryID(
+              in: repositories,
+              filters: filtersSnapshot
+            ) ?? updated.first?.id
+          }
+        }
+        // First successful repositories load after launch — spawn every
+        // session's auxiliary terminals so the `+N sh` count on cards
+        // matches a live state once the user enters a session, and so
+        // the session-scoped tab strip doesn't show "Terminal no longer
+        // running" placeholders for tabs whose PTYs never came back.
+        if !state.didEagerReattachAuxiliaries, !repositories.isEmpty {
+          state.didEagerReattachAuxiliaries = true
+          let reattachJobs = Self.collectAuxiliaryReattachJobs(
+            sessions: state.sessions,
+            repositories: repositories
+          )
+          guard !reattachJobs.isEmpty else { return .none }
+          return .run { _ in
+            for job in reattachJobs {
+              await terminalClient.send(
+                .restoreShellLayout(job.worktree, tabID: TerminalTabID(rawValue: job.tabID))
+              )
+            }
+          }
         }
         return .none
 
@@ -2905,6 +2934,38 @@ struct BoardFeature {
     let matching = sessions.filter { $0.currentWorkspacePath == path }
     guard !matching.isEmpty else { return false }
     return matching.allSatisfy(\.parked)
+  }
+
+  /// One auxiliary terminal that needs its tab re-spawned at launch.
+  struct AuxiliaryReattachJob: Sendable, Equatable {
+    let worktree: Worktree
+    let tabID: UUID
+  }
+
+  /// Walk all sessions and emit a reattach job for every auxiliary
+  /// terminal whose owning repository is registered. The agent (primary)
+  /// terminal is skipped so an `.interrupted` card stays distinguishable
+  /// — the user reanimates via Resume/Rerun explicitly. Remote sessions
+  /// are skipped: their tabs are tied to live ssh and tmux state that
+  /// the reattach path doesn't understand. Repositories that aren't
+  /// registered any more (e.g. user removed a repo between quits) are
+  /// silently skipped — the corresponding session is already
+  /// `.disconnected` / `.detached` in the UI.
+  fileprivate static func collectAuxiliaryReattachJobs(
+    sessions: [AgentSession],
+    repositories: [Repository]
+  ) -> [AuxiliaryReattachJob] {
+    var jobs: [AuxiliaryReattachJob] = []
+    for session in sessions where !session.isRemote {
+      guard !session.auxiliaryTerminals.isEmpty else { continue }
+      guard let repository = repositories.first(where: { $0.id == session.repositoryID })
+      else { continue }
+      let worktree = Self.resumeWorktree(for: session, repository: repository)
+      for terminal in session.auxiliaryTerminals {
+        jobs.append(AuxiliaryReattachJob(worktree: worktree, tabID: terminal.id))
+      }
+    }
+    return jobs
   }
 
   fileprivate static func resumeWorktree(
