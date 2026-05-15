@@ -865,9 +865,10 @@ private struct ReferenceStackChip: View {
         if case .pullRequest(_, _, _, let state) = ref { return state }
         return nil
       }
+      // Open PRs signal active work, so green wins over stale closed/draft/merged refs.
+      if states.contains(.open) { return .green }
       if states.contains(.closed) { return .red }
       if states.contains(.draft) { return .gray }
-      if states.contains(.open) { return .green }
       if !states.isEmpty, states.allSatisfy({ $0 == .merged }) { return .purple }
       return .secondary
     }
