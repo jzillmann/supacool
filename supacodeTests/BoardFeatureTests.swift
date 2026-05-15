@@ -672,9 +672,11 @@ struct BoardFeatureTests {
     await store.send(.parkSession(id: session.id, repositories: [repo])) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = true
-        sessions[0].lastKnownBusy = false
-        sessions[0].lastBusyTransitionAt = nil
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal {
+          $0.lastKnownBusy = false
+          $0.lastBusyTransitionAt = nil
+          $0.lastActivityAt = now
+        }
       }
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
         workspacePath: worktreeID,
@@ -747,7 +749,7 @@ struct BoardFeatureTests {
     await store.send(.unparkSession(id: session.id)) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = false
-        sessions[0].lastActivityAt = now
+        sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
         workspacePath: worktreeID,
@@ -1346,7 +1348,7 @@ struct BoardFeatureTests {
 
     await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
       $0.$sessions.withLock { sessions in
-        sessions[0].lastKnownBusy = true
+        sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = true }
         sessions[0].manualStatusOverride = nil
       }
     }
@@ -1959,9 +1961,11 @@ struct BoardFeatureTests {
   @Test(.dependencies) func resumeDetachedSessionMarksReinitializingUntilTabExists() async throws {
     let sessionID = UUID()
     var session = Self.sampleSession(id: sessionID)
-    session.agentNativeSessionID = "native-session-123"
+    session.updatePrimaryTerminal {
+      $0.agentNativeSessionID = "native-session-123"
+      $0.lastKnownBusy = true
+    }
     session.parked = true
-    session.lastKnownBusy = true
     let repo = Repository(
       id: session.repositoryID,
       rootURL: URL(fileURLWithPath: session.repositoryID),
@@ -2007,7 +2011,7 @@ struct BoardFeatureTests {
   @Test(.dependencies) func resumePickerMarksReinitializingUntilTabExists() async throws {
     let sessionID = UUID()
     var session = Self.sampleSession(id: sessionID)
-    session.agentNativeSessionID = nil
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = nil }
     let repo = Repository(
       id: session.repositoryID,
       rootURL: URL(fileURLWithPath: session.repositoryID),
