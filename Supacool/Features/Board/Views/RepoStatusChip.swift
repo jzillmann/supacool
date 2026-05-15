@@ -71,6 +71,10 @@ struct RepoStatusChip: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 4)
     .help(helpText)
+    .animation(.snappy(duration: 0.22), value: currentBranch)
+    .animation(.snappy(duration: 0.22), value: aheadCount)
+    .animation(.snappy(duration: 0.22), value: behindCount)
+    .animation(.snappy(duration: 0.22), value: localChangeCount)
     .task(id: refreshID) {
       await refreshLoop()
     }
@@ -126,6 +130,7 @@ struct RepoStatusChip: View {
         Text(branchText)
           .lineLimit(1)
           .truncationMode(.middle)
+          .contentTransition(.opacity)
       }
       .frame(maxWidth: 180, alignment: .leading)
       .contentShape(Rectangle())
@@ -147,7 +152,9 @@ struct RepoStatusChip: View {
         } label: {
           HStack(spacing: 2) {
             Text("↓\(behindCount ?? 0)")
+              .contentTransition(.numericText())
             Text("↑\(aheadCount ?? 0)")
+              .contentTransition(.numericText())
           }
         }
         .buttonStyle(.plain)
@@ -156,7 +163,9 @@ struct RepoStatusChip: View {
       } else {
         HStack(spacing: 2) {
           Text("↓\(behindCount ?? 0)")
+            .contentTransition(.numericText())
           Text("↑\(aheadCount ?? 0)")
+            .contentTransition(.numericText())
         }
         .foregroundStyle(.red)
         .help("Branch diverged from base")
@@ -167,26 +176,31 @@ struct RepoStatusChip: View {
           Task { await pullFromOrigin() }
         } label: {
           Text("↓\(behindCount)")
+            .contentTransition(.numericText())
         }
         .buttonStyle(.plain)
         .foregroundStyle(.orange)
         .help(behindOnlyHelp)
       } else {
         Text("↓\(behindCount)")
+          .contentTransition(.numericText())
           .foregroundStyle(.orange)
           .help("Behind base by \(behindCount) commit\(behindCount == 1 ? "" : "s")")
       }
     } else if let aheadCount, aheadCount > 0 {
       Text("↑\(aheadCount)")
+        .contentTransition(.numericText())
         .foregroundStyle(.blue)
     } else if behindCount != nil {
       Text("↓0")
+        .contentTransition(.numericText())
         .foregroundStyle(.secondary)
     } else if isLoading {
       ProgressView()
         .controlSize(.mini)
     } else {
       Text("↓—")
+        .contentTransition(.numericText())
         .foregroundStyle(.secondary)
     }
   }
@@ -195,9 +209,11 @@ struct RepoStatusChip: View {
   private var localChangesView: some View {
     if let localChangeCount {
       Text("Δ\(localChangeCount)")
+        .contentTransition(.numericText())
         .foregroundStyle(localChangeCount > 0 ? .orange : .secondary)
     } else {
       Text("Δ—")
+        .contentTransition(.numericText())
         .foregroundStyle(.secondary)
     }
   }

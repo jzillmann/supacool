@@ -209,7 +209,6 @@ struct FullScreenTerminalView: View {
       Divider().frame(height: 18)
 
       repoChip
-      repoStatusChip
       pullRequestStatus
       referenceChips
       Text(session.displayName)
@@ -337,32 +336,6 @@ struct FullScreenTerminalView: View {
         workspaceBadge
       }
     }
-  }
-
-  @ViewBuilder
-  private var repoStatusChip: some View {
-    if !session.isRemote, let repo = repositories[id: session.repositoryID] {
-      let statusURL = terminalStatusWorktreeURL
-      RepoStatusChip(
-        repository: repo,
-        worktreeURL: statusURL,
-        refreshID: "\(session.id.uuidString)#\(statusURL.path(percentEncoded: false))",
-        showsQuickDiffButton: false,
-        allowsSyncActions: false
-      )
-      .fixedSize()
-    }
-  }
-
-  private var terminalStatusWorktreeURL: URL {
-    activeTerminalWorkingDirectory ?? URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
-  }
-
-  private var activeTerminalWorkingDirectory: URL? {
-    guard let worktree = resolveWorktree() else { return nil }
-    let state = terminalManager.state(for: worktree) { false }
-    let tabID = TerminalTabID(rawValue: session.id)
-    return state.activeWorkingDirectory(for: tabID)
   }
 
   @ViewBuilder

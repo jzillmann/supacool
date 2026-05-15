@@ -76,6 +76,14 @@ struct BoardRootView: View {
     let startedAt: Date
   }
 
+  private struct ToolbarRepoStatus {
+    let repository: Repository
+    let worktreeURL: URL
+    let refreshID: String
+    let showsQuickDiffButton: Bool
+    let allowsSyncActions: Bool
+  }
+
   var body: some View {
     currentContent
     .toolbar(removing: .title)
@@ -537,10 +545,38 @@ struct BoardRootView: View {
     store.send(.focusSession(id: destination))
   }
 
-  /// Repo shown by the center toolbar status chip. We only show this
-  /// when exactly one repo is in context (single registered repo, or a
-  /// single explicit filter selection), and only on the board. The
-  /// full-screen terminal header owns its own active-pane status chip.
+  /// Status chip shown in the window toolbar. On the board it summarizes
+  /// the single repo in context; in a full-screen terminal it follows the
+  /// active pane's current directory so the top chrome stays consistent.
+  private var toolbarRepoStatus: ToolbarRepoStatus? {
+    if let focusedID = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == focusedID }),
+      !session.isRemote,
+      let repository = repositories[id: session.repositoryID]
+    {
+      let worktreeURL = terminalStatusWorktreeURL(for: session)
+      return ToolbarRepoStatus(
+        repository: repository,
+        worktreeURL: worktreeURL,
+        refreshID: "\(session.id.uuidString)#\(worktreeURL.path(percentEncoded: false))",
+        showsQuickDiffButton: false,
+        allowsSyncActions: false
+      )
+    }
+
+    guard let repository = statusRepository else { return nil }
+    return ToolbarRepoStatus(
+      repository: repository,
+      worktreeURL: repository.rootURL,
+      refreshID: repository.id,
+      showsQuickDiffButton: true,
+      allowsSyncActions: true
+    )
+  }
+
+  /// Repo shown by the board toolbar status chip. We only show this when
+  /// exactly one repo is in context (single registered repo, or a single
+  /// explicit filter selection), and only while the dashboard is visible.
   private var statusRepository: Repository? {
     guard store.focusedSessionID == nil else { return nil }
     if repositories.count == 1 {
@@ -550,6 +586,37 @@ struct BoardRootView: View {
     let selected = repositories.filter { store.filters.selectedRepositoryIDs.contains($0.id) }
     guard selected.count == 1 else { return nil }
     return selected.first
+  }
+
+  private func terminalStatusWorktreeURL(for session: AgentSession) -> URL {
+    activeTerminalWorkingDirectory(for: session)
+      ?? URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
+  }
+
+  private func activeTerminalWorkingDirectory(for session: AgentSession) -> URL? {
+    guard let worktree = resolveFocusedWorktree(for: session) else { return nil }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: session.id)
+    return state.activeWorkingDirectory(for: tabID)
+  }
+
+  private func resolveFocusedWorktree(for session: AgentSession) -> Worktree? {
+    let tabID = TerminalTabID(rawValue: session.id)
+    guard terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID) else {
+      return nil
+    }
+    let url = URL(fileURLWithPath: session.worktreeID).standardizedFileURL
+    let repository = repositories[id: session.repositoryID]
+    let discovered = repository?.worktrees.first(where: { $0.id == session.worktreeID })
+    return Worktree(
+      id: session.worktreeID,
+      name: discovered?.name ?? url.lastPathComponent,
+      detail: discovered?.detail ?? "",
+      workingDirectory: discovered?.workingDirectory ?? url,
+      repositoryRootURL: repository?.rootURL.standardizedFileURL ?? url,
+      createdAt: discovered?.createdAt,
+      branch: discovered?.branch
+    )
   }
 
   @ToolbarContentBuilder
@@ -571,8 +638,18 @@ struct BoardRootView: View {
       }
     }
     ToolbarItem(placement: .principal) {
-      if let statusRepository {
-        RepoStatusChip(repository: statusRepository)
+      if let toolbarRepoStatus {
+        RepoStatusChip(
+          repository: toolbarRepoStatus.repository,
+          worktreeURL: toolbarRepoStatus.worktreeURL,
+          refreshID: toolbarRepoStatus.refreshID,
+          showsQuickDiffButton: toolbarRepoStatus.showsQuickDiffButton,
+          allowsSyncActions: toolbarRepoStatus.allowsSyncActions
+        )
+        .fixedSize()
+        .id(toolbarRepoStatus.refreshID)
+        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+        .animation(.snappy(duration: 0.2), value: toolbarRepoStatus.refreshID)
       }
     }
     // Push the + button to the far right so there's breathing room
