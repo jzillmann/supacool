@@ -27,4 +27,38 @@ nonisolated enum BoardPullRequestChecks {
     }
     return hasPendingCheck
   }
+
+  /// Outcome of an OPEN PR's status-check rollup. Used by the board to
+  /// glow cards whose CI has just finished so the user notices them
+  /// without having to read the chip.
+  enum ChecksOutcome: Equatable {
+    /// No PR, PR not OPEN, or no checks reported yet.
+    case unknown
+    /// At least one check still `inProgress` or `expected`.
+    case pending
+    /// Every check has reached a terminal state.
+    case completed(allPassed: Bool)
+  }
+
+  static func outcome(_ pullRequest: GithubPullRequest?) -> ChecksOutcome {
+    guard let pullRequest, pullRequest.state.uppercased() == "OPEN" else { return .unknown }
+    guard let checks = pullRequest.statusCheckRollup?.checks else { return .unknown }
+    return outcome(checks: checks)
+  }
+
+  static func outcome(checks: [GithubPullRequestStatusCheck]) -> ChecksOutcome {
+    guard !checks.isEmpty else { return .unknown }
+    var sawFailure = false
+    for check in checks {
+      switch check.checkState {
+      case .inProgress, .expected:
+        return .pending
+      case .failure:
+        sawFailure = true
+      case .success, .skipped:
+        continue
+      }
+    }
+    return .completed(allPassed: !sawFailure)
+  }
 }

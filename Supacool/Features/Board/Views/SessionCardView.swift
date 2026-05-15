@@ -116,6 +116,11 @@ struct SessionCardView: View {
       radius: session.isPriority ? 10 : 0,
       y: session.isPriority ? 4 : 0
     )
+    .shadow(
+      color: checksGlowColor.opacity(isHovered ? 0.55 : 0.40),
+      radius: checksGlowColor == .clear ? 0 : 12,
+      y: 0
+    )
     .clipShape(cardShape)
     .contentShape(cardShape)
     // The card hosts its own info/unpark buttons, so a giant outer Button
@@ -548,6 +553,16 @@ struct SessionCardView: View {
 
   private var cardBorderColor: Color {
     session.isPriority ? priorityColor.opacity(isHovered ? 0.92 : 0.76) : status.color.opacity(0.25)
+  }
+
+  /// Glow tint when the worktree PR's CI just finished. Green for an
+  /// all-green run, red when at least one check failed. `.clear` (no
+  /// glow) while CI is still running or when there's no PR.
+  private var checksGlowColor: Color {
+    switch BoardPullRequestChecks.outcome(pullRequest) {
+    case .completed(let allPassed): allPassed ? .green : .red
+    case .pending, .unknown: .clear
+    }
   }
 
   private var cardBorderWidth: CGFloat {
