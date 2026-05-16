@@ -251,7 +251,15 @@ struct BoardView: View {
     } else {
       let live = visible.filter { classify($0) != .parked }
       let waiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(classify($0)) })
-      let inProgress = BoardNavOrder.priorityFirst(live.filter { !isWaitingStatus(classify($0)) })
+      let checksPending = BoardNavOrder.priorityFirst(
+        live.filter { BoardNavOrder.isChecksPendingStatus(classify($0)) }
+      )
+      let inProgress = BoardNavOrder.priorityFirst(
+        live.filter {
+          let status = classify($0)
+          return !isWaitingStatus(status) && !BoardNavOrder.isChecksPendingStatus(status)
+        }
+      )
       let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
@@ -320,18 +328,30 @@ struct BoardView: View {
             dimmed: false,
             emptyMessage: "Nothing waiting on you."
           )
+          if !checksPending.isEmpty {
+            Divider()
+              .padding(.vertical, 4)
+            section(
+              title: BoardSessionStatus.waitingForChecks.label,
+              systemImage: BoardSessionStatus.waitingForChecks.systemImage,
+              color: BoardSessionStatus.waitingForChecks.color,
+              sessions: checksPending,
+              dimmed: true,
+              emptyMessage: nil
+            )
+          }
           if !inProgress.isEmpty {
             Divider()
               .padding(.vertical, 4)
+            section(
+              title: "In Progress",
+              systemImage: "circle.fill",
+              color: .green,
+              sessions: inProgress,
+              dimmed: true,
+              emptyMessage: nil
+            )
           }
-          section(
-            title: "In Progress",
-            systemImage: "circle.fill",
-            color: .green,
-            sessions: inProgress,
-            dimmed: true,
-            emptyMessage: nil
-          )
           if !parked.isEmpty {
             Divider()
               .padding(.vertical, 4)
@@ -718,6 +738,7 @@ private struct BoardCardFramesKey: PreferenceKey {
 enum BoardNavOrder {
   private enum Bucket: Equatable {
     case waiting
+    case checksPending
     case inProgress
     case parked
   }
@@ -727,6 +748,12 @@ enum BoardNavOrder {
     case .waitingOnMe, .awaitingInput, .detached, .interrupted, .disconnected: true
     case .inProgress, .waitingForChecks, .fresh, .parked: false
     }
+  }
+
+  /// Cards parked in the "Checks Pending" row are idle because external
+  /// CI is still running, not because they need the user or the agent.
+  static func isChecksPendingStatus(_ status: BoardSessionStatus) -> Bool {
+    status == .waitingForChecks
   }
 
   /// Stable in-row ordering: all priority cards first, preserving the
@@ -753,8 +780,14 @@ enum BoardNavOrder {
     // and only come back into rotation after an unpark.
     let live = visibleSessions.filter { classify($0) != .parked }
     let waiting = priorityFirst(live.filter { isWaitingStatus(classify($0)) })
-    let inProgress = priorityFirst(live.filter { !isWaitingStatus(classify($0)) })
-    return waiting.map(\.id) + inProgress.map(\.id)
+    let checksPending = priorityFirst(live.filter { isChecksPendingStatus(classify($0)) })
+    let inProgress = priorityFirst(
+      live.filter {
+        let status = classify($0)
+        return !isWaitingStatus(status) && !isChecksPendingStatus(status)
+      }
+    )
+    return waiting.map(\.id) + checksPending.map(\.id) + inProgress.map(\.id)
   }
 
   static func nextInSameState(
@@ -781,6 +814,7 @@ enum BoardNavOrder {
 
   private static func bucket(for status: BoardSessionStatus) -> Bucket {
     if status == .parked { return .parked }
+    if isChecksPendingStatus(status) { return .checksPending }
     return isWaitingStatus(status) ? .waiting : .inProgress
   }
 }

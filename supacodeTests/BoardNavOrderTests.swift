@@ -17,7 +17,7 @@ struct BoardNavOrderTests {
       workingA.id: .inProgress,
       waitingB.id: .awaitingInput,
       parked.id: .parked,
-      workingB.id: .waitingForChecks,
+      workingB.id: .inProgress,
     ]
 
     #expect(
@@ -144,6 +144,38 @@ struct BoardNavOrderTests {
         visibleSessions: sessions,
         classify: { _ in .waitingOnMe }
       ) == nil
+    )
+  }
+
+  @Test func checksPendingIsItsOwnBucket() {
+    let waiting = makeSession(1)
+    let checksA = makeSession(2)
+    let working = makeSession(3)
+    let checksB = makeSession(4)
+    let sessions = [waiting, checksA, working, checksB]
+    let statuses: [AgentSession.ID: BoardSessionStatus] = [
+      waiting.id: .waitingOnMe,
+      checksA.id: .waitingForChecks,
+      working.id: .inProgress,
+      checksB.id: .waitingForChecks,
+    ]
+
+    // Cursor cycles within Checks Pending only — In Progress is skipped.
+    #expect(
+      BoardNavOrder.nextInSameState(
+        after: checksA.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == checksB.id
+    )
+
+    // And the row order in `order(...)` puts Checks Pending between
+    // Waiting on Me and In Progress.
+    #expect(
+      BoardNavOrder.order(
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == [waiting.id, checksA.id, checksB.id, working.id]
     )
   }
 
