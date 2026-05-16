@@ -407,6 +407,11 @@ struct BoardFeature {
     /// permanent-deletes anything past `retentionWindow`.
     case _sweepExpiredTrash
     case togglePriority(id: AgentSession.ID)
+    /// User tapped "Refresh worktree" in the full-screen terminal's
+    /// overflow menu. Resolves the session's backing worktree id and
+    /// emits a delegate so AppFeature can re-fan-out the watcher events
+    /// that drive dirty count / ahead-behind / PR state.
+    case refreshWorktreeTapped(id: AgentSession.ID)
     /// User-pinned status override. `nil` clears the override.
     case setManualStatusOverride(id: AgentSession.ID, status: BoardSessionStatus?)
     case markSessionActivity(id: AgentSession.ID)
@@ -709,6 +714,11 @@ struct BoardFeature {
     /// AppFeature runs the evaluation and sends back
     /// `.gettingStartedEvaluated`.
     case gettingStartedReevaluateRequested
+    /// User manually asked to refresh the given worktree (from the
+    /// terminal view's overflow menu). AppFeature replays the watcher
+    /// events that normally drive dirty count, ahead/behind, branch and
+    /// PR state.
+    case refreshWorktreeRequested(worktreeID: Worktree.ID)
   }
 
   @Dependency(TerminalClient.self) var terminalClient
@@ -781,6 +791,12 @@ struct BoardFeature {
           sessions[index].isPriority.toggle()
         }
         return .none
+
+      case .refreshWorktreeTapped(let id):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .none
+        }
+        return .send(.delegate(.refreshWorktreeRequested(worktreeID: session.worktreeID)))
 
       case .setManualStatusOverride(let id, let status):
         state.$sessions.withLock { sessions in

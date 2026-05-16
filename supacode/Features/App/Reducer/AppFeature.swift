@@ -320,6 +320,24 @@ struct AppFeature {
       case .board(.delegate(.gettingStartedReevaluateRequested)):
         return evaluateGettingStartedEffect(state: state)
 
+      case .board(.delegate(.refreshWorktreeRequested(let worktreeID))):
+        // Replay the same watcher events that the file/branch watcher
+        // would fire on real activity. `branchChanged` also pulls in the
+        // dirty count + ahead/behind via the RepositoriesFeature path,
+        // and `filesChanged` covers anything keyed purely on file state.
+        return .merge(
+          .send(
+            .repositories(
+              .worktreeInfoEvent(.branchChanged(worktreeID: worktreeID))
+            )
+          ),
+          .send(
+            .repositories(
+              .worktreeInfoEvent(.filesChanged(worktreeID: worktreeID))
+            )
+          )
+        )
+
       case .settings(.delegate(.hookInstallSucceeded(let slot))):
         return .merge(
           .send(.board(.trayNoteHookInstalled(slot: slot))),

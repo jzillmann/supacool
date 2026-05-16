@@ -348,6 +348,9 @@ struct BoardRootView: View {
             )
           )
         },
+        onRefreshWorktree: {
+          store.send(.refreshWorktreeTapped(id: session.id))
+        },
         activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
         onSelectTerminal: { terminalID in
           store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))

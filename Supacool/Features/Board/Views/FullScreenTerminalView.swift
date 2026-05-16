@@ -78,6 +78,11 @@ struct FullScreenTerminalView: View {
   /// user can spawn a debug agent without leaving the terminal view.
   let onDebug: () -> Void
 
+  /// Re-fetches worktree info (dirty count, ahead/behind, branch) for
+  /// the session's backing worktree. Useful after on-disk changes made
+  /// outside Supacool (e.g. command-line git operations).
+  let onRefreshWorktree: () -> Void
+
   /// Which terminal in `session.terminals` is currently rendered. Pass
   /// `session.primaryTerminalID` for single-terminal sessions.
   let activeTerminalID: UUID
@@ -233,11 +238,31 @@ struct FullScreenTerminalView: View {
         serverLifecycleControl(serverLifecycle)
       }
       agentChip
+      overflowMenu
       parkControl
       removeButton
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
+  }
+
+  /// Catch-all "⋯" menu for less-frequent session actions. Keep entries
+  /// here that don't warrant dedicated toolbar real estate.
+  private var overflowMenu: some View {
+    Menu {
+      Button {
+        onRefreshWorktree()
+      } label: {
+        Label("Refresh worktree", systemImage: "arrow.clockwise")
+      }
+    } label: {
+      Image(systemName: "ellipsis.circle")
+        .font(.body)
+    }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help("More session actions")
   }
 
   private func serverLifecycleControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
