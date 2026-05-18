@@ -817,7 +817,7 @@ struct NewTerminalFeature {
       return .none
     }
 
-    let selection = state.selectedWorkspace
+    var selection = state.selectedWorkspace
     switch selection {
     case .repoRoot:
       break
@@ -863,6 +863,18 @@ struct NewTerminalFeature {
     // `state.newTerminalSheet = nil` upon receiving `.spawnRequested`),
     // so we don't bother flipping `isCreating` — the spinner would
     // never be visible.
+
+    // Guard the Matrix Board invariant that the repo root sits on
+    // origin/HEAD and clean. Agent + prompt submissions that resolved
+    // to `.repoRoot` (empty workspace field, no PR or Linear pin) get
+    // a fresh `.newBranch` slug so the agent runs in an isolated
+    // worktree off origin/main instead of mutating the repo root.
+    selection = Self.resolveSubmittedSelection(
+      selection: selection,
+      agent: state.agent,
+      trimmedPrompt: trimmedPrompt,
+      rerunOwnedWorktreeID: state.rerunOwnedWorktreeID
+    )
 
     // When the sheet was pre-configured from a pasted PR URL, we
     // already have a high-quality human title ready. Pass it through
@@ -1474,6 +1486,33 @@ struct NewTerminalFeature {
     case .existingWorktree, .existingBranch, .newBranch:
       return true
     }
+  }
+
+  /// Submit-time guard for the Matrix Board's "repo root sits on
+  /// origin/HEAD, clean" invariant. When the user types a prompt with an
+  /// agent attached and leaves the Workspace field empty, the selection
+  /// resolves to `.repoRoot` — which spawns the agent inside the repo's
+  /// working directory and lets it `git checkout -b` against whatever
+  /// branch HEAD happens to be on. The next session inherits that drift
+  /// (RepoSyncClient.syncIfSafe bails silently on dirty / off-default
+  /// state). Promoting `.repoRoot` to `.newBranch` here forces a fresh
+  /// worktree off origin/main, isolating the agent's edits.
+  ///
+  /// Left untouched: shell-only sessions (no agent), empty prompts,
+  /// reruns owning the repo root, and any explicit worktree/branch pick.
+  nonisolated static func resolveSubmittedSelection(
+    selection: WorkspaceSelection,
+    agent: AgentType?,
+    trimmedPrompt: String,
+    rerunOwnedWorktreeID: String?
+  ) -> WorkspaceSelection {
+    guard case .repoRoot = selection else { return selection }
+    guard agent != nil else { return selection }
+    guard !trimmedPrompt.isEmpty else { return selection }
+    guard rerunOwnedWorktreeID == nil else { return selection }
+    let slug = sanitizeBranchName(trimmedPrompt)
+    let derived = slug.isEmpty ? "task" : slug
+    return .newBranch(name: derived)
   }
 
   /// Pre-resolves the card's display name when the sheet has enough

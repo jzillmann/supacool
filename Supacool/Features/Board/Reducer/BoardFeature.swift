@@ -766,7 +766,7 @@ struct BoardFeature {
         TranscriptRecorder.shared.append(
           event: .sessionLifecycle(
             kind: "created",
-            context: "agent=\(session.agent?.id ?? "shell")",
+            context: Self.lifecycleCreatedContext(for: session),
             at: Date()
           ),
           tabID: TerminalTabID(rawValue: session.id)
@@ -2857,6 +2857,28 @@ struct BoardFeature {
   /// user last chose, without threading the flag through state.
   fileprivate static func readBypassPermissions() -> Bool {
     UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
+  }
+
+  /// Breadcrumb for the `sessionLifecycle("created")` transcript entry.
+  /// Encodes the bits that turn out to matter when debugging where an
+  /// agent actually landed: agent kind, the resolved working directory,
+  /// and whether the spawn went into the bare repo root (where edits
+  /// pollute the main repo's HEAD) or a worktree. The mode is inferred
+  /// from `worktreeID` vs `repositoryID` — equal means `.repoRoot`,
+  /// different means a real worktree backs the session. Remote sessions
+  /// are flagged separately so the file path isn't misread as local.
+  nonisolated static func lifecycleCreatedContext(
+    for session: AgentSession
+  ) -> String {
+    let agentPart = "agent=\(session.agent?.id ?? "shell")"
+    let modePart: String = {
+      if session.isRemote { return "mode=remote" }
+      return session.worktreeID == session.repositoryID
+        ? "mode=repoRoot"
+        : "mode=worktree"
+    }()
+    let cwdPart = "cwd=\(session.worktreeID)"
+    return [agentPart, modePart, cwdPart].joined(separator: ";")
   }
 
   /// Merge two reference lists, deduping by `dedupeKey`. When
