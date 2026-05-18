@@ -633,8 +633,11 @@ struct BoardView: View {
               }
               .scrollTargetLayout()
               .padding(.vertical, 2)
+              .padding(.bottom, 14)
             }
-            .scrollTargetBehavior(.viewAligned)
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+            .contentMargins(.trailing, boardCardWidth / 2, for: .scrollContent)
             .onAppear {
               scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
             }
