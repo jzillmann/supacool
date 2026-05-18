@@ -19,9 +19,20 @@ struct BoardPullRequestChecksTests {
     #expect(!BoardPullRequestChecks.isWaiting(checks: checks))
   }
 
-  @Test func failedChecksAreActionableNotWaiting() {
+  @Test func pendingChecksKeepWaitingEvenIfSiblingFailed() {
+    // A sibling failure must not pull the card out of "Checks Pending"
+    // while other checks are still running — the agent's mental model
+    // is "wait until CI fully settles, then act on the red glow."
     let checks = [
       GithubPullRequestStatusCheck(name: "CI", status: "IN_PROGRESS"),
+      GithubPullRequestStatusCheck(name: "Tests", status: "COMPLETED", conclusion: "FAILURE"),
+    ]
+    #expect(BoardPullRequestChecks.isWaiting(checks: checks))
+  }
+
+  @Test func allCompletedWithFailureIsNotWaiting() {
+    let checks = [
+      GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS"),
       GithubPullRequestStatusCheck(name: "Tests", status: "COMPLETED", conclusion: "FAILURE"),
     ]
     #expect(!BoardPullRequestChecks.isWaiting(checks: checks))

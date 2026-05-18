@@ -9,23 +9,19 @@ nonisolated enum BoardPullRequestChecks {
     return isWaiting(checks: checks)
   }
 
+  /// A PR is "waiting for checks" iff at least one check is still
+  /// `inProgress`/`expected`. Sibling failures don't bail early — the
+  /// card stays in Checks Pending until CI fully settles, at which
+  /// point `outcome` reports `.completed(allPassed:)` and the card
+  /// flips to Waiting on Me with a red glow if anything failed.
   static func isWaiting(checks: [GithubPullRequestStatusCheck]) -> Bool {
     guard !checks.isEmpty else { return false }
-
-    var hasPendingCheck = false
-    for check in checks {
+    return checks.contains { check in
       switch check.checkState {
-      case .failure:
-        // Failed checks are actionable, so let the normal idle classifier
-        // route the card to Waiting on Me.
-        return false
-      case .inProgress, .expected:
-        hasPendingCheck = true
-      case .success, .skipped:
-        continue
+      case .inProgress, .expected: true
+      case .success, .failure, .skipped: false
       }
     }
-    return hasPendingCheck
   }
 
   /// Outcome of an OPEN PR's status-check rollup. Used by the board to
