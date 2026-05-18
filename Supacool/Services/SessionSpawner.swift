@@ -44,6 +44,7 @@ enum SessionSpawner {
       repository: request.repository,
       fetchOriginBeforeCreation: request.fetchOriginBeforeCreation,
       pullRequestLookup: request.pullRequestLookup,
+      agentRequested: request.agent != nil,
       gitClient: gitClient,
       repoSyncClient: repoSyncClient
     )
@@ -169,6 +170,7 @@ enum SessionSpawner {
     repository: Repository,
     fetchOriginBeforeCreation: Bool,
     pullRequestLookup: PullRequestLookupState,
+    agentRequested: Bool,
     gitClient: GitClientDependency,
     repoSyncClient: RepoSyncClient
   ) async throws -> Worktree {
@@ -204,12 +206,23 @@ enum SessionSpawner {
       // users don't modify the root directly — worktrees are where work
       // happens — so the Main scope keeps the repo root on latest main.
       // Conservative guards in the client; failure
-      // never blocks the spawn.
+      // never blocks the spawn for shell-only sessions.
       let syncOutcome = await repoSyncClient.syncIfSafe(repository.rootURL)
       sessionSpawnerLogger.info(
         "Repo-root pre-flight sync for "
           + "\(repository.rootURL.path(percentEncoded: false)): \(syncOutcome)"
       )
+      // Agent submissions that reach the repo root are by definition
+      // about to make edits inside it. Letting them proceed onto a
+      // dirty / off-default root reproduces the bug
+      // resolveSubmittedSelection guards against (drift inherited by
+      // the next session). Surface the underlying outcome so the user
+      // can clean up or re-aim. Shell-only sessions keep the legacy
+      // permissive behavior — a shell at the root is often how the
+      // user *intends* to fix this state.
+      if agentRequested, let reason = nonPristineReason(syncOutcome) {
+        throw NewTerminalError.repoRootNotPristine(reason: reason)
+      }
       let rootURL = repository.rootURL.standardizedFileURL
       return await MainActor.run {
         let existing = repository.worktrees.first { wt in
@@ -365,6 +378,25 @@ enum SessionSpawner {
       repository.rootURL,
       baseDirectory
     )
+  }
+
+  /// Translate a `RepoSyncOutcome` into a short human-readable reason
+  /// for `NewTerminalError.repoRootNotPristine`, or nil when the outcome
+  /// represents a state the spawn can safely proceed on. Only the two
+  /// "the repo is in a state the agent will inherit" outcomes promote
+  /// to a thrown error — fetch failures, missing default branch, and
+  /// non-fast-forwardable divergence are *informational* and don't
+  /// block the spawn (the agent's working copy is still usable).
+  nonisolated static func nonPristineReason(_ outcome: RepoSyncOutcome) -> String? {
+    switch outcome {
+    case .skippedDirtyTree:
+      return "working tree has uncommitted changes"
+    case .skippedNotOnDefaultBranch(let currentBranch, let defaultBranch):
+      return "checked out on '\(currentBranch)' instead of '\(defaultBranch)'"
+    case .synced, .skippedNoDefaultBranch, .skippedFetchFailed,
+      .skippedFastForwardNotPossible, .failedUnknown:
+      return nil
+    }
   }
 
   private static func buildInput(

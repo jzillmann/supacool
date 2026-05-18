@@ -1552,6 +1552,16 @@ nonisolated enum NewTerminalError: LocalizedError {
   /// already checked out at a *different* path. Carries the conflicting
   /// `Worktree` so the BoardFeature can offer Reuse / Delete & recreate.
   case branchAlreadyCheckedOut(branch: String, existing: Worktree)
+  /// An agent spawn resolved to `.repoRoot` (typically a rerun owning
+  /// the root, or a bookmark configured with `worktreeMode: .repoRoot`)
+  /// but `RepoSyncClient.syncIfSafe` couldn't keep the root pristine —
+  /// either a dirty working tree or a non-default branch is in the way.
+  /// The submit-time substitution in `resolveSubmittedSelection`
+  /// catches the empty-workspace common case; this is the structured
+  /// failure mode for the remainder so the user sees the underlying
+  /// state instead of silently inheriting it. `reason` carries a short
+  /// human-readable description of what blocked the sync.
+  case repoRootNotPristine(reason: String)
 
   var errorDescription: String? {
     switch self {
@@ -1561,6 +1571,9 @@ nonisolated enum NewTerminalError: LocalizedError {
     case .branchAlreadyCheckedOut(let branch, let existing):
       "Branch '\(branch)' is already checked out at "
         + "\(existing.workingDirectory.path(percentEncoded: false))."
+    case .repoRootNotPristine(let reason):
+      "Repo root isn't ready for an agent spawn: \(reason). "
+        + "Clean up the repo or pick a worktree."
     }
   }
 }
