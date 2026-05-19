@@ -520,8 +520,16 @@ struct BoardFeature {
     /// Internal: local spawn finished. Replaces the placeholder tray
     /// card and triggers the normal `createSession` flow.
     case _sessionSpawnCompleted(session: AgentSession)
-    /// Internal: local spawn failed. Drops the placeholder tray card.
-    case _sessionSpawnFailed(sessionID: AgentSession.ID, message: String)
+    /// Internal: local spawn failed. Converts the placeholder tray
+    /// card into a red failure card. `draftSnapshot` carries the
+    /// user's submitted values so tap-to-reopen can resurrect the
+    /// New Terminal sheet pre-filled (nil for legacy paths that don't
+    /// build a snapshot — e.g. the conflict-recovery retries).
+    case _sessionSpawnFailed(
+      sessionID: AgentSession.ID,
+      message: String,
+      draftSnapshot: Draft?
+    )
     /// Internal: spawn detected that the requested branch is already
     /// checked out elsewhere. Presents the WorktreeConflictAlert; the
     /// placeholder tray card stays up so the user keeps a visual anchor
@@ -617,8 +625,12 @@ struct BoardFeature {
     /// Push a new tray card. De-dupes by `kind` so repeated launches don't
     /// stack multiple identical cards (e.g. two stale-hooks entries).
     case trayCardPushed(TrayCard)
-    /// User tapped the card body. Behavior depends on `kind`.
-    case trayCardPrimaryTapped(id: TrayCard.ID)
+    /// User tapped the card body. Behavior depends on `kind`. For
+    /// `.sessionSpawnFailed` cards with an attached `draftSnapshot`,
+    /// the tap reopens the New Terminal sheet pre-filled — `repositories`
+    /// supplies the candidate list (mirrors `.draftTapped(id:repositories:)`,
+    /// since the view layer is where `Array(repositories)` lives).
+    case trayCardPrimaryTapped(id: TrayCard.ID, repositories: [Repository] = [])
     /// User tapped a card's secondary button (e.g. "Reinstall" on a
     /// stale-hooks card). Currently only `.staleHooks` defines one; other
     /// kinds no-op. Removing the card is the responsibility of this
@@ -1764,7 +1776,9 @@ struct BoardFeature {
         }
         return .send(.createSession(sessionToCreate))
 
-      case .newTerminalSheet(.presented(.delegate(.spawnRequested(let request, let displayName)))):
+      case .newTerminalSheet(
+        .presented(.delegate(.spawnRequested(let request, let displayName, let draftSnapshot)))
+      ):
         // Local-path submit: dismiss the sheet immediately so the user
         // doesn't sit through worktree creation. A placeholder tray
         // card stands in until the real session card is created — its
@@ -1772,6 +1786,10 @@ struct BoardFeature {
         // `.createSession` runs, `IdentifiedArrayOf.append` no-ops on
         // the duplicate ID and the same card transitions seamlessly
         // into the post-spawn lifecycle.
+        //
+        // `draftSnapshot` rides along in the closure so a failure can
+        // attach it to the resulting red card — that's what enables
+        // tap-to-reopen.
         state.newTerminalSheet = nil
         let placeholder = TrayCard(
           id: request.sessionID,
@@ -1797,7 +1815,8 @@ struct BoardFeature {
               await send(
                 ._sessionSpawnFailed(
                   sessionID: request.sessionID,
-                  message: conflict.localizedDescription
+                  message: conflict.localizedDescription,
+                  draftSnapshot: draftSnapshot
                 )
               )
             }
@@ -1805,7 +1824,8 @@ struct BoardFeature {
             await send(
               ._sessionSpawnFailed(
                 sessionID: request.sessionID,
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                draftSnapshot: draftSnapshot
               )
             )
           }
@@ -1839,13 +1859,17 @@ struct BoardFeature {
         }
         return .send(.createSession(sessionToCreate))
 
-      case ._sessionSpawnFailed(let sessionID, let message):
+      case ._sessionSpawnFailed(let sessionID, let message, let draftSnapshot):
         boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
         // Convert the in-flight placeholder card into a red failure
         // card so the user sees what went wrong instead of watching
         // the "Starting session" toast disappear silently. Falls back
         // to appending a fresh card if the placeholder was already
         // dropped (e.g. user dismissed it manually mid-spawn).
+        //
+        // `draftSnapshot` (when non-nil) lets the user tap the failed
+        // card to reopen the New Terminal sheet with their original
+        // values — see `trayCardPrimaryTapped`.
         let displayName: String
         if let index = state.trayCards.firstIndex(where: { $0.id == sessionID }),
           case .sessionCreating(_, let placeholderName) = state.trayCards[index].kind
@@ -1853,14 +1877,19 @@ struct BoardFeature {
           displayName = placeholderName
           state.trayCards[index].kind = .sessionSpawnFailed(
             displayName: displayName,
-            message: message
+            message: message,
+            draftSnapshot: draftSnapshot
           )
         } else {
           displayName = "Session"
           state.trayCards.append(
             TrayCard(
               id: sessionID,
-              kind: .sessionSpawnFailed(displayName: displayName, message: message)
+              kind: .sessionSpawnFailed(
+                displayName: displayName,
+                message: message,
+                draftSnapshot: draftSnapshot
+              )
             )
           )
         }
@@ -1900,10 +1929,14 @@ struct BoardFeature {
             )
             await send(._sessionSpawnCompleted(session: session))
           } catch {
+            // Conflict-recovery retries don't carry the original
+            // sheet's draftSnapshot — by this point the user is past
+            // the sheet, so tap-to-reopen wouldn't be a useful affordance.
             await send(
               ._sessionSpawnFailed(
                 sessionID: request.sessionID,
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                draftSnapshot: nil
               )
             )
           }
@@ -1926,7 +1959,8 @@ struct BoardFeature {
             await send(
               ._sessionSpawnFailed(
                 sessionID: request.sessionID,
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                draftSnapshot: nil
               )
             )
           }
@@ -2148,7 +2182,7 @@ struct BoardFeature {
         state.trayCards.remove(id: id)
         return .none
 
-      case .trayCardPrimaryTapped(let id):
+      case .trayCardPrimaryTapped(let id, let repositories):
         guard let card = state.trayCards[id: id] else { return .none }
         switch card.kind {
         case .staleHooks:
@@ -2160,8 +2194,21 @@ struct BoardFeature {
         case .hookInstallFailed:
           state.trayCards.remove(id: id)
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
-        case .worktreeDeleteFailed, .sessionSpawnFailed:
+        case .worktreeDeleteFailed:
           state.trayCards.remove(id: id)
+          return .none
+        case .sessionSpawnFailed(_, _, let draftSnapshot):
+          // Reopen the New Terminal sheet pre-filled with the user's
+          // failed submission so they can fix the issue, retry, or
+          // hit Save Draft. Same path the draft pill uses — we go
+          // through the existing `resuming:` initializer.
+          state.trayCards.remove(id: id)
+          guard let snapshot = draftSnapshot else { return .none }
+          let available = IdentifiedArray(uniqueElements: repositories)
+          state.newTerminalSheet = NewTerminalFeature.State(
+            availableRepositories: available,
+            resuming: snapshot
+          )
           return .none
         }
 

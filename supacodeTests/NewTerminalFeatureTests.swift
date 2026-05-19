@@ -87,6 +87,7 @@ struct NewTerminalFeatureTests {
     await store.receive(\.delegate.spawnRequested)
   }
 
+
   // MARK: - Shell-quoting safety
 
   @Test func shellQuoteEscapesSingleQuotes() {

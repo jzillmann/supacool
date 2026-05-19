@@ -112,7 +112,7 @@ struct BoardRootView: View {
     // Floating tray (stale hooks, draft cards, etc.) hovers over whichever
     // mode is active — board grid or full-screen terminal.
     .overlay(alignment: .bottomTrailing) {
-      BoardTrayView(store: store)
+      BoardTrayView(store: store, repositories: repositories)
         .allowsHitTesting(!store.trayCards.isEmpty)
     }
     // Hidden per-session watchers. Live at the root so busy/awaiting-input

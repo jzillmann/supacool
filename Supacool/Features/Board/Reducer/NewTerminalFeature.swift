@@ -428,8 +428,16 @@ struct NewTerminalFeature {
       /// Local-path submit. Sheet dismisses immediately; BoardFeature
       /// owns the spawn so the long-running git/terminal work doesn't
       /// hold the sheet open. `displayName` seeds the placeholder tray
-      /// card while the worktree is being created.
-      case spawnRequested(SessionSpawner.LocalRequest, displayName: String)
+      /// card while the worktree is being created. `draftSnapshot` is
+      /// a `Draft`-shaped capture of the user's submitted values; if
+      /// the spawn fails, BoardFeature attaches it to the failure tray
+      /// card so tap-to-reopen can resurrect the sheet with the same
+      /// values pre-filled.
+      case spawnRequested(
+        SessionSpawner.LocalRequest,
+        displayName: String,
+        draftSnapshot: Draft
+      )
       /// Remote-path completion: spawn happens inside the sheet's
       /// reducer (no worktree creation, fast). Kept for the remote
       /// flow only.
@@ -931,6 +939,24 @@ struct NewTerminalFeature {
       )
     }()
 
+    // Capture a `Draft`-shaped snapshot of the submitted values so the
+    // parent can attach it to the failure tray card on spawn error.
+    // Tap on that card resurrects the sheet via the same path drafts
+    // use (`NewTerminalFeature.State(availableRepositories:, resuming:)`).
+    // Preserving `editingDraftID` here means a reopened-then-Save-Draft
+    // cycle upserts the same Draft instead of leaving an orphan.
+    let now = Date()
+    let draftSnapshot = Draft(
+      id: state.editingDraftID ?? UUID(),
+      repositoryID: state.selectedRepositoryID,
+      prompt: state.prompt,
+      agent: state.agent,
+      workspaceQuery: state.workspaceQuery,
+      planMode: state.planMode,
+      createdAt: now,
+      updatedAt: now
+    )
+
     var effects: [Effect<Action>] = []
     if let bookmark = bookmarkToSave {
       effects.append(.send(.delegate(.bookmarkSaved(bookmark))))
@@ -943,7 +969,15 @@ struct NewTerminalFeature {
       effects.append(.send(.delegate(.draftConsumed(id: draftID))))
     }
     effects.append(
-      .send(.delegate(.spawnRequested(request, displayName: placeholderDisplayName)))
+      .send(
+        .delegate(
+          .spawnRequested(
+            request,
+            displayName: placeholderDisplayName,
+            draftSnapshot: draftSnapshot
+          )
+        )
+      )
     )
     return .merge(effects)
   }

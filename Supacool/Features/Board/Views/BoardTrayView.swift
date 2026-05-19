@@ -9,6 +9,13 @@ import SwiftUI
 /// it as an overlay without worrying about layout cost.
 struct BoardTrayView: View {
   @Bindable var store: StoreOf<BoardFeature>
+  /// Pass-through from `BoardRootView`. Needed because the
+  /// `.sessionSpawnFailed` tap reopens the New Terminal sheet, which
+  /// wants the candidate repo list to pick a default and resolve the
+  /// snapshot's `repositoryID` against — same plumbing as DraftPillRow.
+  /// Defaults to `[]` so the existing `BoardTrayView(store:)` call sites
+  /// keep working; only the tray rendered over the board passes a real list.
+  var repositories: IdentifiedArrayOf<Repository> = []
 
   var body: some View {
     if !store.trayCards.isEmpty {
@@ -16,7 +23,14 @@ struct BoardTrayView: View {
         ForEach(store.trayCards) { card in
           TrayCardView(
             card: card,
-            onPrimary: { store.send(.trayCardPrimaryTapped(id: card.id)) },
+            onPrimary: {
+              store.send(
+                .trayCardPrimaryTapped(
+                  id: card.id,
+                  repositories: Array(repositories)
+                )
+              )
+            },
             onSecondary: card.kind.hasSecondaryAction
               ? { store.send(.trayCardSecondaryTapped(id: card.id)) }
               : nil,
@@ -159,13 +173,15 @@ private struct TrayCardView: View {
         subtitle: "\(folder) — \(message)",
         helpText: "The directory may still be on disk. Dismiss to clear."
       )
-    case .sessionSpawnFailed(let displayName, let message):
+    case .sessionSpawnFailed(let displayName, let message, let draftSnapshot):
       return TrayCardPresentation(
         icon: "xmark.octagon.fill",
         tint: .red,
         title: "Couldn't start \(displayName)",
         subtitle: message,
-        helpText: "Tap to dismiss. Re-paste your prompt to retry."
+        helpText: draftSnapshot == nil
+          ? "Tap to dismiss."
+          : "Tap to reopen the New Terminal sheet with your values pre-filled."
       )
     }
   }
