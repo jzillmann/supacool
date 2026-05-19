@@ -389,30 +389,16 @@ struct SessionCardView: View {
 
   private var footer: some View {
     HStack(spacing: 8) {
-      if let repositoryName {
-        Label(repositoryName, systemImage: "folder.fill")
-          .labelStyle(.titleAndIcon)
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-          .truncationMode(.tail)
-          .frame(minWidth: 0, alignment: .leading)
+      if let footprint = footprintStore?.footprint(for: session.id) {
+        footprintBadge(footprint: footprint)
       }
-
       Spacer(minLength: 8)
-
-      HStack(spacing: 8) {
-        if let footprint = footprintStore?.footprint(for: session.id) {
-          footprintBadge(footprint: footprint)
-        }
-        Text(relativeTimestamp)
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .monospacedDigit()
-          .lineLimit(1)
-          .fixedSize(horizontal: true, vertical: false)
-      }
-      .layoutPriority(1)
+      Text(relativeTimestamp)
+        .font(.caption2)
+        .foregroundStyle(.tertiary)
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
   }
 

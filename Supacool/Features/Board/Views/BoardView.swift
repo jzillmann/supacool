@@ -270,6 +270,11 @@ struct BoardView: View {
       let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
       let standby = parked.filter(\.parkedActive)
       let coldParked = parked.filter { !$0.parkedActive }
+      // Only show the repo caption above each card when the visible set
+      // actually spans multiple repos. With a single-repo filter (or only
+      // one repo on disk) the caption is implied, so we keep the cards
+      // clean.
+      let showsRepoLabelAbove = Set(visible.map(\.repositoryID)).count >= 2
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           // Drafts row sits ABOVE bookmarks. Always rendered when there's
@@ -335,7 +340,8 @@ struct BoardView: View {
             color: .orange,
             sessions: waiting,
             dimmed: false,
-            emptyMessage: "Nothing waiting on you."
+            emptyMessage: "Nothing waiting on you.",
+            showsRepoLabelAbove: showsRepoLabelAbove
           )
           if !checksPending.isEmpty {
             Divider()
@@ -346,7 +352,8 @@ struct BoardView: View {
               color: BoardSessionStatus.waitingForChecks.color,
               sessions: checksPending,
               dimmed: true,
-              emptyMessage: nil
+              emptyMessage: nil,
+              showsRepoLabelAbove: showsRepoLabelAbove
             )
           }
           if !inProgress.isEmpty {
@@ -358,7 +365,8 @@ struct BoardView: View {
               color: .green,
               sessions: inProgress,
               dimmed: true,
-              emptyMessage: nil
+              emptyMessage: nil,
+              showsRepoLabelAbove: showsRepoLabelAbove
             )
           }
           if !standby.isEmpty || !coldParked.isEmpty {
@@ -403,7 +411,8 @@ struct BoardView: View {
                 sessions: standby,
                 dimmed: false,
                 emptyMessage: nil,
-                hidesHeader: true
+                hidesHeader: true,
+                showsRepoLabelAbove: showsRepoLabelAbove
               )
             }
             if parkedBucketExpanded && !coldParked.isEmpty {
@@ -414,7 +423,8 @@ struct BoardView: View {
                 sessions: coldParked,
                 dimmed: true,
                 emptyMessage: nil,
-                hidesHeader: true
+                hidesHeader: true,
+                showsRepoLabelAbove: showsRepoLabelAbove
               )
             }
           }
@@ -486,7 +496,8 @@ struct BoardView: View {
     sessions: [AgentSession],
     dimmed: Bool,
     emptyMessage: String?,
-    hidesHeader: Bool = false
+    hidesHeader: Bool = false,
+    showsRepoLabelAbove: Bool = false
   ) -> some View {
     if sessions.isEmpty && emptyMessage == nil {
       EmptyView()
@@ -669,7 +680,8 @@ struct BoardView: View {
                     onAppear: {
                       store.send(.cardAppeared(id: session.id))
                       store.send(.serverLifecycleStatusRequested(sessionID: session.id))
-                    }
+                    },
+                    showsRepoLabelAbove: showsRepoLabelAbove
                   )
                   .frame(width: boardCardWidth)
                   .id(session.id)
@@ -918,10 +930,36 @@ private struct SessionCardContainer: View {
   let onServerLifecycleStart: () -> Void
   let onServerLifecycleStop: () -> Void
   let onAppear: (() -> Void)?
+  /// When true, render a small repo caption above the card (outside the
+  /// card border, top-left). The board flips this on for every card when
+  /// it sees ≥2 distinct repos in the currently visible session set,
+  /// so a single-repo filter keeps the card clean.
+  let showsRepoLabelAbove: Bool
 
   @State private var isHovered: Bool = false
 
   var body: some View {
+    VStack(alignment: .leading, spacing: 4) {
+      if showsRepoLabelAbove {
+        HStack(spacing: 4) {
+          Image(systemName: "folder.fill")
+            .font(.caption2)
+          Text(repositoryName ?? "")
+            .font(.caption2)
+            .lineLimit(1)
+            .truncationMode(.tail)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.leading, 4)
+        .frame(minHeight: 14, alignment: .leading)
+        .opacity(repositoryName == nil ? 0 : 0.85)
+        .accessibilityLabel(repositoryName.map { "Repository: \($0)" } ?? "")
+      }
+      cardWithOverlays
+    }
+  }
+
+  private var cardWithOverlays: some View {
     SessionCardView(
       session: session,
       repositoryName: repositoryName,
