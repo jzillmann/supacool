@@ -46,9 +46,16 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// previous silent disappearance. `displayName` is the placeholder's
   /// label so the user can correlate the failure with the intended
   /// session; `message` is `error.localizedDescription` from the throw.
-  /// Primary tap dismisses (no native retry — user re-paste prompt
-  /// into a fresh New Terminal sheet).
-  case sessionSpawnFailed(displayName: String, message: String)
+  ///
+  /// `draftSnapshot` carries a `Draft`-shaped snapshot of the user's
+  /// in-flight submission (local path only — remote spawn failures
+  /// surface via NewTerminalFeature directly without leaning on this
+  /// card). When present, primary tap reopens the New Terminal sheet
+  /// pre-filled with those values so the user can fix the issue,
+  /// retry, or hit Save Draft. `nil` means the failure has no
+  /// recoverable context (remote spawn or pre-existing serialized card
+  /// from before this feature) — primary tap then just dismisses.
+  case sessionSpawnFailed(displayName: String, message: String, draftSnapshot: Draft?)
 
   /// Whether this kind offers a secondary call-to-action button next to
   /// the main tap target. Only `.staleHooks` currently does ("Reinstall").

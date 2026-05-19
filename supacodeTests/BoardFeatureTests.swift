@@ -2557,6 +2557,75 @@ struct BoardFeatureTests {
     }
   }
 
+  /// Tapping a `.sessionSpawnFailed` card that carries a draft snapshot
+  /// reopens the New Terminal sheet with the user's submitted values
+  /// pre-filled. This is the recovery affordance for a failed
+  /// submission — same path the draft pill uses, just triggered from
+  /// the failure card instead.
+  @Test(.dependencies) func trayCardPrimaryTappedSessionSpawnFailedWithDraftReopensSheet() async {
+    let repo = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "test-repo",
+      worktrees: []
+    )
+    let snapshot = Draft(
+      id: UUID(),
+      repositoryID: "/tmp/repo",
+      prompt: "Retry me",
+      agent: .claude,
+      workspaceQuery: "feat-retry",
+      planMode: false
+    )
+    let card = TrayCard(
+      kind: .sessionSpawnFailed(
+        displayName: "Retry me",
+        message: "Git command failed",
+        draftSnapshot: snapshot
+      )
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    // Sheet state carries non-trivial internal computed fields (branch
+    // lists, PR lookup, etc.) so we can't assert the entire shape
+    // exhaustively — just confirm the sheet appears with the snapshot
+    // values restored.
+    store.exhaustivity = .off
+
+    await store.send(.trayCardPrimaryTapped(id: card.id, repositories: [repo]))
+    #expect(store.state.trayCards.isEmpty)
+    #expect(store.state.newTerminalSheet?.prompt == "Retry me")
+    #expect(store.state.newTerminalSheet?.agent == .claude)
+    #expect(store.state.newTerminalSheet?.workspaceQuery == "feat-retry")
+    #expect(store.state.newTerminalSheet?.selectedRepositoryID == "/tmp/repo")
+  }
+
+  /// A `.sessionSpawnFailed` card without a snapshot (e.g. a conflict-
+  /// recovery retry that failed past the sheet) should just dismiss
+  /// on tap rather than opening an empty New Terminal sheet.
+  @Test(.dependencies) func trayCardPrimaryTappedSessionSpawnFailedNoSnapshotDismisses() async {
+    let card = TrayCard(
+      kind: .sessionSpawnFailed(
+        displayName: "Past-the-sheet failure",
+        message: "boom",
+        draftSnapshot: nil
+      )
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardPrimaryTapped(id: card.id)) {
+      $0.trayCards = []
+    }
+    #expect(store.state.newTerminalSheet == nil)
+  }
+
   // MARK: - Worktree-conflict alert
 
   @Test(.dependencies) func sessionSpawnConflictPresentsAlertAndKeepsPlaceholder() async {
