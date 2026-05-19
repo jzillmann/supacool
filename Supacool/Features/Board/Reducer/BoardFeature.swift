@@ -761,6 +761,7 @@ struct BoardFeature {
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
+  @Dependency(\.continuousClock) var clock
 
   /// How long a PR state lookup stays fresh. Refreshing more often than
   /// this rate-limits unnecessary `gh pr view` calls when the user is
@@ -1301,11 +1302,24 @@ struct BoardFeature {
             repositories: repositories
           )
           guard !reattachJobs.isEmpty else { return .none }
-          return .run { _ in
+          return .run { [clock] _ in
+            // Stagger the spawns. terminalClient.send enqueues the
+            // restore command and returns quickly, so an unpaced loop
+            // here fires ~all sessions' `login` forks within a few
+            // hundred ms. On macOS 26 we observed `/usr/bin/login`
+            // SIGABRTing inside dyld's `ignite → ignition_halt` path
+            // when 6+ concurrent forks raced through dyld init in the
+            // same coalition (login is setuid root; concurrent setuid
+            // dyld bring-up has a known race). Spacing the dispatches
+            // ~150 ms apart keeps the in-flight count near 1 and the
+            // crashes go away. Cheap — restoring 19 sessions adds <3 s
+            // to a startup the user never feels because the cards
+            // render immediately and reattach is invisible.
             for job in reattachJobs {
               await terminalClient.send(
                 .restoreShellLayout(job.worktree, tabID: TerminalTabID(rawValue: job.tabID))
               )
+              try? await clock.sleep(for: .milliseconds(150))
             }
           }
         }
