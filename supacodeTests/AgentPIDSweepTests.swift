@@ -31,24 +31,24 @@ struct AgentPIDSweepTests {
     #expect(fixture.manager.registeredAgentPID(tabID: fixture.tabID.rawValue) == nil)
   }
 
-  @Test(.dependencies) func sweepClearsBusyWhenRegisteredPIDIsDead() {
+  @Test(.dependencies) func sweepClearsBusyWhenRegisteredPIDIsDead() async {
     let deadPID: Int32 = 77777
     let fixture = makeFixture(deadPIDs: [deadPID])
 
     fixture.fireBusy(active: true, pid: deadPID)
     #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
 
-    fixture.manager.sweepAgentPIDs()
+    await fixture.manager.sweepAgentPIDs()
 
     #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .idle)
     #expect(fixture.manager.registeredAgentPID(tabID: fixture.tabID.rawValue) == nil)
   }
 
-  @Test(.dependencies) func sweepLeavesLiveAgentsAlone() {
+  @Test(.dependencies) func sweepLeavesLiveAgentsAlone() async {
     let fixture = makeFixture(deadPIDs: [])
 
     fixture.fireBusy(active: true, pid: 10001)
-    fixture.manager.sweepAgentPIDs()
+    await fixture.manager.sweepAgentPIDs()
 
     #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
     #expect(fixture.manager.registeredAgentPID(tabID: fixture.tabID.rawValue) == 10001)
@@ -87,7 +87,7 @@ struct AgentPIDSweepTests {
 
   /// Sweep must clear only dead PIDs. With pi alive and codex dead, the
   /// surface stays busy and pi stays registered.
-  @Test(.dependencies) func sweepClearsDeadInnerPIDOnly() {
+  @Test(.dependencies) func sweepClearsDeadInnerPIDOnly() async {
     let piPID: Int32 = 32196
     let codex: Int32 = 63935
     let fixture = makeFixture(deadPIDs: [codex])
@@ -95,7 +95,7 @@ struct AgentPIDSweepTests {
     fixture.fireBusy(active: true, pid: piPID)
     fixture.fireBusy(active: true, pid: codex)
 
-    fixture.manager.sweepAgentPIDs()
+    await fixture.manager.sweepAgentPIDs()
 
     #expect(fixture.manager.taskStatus(for: fixture.worktree.id) == .running)
     #expect(fixture.manager.registeredAgentPIDs(tabID: fixture.tabID.rawValue) == [piPID])

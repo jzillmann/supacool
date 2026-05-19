@@ -82,14 +82,24 @@ final class WorktreeOwnedProcessTracker {
   /// PIDs whose process is no longer alive are dropped. Returns the
   /// snapshots newly adopted on this call, in observation order (used
   /// for telemetry / tests; ignore in production).
+  ///
+  /// `enumerate()` and the per-PID `kill(pid, 0)` liveness fallback run
+  /// inside a detached Task so the proc_listpids / proc_pidinfo syscall
+  /// storm doesn't block the main thread — this method is invoked from
+  /// `WorktreeTerminalManager`'s 1 s @MainActor poll, and on a dev box
+  /// with ~1k+ live processes the sync walk was a periodic beachball.
   @discardableResult
-  func refresh() -> [AdoptedProcess] {
+  func refresh() async -> [AdoptedProcess] {
     let cutoff = now().addingTimeInterval(-minimumOrphanAge)
-    let snapshots = enumerate().filter { snap in
-      snap.ppid == 1
-        && snap.cwd.hasPrefix(cwdPrefix)
-        && snap.startedAt <= cutoff
-    }
+    let cwdPrefix = self.cwdPrefix
+    let enumerate = self.enumerate
+    let snapshots = await Task.detached(priority: .utility) {
+      enumerate().filter { snap in
+        snap.ppid == 1
+          && snap.cwd.hasPrefix(cwdPrefix)
+          && snap.startedAt <= cutoff
+      }
+    }.value
 
     let livePIDs = Set(snapshots.map(\.pid))
     let alreadyAdoptedPIDs = Set(adoptedByWorktree.values.flatMap { $0.map(\.pid) })
@@ -114,14 +124,26 @@ final class WorktreeOwnedProcessTracker {
       )
     }
 
-    // Drop PIDs whose process has died since the last refresh. Live
-    // PIDs returned by `enumerate` stay; for everything else, fall
-    // back to `kill(pid, 0)` (cheap) before deciding to drop.
+    // PIDs the enumerate pass didn't see — fall back to `kill(pid, 0)`
+    // to confirm they're really gone before dropping. Cheap per call,
+    // but stacks linearly with adopted-PID count; off-load alongside
+    // the proc-table walk above.
+    let suspectPIDs: [pid_t] = adoptedByWorktree.values
+      .flatMap { $0 }
+      .map(\.pid)
+      .filter { !livePIDs.contains($0) }
+
+    let deadPIDs: Set<pid_t>
+    if suspectPIDs.isEmpty {
+      deadPIDs = []
+    } else {
+      deadPIDs = await Task.detached(priority: .utility) {
+        Set(suspectPIDs.filter { kill($0, 0) != 0 })
+      }.value
+    }
+
     for (path, processes) in adoptedByWorktree {
-      let alive = processes.filter { process in
-        if livePIDs.contains(process.pid) { return true }
-        return kill(process.pid, 0) == 0
-      }
+      let alive = processes.filter { !deadPIDs.contains($0.pid) }
       if alive.isEmpty {
         adoptedByWorktree.removeValue(forKey: path)
       } else if alive != processes {

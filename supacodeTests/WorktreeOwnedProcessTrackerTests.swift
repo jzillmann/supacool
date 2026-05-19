@@ -70,7 +70,7 @@ nonisolated private final class SnapshotProvider: @unchecked Sendable {
 struct WorktreeOwnedProcessTrackerTests {
   // MARK: - Refresh: adoption filter
 
-  @Test func refreshAdoptsOrphanInsideRepos() {
+  @Test func refreshAdoptsOrphanInsideRepos() async {
     let snapshot = makeSnapshot(pid: 1001, ppid: 1, cwd: "/tmp/repos/foo/wt", ageSec: 600)
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(
@@ -81,14 +81,14 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    let adopted = tracker.refresh()
+    let adopted = await tracker.refresh()
 
     #expect(adopted.map(\.pid) == [1001])
     #expect(recorder.calls.isEmpty, "refresh must never terminate")
     #expect(tracker.adoptedByWorktree["/tmp/repos/foo/wt"]?.map(\.pid) == [1001])
   }
 
-  @Test func refreshIgnoresOrphanOutsideRepos() {
+  @Test func refreshIgnoresOrphanOutsideRepos() async {
     let snapshot = makeSnapshot(
       pid: 1002, ppid: 1, cwd: "/Users/somebody/projects/foo", ageSec: 600
     )
@@ -101,13 +101,13 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    let adopted = tracker.refresh()
+    let adopted = await tracker.refresh()
 
     #expect(adopted.isEmpty)
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 
-  @Test func refreshIgnoresNonOrphanEvenIfInsideRepos() {
+  @Test func refreshIgnoresNonOrphanEvenIfInsideRepos() async {
     let snapshot = makeSnapshot(pid: 1003, ppid: 4242, cwd: "/tmp/repos/foo/wt", ageSec: 600)
     let tracker = WorktreeOwnedProcessTracker(
       cwdPrefix: reposPrefix,
@@ -117,11 +117,11 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { _, _ in }
     )
 
-    #expect(tracker.refresh().isEmpty)
+    #expect(await tracker.refresh().isEmpty)
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 
-  @Test func refreshIgnoresOrphanYoungerThanThreshold() {
+  @Test func refreshIgnoresOrphanYoungerThanThreshold() async {
     let snapshot = makeSnapshot(pid: 1004, ppid: 1, cwd: "/tmp/repos/foo/wt", ageSec: 30)
     let tracker = WorktreeOwnedProcessTracker(
       cwdPrefix: reposPrefix,
@@ -131,11 +131,11 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { _, _ in }
     )
 
-    #expect(tracker.refresh().isEmpty)
+    #expect(await tracker.refresh().isEmpty)
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 
-  @Test func refreshIgnoresCwdWithoutEnoughSegmentsForAWorktree() {
+  @Test func refreshIgnoresCwdWithoutEnoughSegmentsForAWorktree() async {
     // cwd is "/tmp/repos/foo" — one segment after the prefix is not enough
     // to identify a worktree directory (`<repos>/<repo>/<worktree>`).
     let snapshot = makeSnapshot(pid: 1005, ppid: 1, cwd: "/tmp/repos/foo", ageSec: 600)
@@ -147,13 +147,13 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { _, _ in }
     )
 
-    #expect(tracker.refresh().isEmpty)
+    #expect(await tracker.refresh().isEmpty)
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 
   // MARK: - Refresh: idempotence + GC
 
-  @Test func refreshDoesNotReAdoptSamePIDTwice() {
+  @Test func refreshDoesNotReAdoptSamePIDTwice() async {
     let snapshot = makeSnapshot(pid: 2001, ppid: 1, cwd: "/tmp/repos/foo/wt", ageSec: 600)
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(
@@ -164,15 +164,15 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    _ = tracker.refresh()
-    let second = tracker.refresh()
+    _ = await tracker.refresh()
+    let second = await tracker.refresh()
 
     #expect(second.isEmpty, "the same PID must not be re-adopted on the next refresh")
     #expect(tracker.adoptedByWorktree["/tmp/repos/foo/wt"]?.map(\.pid) == [2001])
     #expect(recorder.calls.isEmpty)
   }
 
-  @Test func refreshDropsPIDsThatDisappear() {
+  @Test func refreshDropsPIDsThatDisappear() async {
     let snap = makeSnapshot(pid: 2010, ppid: 1, cwd: "/tmp/repos/foo/wt", ageSec: 600)
     let provider = SnapshotProvider([snap])
     let tracker = WorktreeOwnedProcessTracker(
@@ -183,18 +183,18 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { _, _ in }
     )
 
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     #expect(tracker.adoptedByWorktree["/tmp/repos/foo/wt"]?.map(\.pid) == [2010])
 
     // PID vanishes from the next enumerate call AND from the live OS
     // (the test PID won't actually exist on the system, so `kill(pid, 0)`
     // returns ESRCH and the tracker drops it).
     provider.set([])
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 
-  @Test func refreshGroupsMultipleOrphansByWorktree() {
+  @Test func refreshGroupsMultipleOrphansByWorktree() async {
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(
       cwdPrefix: reposPrefix,
@@ -211,7 +211,7 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    let adopted = tracker.refresh()
+    let adopted = await tracker.refresh()
 
     #expect(Set(adopted.map(\.pid)) == [4001, 4002, 4003, 4004])
     #expect(tracker.adoptedByWorktree["/tmp/repos/a/wt1"]?.map(\.pid).sorted() == [4001, 4002])
@@ -222,7 +222,7 @@ struct WorktreeOwnedProcessTrackerTests {
 
   // MARK: - Release: actually kills, and only for the right worktree
 
-  @Test func releaseTerminatesEveryAdoptedPIDInTheWorktree() {
+  @Test func releaseTerminatesEveryAdoptedPIDInTheWorktree() async {
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(
       cwdPrefix: reposPrefix,
@@ -237,7 +237,7 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     let acted = tracker.release(worktreePath: "/tmp/repos/a/wt")
 
     #expect(Set(acted) == [5001, 5002])
@@ -246,7 +246,7 @@ struct WorktreeOwnedProcessTrackerTests {
     #expect(tracker.adoptedByWorktree["/tmp/repos/a/wt"] == nil)
   }
 
-  @Test func releaseLeavesOtherWorktreesUntouched() {
+  @Test func releaseLeavesOtherWorktreesUntouched() async {
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(
       cwdPrefix: reposPrefix,
@@ -261,7 +261,7 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     let acted = tracker.release(worktreePath: "/tmp/repos/a/wt")
 
     #expect(acted == [6001])
@@ -285,7 +285,7 @@ struct WorktreeOwnedProcessTrackerTests {
     #expect(recorder.calls.isEmpty)
   }
 
-  @Test func releaseStripsTrailingSlashOnLookup() {
+  @Test func releaseStripsTrailingSlashOnLookup() async {
     // Callers (notably AgentSession.currentWorkspacePath) sometimes pass
     // a path with a trailing slash; tracker keys never have one.
     let recorder = TerminationRecorder()
@@ -299,14 +299,14 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     let acted = tracker.release(worktreePath: "/tmp/repos/a/wt/")
 
     #expect(acted == [7001])
     #expect(recorder.calls == [.init(pid: 7001, signal: SIGTERM)])
   }
 
-  @Test func refreshAfterReleaseDoesNotReAdoptTheSameLivePIDs() {
+  @Test func refreshAfterReleaseDoesNotReAdoptTheSameLivePIDs() async {
     // Once a worktree is released, its bucket is gone; subsequent
     // refreshes ignore the (still-live, on the system) snapshots
     // because the PIDs are still alive on the host so `kill(pid, 0)`
@@ -335,12 +335,12 @@ struct WorktreeOwnedProcessTrackerTests {
       terminate: { pid, signal in recorder.record(pid, signal) }
     )
 
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     _ = tracker.release(worktreePath: "/tmp/repos/a/wt")
     #expect(tracker.adoptedByWorktree.isEmpty)
 
     provider.set([])  // process is gone after the release SIGTERM
-    _ = tracker.refresh()
+    _ = await tracker.refresh()
     #expect(tracker.adoptedByWorktree.isEmpty)
   }
 }

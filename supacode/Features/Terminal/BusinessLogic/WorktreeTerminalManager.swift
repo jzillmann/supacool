@@ -57,7 +57,7 @@ final class WorktreeTerminalManager {
   /// Supacool-only. Per-tab registration of the agent process PID so a
   /// background sweep can clear stale busy/awaiting state if the agent
   /// crashes (SIGKILL, OOM) before a clean `Stop`/`SessionEnd` hook fires.
-  private struct AgentPIDRegistration {
+  private struct AgentPIDRegistration: Sendable {
     let worktreeID: Worktree.ID
     let surfaceID: UUID
     let pid: Int32
@@ -1373,8 +1373,8 @@ final class WorktreeTerminalManager {
   //      main-thread work (input handling, layout, animation ticks)
   //      interleaves instead of waiting for the entire sweep.
   private func sampleAwaitingInputPromptScreens() async {
-    tickAgentPIDSweepIfNeeded()
-    tickOwnedProcessRefreshIfNeeded()
+    await tickAgentPIDSweepIfNeeded()
+    await tickOwnedProcessRefreshIfNeeded()
     var openTabIDs = Set<UUID>()
 
     // Tabs that have ever received a hook event. These get accurate
@@ -1496,14 +1496,14 @@ final class WorktreeTerminalManager {
   /// backing on the existing timer avoids a second background Task
   /// whose mere presence was observed to destabilise TestClock-driven
   /// tests when Swift Testing runs multiple tests in parallel.
-  private func tickAgentPIDSweepIfNeeded() {
+  private func tickAgentPIDSweepIfNeeded() async {
     awaitingInputPromptScanTickCount &+= 1
     let ticksPerSweep = max(
       1,
       Int(agentPIDSweepInterval / awaitingInputActivityPollInterval)
     )
     guard awaitingInputPromptScanTickCount % ticksPerSweep == 0 else { return }
-    sweepAgentPIDs()
+    await sweepAgentPIDs()
   }
 
   /// Piggy-backs on the 1s prompt-scan loop and refreshes the owned-
@@ -1513,7 +1513,7 @@ final class WorktreeTerminalManager {
   /// Swift Testing. No-op when `ownedProcessTracker` is nil (default in
   /// tests). Refresh is non-destructive; actual termination happens
   /// only via `releaseOwnedProcesses(forWorktreePath:)`.
-  private func tickOwnedProcessRefreshIfNeeded() {
+  private func tickOwnedProcessRefreshIfNeeded() async {
     guard let ownedProcessTracker else { return }
     ownedProcessRefreshTickCount &+= 1
     let ticksPerRefresh = max(
@@ -1521,7 +1521,10 @@ final class WorktreeTerminalManager {
       Int(ownedProcessRefreshInterval / awaitingInputActivityPollInterval)
     )
     guard ownedProcessRefreshTickCount % ticksPerRefresh == 0 else { return }
-    ownedProcessTracker.refresh()
+    // `refresh()` is async: its proc-table walk runs on a detached Task
+    // so the syscall storm doesn't block the @MainActor poll. See
+    // `WorktreeOwnedProcessTracker.refresh()`.
+    await ownedProcessTracker.refresh()
   }
 
   /// SIGTERMs every process the tracker has attributed to the given
@@ -1540,14 +1543,22 @@ final class WorktreeTerminalManager {
   /// fires to report the transition. Per-PID granularity: a dead inner
   /// agent (codex) is dropped without disturbing a still-live outer
   /// agent (pi) on the same tab.
-  func sweepAgentPIDs() {
+  func sweepAgentPIDs() async {
     guard !agentPIDByTab.isEmpty else { return }
-    var dead: [(tabID: UUID, registration: AgentPIDRegistration)] = []
-    for (tabID, registrations) in agentPIDByTab {
-      for registration in registrations.values where !isProcessAlive(registration.pid) {
-        dead.append((tabID, registration))
+    // Snapshot the (tab, registration) pairs and batch the liveness
+    // probes off the main thread. Each `isProcessAlive` is a `kill(pid,
+    // 0)` syscall in production; with N registered agents the cost is
+    // small individually but stacks linearly and runs on @MainActor.
+    let candidates: [(tabID: UUID, registration: AgentPIDRegistration)] =
+      agentPIDByTab.flatMap { tabID, registrations in
+        registrations.values.map { (tabID, $0) }
       }
-    }
+    let isProcessAlive = self.isProcessAlive
+    let dead: [(tabID: UUID, registration: AgentPIDRegistration)] = await Task.detached(
+      priority: .utility
+    ) {
+      candidates.filter { !isProcessAlive($0.registration.pid) }
+    }.value
     for (tabID, registration) in dead {
       terminalLogger.info(
         "Agent PID \(registration.pid) gone; clearing busy state on tab \(tabID)"
