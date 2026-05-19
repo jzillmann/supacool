@@ -10,6 +10,12 @@ nonisolated struct TrashedSessionsKeyID: Hashable, Sendable {}
 nonisolated struct TrashedSessionsKey: SharedKey {
   private static let logger = SupaLogger("TrashedSessions")
 
+  /// Off-main encode + write queue. See `AgentSessionsKey.saveQueue`.
+  private static let saveQueue = DispatchQueue(
+    label: "io.morethan.supacool.trashed-sessions-save",
+    qos: .utility
+  )
+
   var id: TrashedSessionsKeyID { TrashedSessionsKeyID() }
 
   static var fileURL: URL {
@@ -57,15 +63,18 @@ nonisolated struct TrashedSessionsKey: SharedKey {
     continuation: SaveContinuation
   ) {
     @Dependency(\.settingsFileStorage) var storage
-    do {
-      let encoder = JSONEncoder()
-      encoder.dateEncodingStrategy = .iso8601
-      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-      let data = try encoder.encode(value)
-      try storage.save(data, Self.fileURL)
-      continuation.resume()
-    } catch {
-      continuation.resume(throwing: error)
+    let resolvedStorage = storage
+    Self.saveQueue.async {
+      do {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(value)
+        try resolvedStorage.save(data, Self.fileURL)
+        continuation.resume()
+      } catch {
+        continuation.resume(throwing: error)
+      }
     }
   }
 }

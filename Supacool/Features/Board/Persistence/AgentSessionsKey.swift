@@ -9,6 +9,20 @@ nonisolated struct AgentSessionsKeyID: Hashable, Sendable {}
 nonisolated struct AgentSessionsKey: SharedKey {
   private static let logger = SupaLogger("AgentSessions")
 
+  /// Serial queue used for the JSON encode + atomic-write half of `save`.
+  /// `Sharing` invokes `save` synchronously from `withLock`'s defer; with
+  /// many agent sessions the encode (~96 KB pretty-printed JSON) and the
+  /// disk write together cost tens of ms on every reducer mutation — a
+  /// hot main-thread block visible as steady-state beachballs. Sharing's
+  /// `SaveContinuation` is designed for async fulfilment, so we resolve
+  /// the `SettingsFileStorage` dependency on the calling thread, hop to
+  /// this queue for the heavy work, and resume the continuation when the
+  /// write finishes.
+  private static let saveQueue = DispatchQueue(
+    label: "io.morethan.supacool.agent-sessions-save",
+    qos: .utility
+  )
+
   var id: AgentSessionsKeyID { AgentSessionsKeyID() }
 
   static var fileURL: URL {
@@ -56,15 +70,20 @@ nonisolated struct AgentSessionsKey: SharedKey {
     continuation: SaveContinuation
   ) {
     @Dependency(\.settingsFileStorage) var storage
-    do {
-      let encoder = JSONEncoder()
-      encoder.dateEncodingStrategy = .iso8601
-      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-      let data = try encoder.encode(value)
-      try storage.save(data, Self.fileURL)
-      continuation.resume()
-    } catch {
-      continuation.resume(throwing: error)
+    // Resolve the dependency on the calling thread — the DispatchQueue
+    // block runs outside the dependency graph's TaskLocal scope.
+    let resolvedStorage = storage
+    Self.saveQueue.async {
+      do {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(value)
+        try resolvedStorage.save(data, Self.fileURL)
+        continuation.resume()
+      } catch {
+        continuation.resume(throwing: error)
+      }
     }
   }
 }

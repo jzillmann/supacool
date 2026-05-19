@@ -10,6 +10,15 @@ nonisolated struct BookmarksKeyID: Hashable, Sendable {}
 nonisolated struct BookmarksKey: SharedKey {
   private static let logger = SupaLogger("Bookmarks")
 
+  /// Off-main encode + write queue. See `AgentSessionsKey.saveQueue` for
+  /// rationale: `Sharing.withLock`'s defer calls `save` synchronously,
+  /// and a sync JSON encode + atomic write on every reducer mutation
+  /// would block the main thread.
+  private static let saveQueue = DispatchQueue(
+    label: "io.morethan.supacool.bookmarks-save",
+    qos: .utility
+  )
+
   var id: BookmarksKeyID { BookmarksKeyID() }
 
   static var fileURL: URL {
@@ -57,15 +66,18 @@ nonisolated struct BookmarksKey: SharedKey {
     continuation: SaveContinuation
   ) {
     @Dependency(\.settingsFileStorage) var storage
-    do {
-      let encoder = JSONEncoder()
-      encoder.dateEncodingStrategy = .iso8601
-      encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-      let data = try encoder.encode(value)
-      try storage.save(data, Self.fileURL)
-      continuation.resume()
-    } catch {
-      continuation.resume(throwing: error)
+    let resolvedStorage = storage
+    Self.saveQueue.async {
+      do {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(value)
+        try resolvedStorage.save(data, Self.fileURL)
+        continuation.resume()
+      } catch {
+        continuation.resume(throwing: error)
+      }
     }
   }
 }
