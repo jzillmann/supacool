@@ -939,7 +939,7 @@ private struct SessionCardContainer: View {
   @State private var isHovered: Bool = false
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 4) {
+    VStack(alignment: .leading, spacing: 6) {
       if showsRepoLabelAbove {
         HStack(spacing: 4) {
           Image(systemName: "folder.fill")
@@ -950,7 +950,10 @@ private struct SessionCardContainer: View {
             .truncationMode(.tail)
         }
         .foregroundStyle(.secondary)
-        .padding(.leading, 4)
+        // Anchor the label to the card's internal content padding (14pt)
+        // so its icon sits in the same column as the card's agent-icon
+        // row beneath it.
+        .padding(.leading, 14)
         .frame(minHeight: 14, alignment: .leading)
         .opacity(repositoryName == nil ? 0 : 0.85)
         .accessibilityLabel(repositoryName.map { "Repository: \($0)" } ?? "")
