@@ -310,6 +310,7 @@ struct BoardFeatureTests {
     await store.send(.parkActiveSession(id: session.id)) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = true
+        sessions[0].parkedActive = true
         sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
       $0.focusedSessionID = nil
@@ -324,10 +325,11 @@ struct BoardFeatureTests {
     )
   }
 
-  @Test(.dependencies) func unparkSessionOnlyClearsParkedBit() async {
+  @Test(.dependencies) func unparkSessionClearsParkedAndStandbyBits() async {
     let now = Date(timeIntervalSince1970: 1_750_000_333)
     var session = Self.sampleSession()
     session.parked = true
+    session.parkedActive = true
     session.updatePrimaryTerminal { $0.lastKnownBusy = true }
     var state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
@@ -342,6 +344,7 @@ struct BoardFeatureTests {
     await store.send(.unparkSession(id: session.id)) {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = false
+        sessions[0].parkedActive = false
         sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
     }

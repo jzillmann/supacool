@@ -699,9 +699,9 @@ struct FullScreenTerminalView: View {
   }
 
   /// Park control beside delete. Default click parks and tears down the
-  /// tab; the context menu offers "Park as Active" to hide the card
-  /// without interrupting the running terminal. When viewing an active
-  /// parked session, the same slot becomes Unpark.
+  /// tab; the context menu offers Standby to hide the card without
+  /// interrupting the running terminal. When viewing a standby session,
+  /// the same slot becomes Unpark.
   @ViewBuilder
   private var parkControl: some View {
     if let onPark {
@@ -714,12 +714,12 @@ struct FullScreenTerminalView: View {
       .help(
         onParkActive == nil
           ? "Park session"
-          : "Park and stop terminal. Right-click for Park as Active."
+          : "Park and stop terminal. Right-click for Standby."
       )
       .contextMenu {
         Button("Park", systemImage: "parkingsign", action: onPark)
         if let onParkActive {
-          Button("Park as Active", systemImage: "bolt.circle", action: onParkActive)
+          Button("Standby", systemImage: "bolt.circle", action: onParkActive)
         }
       }
     } else if let onUnpark {

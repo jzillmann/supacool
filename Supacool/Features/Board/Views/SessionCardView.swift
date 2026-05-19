@@ -13,7 +13,10 @@ struct SessionCardView: View {
   var onServerLifecycleRefresh: (() -> Void)? = nil
   var onServerLifecycleStart: (() -> Void)? = nil
   var onServerLifecycleStop: (() -> Void)? = nil
-  /// True for "Park as Active": parked in the board, but its PTY/tab is still alive.
+  /// True for Standby (formerly "Park as Active"): the user parked this
+  /// session with intent to come back to it. Persisted on the session,
+  /// so after a crash/relaunch the card still reads as Standby even
+  /// though no live PTY/tab exists yet.
   var isActiveParked: Bool = false
   var debugLinkTitle: String? = nil
   var onDebugLinkTap: (() -> Void)? = nil
@@ -196,7 +199,7 @@ struct SessionCardView: View {
         Button("Park", systemImage: "parkingsign", action: onPark)
       }
       if let onParkActive {
-        Button("Park as Active", systemImage: "bolt.circle", action: onParkActive)
+        Button("Standby", systemImage: "bolt.circle", action: onParkActive)
       }
       if let onUnpark {
         Button("Unpark", systemImage: "play.circle", action: onUnpark)
@@ -527,8 +530,9 @@ struct SessionCardView: View {
 
   /// Cards whose underlying PTY/tab isn't alive right now. Renders
   /// with a frosted "cracked glass" overlay so the board communicates
-  /// dormancy at a glance. Active-parked cards keep a live tab, so they
-  /// should look like normal cards even though they stay in the Parked bucket.
+  /// dormancy at a glance. Standby cards (formerly "Park as Active") render
+  /// full-strength because the user explicitly intends to come back to them —
+  /// even post-crash, when the tab itself is no longer alive.
   private var isDormant: Bool {
     if isActiveParked { return false }
     switch status {

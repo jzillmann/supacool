@@ -66,6 +66,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// User explicitly parked this session.
   var parked: Bool
 
+  /// Sub-state of `parked`. True when the user parked this session via
+  /// "Standby" rather than a cold Park — i.e. intent is to come back to
+  /// it. Persisted so the distinction survives quit / crash, and the
+  /// board can sort these into their own dormant bucket.
+  var parkedActive: Bool
+
   /// When true, the Auto-Observer monitors this session.
   var autoObserver: Bool
 
@@ -138,6 +144,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     planMode: Bool = false,
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
+    parkedActive: Bool = false,
     autoObserver: Bool = false,
     autoObserverPrompt: String = "",
     references: [SessionReference] = [],
@@ -161,6 +168,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.isPriority = isPriority
     self.planMode = planMode
     self.parked = parked
+    self.parkedActive = parkedActive
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
     self.references = references
@@ -203,7 +211,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case sourceBookmarkID, debugSourceSessionID
     case createdAt
     case removeBackingWorktreeOnDelete, isPriority, planMode
-    case parked
+    case parked, parkedActive
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
@@ -234,6 +242,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     isPriority = try c.decodeIfPresent(Bool.self, forKey: .isPriority) ?? false
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
+    parkedActive = try c.decodeIfPresent(Bool.self, forKey: .parkedActive) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
@@ -315,6 +324,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(isPriority, forKey: .isPriority)
     try c.encode(planMode, forKey: .planMode)
     try c.encode(parked, forKey: .parked)
+    try c.encode(parkedActive, forKey: .parkedActive)
     try c.encode(autoObserver, forKey: .autoObserver)
     try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
     try c.encode(references, forKey: .references)

@@ -34,6 +34,13 @@ struct BoardView: View {
   /// one in flat index order).
   @State private var cardFrames: [AgentSession.ID: CGRect] = [:]
 
+  /// Whether the Standby / Parked pill-row buckets are expanded. Sticky
+  /// within a board session (e.g. across scroll / nav into a full-screen
+  /// terminal and back); resets to collapsed on app relaunch so the
+  /// dormant sections stay out of the way by default.
+  @State private var standbyBucketExpanded: Bool = false
+  @State private var parkedBucketExpanded: Bool = false
+
   private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
   private let boardCardWidth: CGFloat = 280
   private let boardCarouselSpacing: CGFloat = 14
@@ -261,6 +268,8 @@ struct BoardView: View {
         }
       )
       let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
+      let standby = parked.filter(\.parkedActive)
+      let coldParked = parked.filter { !$0.parkedActive }
       ScrollView {
         VStack(alignment: .leading, spacing: 20) {
           // Drafts row sits ABOVE bookmarks. Always rendered when there's
@@ -352,17 +361,62 @@ struct BoardView: View {
               emptyMessage: nil
             )
           }
-          if !parked.isEmpty {
+          if !standby.isEmpty || !coldParked.isEmpty {
             Divider()
               .padding(.vertical, 4)
-            section(
-              title: "Parked",
-              systemImage: "parkingsign",
-              color: .secondary,
-              sessions: parked,
-              dimmed: true,
-              emptyMessage: nil
-            )
+            HStack(spacing: 8) {
+              if !standby.isEmpty {
+                DormantBucketPill(
+                  title: "Standby",
+                  count: standby.count,
+                  systemImage: "bolt.circle",
+                  color: .yellow,
+                  isExpanded: standbyBucketExpanded,
+                  action: {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                      standbyBucketExpanded.toggle()
+                    }
+                  }
+                )
+              }
+              if !coldParked.isEmpty {
+                DormantBucketPill(
+                  title: "Parked",
+                  count: coldParked.count,
+                  systemImage: "parkingsign",
+                  color: .secondary,
+                  isExpanded: parkedBucketExpanded,
+                  action: {
+                    withAnimation(.easeInOut(duration: 0.18)) {
+                      parkedBucketExpanded.toggle()
+                    }
+                  }
+                )
+              }
+              Spacer()
+            }
+            if standbyBucketExpanded && !standby.isEmpty {
+              section(
+                title: "Standby",
+                systemImage: "bolt.circle",
+                color: .yellow,
+                sessions: standby,
+                dimmed: false,
+                emptyMessage: nil,
+                hidesHeader: true
+              )
+            }
+            if parkedBucketExpanded && !coldParked.isEmpty {
+              section(
+                title: "Parked",
+                systemImage: "parkingsign",
+                color: .secondary,
+                sessions: coldParked,
+                dimmed: true,
+                emptyMessage: nil,
+                hidesHeader: true
+              )
+            }
           }
         }
         .padding(20)
@@ -431,23 +485,26 @@ struct BoardView: View {
     color: Color,
     sessions: [AgentSession],
     dimmed: Bool,
-    emptyMessage: String?
+    emptyMessage: String?,
+    hidesHeader: Bool = false
   ) -> some View {
     if sessions.isEmpty && emptyMessage == nil {
       EmptyView()
     } else {
       VStack(alignment: .leading, spacing: 12) {
-        Label {
-          Text(title)
-            .font(.headline)
-            .foregroundStyle(.secondary)
-          Text("(\(sessions.count))")
-            .font(.subheadline)
-            .foregroundStyle(.tertiary)
-            .monospacedDigit()
-        } icon: {
-          Image(systemName: systemImage)
-            .foregroundStyle(color)
+        if !hidesHeader {
+          Label {
+            Text(title)
+              .font(.headline)
+              .foregroundStyle(.secondary)
+            Text("(\(sessions.count))")
+              .font(.subheadline)
+              .foregroundStyle(.tertiary)
+              .monospacedDigit()
+          } icon: {
+            Image(systemName: systemImage)
+              .foregroundStyle(color)
+          }
         }
 
         if sessions.isEmpty, emptyMessage != nil {
@@ -465,7 +522,7 @@ struct BoardView: View {
                 ForEach(sessions, id: \.id) { session in
                   let sessionStatus = classify(session)
                   let sessionHasTab = sessionTabExists(session)
-                  let activeParked = session.parked && sessionHasTab
+                  let activeParked = session.parkedActive
                   let debugLink = debugLinkDescriptor(for: session)
                   let onDebugLinkTap: (() -> Void)? = {
                     guard let targetID = debugLink?.targetID else { return nil }
@@ -934,5 +991,56 @@ private struct SessionCardContainer: View {
         NSCursor.pop()
       }
     }
+  }
+}
+
+/// Pill-style chip used by BoardView's dormant footer. Two of these live
+/// side-by-side ("Standby (n)" / "Parked (n)"); clicking one toggles the
+/// matching collapsible carousel below.
+private struct DormantBucketPill: View {
+  let title: String
+  let count: Int
+  let systemImage: String
+  let color: Color
+  let isExpanded: Bool
+  let action: () -> Void
+
+  @State private var isHovered: Bool = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 6) {
+        Image(systemName: "chevron.right")
+          .font(.system(size: 9, weight: .semibold))
+          .foregroundStyle(.tertiary)
+          .rotationEffect(.degrees(isExpanded ? 90 : 0))
+        Image(systemName: systemImage)
+          .font(.system(size: 12))
+          .foregroundStyle(color)
+        Text(title)
+          .font(.subheadline.weight(.medium))
+          .foregroundStyle(.secondary)
+        Text("(\(count))")
+          .font(.subheadline)
+          .foregroundStyle(.tertiary)
+          .monospacedDigit()
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 6)
+      .background(
+        Capsule(style: .continuous)
+          .fill(.thinMaterial)
+      )
+      .overlay(
+        Capsule(style: .continuous)
+          .strokeBorder(
+            Color.secondary.opacity(isHovered ? 0.35 : 0.15),
+            lineWidth: 0.5
+          )
+      )
+    }
+    .buttonStyle(.plain)
+    .help("\(isExpanded ? "Collapse" : "Expand") \(title.lowercased()) sessions")
+    .onHover { isHovered = $0 }
   }
 }

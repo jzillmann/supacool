@@ -1054,6 +1054,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
+          sessions[index].parkedActive = false
           sessions[index].updatePrimaryTerminal {
             $0.lastKnownBusy = false
             $0.lastBusyTransitionAt = nil
@@ -1106,6 +1107,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = true
+          sessions[index].parkedActive = true
           sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
         }
         state.reinitializingSessionIDs.remove(id)
@@ -1142,6 +1144,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
+          sessions[index].parkedActive = false
           sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
         }
         TranscriptRecorder.shared.append(
@@ -1414,6 +1417,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
+          sessions[index].parkedActive = false
           sessions[index].updatePrimaryTerminal {
             $0.lastKnownBusy = false
             $0.lastBusyTransitionAt = nil
@@ -1471,6 +1475,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
+          sessions[index].parkedActive = false
           sessions[index].updatePrimaryTerminal {
             $0.lastKnownBusy = false
             $0.lastBusyTransitionAt = nil
@@ -1526,6 +1531,7 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
+          sessions[index].parkedActive = false
           sessions[index].updatePrimaryTerminal {
             $0.lastKnownBusy = false
             $0.lastBusyTransitionAt = nil

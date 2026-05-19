@@ -143,6 +143,55 @@ struct AgentSessionMigrationTests {
     #expect(decoded.auxiliaryTerminals[0].id == shellID)
   }
 
+  @Test func parkedActiveDefaultsToFalseWhenMissing() throws {
+    // A snapshot from before `parkedActive` existed. The decoder must
+    // synthesize `false` rather than throwing.
+    let sessionID = UUID()
+    let json = """
+    {
+      "id": "\(sessionID.uuidString)",
+      "repositoryID": "/tmp/repo",
+      "worktreeID": "/tmp/repo",
+      "currentWorkspacePath": "/tmp/repo",
+      "displayName": "p",
+      "createdAt": 1750000000,
+      "parked": true,
+      "terminals": [
+        {
+          "id": "\(sessionID.uuidString)",
+          "role": "agent",
+          "agent": "claude",
+          "initialPrompt": "p",
+          "createdAt": 1750000000,
+          "lastActivityAt": 1750000000
+        }
+      ],
+      "primaryTerminalID": "\(sessionID.uuidString)"
+    }
+    """
+    let decoded = try JSONDecoder().decode(AgentSession.self, from: Data(json.utf8))
+    #expect(decoded.parked == true)
+    #expect(decoded.parkedActive == false)
+  }
+
+  @Test func parkedActiveRoundTrips() throws {
+    var session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "p",
+      parked: true,
+      parkedActive: true
+    )
+    // Hand-set to confirm encode/decode preserves the bit independently.
+    session.parkedActive = true
+
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
+    #expect(decoded.parked == true)
+    #expect(decoded.parkedActive == true)
+  }
+
   // MARK: Forward compatibility
 
   @Test func newShapeIgnoresUnknownTerminalKeys() throws {
