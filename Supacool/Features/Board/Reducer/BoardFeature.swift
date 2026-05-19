@@ -130,6 +130,16 @@ struct BoardFeature {
     /// owns the signal (stale hooks check, New Terminal drafts, etc.).
     var trayCards: IdentifiedArrayOf<TrayCard> = []
 
+    /// In-memory backoff cache keyed by `SessionReference.dedupeKey`. When
+    /// `_refreshPRStatus` fails (typically GitHub rate-limit), we record
+    /// the timestamp here so subsequent `.cardAppeared` / `._referencesScanned`
+    /// passes skip the ref for `prRefreshFailureCooldown` seconds instead of
+    /// re-spawning the same `gh pr view` subprocess each time. Failing-and-
+    /// retrying every card-appeared was responsible for episodic multi-
+    /// second beachballs (spawn storm + zsh -l startup overhead) observed
+    /// on boards with many cross-referenced PRs.
+    var prRefreshFailureAt: [String: Date] = [:]
+
     /// First-launch Getting Started carousel state. `isPresented` is
     /// session-only; it flips true the first time app-launch evaluation
     /// finds any incomplete, non-skipped tasks, and flips false as soon
@@ -613,6 +623,12 @@ struct BoardFeature {
     /// for each unique PR, throttled by the cache window.
     case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
     case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, state: PRState)
+    /// Records that a `gh pr view` lookup failed for the given dedupe key
+    /// so subsequent scan/cardAppeared passes skip it for
+    /// `prRefreshFailureCooldown` seconds instead of immediately re-
+    /// spawning the same subprocess (especially relevant under
+    /// GitHub rate-limit pressure).
+    case _prRefreshFailed(refKey: String)
 
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
@@ -751,6 +767,15 @@ struct BoardFeature {
   /// bouncing between cards. 60 s is a reasonable compromise between
   /// "current enough" and "don't spam the API".
   private static let prStateCacheWindow: TimeInterval = 60
+
+  /// Backoff window for refs whose last `gh pr view` failed. Most
+  /// failures we see in the wild are GitHub GraphQL rate-limit denials
+  /// that take 5–10 minutes to clear; retrying every card-appeared
+  /// spawns dozens of `zsh -l` shells per wave and was directly
+  /// responsible for episodic beachballs. See `prRefreshFailureAt`.
+  /// `nonisolated` so the static helper below (also nonisolated) can
+  /// read the constant without crossing the @MainActor boundary.
+  nonisolated static let prRefreshFailureCooldown: TimeInterval = 300
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -2043,10 +2068,17 @@ struct BoardFeature {
         let needsScan = session.referencesScannedAt == nil
           || session.lastActivityAt > (session.referencesScannedAt ?? .distantPast)
         // Also kick off PR status refresh for any PRs in the current cache,
-        // throttled by the cache window.
+        // throttled by the cache window. The cooldown filter
+        // (`prRefreshFailureAt`) skips refs we already failed to fetch in
+        // the last `prRefreshFailureCooldown` so a rate-limit denial
+        // doesn't re-spawn `gh pr view` on every cardAppeared wave.
         let cacheWindow = Self.prStateCacheWindow
-        let hasUnresolvedPR = session.references.contains {
-          if case .pullRequest(_, _, _, nil) = $0 { return true }
+        let failureCache = state.prRefreshFailureAt
+        let now = date.now
+        let hasUnresolvedPR = session.references.contains { ref in
+          if case .pullRequest(_, _, _, nil) = ref,
+            Self.shouldRetryPRRef(ref, lastFailureAt: failureCache, now: now)
+          { return true }
           return false
         }
         let shouldRefreshPRs = hasUnresolvedPR
@@ -2055,8 +2087,11 @@ struct BoardFeature {
         let agentID = session.agentNativeSessionID
         let initialPrompt = session.initialPrompt
         let prRefs = shouldRefreshPRs
-          ? session.references.filter {
-              if case .pullRequest = $0 { return true } else { return false }
+          ? session.references.filter { ref in
+              if case .pullRequest = ref,
+                Self.shouldRetryPRRef(ref, lastFailureAt: failureCache, now: now)
+              { return true }
+              return false
             }
           : []
 
@@ -2096,12 +2131,18 @@ struct BoardFeature {
           )
           sessions[index].referencesScannedAt = Date()
         }
-        // Kick off PR status fetches for any PR refs we just discovered.
+        // Kick off PR status fetches for any PR refs we just discovered
+        // and haven't tried recently (see `prRefreshFailureAt`).
         guard let updated = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
+        let failureCache = state.prRefreshFailureAt
+        let now = date.now
         let prRefs = updated.references.filter {
-          if case .pullRequest(_, _, _, let s) = $0 { return s == nil } else { return false }
+          if case .pullRequest(_, _, _, let s) = $0, s == nil,
+            Self.shouldRetryPRRef($0, lastFailureAt: failureCache, now: now)
+          { return true }
+          return false
         }
         return .merge(prRefs.map { .send(._refreshPRStatus(id: id, ref: $0)) })
 
@@ -2117,8 +2158,17 @@ struct BoardFeature {
             boardLogger.warning(
               "Failed to fetch PR state for \(owner)/\(repo)#\(number): \(error)"
             )
+            await send(._prRefreshFailed(refKey: ref.dedupeKey))
           }
         }
+
+      case ._prRefreshFailed(let refKey):
+        // Record the failure timestamp so the cooldown filter skips this
+        // ref on the next scan/cardAppeared wave. Stops the spawn storm
+        // when GitHub rate-limits us — a single failed batch used to
+        // re-fire every busy→idle transition on every card.
+        state.prRefreshFailureAt[refKey] = date.now
+        return .none
 
       case ._prStatusUpdated(let id, let ref, let newState):
         state.$sessions.withLock { sessions in
@@ -2969,6 +3019,19 @@ struct BoardFeature {
       return .pullRequest(owner: owner, repo: repo, number: number, state: newState)
     }
     return ref
+  }
+
+  /// True iff `ref` is a PR reference that hasn't failed within the
+  /// `prRefreshFailureCooldown` window. Non-PR refs return false (the
+  /// callers already filter to PRs upstream; this is defensive).
+  nonisolated fileprivate static func shouldRetryPRRef(
+    _ ref: SessionReference,
+    lastFailureAt: [String: Date],
+    now: Date
+  ) -> Bool {
+    guard case .pullRequest = ref else { return false }
+    guard let failedAt = lastFailureAt[ref.dedupeKey] else { return true }
+    return now.timeIntervalSince(failedAt) >= Self.prRefreshFailureCooldown
   }
 
   // MARK: - Remote helpers
