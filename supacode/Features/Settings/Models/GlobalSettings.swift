@@ -155,7 +155,9 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let legacy = try decoder.container(keyedBy: LegacyCodingKey.self)
-    appearanceMode = try container.decode(AppearanceMode.self, forKey: .appearanceMode)
+    appearanceMode =
+      (try? container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode))
+      ?? Self.default.appearanceMode
     defaultEditorID =
       try container.decodeIfPresent(String.self, forKey: .defaultEditorID)
       ?? Self.default.defaultEditorID
@@ -165,8 +167,12 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     updateChannel =
       try container.decodeIfPresent(UpdateChannel.self, forKey: .updateChannel)
       ?? Self.default.updateChannel
-    updatesAutomaticallyCheckForUpdates = try container.decode(Bool.self, forKey: .updatesAutomaticallyCheckForUpdates)
-    updatesAutomaticallyDownloadUpdates = try container.decode(Bool.self, forKey: .updatesAutomaticallyDownloadUpdates)
+    updatesAutomaticallyCheckForUpdates =
+      try container.decodeIfPresent(Bool.self, forKey: .updatesAutomaticallyCheckForUpdates)
+      ?? Self.default.updatesAutomaticallyCheckForUpdates
+    updatesAutomaticallyDownloadUpdates =
+      try container.decodeIfPresent(Bool.self, forKey: .updatesAutomaticallyDownloadUpdates)
+      ?? Self.default.updatesAutomaticallyDownloadUpdates
     inAppNotificationsEnabled =
       try container.decodeIfPresent(Bool.self, forKey: .inAppNotificationsEnabled)
       ?? Self.default.inAppNotificationsEnabled

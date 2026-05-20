@@ -2806,11 +2806,10 @@ struct RepositoriesFeatureTests {
       )
     ) {
       $0.loadFailuresByID = [repository.id: "boom"]
-      $0.repositories = []
       $0.isInitialLoadComplete = true
     }
 
-    await store.receive(\.delegate.repositoriesChanged)
+    await store.finish()
   }
 
   @Test func worktreeOrderPreservedWhenRepositoryLoadFails() async {
@@ -2835,15 +2834,14 @@ struct RepositoriesFeatureTests {
       )
     ) {
       $0.loadFailuresByID = [repository.id: "boom"]
-      $0.repositories = []
       $0.isInitialLoadComplete = true
     }
 
-    await store.receive(\.delegate.repositoriesChanged)
     expectNoDifference(
       store.state.worktreeOrderByRepository,
       [repoRoot: [worktree1.id, worktree2.id]]
     )
+    await store.finish()
   }
 
   @Test func archivedWorktreeIDsPreservedWhenRepositoryLoadFails() async {
@@ -2865,12 +2863,11 @@ struct RepositoriesFeatureTests {
       )
     ) {
       $0.loadFailuresByID = [repository.id: "boom"]
-      $0.repositories = []
       $0.isInitialLoadComplete = true
     }
 
-    await store.receive(\.delegate.repositoriesChanged)
     #expect(store.state.archivedWorktreeIDs == [worktree.id])
+    await store.finish()
   }
 
   @Test func repositoriesLoadedSkipsSelectionChangeWhenOnlyDisplayDataChanges() async {

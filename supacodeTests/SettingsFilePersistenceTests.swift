@@ -55,6 +55,67 @@ struct SettingsFilePersistenceTests {
     #expect(reloaded.pinnedWorktreeIDs == ["/tmp/repo-a/wt-1"])
   }
 
+  @Test(.dependencies) func missingGlobalFieldsDoNotResetRepositoryRoots() throws {
+    let data = Data(
+      """
+      {
+        "global": {},
+        "repositories": {},
+        "repositoryRoots": ["/tmp/repo-a", "/tmp/repo-b"],
+        "pinnedWorktreeIDs": ["/tmp/repo-a/main"]
+      }
+      """.utf8
+    )
+    let storage = MutableTestStorage(initialData: data)
+
+    let settings: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      return settings
+    }
+
+    #expect(settings.global.appearanceMode == .dark)
+    #expect(settings.global.updatesAutomaticallyCheckForUpdates == true)
+    #expect(settings.global.updatesAutomaticallyDownloadUpdates == false)
+    #expect(settings.repositoryRoots == ["/tmp/repo-a", "/tmp/repo-b"])
+    #expect(settings.pinnedWorktreeIDs == ["/tmp/repo-a/main"])
+  }
+
+  @Test(.dependencies) func corruptRepositorySettingsDoNotResetRepositoryRoots() throws {
+    let data = Data(
+      """
+      {
+        "global": {},
+        "repositories": {
+          "/tmp/repo-a": {
+            "remoteTargets": [
+              {
+                "id": "not-a-uuid",
+                "hostID": "not-a-uuid",
+                "remoteWorkingDirectory": "/srv/app"
+              }
+            ]
+          }
+        },
+        "repositoryRoots": ["/tmp/repo-a"],
+        "pinnedWorktreeIDs": []
+      }
+      """.utf8
+    )
+    let storage = MutableTestStorage(initialData: data)
+
+    let settings: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      return settings
+    }
+
+    #expect(settings.repositories == [:])
+    #expect(settings.repositoryRoots == ["/tmp/repo-a"])
+  }
+
   @Test(.dependencies) func invalidJSONResetsToDefaults() throws {
     let storage = MutableTestStorage(initialData: Data("{".utf8))
 

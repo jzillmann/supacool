@@ -408,15 +408,21 @@ struct RepositoriesFeature {
         state.isRefreshingWorktrees = false
         let previousSelection = state.selectedWorktreeID
         let previousSelectedWorktree = state.worktree(for: previousSelection)
-        let incomingRepositories = IdentifiedArray(uniqueElements: repositories)
-        let repositoriesChanged = incomingRepositories != state.repositories
+        let previousRepositories = state.repositories
+        let repositoriesToApply = repositoriesPreservingFailedReloads(
+          loaded: repositories,
+          failures: failures,
+          roots: roots,
+          state: state
+        )
         let applyResult = applyRepositories(
-          repositories,
+          repositoriesToApply,
           roots: roots,
           shouldPruneArchivedWorktreeIDs: failures.isEmpty,
           state: &state,
           animated: animated
         )
+        let repositoriesChanged = state.repositories != previousRepositories
         state.repositoryRoots = roots
         state.isInitialLoadComplete = true
         state.loadFailuresByID = Dictionary(
@@ -2999,6 +3005,37 @@ struct RepositoriesFeature {
       }
     }
     return (loaded, failures)
+  }
+
+  private func repositoriesPreservingFailedReloads(
+    loaded repositories: [Repository],
+    failures: [LoadFailure],
+    roots: [URL],
+    state: State
+  ) -> [Repository] {
+    guard !failures.isEmpty else { return repositories }
+
+    let loadedByID = Dictionary(uniqueKeysWithValues: repositories.map { ($0.id, $0) })
+    let failedIDs = Set(failures.map(\.rootID))
+    var applied: [Repository] = []
+    var appliedIDs = Set<Repository.ID>()
+
+    for root in roots {
+      let rootID = root.standardizedFileURL.path(percentEncoded: false)
+      if let loaded = loadedByID[rootID] {
+        applied.append(loaded)
+        appliedIDs.insert(rootID)
+      } else if failedIDs.contains(rootID), let existing = state.repositories[id: rootID] {
+        applied.append(existing)
+        appliedIDs.insert(rootID)
+      }
+    }
+
+    for repository in repositories where !appliedIDs.contains(repository.id) {
+      applied.append(repository)
+    }
+
+    return applied
   }
 
   private func applyRepositories(

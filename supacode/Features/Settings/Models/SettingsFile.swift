@@ -32,13 +32,13 @@ nonisolated struct SettingsFile: Codable, Equatable, Sendable {
 
   init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    global = try container.decodeIfPresent(GlobalSettings.self, forKey: .global) ?? .default
+    global = (try? container.decodeIfPresent(GlobalSettings.self, forKey: .global)) ?? .default
     repositories =
-      try container.decodeIfPresent([String: RepositorySettings].self, forKey: .repositories)
+      (try? container.decodeIfPresent([String: RepositorySettings].self, forKey: .repositories))
       ?? [:]
-    repositoryRoots = try container.decodeIfPresent([String].self, forKey: .repositoryRoots) ?? []
+    repositoryRoots = (try? container.decodeIfPresent([String].self, forKey: .repositoryRoots)) ?? []
     pinnedWorktreeIDs =
-      try container.decodeIfPresent([Worktree.ID].self, forKey: .pinnedWorktreeIDs) ?? []
+      (try? container.decodeIfPresent([Worktree.ID].self, forKey: .pinnedWorktreeIDs)) ?? []
   }
 
   func encode(to encoder: any Encoder) throws {

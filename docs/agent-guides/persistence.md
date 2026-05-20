@@ -73,6 +73,10 @@ Files following this pattern:
 - `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacool/agent-sessions.json`
 - `Supacool/Domain/SessionTerminal.swift` → embedded inside each `AgentSession.terminals[]`
 - `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacool/board-filters.json`
+- `supacode/Features/Settings/Models/SettingsFile.swift` (type `SettingsFile`) → `~/.supacool/settings.json`
+- `supacode/Features/Settings/Models/GlobalSettings.swift` (type `GlobalSettings`) → embedded in `settings.json`
+- `supacode/Features/Settings/Models/RepositorySettings.swift` (types `RepositorySettings` and
+  `ServerLifecycleSettings`) → embedded in `settings.json` and per-repo `supacool.json`
 - `supacode/Features/Terminal/Models/TerminalLayoutSnapshot.swift` (types `TerminalLayoutSnapshot` and `TabSnapshot`) → `~/.supacool/layouts.json`
 
 If you add another `@Shared`-backed Codable, append it here.
