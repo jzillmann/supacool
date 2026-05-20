@@ -872,11 +872,11 @@ struct NewTerminalFeature {
     // so we don't bother flipping `isCreating` — the spinner would
     // never be visible.
 
-    // Guard the Matrix Board invariant that the repo root sits on
-    // origin/HEAD and clean. Agent + prompt submissions that resolved
-    // to `.repoRoot` (empty workspace field, no PR or Linear pin) get
-    // a fresh `.newBranch` slug so the agent runs in an isolated
-    // worktree off origin/main instead of mutating the repo root.
+    // Honor the submitted Scope exactly. Earlier builds silently promoted
+    // Main + agent + prompt submissions to a generated worktree branch,
+    // which made the UI lie and could derive branch names from pasted file
+    // paths. SessionSpawner still tries a best-effort repo-root sync, but
+    // it must not override an explicit Main selection.
     selection = Self.resolveSubmittedSelection(
       selection: selection,
       agent: state.agent,
@@ -1522,31 +1522,18 @@ struct NewTerminalFeature {
     }
   }
 
-  /// Submit-time guard for the Matrix Board's "repo root sits on
-  /// origin/HEAD, clean" invariant. When the user types a prompt with an
-  /// agent attached and leaves the Workspace field empty, the selection
-  /// resolves to `.repoRoot` — which spawns the agent inside the repo's
-  /// working directory and lets it `git checkout -b` against whatever
-  /// branch HEAD happens to be on. The next session inherits that drift
-  /// (RepoSyncClient.syncIfSafe bails silently on dirty / off-default
-  /// state). Promoting `.repoRoot` to `.newBranch` here forces a fresh
-  /// worktree off origin/main, isolating the agent's edits.
-  ///
-  /// Left untouched: shell-only sessions (no agent), empty prompts,
-  /// reruns owning the repo root, and any explicit worktree/branch pick.
+  /// Submit-time normalization point for the user's workspace choice.
+  /// This intentionally does **not** promote `.repoRoot` to a generated
+  /// worktree. The Scope picker says "Main" runs at the repo root, and
+  /// the reducer must honor that exact selection. SessionSpawner may do a
+  /// best-effort repo-root sync, but it does not rewrite this choice.
   nonisolated static func resolveSubmittedSelection(
     selection: WorkspaceSelection,
-    agent: AgentType?,
-    trimmedPrompt: String,
-    rerunOwnedWorktreeID: String?
+    agent _: AgentType?,
+    trimmedPrompt _: String,
+    rerunOwnedWorktreeID _: String?
   ) -> WorkspaceSelection {
-    guard case .repoRoot = selection else { return selection }
-    guard agent != nil else { return selection }
-    guard !trimmedPrompt.isEmpty else { return selection }
-    guard rerunOwnedWorktreeID == nil else { return selection }
-    let slug = sanitizeBranchName(trimmedPrompt)
-    let derived = slug.isEmpty ? "task" : slug
-    return .newBranch(name: derived)
+    selection
   }
 
   /// Pre-resolves the card's display name when the sheet has enough
@@ -1586,17 +1573,6 @@ nonisolated enum NewTerminalError: LocalizedError {
   /// already checked out at a *different* path. Carries the conflicting
   /// `Worktree` so the BoardFeature can offer Reuse / Delete & recreate.
   case branchAlreadyCheckedOut(branch: String, existing: Worktree)
-  /// An agent spawn resolved to `.repoRoot` (typically a rerun owning
-  /// the root, or a bookmark configured with `worktreeMode: .repoRoot`)
-  /// but `RepoSyncClient.syncIfSafe` couldn't keep the root pristine —
-  /// either a dirty working tree or a non-default branch is in the way.
-  /// The submit-time substitution in `resolveSubmittedSelection`
-  /// catches the empty-workspace common case; this is the structured
-  /// failure mode for the remainder so the user sees the underlying
-  /// state instead of silently inheriting it. `reason` carries a short
-  /// human-readable description of what blocked the sync.
-  case repoRootNotPristine(reason: String)
-
   var errorDescription: String? {
     switch self {
     case .worktreeMissing: "Picked worktree is no longer available."
@@ -1605,9 +1581,6 @@ nonisolated enum NewTerminalError: LocalizedError {
     case .branchAlreadyCheckedOut(let branch, let existing):
       "Branch '\(branch)' is already checked out at "
         + "\(existing.workingDirectory.path(percentEncoded: false))."
-    case .repoRootNotPristine(let reason):
-      "Repo root isn't ready for an agent spawn: \(reason). "
-        + "Clean up the repo or pick a worktree."
     }
   }
 }

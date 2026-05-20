@@ -202,26 +202,22 @@ enum SessionSpawner {
 
     case .repoRoot:
       // Pre-flight: try to fast-forward the repo root to origin/<default>
-      // before we hand the terminal to the user. Supacool's model is that
-      // users don't modify the root directly — worktrees are where work
-      // happens — so the Main scope keeps the repo root on latest main.
-      // Conservative guards in the client; failure
-      // never blocks the spawn for shell-only sessions.
+      // before we hand the terminal to the user. Conservative guards in
+      // the client mean this is best-effort: explicit Main scope should
+      // still spawn even when the root is dirty or off the default branch.
       let syncOutcome = await repoSyncClient.syncIfSafe(repository.rootURL)
       sessionSpawnerLogger.info(
         "Repo-root pre-flight sync for "
           + "\(repository.rootURL.path(percentEncoded: false)): \(syncOutcome)"
       )
-      // Agent submissions that reach the repo root are by definition
-      // about to make edits inside it. Letting them proceed onto a
-      // dirty / off-default root reproduces the bug
-      // resolveSubmittedSelection guards against (drift inherited by
-      // the next session). Surface the underlying outcome so the user
-      // can clean up or re-aim. Shell-only sessions keep the legacy
-      // permissive behavior — a shell at the root is often how the
-      // user *intends* to fix this state.
+      // Agent submissions that reach the repo root inherit whatever state
+      // the root is in. Log that explicitly for traceability, but don't
+      // override the user's Main selection.
       if agentRequested, let reason = nonPristineReason(syncOutcome) {
-        throw NewTerminalError.repoRootNotPristine(reason: reason)
+        sessionSpawnerLogger.warning(
+          "Proceeding with repo-root agent spawn despite \(reason) at "
+            + "\(repository.rootURL.path(percentEncoded: false))"
+        )
       }
       let rootURL = repository.rootURL.standardizedFileURL
       return await MainActor.run {
@@ -380,13 +376,12 @@ enum SessionSpawner {
     )
   }
 
-  /// Translate a `RepoSyncOutcome` into a short human-readable reason
-  /// for `NewTerminalError.repoRootNotPristine`, or nil when the outcome
-  /// represents a state the spawn can safely proceed on. Only the two
-  /// "the repo is in a state the agent will inherit" outcomes promote
-  /// to a thrown error — fetch failures, missing default branch, and
-  /// non-fast-forwardable divergence are *informational* and don't
-  /// block the spawn (the agent's working copy is still usable).
+  /// Translate a `RepoSyncOutcome` into a short human-readable reason for
+  /// repo-root agent-spawn logs, or nil when the outcome is uninteresting.
+  /// Dirty and off-default roots are worth logging because the agent will
+  /// inherit that state. Fetch failures, missing default branch, and
+  /// non-fast-forwardable divergence are informational — the working copy
+  /// is still usable.
   nonisolated static func nonPristineReason(_ outcome: RepoSyncOutcome) -> String? {
     switch outcome {
     case .skippedDirtyTree:
