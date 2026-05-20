@@ -50,25 +50,50 @@ private nonisolated enum AutoObserverLive {
   // MARK: Layer 1 – pattern matching
 
   /// Patterns applied against the last ~800 characters of screen content.
-  /// Order matters: more specific patterns first.
-  private static let patterns: [(pattern: String, response: String)] = [
-    // Claude permission prompt: numbered list with Allow options.
-    // Matches "❯ 1." or "1." at the start of a line when near Allow/Deny text.
-    (#"(?i)1[.)]\s+allow"#, "1"),
-    // Standard yes/no prompts — capital letter = default, don't override.
-    (#"\(Y/n\)"#, "y"),
-    (#"\(y/n\)"#, "y"),
-    // "Press Enter to continue" / "press any key"
-    (#"(?i)press enter to continue"#, "\n"),
-    // Generic "Continue?" at end of last line
-    (#"(?i)continue\?\s*$"#, "y"),
-  ]
+  /// Order matters: more specific patterns first. Each entry holds the
+  /// pre-compiled `Regex` so we only pay the compile cost (and the
+  /// ICU `UnicodeSet` allocation that goes with it) once per process,
+  /// not once per screen scan.
+  ///
+  /// Pre-compiling matters because a `sample` capture during a 1.2 s
+  /// main-thread stall showed ~170 ms inside
+  /// `objc_autoreleasePoolPop → -[NSRegularExpression dealloc]
+  /// → icu::RegexPattern::~RegexPattern → icu::UnicodeSet::~UnicodeSet`
+  /// — every `Regex(_:)` call constructs a transient autorelease-pool
+  /// resident pattern object whose dealloc tears down a non-trivial
+  /// ICU graph. Tail loops over the patterns frequently enough that
+  /// the cumulative create/destroy cost was material to beachballs.
+  private struct CompiledPattern: @unchecked Sendable {
+    let raw: String
+    let regex: Regex<AnyRegexOutput>
+    let response: String
+  }
+  private static let patterns: [CompiledPattern] = {
+    let rawPatterns: [(String, String)] = [
+      // Claude permission prompt: numbered list with Allow options.
+      // Matches "❯ 1." or "1." at the start of a line when near Allow/Deny text.
+      (#"(?i)1[.)]\s+allow"#, "1"),
+      // Standard yes/no prompts — capital letter = default, don't override.
+      (#"\(Y/n\)"#, "y"),
+      (#"\(y/n\)"#, "y"),
+      // "Press Enter to continue" / "press any key"
+      (#"(?i)press enter to continue"#, "\n"),
+      // Generic "Continue?" at end of last line
+      (#"(?i)continue\?\s*$"#, "y"),
+    ]
+    return rawPatterns.compactMap { raw, response in
+      guard let regex = try? Regex(raw) else {
+        observerLogger.warning("Auto-observer pattern failed to compile: \(raw)")
+        return nil
+      }
+      return CompiledPattern(raw: raw, regex: regex, response: response)
+    }
+  }()
 
   static func layer1(tail: String) -> String? {
     for entry in patterns {
-      guard let regex = try? Regex(entry.pattern) else { continue }
-      if tail.contains(regex) {
-        observerLogger.debug("Auto-observer layer-1 match: pattern=\(entry.pattern) → \(entry.response)")
+      if tail.contains(entry.regex) {
+        observerLogger.debug("Auto-observer layer-1 match: pattern=\(entry.raw) → \(entry.response)")
         return entry.response
       }
     }
