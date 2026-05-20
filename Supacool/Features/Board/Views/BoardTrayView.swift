@@ -73,7 +73,16 @@ private struct TrayCardView: View {
     }
     .buttonStyle(.plain)
     .onHover { isHovering = $0 }
-    .help(presentation.helpText)
+    .help(presentation.tooltipText)
+    .contextMenu {
+      if let detail = presentation.subtitle {
+        Button("Copy details") {
+          let pb = NSPasteboard.general
+          pb.clearContents()
+          pb.setString("\(presentation.title)\n\(detail)", forType: .string)
+        }
+      }
+    }
   }
 
   private var content: some View {
@@ -225,4 +234,12 @@ private struct TrayCardPresentation {
   let helpText: String
   var secondaryTitle: String?
   var secondaryHelp: String?
+
+  /// Hover tooltip — shows the full subtitle (which the in-card label
+  /// truncates to 2 lines) above the call-to-action hint, so users can
+  /// read long error messages without leaving the board.
+  var tooltipText: String {
+    guard let subtitle, !subtitle.isEmpty else { return helpText }
+    return "\(subtitle)\n\n\(helpText)"
+  }
 }
