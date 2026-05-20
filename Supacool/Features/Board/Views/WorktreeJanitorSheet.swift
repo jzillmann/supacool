@@ -39,7 +39,7 @@ struct WorktreeJanitorSheet: View {
       footer
     }
     .frame(minWidth: 860, minHeight: 480)
-    .task {
+    .task(id: store.repositoryID) {
       store.send(.scanRequested)
     }
     .confirmationDialog(
