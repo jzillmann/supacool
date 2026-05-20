@@ -78,6 +78,54 @@ struct WorktreeJanitorFeatureTests {
     }
   }
 
+  @Test func scanMergesFilesystemFoldersIntoRows() async {
+    let repoRoot = "/repos/foo"
+    let defaultBase = SupacoolPaths.repositoryDirectory(for: URL(fileURLWithPath: repoRoot))
+    let folderPath = defaultBase.appending(path: "failed-create").path(percentEncoded: false)
+    let store = TestStore(
+      initialState: WorktreeJanitorFeature.State(
+        repositoryID: repoRoot,
+        repositoryName: "foo",
+        sessionsSnapshot: []
+      )
+    ) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0.worktreeInventory.list = { _ in
+        [GitWtWorktreeEntry(branch: "main", path: repoRoot, head: "r", isBare: false)]
+      }
+      $0.worktreeInventory.listFolders = { _ in [URL(fileURLWithPath: folderPath)] }
+      $0.worktreeInventory.measure = { _ in 1024 }
+      $0.worktreeInventory.gitMetadata = { _, _ in WorktreeInventoryGitMetadata() }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.scanRequested) {
+      $0.isScanning = true
+    }
+    await store.receive(\._listLoaded) {
+      $0.rows = [
+        WorktreeInventoryEntry(
+          id: repoRoot, name: "foo", branch: "main", head: "r",
+          status: .repoRoot
+        ),
+        WorktreeInventoryEntry(
+          id: folderPath, name: "failed-create", branch: nil, head: "",
+          status: .orphan
+        ),
+      ]
+    }
+    await store.receive(\._sizeLoaded) {
+      $0.rows[id: folderPath]?.sizeBytes = 1024
+    }
+    await store.receive(\._metadataLoaded) {
+      $0.rows[id: folderPath]?.uncommittedCount = 0
+    }
+    await store.receive(\._scanCompleted) {
+      $0.isScanning = false
+    }
+  }
+
   @Test func scanIsIdempotentOnReentry() async {
     let store = TestStore(
       initialState: WorktreeJanitorFeature.State(
@@ -220,7 +268,7 @@ struct WorktreeJanitorFeatureTests {
       .init(
         id: "/r/wt", name: "wt", branch: "feat", head: "a",
         status: .owned(sessionID: UUID(), displayName: "Live session")
-      ),
+      )
     ]
     let store = TestStore(initialState: state) {
       WorktreeJanitorFeature()
@@ -300,7 +348,7 @@ struct WorktreeJanitorFeatureTests {
       .init(
         id: "/r/wt", name: "wt", branch: "feat", head: "a",
         status: .orphanDirty, sizeBytes: UInt64(1_024 * 1_024)
-      ),
+      )
     ]
     state.selectedIDs = ["/r/wt"]
     let store = TestStore(initialState: state) {

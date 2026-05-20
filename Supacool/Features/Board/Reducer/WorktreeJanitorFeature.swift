@@ -14,7 +14,8 @@ private nonisolated let janitorLogger = SupaLogger("Supacool.WorktreeJanitor")
 ///   2. Resolve the repo's default branch via `symbolic-ref origin/HEAD`
 ///      → drives ahead/behind + diff-stat base. Falls back to
 ///      `origin/HEAD` when the symref isn't set.
-///   3. List worktrees and classify against the live session snapshot.
+///   3. List registered worktrees plus leftover filesystem folders and
+///      classify against the live session snapshot.
 ///   4. Compute orphan session cards — sessions whose backing worktree
 ///      is no longer present in the inventory — and surface a banner
 ///      so the user can remove those cards in the same pass.
@@ -200,7 +201,9 @@ struct WorktreeJanitorFeature {
           ($0.lastCommit?.date ?? .distantPast) < ($1.lastCommit?.date ?? .distantPast)
         }
       case .aheadBehind:
-        return { Self.aheadBehindMagnitude($0.aheadBehind) < Self.aheadBehindMagnitude($1.aheadBehind) }
+        return {
+          Self.aheadBehindMagnitude($0.aheadBehind) < Self.aheadBehindMagnitude($1.aheadBehind)
+        }
       case .dirty:
         return { ($0.uncommittedCount ?? 0) < ($1.uncommittedCount ?? 0) }
       }
@@ -333,8 +336,15 @@ struct WorktreeJanitorFeature {
         state.baseRef = Self.fallbackBaseRef
         let repositoryID = state.repositoryID
         let sessions = state.sessionsSnapshot
-        return .run { [inventory, worktreePrune] send in
-          let repoRoot = URL(fileURLWithPath: repositoryID)
+        let repoRoot = URL(fileURLWithPath: repositoryID).standardizedFileURL
+        @Shared(.settingsFile) var settingsFile
+        @Shared(.repositorySettings(repoRoot)) var repositorySettings
+        let worktreeBaseDirectory = SupacoolPaths.worktreeBaseDirectory(
+          for: repoRoot,
+          globalDefaultPath: settingsFile.global.defaultWorktreeBaseDirectoryPath,
+          repositoryOverridePath: repositorySettings.worktreeBaseDirectoryPath
+        )
+        return .run { [inventory, worktreePrune, worktreeBaseDirectory] send in
 
           // 1. Prune stale admin records so the list call returns
           //    ground truth. Silent on failure — prune is nice-to-have,
@@ -363,10 +373,33 @@ struct WorktreeJanitorFeature {
             )
           }
 
-          // 3. List + classify.
+          // 3. List + classify. Git's admin records are authoritative
+          //    for linked worktrees, but not for failed/interrupted
+          //    folders left on disk; merge both sources so the janitor
+          //    can reclaim plain directories too.
           let entries: [GitWtWorktreeEntry]
           do {
-            entries = try await inventory.list(repoRoot)
+            let registeredEntries = try await inventory.list(repoRoot)
+            let folderURLs: [URL]
+            let baseDirectoryPath = normalizePath(worktreeBaseDirectory.path(percentEncoded: false))
+            if baseDirectoryPath == normalizePath(repositoryID) {
+              folderURLs = []
+            } else {
+              do {
+                folderURLs = try await inventory.listFolders(worktreeBaseDirectory)
+              } catch {
+                janitorLogger.warning(
+                  "folder list failed for \(worktreeBaseDirectory.path(percentEncoded: false)): "
+                    + "\(error.localizedDescription)"
+                )
+                folderURLs = []
+              }
+            }
+            entries = mergeWorktreeInventoryEntries(
+              registeredEntries: registeredEntries,
+              filesystemFolderURLs: folderURLs,
+              repositoryID: repositoryID
+            )
           } catch {
             janitorLogger.warning(
               "list failed for \(repositoryID): \(error.localizedDescription)"
@@ -635,7 +668,10 @@ private func removeOrphanWorktree(
     branch: target.branch
   )
   do {
-    _ = try await gitClient.removeWorktree(synthetic, /* deleteBranch */ false)
+    _ = try await gitClient.removeWorktree(
+      synthetic,
+      false  // deleteBranch
+    )
     return .success
   } catch {
     janitorLogger.warning(

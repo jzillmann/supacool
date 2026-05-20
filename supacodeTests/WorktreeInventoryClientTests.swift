@@ -158,6 +158,102 @@ struct WorktreeInventoryClientParserTests {
   }
 }
 
+// MARK: - Inventory merging
+
+struct WorktreeInventoryMergeTests {
+  @Test func appendsUnregisteredFilesystemFolders() {
+    let registered = [
+      GitWtWorktreeEntry(
+        branch: "main",
+        path: "/repos/foo",
+        head: "root",
+        isBare: false
+      ),
+      GitWtWorktreeEntry(
+        branch: "feature",
+        path: "/worktrees/foo/feature",
+        head: "abc",
+        isBare: false
+      ),
+    ]
+    let merged = mergeWorktreeInventoryEntries(
+      registeredEntries: registered,
+      filesystemFolderURLs: [
+        URL(fileURLWithPath: "/worktrees/foo/failed-create")
+      ],
+      repositoryID: "/repos/foo"
+    )
+
+    #expect(
+      merged.map(\.path) == [
+        "/repos/foo",
+        "/worktrees/foo/feature",
+        "/worktrees/foo/failed-create",
+      ])
+    #expect(merged.last?.branch == "")
+    #expect(merged.last?.head == "")
+  }
+
+  @Test func dedupesRegisteredPathsAndRepoRootFolders() {
+    let registered = [
+      GitWtWorktreeEntry(
+        branch: "main",
+        path: "/repos/foo",
+        head: "root",
+        isBare: false
+      ),
+      GitWtWorktreeEntry(
+        branch: "feature",
+        path: "/worktrees/foo/feature",
+        head: "abc",
+        isBare: false
+      ),
+    ]
+    let merged = mergeWorktreeInventoryEntries(
+      registeredEntries: registered,
+      filesystemFolderURLs: [
+        URL(fileURLWithPath: "/repos/foo"),
+        URL(fileURLWithPath: "/worktrees/foo/feature/"),
+        URL(fileURLWithPath: "/worktrees/foo/orphan"),
+        URL(fileURLWithPath: "/worktrees/foo/orphan"),
+      ],
+      repositoryID: "/repos/foo/"
+    )
+
+    #expect(
+      merged.map(\.path) == [
+        "/repos/foo",
+        "/worktrees/foo/feature",
+        "/worktrees/foo/orphan",
+      ])
+  }
+
+  @Test func skipsFoldersThatContainRegisteredNestedWorktrees() {
+    let registered = [
+      GitWtWorktreeEntry(
+        branch: "nested",
+        path: "/worktrees/foo/group/nested",
+        head: "abc",
+        isBare: false
+      )
+    ]
+    let merged = mergeWorktreeInventoryEntries(
+      registeredEntries: registered,
+      filesystemFolderURLs: [
+        URL(fileURLWithPath: "/worktrees/foo/group"),
+        URL(fileURLWithPath: "/worktrees/foo/plain"),
+      ],
+      repositoryID: "/repos/foo"
+    )
+
+    #expect(
+      merged.map(\.path) == [
+        "/worktrees/foo/group/nested",
+        "/worktrees/foo/plain",
+      ])
+  }
+}
+
 // MARK: - Classification
 
 struct WorktreeInventoryClassifyTests {
@@ -224,7 +320,12 @@ struct WorktreeInventoryClassifyTests {
       initialPrompt: "convert"
     )
     let entries = [
-      GitWtWorktreeEntry(branch: "converted", path: "/repos/foo/converted", head: "a", isBare: false)
+      GitWtWorktreeEntry(
+        branch: "converted",
+        path: "/repos/foo/converted",
+        head: "a",
+        isBare: false
+      )
     ]
     let result = classifyWorktreeInventory(
       entries: entries,
@@ -326,7 +427,8 @@ struct WorktreeInventoryClassifyTests {
       status: .owned(sessionID: UUID(), displayName: "Session")
     )
     let updated = applyUncommittedCount(5, to: owned)
-    if case .owned = updated.status {} else {
+    if case .owned = updated.status {
+    } else {
       Issue.record("Expected owned status to survive uncommitted-count merge")
     }
     #expect(updated.uncommittedCount == 5)
@@ -369,6 +471,28 @@ struct WorktreeInventoryClientLiveTests {
     let entries = try await client.list(URL(fileURLWithPath: "/repos/foo"))
     #expect(entries.count == 2)
     #expect(entries.map(\.branch) == ["main", "feature"])
+  }
+
+  @Test func listFoldersReturnsImmediateDirectoriesOnly() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appending(
+        path: "WorktreeInventoryClientTests-\(UUID().uuidString)",
+        directoryHint: .isDirectory
+      )
+    let child = root.appending(path: "child", directoryHint: .isDirectory)
+    let nested = child.appending(path: "nested", directoryHint: .isDirectory)
+    let file = root.appending(path: "file.txt", directoryHint: .notDirectory)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    try "x".write(to: file, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let client = WorktreeInventoryClient.live(
+      shell: scriptedShell { _ in
+        throw ScriptedShellError.unexpected(args: [])
+      })
+    let folders = try await client.listFolders(root)
+
+    #expect(folders.map { $0.lastPathComponent } == ["child"])
   }
 
   @Test func measureReturnsZeroWhenDuUnparseable() async throws {

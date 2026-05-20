@@ -12,6 +12,9 @@ private nonisolated let inventoryLogger = SupaLogger("Supacool.WorktreeInventory
 /// independently and cancel per-row:
 ///
 /// - `list`        → `git worktree list --porcelain`. Cheap. One call per scan.
+/// - `listFolders` → immediate child directories under the configured worktree
+///                   base path. Catches failed/abandoned folders that Git no
+///                   longer has admin records for.
 /// - `measure`     → `du -sk`. Slow (recurses node_modules). One call per row,
 ///                   parallelized by the caller with bounded concurrency.
 /// - `gitMetadata` → bundled `git log -1 / status --porcelain / rev-list`.
@@ -27,6 +30,12 @@ nonisolated struct WorktreeInventoryClient: Sendable {
   /// All non-bare worktrees registered for `repoRoot`. Fast — reads
   /// git's admin records only, never touches worktree contents.
   var list: @Sendable (_ repoRoot: URL) async throws -> [GitWtWorktreeEntry]
+
+  /// Immediate child directories under the configured worktree base
+  /// directory. These are not necessarily Git worktrees — they include
+  /// failed creations and abandoned plain folders so the janitor can
+  /// surface/delete them too. Missing base directory returns `[]`.
+  var listFolders: @Sendable (_ baseDirectory: URL) async throws -> [URL]
 
   /// Disk footprint of `path` in bytes. Slow on cold caches — `du -sk`
   /// recurses into `node_modules`. Caller is expected to parallelize
@@ -84,6 +93,33 @@ extension WorktreeInventoryClient: DependencyKey {
           log: false
         )
         return parseWorktreePorcelain(output.stdout)
+      },
+      listFolders: { baseDirectory in
+        let fileManager = FileManager.default
+        let basePath = baseDirectory.standardizedFileURL.path(percentEncoded: false)
+        var isDirectory: ObjCBool = false
+        guard
+          fileManager.fileExists(atPath: basePath, isDirectory: &isDirectory),
+          isDirectory.boolValue
+        else {
+          return []
+        }
+        let children = try fileManager.contentsOfDirectory(
+          at: baseDirectory.standardizedFileURL,
+          includingPropertiesForKeys: [.isDirectoryKey],
+          options: []
+        )
+        return
+          children
+          .filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+          }
+          .map(\.standardizedFileURL)
+          .sorted {
+            $0.path(percentEncoded: false).localizedStandardCompare(
+              $1.path(percentEncoded: false)
+            ) == .orderedAscending
+          }
       },
       measure: { path in
         // `du -sk` → 1K-block count + tab + path. macOS default block
@@ -183,6 +219,7 @@ extension WorktreeInventoryClient: DependencyKey {
       struct UnimplementedList: Error {}
       throw UnimplementedList()
     },
+    listFolders: { _ in [] },
     measure: { _ in
       struct UnimplementedMeasure: Error {}
       throw UnimplementedMeasure()
@@ -207,6 +244,62 @@ extension DependencyValues {
     get { self[WorktreeInventoryClient.self] }
     set { self[WorktreeInventoryClient.self] = newValue }
   }
+}
+
+// MARK: - Inventory merging
+
+/// Merge Git's registered worktree records with plain directories found
+/// under Supacool's configured worktree base path.
+///
+/// Git only knows about directories that still have admin records under
+/// `.git/worktrees`. Failed creations, interrupted deletes, and manually
+/// copied folders can remain on disk after those records disappear. The
+/// janitor still needs to show them so the user can reclaim disk space.
+///
+/// Rules:
+/// - registered Git records win when a folder path matches exactly;
+/// - the repo root is never synthesized as a folder row;
+/// - folders that contain, or are contained by, a registered linked
+///   worktree are skipped to avoid offering a dangerous parent/child
+///   delete candidate (for example, a grouping directory that contains
+///   nested registered worktrees).
+nonisolated func mergeWorktreeInventoryEntries(
+  registeredEntries: [GitWtWorktreeEntry],
+  filesystemFolderURLs: [URL],
+  repositoryID: String
+) -> [GitWtWorktreeEntry] {
+  let normalizedRepo = normalizePath(repositoryID)
+  let registeredPaths = Set(
+    registeredEntries
+      .filter { !$0.isBare }
+      .map { normalizePath($0.path) }
+  )
+  let linkedWorktreePaths = registeredPaths.filter { $0 != normalizedRepo }
+
+  var merged = registeredEntries
+  var appendedFolderPaths: Set<String> = []
+  for folderURL in filesystemFolderURLs {
+    let path = normalizePath(folderURL.path(percentEncoded: false))
+    guard path != normalizedRepo else { continue }
+    guard !registeredPaths.contains(path) else { continue }
+    guard !appendedFolderPaths.contains(path) else { continue }
+    guard
+      !linkedWorktreePaths.contains(where: { linkedPath in
+        pathIsAncestor(path, of: linkedPath) || pathIsAncestor(linkedPath, of: path)
+      })
+    else { continue }
+
+    appendedFolderPaths.insert(path)
+    merged.append(
+      GitWtWorktreeEntry(
+        branch: "",
+        path: path,
+        head: "",
+        isBare: false
+      )
+    )
+  }
+  return merged
 }
 
 // MARK: - Classification
@@ -245,7 +338,8 @@ nonisolated func classifyWorktreeInventory(
     }
   }
 
-  return entries
+  return
+    entries
     .filter { !$0.isBare }
     .map { entry in
       let entryPath = normalizePath(entry.path)
@@ -288,12 +382,10 @@ nonisolated func applyUncommittedCount(
 
 /// Find session ids in `sessions` whose backing worktree isn't present
 /// in the inventory any more — i.e. session cards that outlived their
-/// directory. Authoritative alternative to
-/// `findOrphanSessionIDs(in:repositoryID:)` in `BoardFeature`, which
-/// stats the filesystem: that version misses the case where the dir
-/// still exists on disk but git has pruned the worktree record (e.g.
-/// user deleted the dir while Supacool was closed and `git worktree
-/// prune` has been run), and vice versa.
+/// directory. The inventory includes both Git-registered worktrees and
+/// plain folders found under the configured worktree base directory, so
+/// a session is only orphaned when neither source can still account for
+/// its backing path.
 ///
 /// Matching mirrors `classifyWorktreeInventory`: a session is only
 /// considered attached when its `worktreeID` or `currentWorkspacePath`
@@ -453,6 +545,13 @@ nonisolated func normalizePath(_ path: String) -> String {
     result.removeLast()
   }
   return result
+}
+
+nonisolated private func pathIsAncestor(_ ancestor: String, of descendant: String) -> Bool {
+  let ancestorComponents = URL(fileURLWithPath: ancestor).standardizedFileURL.pathComponents
+  let descendantComponents = URL(fileURLWithPath: descendant).standardizedFileURL.pathComponents
+  guard descendantComponents.count > ancestorComponents.count else { return false }
+  return zip(ancestorComponents, descendantComponents).allSatisfy(==)
 }
 
 /// Drop a literal prefix if present; returns nil otherwise. Free

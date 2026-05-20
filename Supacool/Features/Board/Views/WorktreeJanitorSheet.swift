@@ -2,7 +2,7 @@ import ComposableArchitecture
 import Foundation
 import SwiftUI
 
-/// Inspector + janitor for every worktree registered against a repo.
+/// Inspector + janitor for every worktree/folder known for a repo.
 ///
 /// Columns: selection | name+branch | status | size | last commit |
 /// ahead/behind vs the repo's default branch | dirty count | diff-stat
@@ -80,7 +80,7 @@ struct WorktreeJanitorSheet: View {
   private var headerSubtitle: String {
     let count = store.rows.count
     guard count > 0 else { return store.repositoryName }
-    let suffix = count == 1 ? "1 worktree" : "\(count) worktrees"
+    let suffix = count == 1 ? "1 worktree/folder" : "\(count) worktrees/folders"
     return "\(store.repositoryName) · \(suffix)"
   }
 
@@ -168,7 +168,7 @@ struct WorktreeJanitorSheet: View {
   }
 
   private var emptyPlaceholder: some View {
-    Text("No worktrees registered.")
+    Text("No worktrees or folders found.")
       .font(.callout)
       .foregroundStyle(.secondary)
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -520,31 +520,35 @@ struct WorktreeJanitorSheet: View {
       store.prunedRefCount == 0
       ? ""
       : " · pruned \(store.prunedRefCount) stale record\(store.prunedRefCount == 1 ? "" : "s")"
-    return
-      "\(store.rows.count) worktrees · \(candidateCount) candidates · \(formatSize(totalBytes)) on disk\(prunedSuffix)"
+    let count = store.rows.count
+    let size = formatSize(totalBytes)
+    return "\(count) worktrees/folders · \(candidateCount) candidates · "
+      + "\(size) on disk\(prunedSuffix)"
   }
 
   // MARK: - Confirmation dialog
 
   private var confirmationTitle: String {
     guard let confirmation = store.deleteConfirmation else {
-      return "Delete worktrees?"
+      return "Delete worktrees/folders?"
     }
     let count = confirmation.targets.count
     return count == 1
       ? "Delete \"\(confirmation.targets[0].name)\"?"
-      : "Delete \(count) worktrees?"
+      : "Delete \(count) worktrees/folders?"
   }
 
   private func confirmationMessage(
     _ confirmation: WorktreeJanitorFeature.DeleteConfirmation
   ) -> String {
     var lines: [String] = []
+    let count = confirmation.targets.count
+    let noun = count == 1 ? "worktree/folder" : "worktrees/folders"
     lines.append(
-      "Removing \(confirmation.targets.count) worktree\(confirmation.targets.count == 1 ? "" : "s") will reclaim about \(formatSize(confirmation.totalBytes))."
+      "Removing \(count) \(noun) will reclaim about \(formatSize(confirmation.totalBytes))."
     )
     if confirmation.hasDirty {
-      lines.append("⚠️ One or more selected worktrees have uncommitted changes.")
+      lines.append("⚠️ One or more selected worktrees/folders have uncommitted changes.")
     }
     lines.append("Branches are kept — only the worktree directories are removed.")
     return lines.joined(separator: "\n\n")
