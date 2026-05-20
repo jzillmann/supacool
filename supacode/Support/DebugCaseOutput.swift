@@ -22,7 +22,13 @@ struct LogActionsReducer<Base: Reducer>: Reducer where Base.State: Equatable {
       let previousState = state
       let effects = base.reduce(into: &state, action: action)
       if previousState != state, let diff = CustomDump.diff(previousState, state) {
-        print(diff)
+        // Off-main print: `print(diff)` blocks on the stdout `write()`
+        // syscall when the parent pipe (e.g. `make run-app`'s terminal)
+        // is slow to drain. Each action dumping the full state diff was
+        // pegging the main thread for hundreds of ms per call. Route
+        // through SupaLogger's shared background queue instead so the
+        // log stays useful but the action-dispatch path returns instantly.
+        SupaLogger.dispatchRawPrint(diff)
       }
       return effects
     #else
