@@ -994,7 +994,8 @@ private struct SessionCardContainer: View {
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
       onAutoObserverRunNow: onAutoObserverRunNow,
       onDebug: onDebug,
-      onAppear: onAppear
+      onAppear: onAppear,
+      onReferencesPopoverOpened: onAppear
     )
     .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)
     .overlay {

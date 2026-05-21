@@ -14,6 +14,10 @@ struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
   let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
+  /// Whether the focused-terminal breadcrumb should repeat the repository
+  /// name. The window toolbar already names the project when a single repo
+  /// is selected, so this can be disabled to avoid duplicate chrome.
+  let showsRepositoryNameInHeader: Bool
   let terminalManager: WorktreeTerminalManager
   let onBackToBoard: () -> Void
   let onNewTerminal: () -> Void
@@ -82,6 +86,10 @@ struct FullScreenTerminalView: View {
   /// the session's backing worktree. Useful after on-disk changes made
   /// outside Supacool (e.g. command-line git operations).
   let onRefreshWorktree: () -> Void
+
+  /// Cache-throttled refresh of parsed references/PR states when the PR
+  /// reference popover opens.
+  let onReferencesPopoverOpened: (() -> Void)?
 
   /// Which terminal in `session.terminals` is currently rendered. Pass
   /// `session.primaryTerminalID` for single-terminal sessions.
@@ -350,13 +358,15 @@ struct FullScreenTerminalView: View {
   private var repoChip: some View {
     if let repo = repositories[id: session.repositoryID] {
       HStack(spacing: 6) {
-        HStack(spacing: 4) {
-          Image(systemName: "folder.fill")
-            .font(.caption2)
-            .foregroundStyle(.yellow)
-          Text(repo.name)
-            .font(.caption)
-            .foregroundStyle(.secondary)
+        if showsRepositoryNameInHeader {
+          HStack(spacing: 4) {
+            Image(systemName: "folder.fill")
+              .font(.caption2)
+              .foregroundStyle(.yellow)
+            Text(repo.name)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
         }
         workspaceBadge
       }
@@ -381,7 +391,10 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var referenceChips: some View {
     if !session.references.isEmpty {
-      SessionReferenceSummaryChips(references: session.references)
+      SessionReferenceSummaryChips(
+        references: session.references,
+        onPullRequestsPopoverOpened: onReferencesPopoverOpened
+      )
     }
   }
 

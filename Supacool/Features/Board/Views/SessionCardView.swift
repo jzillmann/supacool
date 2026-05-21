@@ -49,6 +49,9 @@ struct SessionCardView: View {
   /// reference scanner (Linear ticket ids, GitHub PR URLs in the
   /// session's transcript).
   var onAppear: (() -> Void)?
+  /// Called when the PR reference popover opens so visible PR states get
+  /// a cache-throttled refresh without adding extra chrome to the popover.
+  var onReferencesPopoverOpened: (() -> Void)?
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
@@ -488,7 +491,10 @@ struct SessionCardView: View {
   /// Inline chips for parsed work references. Keeps the obvious Linear
   /// ticket visible and collapses multiple PRs into a stacked dropdown chip.
   private var referenceChips: some View {
-    SessionReferenceSummaryChips(references: session.references)
+    SessionReferenceSummaryChips(
+      references: session.references,
+      onPullRequestsPopoverOpened: onReferencesPopoverOpened
+    )
   }
 
   private func pullRequestStatus(_ model: PullRequestStatusModel) -> some View {
@@ -695,6 +701,7 @@ struct ReferenceChip: View {
 /// with a dropdown list so PR-heavy sessions do not flood the layout.
 struct SessionReferenceSummaryChips: View {
   let references: [SessionReference]
+  var onPullRequestsPopoverOpened: (() -> Void)? = nil
 
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
 
@@ -730,7 +737,8 @@ struct SessionReferenceSummaryChips: View {
         ReferenceStackChip(
           kind: .pullRequests,
           references: pullRequests,
-          linearOrgSlug: linearOrgSlug
+          linearOrgSlug: linearOrgSlug,
+          onPopoverOpened: onPullRequestsPopoverOpened
         )
       }
     }
@@ -802,6 +810,7 @@ private struct ReferenceStackChip: View {
   let kind: Kind
   let references: [SessionReference]
   let linearOrgSlug: String
+  var onPopoverOpened: (() -> Void)? = nil
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
@@ -809,6 +818,9 @@ private struct ReferenceStackChip: View {
   var body: some View {
     Button {
       isPopoverShown.toggle()
+      if isPopoverShown {
+        onPopoverOpened?()
+      }
     } label: {
       HStack(spacing: 4) {
         stackGlyph

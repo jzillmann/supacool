@@ -248,6 +248,7 @@ struct BoardRootView: View {
         session: session,
         repositories: repositories,
         worktreeInfoByID: worktreeInfoByID,
+        showsRepositoryNameInHeader: showsFocusedHeaderRepositoryName,
         terminalManager: terminalManager,
         onBackToBoard: { store.send(.focusSession(id: nil)) },
         onNewTerminal: {
@@ -357,6 +358,9 @@ struct BoardRootView: View {
         },
         onRefreshWorktree: {
           store.send(.refreshWorktreeTapped(id: session.id))
+        },
+        onReferencesPopoverOpened: {
+          store.send(.cardAppeared(id: session.id))
         },
         activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
         onSelectTerminal: { terminalID in
@@ -639,6 +643,17 @@ struct BoardRootView: View {
       showsQuickDiffButton: true,
       allowsSyncActions: true
     )
+  }
+
+  /// Whether the focused-terminal breadcrumb should repeat the repository
+  /// name. The toolbar picker already displays it for single-repo context
+  /// (one registered repo, or one explicit selection), so keep the second
+  /// header line cleaner in that case.
+  private var showsFocusedHeaderRepositoryName: Bool {
+    guard repositories.count > 1 else { return false }
+    guard !store.filters.showsAllRepositories else { return true }
+    let selected = repositories.filter { store.filters.selectedRepositoryIDs.contains($0.id) }
+    return selected.count != 1
   }
 
   /// Repo shown by the board toolbar status chip. We only show this when
