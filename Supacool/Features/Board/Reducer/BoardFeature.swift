@@ -778,6 +778,16 @@ struct BoardFeature {
   /// read the constant without crossing the @MainActor boundary.
   nonisolated static let prRefreshFailureCooldown: TimeInterval = 300
 
+  /// Wall-clock cap on a single `gh pr view` invocation. The
+  /// `_refreshPRStatus` effect races the subprocess against a sleep of
+  /// this duration; whichever wins first wins the group, the other
+  /// task is cancelled. 30 s is generous enough that a normal `gh pr
+  /// view` completes well within it (typical latency: a few hundred
+  /// ms) but short enough that a stuck shell wrapper records a
+  /// failure quickly enough for the cooldown filter to block
+  /// subsequent spawns. See `_refreshPRStatus` for the storm history.
+  nonisolated static let prRefreshTimeout: Duration = .seconds(30)
+
   var body: some Reducer<State, Action> {
     BindingReducer()
     Reduce { state, action in
@@ -2166,7 +2176,31 @@ struct BoardFeature {
         }
         return .run { [githubCLI] send in
           do {
-            let newState = try await githubCLI.viewPullRequest(owner, repo, number)
+            // Race the gh subprocess against a wall-clock timeout.
+            // Without this, a `gh pr view` that hangs (network stall,
+            // or its own `zsh -l` startup blocked on a fork() EAGAIN
+            // under proc-table pressure) never returns success OR
+            // failure. The failure cache below only populates from the
+            // catch path, so a hung subprocess means the same PR ref
+            // gets re-spawned on every cardAppeared wave. We saw 377
+            // accumulated stuck gh wrappers in the wild before this
+            // fix; the cumulative slot consumption then *causes* more
+            // forks to fail, so the storm self-reinforces.
+            let newState = try await withThrowingTaskGroup(of: PRState.self) {
+              group in
+              group.addTask {
+                try await githubCLI.viewPullRequest(owner, repo, number)
+              }
+              group.addTask {
+                try await Task.sleep(for: Self.prRefreshTimeout)
+                throw PRRefreshTimeoutError()
+              }
+              defer { group.cancelAll() }
+              guard let result = try await group.next() else {
+                throw PRRefreshTimeoutError()
+              }
+              return result
+            }
             await send(._prStatusUpdated(id: id, ref: ref, state: newState))
           } catch {
             boardLogger.warning(
@@ -2175,6 +2209,7 @@ struct BoardFeature {
             await send(._prRefreshFailed(refKey: ref.dedupeKey))
           }
         }
+        .cancellable(id: PRRefreshCancelID(refKey: ref.dedupeKey), cancelInFlight: true)
 
       case ._prRefreshFailed(let refKey):
         // Record the failure timestamp so the cooldown filter skips this
@@ -3273,6 +3308,20 @@ private nonisolated struct AutoDisplayNameCancelID: Hashable, Sendable {
 private nonisolated struct ServerLifecycleCancelID: Hashable, Sendable {
   let workspacePath: String
 }
+
+/// Cancel ID for in-flight `_refreshPRStatus` effects. Keyed by the
+/// PR's `dedupeKey` so a later cardAppeared wave that re-fires the
+/// same ref cancels the prior gh subprocess instead of stacking
+/// another one on top.
+private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
+  let refKey: String
+}
+
+/// Thrown by the timeout arm of the `_refreshPRStatus` TaskGroup race.
+/// Surfaces as a generic failure via the same path as any other
+/// `viewPullRequest` error, so it populates the failure cooldown
+/// cache and blocks the spawn-storm feedback loop.
+private nonisolated struct PRRefreshTimeoutError: Error {}
 
 // MARK: - Worktree prune helpers
 
