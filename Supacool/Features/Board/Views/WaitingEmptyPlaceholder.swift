@@ -52,14 +52,38 @@ struct WaitingEmptyPlaceholder: View {
 /// glyph positions are derived from `time + per-column phase`, glyph
 /// values from `time` rounded to the cycle rate. No `@State`, no timers,
 /// nothing to leak.
+///
+/// Performance: a live `sample` capture during a 1.4 s main-thread
+/// freeze showed `MatrixRainCanvas.drawColumn → ctx.draw → Core Text
+/// typesetting` as 55 % of the stall — every `ctx.draw(Text(...))` ran
+/// the full attributed-string → `CTLineCreateWithAttributedString`
+/// pipeline. With ~50 columns × ~10 glyphs × 24 fps the canvas was
+/// asking SwiftUI for ~12 k typeset lines per second.
+///
+/// Two mitigations applied here:
+///   1. Pre-resolve each unique (glyph, alpha-bucket) once per frame via
+///      `ctx.resolve(_:)` and reuse across every column that wants the
+///      same glyph at the same brightness. Cuts typeset calls from
+///      O(columns × trailLength) to O(uniqueGlyphs × alphaBuckets) per
+///      frame — about a 6× reduction on the default layout.
+///   2. Drop frame rate from 24 fps to 12 fps. The decoration stays
+///      smooth enough to read as "rain" while halving render cadence.
+///      Net: ~12× fewer typeset calls per second.
 private struct MatrixRainCanvas: View {
   private let columnSpacing: CGFloat = 16
   private let glyphHeight: CGFloat = 18
   private let glyphFontSize: CGFloat = 13
   private let glyphTickRate: Double = 4.0  // glyph cycles per second
+  /// Frame rate (per second) for the rain animation.
+  private let fps: Double = 12.0
+  /// Alpha values are continuous in `drawColumn`; we discretize them to
+  /// this many buckets so the resolve cache key (glyph, bucket) hits.
+  /// 6 buckets give a visibly smooth fade while letting every column's
+  /// trail share a small set of pre-resolved texts.
+  private static let alphaBucketCount: Int = 6
 
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+    TimelineView(.animation(minimumInterval: 1.0 / fps)) { context in
       Canvas { ctx, size in
         let time = context.date.timeIntervalSinceReferenceDate
         draw(into: ctx, size: size, time: time)
@@ -70,9 +94,27 @@ private struct MatrixRainCanvas: View {
   private func draw(into ctx: GraphicsContext, size: CGSize, time: TimeInterval) {
     let columnCount = max(1, Int(size.width / columnSpacing))
     let glyphTick = floor(time * glyphTickRate)
+    // Per-frame resolved-text cache: (glyph, alpha-bucket) → ResolvedText.
+    // Resolving once per unique combo lets every column reuse the same
+    // typeset CTLine instead of rebuilding it on every ctx.draw.
+    var cache: [CacheKey: GraphicsContext.ResolvedText] = [:]
+    let fontSize = glyphFontSize
     for col in 0..<columnCount {
-      drawColumn(ctx: ctx, size: size, col: col, time: time, glyphTick: glyphTick)
+      drawColumn(
+        ctx: ctx,
+        size: size,
+        col: col,
+        time: time,
+        glyphTick: glyphTick,
+        cache: &cache,
+        fontSize: fontSize,
+      )
     }
+  }
+
+  private struct CacheKey: Hashable {
+    let glyph: Character
+    let alphaBucket: Int
   }
 
   private func drawColumn(
@@ -81,6 +123,8 @@ private struct MatrixRainCanvas: View {
     col: Int,
     time: TimeInterval,
     glyphTick: Double,
+    cache: inout [CacheKey: GraphicsContext.ResolvedText],
+    fontSize: CGFloat,
   ) {
     let seed = Double(col) * 12.9898
     let speed = 35.0 + abs(sin(seed)) * 50.0  // 35–85 px/s
@@ -101,11 +145,36 @@ private struct MatrixRainCanvas: View {
       // i = 0 is the back of the tail (dimmest).
       let progress = Double(i + 1) / Double(trailLength)
       let alpha = isHead ? min(1.0, progress + 0.15) : progress * 0.85
-      let text = Text(String(glyph))
-        .font(.system(size: glyphFontSize, design: .monospaced))
-        .foregroundStyle(Color.green.opacity(alpha))
-      ctx.draw(text, at: CGPoint(x: x, y: y))
+      let bucket = Self.alphaBucket(for: alpha)
+      let key = CacheKey(glyph: glyph, alphaBucket: bucket)
+      let resolved: GraphicsContext.ResolvedText
+      if let hit = cache[key] {
+        resolved = hit
+      } else {
+        let bucketAlpha = Self.alphaForBucket(bucket)
+        let text = Text(String(glyph))
+          .font(.system(size: fontSize, design: .monospaced))
+          .foregroundStyle(Color.green.opacity(bucketAlpha))
+        resolved = ctx.resolve(text)
+        cache[key] = resolved
+      }
+      ctx.draw(resolved, at: CGPoint(x: x, y: y))
     }
+  }
+
+  /// Snap a continuous alpha (0…1) to one of `alphaBucketCount` buckets
+  /// so the resolve cache key has a small, finite domain.
+  private static func alphaBucket(for alpha: Double) -> Int {
+    let clamped = max(0.0, min(1.0, alpha))
+    let bucket = Int(clamped * Double(alphaBucketCount - 1))
+    return min(max(bucket, 0), alphaBucketCount - 1)
+  }
+
+  /// Inverse of `alphaBucket`: representative alpha for a bucket index.
+  /// Bucket 0 maps to 0 and bucket `alphaBucketCount-1` maps to 1, with
+  /// the rest evenly spaced in between.
+  private static func alphaForBucket(_ bucket: Int) -> Double {
+    Double(bucket) / Double(alphaBucketCount - 1)
   }
 
   private static let glyphs: [Character] = Array(
