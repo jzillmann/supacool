@@ -8,8 +8,8 @@ import SwiftUI
 /// Supacool header with a back button.
 ///
 /// `⌘.`, `⌘B`, or a two-finger swipe left returns to the board. `⌘/`
-/// advances to the next terminal in the same board state, or returns to
-/// the board when none remains.
+/// advances to the next terminal in the same board state, and `⌘⇧/`
+/// moves to the previous one. Either returns to the board when none remains.
 struct FullScreenTerminalView: View {
   let session: AgentSession
   let repositories: IdentifiedArrayOf<Repository>
@@ -70,7 +70,11 @@ struct FullScreenTerminalView: View {
   /// (Waiting on Me / In Progress / Parked), or back to the board when
   /// this is the last matching session.
   let onNextInCurrentState: () -> Void
+  /// Moves to the previous terminal in this session's current board state,
+  /// or back to the board when this is the first matching session.
+  let onPreviousInCurrentState: () -> Void
   let nextInCurrentStateShortcut: AppShortcut?
+  let previousInCurrentStateShortcut: AppShortcut?
 
   /// Mirrors the board card's auto-observer affordance so the user can
   /// flip the observer on/off without going back to the board.
@@ -181,6 +185,11 @@ struct FullScreenTerminalView: View {
     .background(
       Button("Next Terminal in State") { onNextInCurrentState() }
         .appKeyboardShortcut(nextInCurrentStateShortcut)
+        .hidden()
+    )
+    .background(
+      Button("Previous Terminal in State") { onPreviousInCurrentState() }
+        .appKeyboardShortcut(previousInCurrentStateShortcut)
         .hidden()
     )
     // ⌘-Tab-style session switcher. ⌘⌥← / ⌘⌥↑ cycle backward, ⌘⌥→ /

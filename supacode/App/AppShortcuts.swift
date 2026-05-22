@@ -6,7 +6,7 @@ import SwiftUI
 // Compile-time checkable shortcut identifier.
 nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresentable {
   case commandPalette, openSettings, checkForUpdates
-  case nextTerminalInState
+  case nextTerminalInState, previousTerminalInState
   case toggleLeftSidebar, revealInSidebar
   case newWorktree, refreshWorktrees, archivedWorktrees, archiveWorktree
   case deleteWorktree, confirmWorktreeAction
@@ -38,6 +38,7 @@ nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresenta
     case .openSettings: "openSettings"
     case .checkForUpdates: "checkForUpdates"
     case .nextTerminalInState: "nextTerminalInState"
+    case .previousTerminalInState: "previousTerminalInState"
     case .toggleLeftSidebar: "toggleLeftSidebar"
     case .revealInSidebar: "revealInSidebar"
     case .newWorktree: "newWorktree"
@@ -63,6 +64,7 @@ nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresenta
     "openSettings": .openSettings,
     "checkForUpdates": .checkForUpdates,
     "nextTerminalInState": .nextTerminalInState,
+    "previousTerminalInState": .previousTerminalInState,
     "toggleLeftSidebar": .toggleLeftSidebar,
     "revealInSidebar": .revealInSidebar,
     "newWorktree": .newWorktree,
@@ -99,6 +101,7 @@ nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresenta
     case .openSettings: "Open Settings"
     case .checkForUpdates: "Check For Updates"
     case .nextTerminalInState: "Next Terminal in State"
+    case .previousTerminalInState: "Previous Terminal in State"
     case .toggleLeftSidebar: "Toggle Left Sidebar"
     case .revealInSidebar: "Reveal in Sidebar"
     case .newWorktree: "New Worktree"
@@ -273,6 +276,11 @@ enum AppShortcuts {
   static let openSettings = AppShortcut(id: .openSettings, key: ",", modifiers: .command)
   static let checkForUpdates = AppShortcut(id: .checkForUpdates, key: "u", modifiers: .command)
   static let nextTerminalInState = AppShortcut(id: .nextTerminalInState, key: "/", modifiers: .command)
+  static let previousTerminalInState = AppShortcut(
+    id: .previousTerminalInState,
+    key: "/",
+    modifiers: [.command, .shift]
+  )
 
   static let toggleLeftSidebar = AppShortcut(id: .toggleLeftSidebar, key: "[", modifiers: .command)
   static let revealInSidebar = AppShortcut(id: .revealInSidebar, key: "e", modifiers: [.command, .shift])
@@ -328,7 +336,7 @@ enum AppShortcuts {
 
   static let groups: [AppShortcutGroup] = [
     AppShortcutGroup(category: .general, shortcuts: [commandPalette, openSettings, checkForUpdates]),
-    AppShortcutGroup(category: .matrixBoard, shortcuts: [nextTerminalInState]),
+    AppShortcutGroup(category: .matrixBoard, shortcuts: [nextTerminalInState, previousTerminalInState]),
     AppShortcutGroup(category: .sidebar, shortcuts: [toggleLeftSidebar, revealInSidebar]),
     AppShortcutGroup(
       category: .worktrees,

@@ -50,6 +50,51 @@ struct BoardNavOrderTests {
     )
   }
 
+  @Test func previousInSameStateSkipsOtherBucketsWithoutWrapping() {
+    let waitingA = makeSession(1)
+    let workingA = makeSession(2)
+    let waitingB = makeSession(3)
+    let parked = makeSession(4)
+    let workingB = makeSession(5)
+    let sessions = [waitingA, workingA, waitingB, parked, workingB]
+    let statuses: [AgentSession.ID: BoardSessionStatus] = [
+      waitingA.id: .waitingOnMe,
+      workingA.id: .inProgress,
+      waitingB.id: .awaitingInput,
+      parked.id: .parked,
+      workingB.id: .inProgress,
+    ]
+
+    #expect(
+      BoardNavOrder.previousInSameState(
+        before: waitingB.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == waitingA.id
+    )
+    #expect(
+      BoardNavOrder.previousInSameState(
+        before: workingB.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == workingA.id
+    )
+    #expect(
+      BoardNavOrder.previousInSameState(
+        before: waitingA.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == nil
+    )
+    #expect(
+      BoardNavOrder.previousInSameState(
+        before: parked.id,
+        visibleSessions: sessions,
+        classify: { statuses[$0.id]! }
+      ) == nil
+    )
+  }
+
   @Test func nextInSameStateCanUseCapturedStatusForCurrentSession() {
     let waitingA = makeSession(1)
     let working = makeSession(2)
@@ -68,6 +113,27 @@ struct BoardNavOrderTests {
         currentStatusOverride: .waitingOnMe,
         classify: { liveStatuses[$0.id]! }
       ) == waitingB.id
+    )
+  }
+
+  @Test func previousInSameStateCanUseCapturedStatusForCurrentSession() {
+    let waitingA = makeSession(1)
+    let working = makeSession(2)
+    let waitingB = makeSession(3)
+    let sessions = [waitingA, working, waitingB]
+    let liveStatuses: [AgentSession.ID: BoardSessionStatus] = [
+      waitingA.id: .waitingOnMe,
+      working.id: .inProgress,
+      waitingB.id: .inProgress,
+    ]
+
+    #expect(
+      BoardNavOrder.previousInSameState(
+        before: waitingB.id,
+        visibleSessions: sessions,
+        currentStatusOverride: .waitingOnMe,
+        classify: { liveStatuses[$0.id]! }
+      ) == waitingA.id
     )
   }
 

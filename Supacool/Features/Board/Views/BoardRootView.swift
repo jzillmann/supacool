@@ -60,7 +60,7 @@ struct BoardRootView: View {
   /// looking like a fresh prompt submission.
   @State private var autoZoomBackArmedSessionID: AgentSession.ID?
 
-  /// Board status/bucket that `⌘/` should keep advancing through for the
+  /// Board status/bucket that `⌘/` / `⌘⇧/` should keep moving through for the
   /// focused session. Captured when the user enters a card and preserved
   /// across idle → busy transitions so "answer this idle card, then next"
   /// moves to the next idle card instead of jumping into the busy bucket.
@@ -346,7 +346,9 @@ struct BoardRootView: View {
         },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
         onNextInCurrentState: { focusNextSessionInCurrentState() },
+        onPreviousInCurrentState: { focusPreviousSessionInCurrentState() },
         nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
+        previousInCurrentStateShortcut: AppShortcuts.previousTerminalInState.effective(from: shortcutOverrides),
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
@@ -606,18 +608,42 @@ struct BoardRootView: View {
   }
 
   private func focusNextSessionInCurrentState() {
+    focusSessionInCurrentState(direction: .forward)
+  }
+
+  private func focusPreviousSessionInCurrentState() {
+    focusSessionInCurrentState(direction: .backward)
+  }
+
+  private func focusSessionInCurrentState(direction: StateNavigationDirection) {
     // Read focus at invocation time; rapid ⌘/ repeats can arrive while SwiftUI still holds
     // an older shortcut closure.
     guard let currentID = store.focusedSessionID else { return }
-    let destination = BoardNavOrder.nextInSameState(
-      after: currentID,
-      visibleSessions: store.visibleSessions,
-      currentStatusOverride: nextInStateAnchor?.sessionID == currentID
-        ? nextInStateAnchor?.status
-        : nil,
-      classify: classify
-    )
+    let currentStatusOverride = nextInStateAnchor?.sessionID == currentID
+      ? nextInStateAnchor?.status
+      : nil
+    let destination = switch direction {
+    case .forward:
+      BoardNavOrder.nextInSameState(
+        after: currentID,
+        visibleSessions: store.visibleSessions,
+        currentStatusOverride: currentStatusOverride,
+        classify: classify
+      )
+    case .backward:
+      BoardNavOrder.previousInSameState(
+        before: currentID,
+        visibleSessions: store.visibleSessions,
+        currentStatusOverride: currentStatusOverride,
+        classify: classify
+      )
+    }
     store.send(.focusSession(id: destination))
+  }
+
+  private enum StateNavigationDirection {
+    case forward
+    case backward
   }
 
   /// Status chip shown in the window toolbar. On the board it summarizes

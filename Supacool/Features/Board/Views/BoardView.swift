@@ -868,20 +868,52 @@ enum BoardNavOrder {
     currentStatusOverride: BoardSessionStatus? = nil,
     classify: (AgentSession) -> BoardSessionStatus
   ) -> AgentSession.ID? {
-    guard let current = visibleSessions.first(where: { $0.id == currentID }) else { return nil }
+    let matchingIDs = sameStateIDs(
+      currentID: currentID,
+      visibleSessions: visibleSessions,
+      currentStatusOverride: currentStatusOverride,
+      classify: classify
+    )
+    guard let currentIndex = matchingIDs.firstIndex(of: currentID) else { return nil }
+    let nextIndex = matchingIDs.index(after: currentIndex)
+    guard nextIndex < matchingIDs.endIndex else { return nil }
+    return matchingIDs[nextIndex]
+  }
+
+  static func previousInSameState(
+    before currentID: AgentSession.ID,
+    visibleSessions: [AgentSession],
+    currentStatusOverride: BoardSessionStatus? = nil,
+    classify: (AgentSession) -> BoardSessionStatus
+  ) -> AgentSession.ID? {
+    let matchingIDs = sameStateIDs(
+      currentID: currentID,
+      visibleSessions: visibleSessions,
+      currentStatusOverride: currentStatusOverride,
+      classify: classify
+    )
+    guard let currentIndex = matchingIDs.firstIndex(of: currentID), currentIndex > matchingIDs.startIndex else {
+      return nil
+    }
+    return matchingIDs[matchingIDs.index(before: currentIndex)]
+  }
+
+  private static func sameStateIDs(
+    currentID: AgentSession.ID,
+    visibleSessions: [AgentSession],
+    currentStatusOverride: BoardSessionStatus?,
+    classify: (AgentSession) -> BoardSessionStatus
+  ) -> [AgentSession.ID] {
+    guard let current = visibleSessions.first(where: { $0.id == currentID }) else { return [] }
     let currentStatus = currentStatusOverride ?? classify(current)
     let currentBucket = bucket(for: currentStatus)
-    let matchingIDs = priorityFirst(
+    return priorityFirst(
       visibleSessions.filter { session in
         let status = session.id == currentID ? currentStatus : classify(session)
         return bucket(for: status) == currentBucket
       }
     )
       .map(\.id)
-    guard let currentIndex = matchingIDs.firstIndex(of: currentID) else { return nil }
-    let nextIndex = matchingIDs.index(after: currentIndex)
-    guard nextIndex < matchingIDs.endIndex else { return nil }
-    return matchingIDs[nextIndex]
   }
 
   private static func bucket(for status: BoardSessionStatus) -> Bucket {

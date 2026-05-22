@@ -85,6 +85,7 @@ struct AppShortcutsTests {
     #expect(AppShortcuts.newWorktree.displayName == "New Worktree")
     #expect(AppShortcuts.openPullRequest.displayName == "Open Pull Request")
     #expect(AppShortcuts.nextTerminalInState.displayName == "Next Terminal in State")
+    #expect(AppShortcuts.previousTerminalInState.displayName == "Previous Terminal in State")
     #expect(AppShortcuts.toggleLeftSidebar.displayName == "Toggle Left Sidebar")
     #expect(AppShortcuts.selectWorktree1.displayName == "Select Worktree 1")
     #expect(AppShortcuts.selectWorktree0.displayName == "Select Worktree 10")
@@ -125,9 +126,11 @@ struct AppShortcutsTests {
     #expect(groupIDs == allIDs)
   }
 
-  @Test func nextTerminalInStateUsesCommandSlash() {
+  @Test func terminalInStateShortcutsUseCommandSlash() {
     #expect(AppShortcuts.nextTerminalInState.display == "⌘/")
     #expect(AppShortcuts.nextTerminalInState.ghosttyUnbindArgument == "--keybind=super+/=unbind")
+    #expect(AppShortcuts.previousTerminalInState.modifiers == [.command, .shift])
+    #expect(AppShortcuts.previousTerminalInState.ghosttyUnbindArgument == "--keybind=shift+super+/=unbind")
   }
 
   // MARK: - Effective shortcut disabled.
