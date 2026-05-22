@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import Foundation
 import IdentifiedCollections
@@ -691,6 +692,17 @@ struct BoardFeature {
     /// kinds no-op. Removing the card is the responsibility of this
     /// handler / the follow-up effect, not a caller responsibility.
     case trayCardSecondaryTapped(id: TrayCard.ID)
+    /// User tapped the Copy icon on an error card. Puts the card's
+    /// title + message on the system pasteboard. Card stays open so
+    /// the user can paste, read, and then either Debug or dismiss.
+    case trayCardCopyTapped(id: TrayCard.ID)
+    /// User tapped the Debug icon on an error card. Opens the debug
+    /// sheet pre-filled with the card's title + message as the source.
+    /// Only available when a registered repo contains `supacool.xcodeproj`;
+    /// the view hides the button otherwise. `repositories` is forwarded
+    /// from the parent so the spawn handler can look up the supacool repo
+    /// (same path as `.debugSessionRequested`).
+    case trayCardDebugTapped(id: TrayCard.ID, repositories: [Repository] = [])
     /// User tapped the × on a card. Removes it for the session.
     case trayCardDismissed(id: TrayCard.ID)
     /// Fired by AppFeature when SettingsFeature reports a successful
@@ -2474,6 +2486,34 @@ struct BoardFeature {
           return .none
         }
 
+      case .trayCardCopyTapped(let id):
+        guard let card = state.trayCards[id: id],
+          let content = card.kind.errorContent
+        else { return .none }
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString("\(content.title)\n\(content.message)", forType: .string)
+        return .none
+
+      case .trayCardDebugTapped(let id, let repositories):
+        guard let card = state.trayCards[id: id],
+          let content = card.kind.errorContent,
+          SupacoolDebugSupport.findSupacoolRepository(in: repositories) != nil
+        else { return .none }
+        // Drop the card now — the debug sheet is replacing it as the
+        // surface where the user works the problem.
+        state.trayCards.remove(id: id)
+        var sheetState = DebugSessionFeature.State(
+          source: .spawnFailure(
+            errorTitle: content.title,
+            errorMessage: content.message
+          )
+        )
+        sheetState.isSupacoolRepoRegistered = true
+        state.pendingDebugRepositories = repositories
+        state.debugSheet = sheetState
+        return .none
+
       case .trayNoteHookInstalled(let slot):
         // Narrow any stale-hooks cards that include this slot. If the
         // card's slot list becomes empty, the card is removed entirely.
@@ -2641,14 +2681,34 @@ struct BoardFeature {
         state.debugSheet = nil
         state.pendingDebugRepositories = []
 
-        let tracePath = TranscriptRecorder.shared.transcriptURL(
-          tabID: TerminalTabID(rawValue: source.id)
-        )?.path(percentEncoded: false) ?? "(trace file not yet written)"
-        let prompt = SupacoolDebugSupport.buildDebugPrompt(
-          observation: observation,
-          sourceSession: source,
-          tracePath: tracePath
-        )
+        let prompt: String
+        let suggestedDisplayName: String
+        let debugSourceSessionID: AgentSession.ID?
+        switch source {
+        case .session(let sourceSession):
+          let tracePath = TranscriptRecorder.shared.transcriptURL(
+            tabID: TerminalTabID(rawValue: sourceSession.id)
+          )?.path(percentEncoded: false) ?? "(trace file not yet written)"
+          prompt = SupacoolDebugSupport.buildDebugPrompt(
+            observation: observation,
+            sourceSession: sourceSession,
+            tracePath: tracePath
+          )
+          suggestedDisplayName = SupacoolDebugSupport.debugDisplayName(
+            sourceDisplayName: sourceSession.displayName
+          )
+          debugSourceSessionID = sourceSession.id
+        case .spawnFailure(let errorTitle, let errorMessage):
+          prompt = SupacoolDebugSupport.buildSpawnFailureDebugPrompt(
+            observation: observation,
+            errorTitle: errorTitle,
+            errorMessage: errorMessage
+          )
+          suggestedDisplayName = SupacoolDebugSupport.spawnFailureDebugDisplayName(
+            errorTitle: errorTitle
+          )
+          debugSourceSessionID = nil
+        }
         let bypass =
           UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
         @Shared(.settingsFile) var settingsFile
@@ -2669,15 +2729,13 @@ struct BoardFeature {
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,
           pullRequestLookup: .idle,
-          suggestedDisplayName: SupacoolDebugSupport.debugDisplayName(
-            sourceDisplayName: source.displayName
-          ),
+          suggestedDisplayName: suggestedDisplayName,
           removeBackingWorktreeOnDelete: removeOnDelete
         )
         return .run { send in
           do {
             var session = try await SessionSpawner.spawnLocal(request)
-            session.debugSourceSessionID = source.id
+            session.debugSourceSessionID = debugSourceSessionID
             await send(._debugSpawnCompleted(session: session))
           } catch {
             await send(._debugSpawnFailed(message: error.localizedDescription))

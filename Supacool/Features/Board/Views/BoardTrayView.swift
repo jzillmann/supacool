@@ -19,6 +19,12 @@ struct BoardTrayView: View {
 
   var body: some View {
     if !store.trayCards.isEmpty {
+      // Computed once per render: error cards' Debug icon is gated on
+      // whether any registered repo holds `supacool.xcodeproj`. Cheap
+      // (a few file-exists checks against the registered roots) and
+      // the tray is rarely populated.
+      let supacoolRegistered =
+        SupacoolDebugSupport.findSupacoolRepository(in: Array(repositories)) != nil
       HStack(alignment: .bottom, spacing: 10) {
         ForEach(store.trayCards) { card in
           TrayCardView(
@@ -33,6 +39,19 @@ struct BoardTrayView: View {
             },
             onSecondary: card.kind.hasSecondaryAction
               ? { store.send(.trayCardSecondaryTapped(id: card.id)) }
+              : nil,
+            onCopy: card.kind.errorContent != nil
+              ? { store.send(.trayCardCopyTapped(id: card.id)) }
+              : nil,
+            onDebug: card.kind.errorContent != nil && supacoolRegistered
+              ? {
+                store.send(
+                  .trayCardDebugTapped(
+                    id: card.id,
+                    repositories: Array(repositories)
+                  )
+                )
+              }
               : nil,
             onDismiss: { store.send(.trayCardDismissed(id: card.id)) }
           )
@@ -55,6 +74,8 @@ private struct TrayCardView: View {
   let card: TrayCard
   let onPrimary: () -> Void
   let onSecondary: (() -> Void)?
+  let onCopy: (() -> Void)?
+  let onDebug: (() -> Void)?
   let onDismiss: () -> Void
 
   @State private var isHovering: Bool = false
@@ -110,6 +131,24 @@ private struct TrayCardView: View {
           .help(presentation.secondaryHelp ?? secondaryTitle)
       }
 
+      if let onCopy {
+        iconButton(
+          systemName: "doc.on.doc",
+          accessibilityLabel: "Copy error",
+          help: "Copy this error to the clipboard",
+          action: onCopy
+        )
+      }
+
+      if let onDebug {
+        iconButton(
+          systemName: "ladybug",
+          accessibilityLabel: "Debug this error",
+          help: "Start a Supacool debug session on this error",
+          action: onDebug
+        )
+      }
+
       Button(action: onDismiss) {
         Image(systemName: "xmark")
           .font(.caption2.weight(.semibold))
@@ -122,6 +161,25 @@ private struct TrayCardView: View {
       .opacity(isHovering ? 1 : 0.6)
       .help("Dismiss")
     }
+  }
+
+  private func iconButton(
+    systemName: String,
+    accessibilityLabel: String,
+    help: String,
+    action: @escaping () -> Void
+  ) -> some View {
+    Button(action: action) {
+      Image(systemName: systemName)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .padding(4)
+        .contentShape(Rectangle())
+        .accessibilityLabel(accessibilityLabel)
+    }
+    .buttonStyle(.plain)
+    .opacity(isHovering ? 1 : 0.7)
+    .help(help)
   }
 
   @ViewBuilder

@@ -98,6 +98,46 @@ enum SupacoolDebugSupport {
       """
   }
 
+  /// Prompt template handed to the debug agent when the source is a
+  /// `sessionSpawnFailed` tray card rather than a live session. There's
+  /// no trace JSONL (the agent never ran) — the agent works from the
+  /// error title + message and the codebase alone.
+  static func buildSpawnFailureDebugPrompt(
+    observation: String,
+    errorTitle: String,
+    errorMessage: String
+  ) -> String {
+    let trimmedObservation = observation.trimmingCharacters(in: .whitespacesAndNewlines)
+    return """
+      I tried to start a Supacool agent session but it failed before
+      the agent could run. Here's what went wrong:
+
+        Error: \(errorTitle)
+        Details: \(errorMessage)
+
+      Additional context from me:
+
+      \(trimmedObservation)
+
+      The Supacool source is at this worktree's root (Supacool/,
+      supacode/, supacoolTests/). Please:
+        1. Trace the error back to the code path that produced it —
+           SessionSpawner, the agent launcher, the worktree creator,
+           or wherever the error originated.
+        2. Identify the root cause and propose a concrete fix.
+        3. Don't modify any files yet — first walk me through your
+           analysis and the proposed fix.
+      """
+  }
+
+  /// Display name used for spawn-failure debug sessions. Mirrors
+  /// `debugDisplayName(sourceDisplayName:)` but with a distinct prefix
+  /// so the board can tell the two flavors apart at a glance.
+  static func spawnFailureDebugDisplayName(errorTitle: String) -> String {
+    let trimmed = errorTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    return "Debug: \(trimmed)"
+  }
+
   /// Lowercased, hyphen-collapsed, alphanumeric-only slug usable as a
   /// segment of a git branch / worktree name.
   private static func slugify(_ raw: String) -> String {

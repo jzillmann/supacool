@@ -26,14 +26,33 @@ nonisolated enum DebugTarget: String, CaseIterable, Identifiable, Equatable, Sen
   }
 }
 
+/// What kind of thing we're asking the debug agent to look at. Either a
+/// real `AgentSession` (the "Debug session…" right-click on a card) or
+/// a `sessionSpawnFailed` tray-card error (no AgentSession ever existed
+/// because the spawn itself failed). The spawn handler in BoardFeature
+/// branches on this to pick the right prompt template + display name.
+nonisolated enum DebugSource: Equatable, Sendable {
+  case session(AgentSession)
+  case spawnFailure(errorTitle: String, errorMessage: String)
+
+  /// Short label shown in the sheet header and used to seed the
+  /// auto-generated worktree branch name.
+  var displayName: String {
+    switch self {
+    case .session(let session): return session.displayName
+    case .spawnFailure(let title, _): return title
+    }
+  }
+}
+
 @Reducer
 struct DebugSessionFeature {
   @ObservableState
   struct State: Equatable {
-    /// Session being debugged. Snapshot is captured at sheet-open
-    /// time so even if the source session is removed mid-edit the
+    /// What we're debugging. Snapshot is captured at sheet-open time
+    /// so even if the source session/card is removed mid-edit the
     /// debug spawn still has everything it needs.
-    let sourceSession: AgentSession
+    let source: DebugSource
     /// `false` when no registered repo carries `supacool.xcodeproj` at
     /// its root. When false, the view drops the editor and Spawn
     /// button entirely and shows a "register supacool first" panel.
@@ -56,11 +75,25 @@ struct DebugSessionFeature {
     /// (empty observation, etc.). Cleared on next edit.
     var errorMessage: String?
 
-    init(sourceSession: AgentSession) {
-      self.sourceSession = sourceSession
+    init(source: DebugSource) {
+      self.source = source
       self.branchName = SupacoolDebugSupport.debugWorktreeName(
-        sourceDisplayName: sourceSession.displayName
+        sourceDisplayName: source.displayName
       )
+      // For spawn-failure sources, seed the observation with the error
+      // message so the user has something concrete to edit or extend
+      // instead of staring at an empty editor. Real sessions start
+      // blank — the user types what they noticed in the source's
+      // behaviour, which is the whole point of the editor.
+      if case .spawnFailure(let title, let message) = source {
+        self.observation = "Couldn't spawn \"\(title)\". Error:\n\(message)"
+      }
+    }
+
+    /// Convenience initializer kept for call sites that already had a
+    /// real `AgentSession` (the "Debug session…" card menu).
+    init(sourceSession: AgentSession) {
+      self.init(source: .session(sourceSession))
     }
   }
 
@@ -77,7 +110,7 @@ struct DebugSessionFeature {
         observation: String,
         agent: AgentType,
         selection: WorkspaceSelection,
-        sourceSession: AgentSession
+        source: DebugSource
       )
       case registerSupacoolRequested
       case cancelled
@@ -118,7 +151,7 @@ struct DebugSessionFeature {
               observation: trimmed,
               agent: state.agent,
               selection: selection,
-              sourceSession: state.sourceSession
+              source: state.source
             )
           )
         )

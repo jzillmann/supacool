@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import DependenciesTestSupport
 import Foundation
@@ -2659,6 +2660,76 @@ struct BoardFeatureTests {
     #expect(store.state.newTerminalSheet?.agent == .claude)
     #expect(store.state.newTerminalSheet?.workspaceQuery == "feat-retry")
     #expect(store.state.newTerminalSheet?.selectedRepositoryID == "/tmp/repo")
+  }
+
+  /// Copy button puts "title\nmessage" on the pasteboard for any error
+  /// card. Card stays visible — copying is non-destructive so the user
+  /// can still Debug or × after pasting.
+  @Test(.dependencies) func trayCardCopyTappedPutsTitleAndMessageOnPasteboard() async {
+    let card = TrayCard(
+      kind: .sessionSpawnFailed(
+        displayName: "Retry me",
+        message: "Git command failed: permission denied",
+        draftSnapshot: nil
+      )
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    let pb = NSPasteboard.general
+    pb.clearContents()
+
+    await store.send(.trayCardCopyTapped(id: card.id))
+    #expect(store.state.trayCards.count == 1)  // card stays
+    #expect(pb.string(forType: .string) == "Couldn't start Retry me\nGit command failed: permission denied")
+  }
+
+  /// Copy is a no-op on non-error cards (no `errorContent`). Nothing
+  /// on the pasteboard, card stays put.
+  @Test(.dependencies) func trayCardCopyTappedStaleHooksIsNoOp() async {
+    let card = TrayCard(kind: .staleHooks(slots: [.claudeProgress]))
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    pb.setString("sentinel", forType: .string)
+
+    await store.send(.trayCardCopyTapped(id: card.id))
+    #expect(store.state.trayCards.count == 1)
+    #expect(pb.string(forType: .string) == "sentinel")
+  }
+
+  /// Debug button opens the debug sheet with a `.spawnFailure` source
+  /// seeded from the card's title + message, and removes the card.
+  /// Skipped if no registered repo holds `supacool.xcodeproj` — but
+  /// we can't easily fabricate one in tests, so this test asserts the
+  /// no-supacool-repo branch is a no-op and a second test would need a
+  /// real filesystem fixture for the happy path. Here we cover the
+  /// guard path.
+  @Test(.dependencies) func trayCardDebugTappedWithoutSupacoolRepoIsNoOp() async {
+    let card = TrayCard(
+      kind: .hookInstallFailed(slot: .claudeProgress, message: "boom")
+    )
+    var state = BoardFeature.State()
+    state.trayCards = [card]
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    let unrelatedRepo = Repository(
+      id: "/tmp/not-supacool",
+      rootURL: URL(fileURLWithPath: "/tmp/not-supacool"),
+      name: "not-supacool",
+      worktrees: []
+    )
+
+    await store.send(.trayCardDebugTapped(id: card.id, repositories: [unrelatedRepo]))
+    #expect(store.state.trayCards.count == 1)
+    #expect(store.state.debugSheet == nil)
   }
 
   /// A `.sessionSpawnFailed` card without a snapshot (e.g. a conflict-

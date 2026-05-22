@@ -66,4 +66,30 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
       .sessionSpawnFailed: false
     }
   }
+
+  /// The (title, message) pair this card surfaces, when applicable.
+  /// Used by the tray's Copy button to put a meaningful string on the
+  /// pasteboard and by the Debug button to seed the debug-session
+  /// prompt. Non-error kinds return `nil`.
+  var errorContent: (title: String, message: String)? {
+    switch self {
+    case .staleHooks, .sessionCreating: return nil
+    case .hookInstallFailed(let slot, let message):
+      let label: String = {
+        switch slot {
+        case .claudeProgress: "Claude Progress"
+        case .claudeNotifications: "Claude Notifications"
+        case .codexProgress: "Codex Progress"
+        case .codexNotifications: "Codex Notifications"
+        case .piExtension: "Pi Extension"
+        }
+      }()
+      return ("\(label) install failed", message)
+    case .worktreeDeleteFailed(let path, let message):
+      let folder = URL(fileURLWithPath: path).lastPathComponent
+      return ("Couldn't remove worktree \(folder)", message)
+    case .sessionSpawnFailed(let displayName, let message, _):
+      return ("Couldn't start \(displayName)", message)
+    }
+  }
 }

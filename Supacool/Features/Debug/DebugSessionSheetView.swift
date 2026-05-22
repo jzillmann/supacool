@@ -40,9 +40,14 @@ struct DebugSessionSheetView: View {
   }
 
   private var headerSubtitle: String {
-    let name = store.sourceSession.displayName
-    return "Spawns a fresh agent in the supacool repo, primed with this "
-      + "session's trace. Source: \(name)."
+    switch store.source {
+    case .session(let session):
+      return "Spawns a fresh agent in the supacool repo, primed with this "
+        + "session's trace. Source: \(session.displayName)."
+    case .spawnFailure(let title, _):
+      return "Spawns a fresh agent in the supacool repo to investigate "
+        + "why \"\(title)\" couldn't start."
+    }
   }
 
   // MARK: Registered (happy path)
