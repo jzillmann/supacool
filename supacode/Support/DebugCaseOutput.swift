@@ -19,17 +19,26 @@ struct LogActionsReducer<Base: Reducer>: Reducer where Base.State: Equatable {
     let actionLabel = debugCaseOutput(action)
     logger.debug("Action: \(actionLabel)")
     #if DEBUG
+      // Snapshot before/after by value so the diff can run off main.
+      // Two copies of State per action sound costly, but State is a
+      // value type and Swift's copy-on-write means the copies are
+      // cheap-shallow until something else mutates the underlying
+      // storage. The diff computation (CustomDump.diff) and the
+      // Equatable comparison `previousState != state` were each
+      // *significantly* expensive on main for boards with 19+
+      // sessions — a `sample` capture during a 1.2 s freeze caught
+      // `LogActionsReducer.reduce` at 137 main-thread samples per
+      // stall, with the diff walk on top of the previous `print()`
+      // cost.
+      //
+      // Now: capture both snapshots, reduce, then hand the pair to
+      // SupaLogger's background queue. The diff/equality work
+      // happens off-main; the action-dispatch path returns
+      // instantly.
       let previousState = state
       let effects = base.reduce(into: &state, action: action)
-      if previousState != state, let diff = CustomDump.diff(previousState, state) {
-        // Off-main print: `print(diff)` blocks on the stdout `write()`
-        // syscall when the parent pipe (e.g. `make run-app`'s terminal)
-        // is slow to drain. Each action dumping the full state diff was
-        // pegging the main thread for hundreds of ms per call. Route
-        // through SupaLogger's shared background queue instead so the
-        // log stays useful but the action-dispatch path returns instantly.
-        SupaLogger.dispatchRawPrint(diff)
-      }
+      let nextState = state
+      SupaLogger.dispatchStateDiff(previous: previousState, next: nextState)
       return effects
     #else
       SentrySDK.logger.info("Action: \(actionLabel)")

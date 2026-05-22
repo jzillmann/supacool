@@ -1,3 +1,4 @@
+import CustomDump
 import OSLog
 
 nonisolated struct SupaLogger: Sendable {
@@ -72,5 +73,47 @@ nonisolated struct SupaLogger: Sendable {
         print(message)
       }
     }
+
+    /// Off-main state diff for `LogActionsReducer`. Captures both
+    /// snapshots by value, then runs the Equatable comparison and
+    /// `CustomDump.diff` on the print queue rather than on the
+    /// reducer's main-actor caller.
+    ///
+    /// A live `sample` capture during a 1.2 s freeze showed
+    /// `LogActionsReducer.reduce` accounting for 137 main-thread
+    /// samples per stall on a board with 19 sessions — the diff walk
+    /// over the whole `AppFeature.State` (sessions, repositories,
+    /// remoteHosts, etc.) is non-trivial and was being paid per
+    /// action. Moving the comparison + diff off main eliminates that
+    /// per-action tax.
+    ///
+    /// `State: Equatable` matches the constraint on `LogActionsReducer`.
+    /// Wrapped in a `@unchecked Sendable` box because most TCA state
+    /// types aren't formally `Sendable` even though they're
+    /// effectively read-only after the reducer returns them.
+    nonisolated static func dispatchStateDiff<State: Equatable>(
+      previous: State,
+      next: State,
+    ) {
+      let pair = StateDiffPair(previous: previous, next: next)
+      printQueue.async {
+        guard pair.previous != pair.next,
+          let diff = CustomDump.diff(pair.previous, pair.next)
+        else { return }
+        print(diff)
+      }
+    }
   #endif
+}
+
+/// Generic snapshot wrapper used by `SupaLogger.dispatchStateDiff` to
+/// ferry two `State` values to a background queue. `@unchecked
+/// Sendable` because most TCA state types aren't formally `Sendable`
+/// even though they're effectively read-only after the reducer hands
+/// them back; we only ever read these copies from the diff worker.
+/// Must be a top-level generic struct (Swift doesn't allow generic
+/// types nested inside generic functions).
+nonisolated private struct StateDiffPair<State>: @unchecked Sendable {
+  let previous: State
+  let next: State
 }
