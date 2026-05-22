@@ -75,19 +75,30 @@ struct BoardFeatureTests {
 
   // MARK: - References
 
-  @Test(.dependencies) func cardAppearedRefreshesSeededUnresolvedPullRequestsImmediately() async {
+  /// PR refresh used to be triggered directly by `.cardAppeared`. That
+  /// dispatch path was removed when we moved to a single global
+  /// `_runPRRefreshTick` scheduler (architectural fix for the
+  /// per-session × per-cardAppeared spawn storm), so this test now
+  /// exercises the tick path instead.
+  ///
+  /// Uses a `TestClock` for `\.continuousClock` so the timeout-arm
+  /// `clock.sleep(...)` inside `fetchPRWithTimeout` parks forever and
+  /// the mocked `viewPullRequest` (which returns synchronously) is
+  /// guaranteed to win the TaskGroup race.
+  @Test(.dependencies) func prRefreshTickResolvesUnresolvedPullRequests() async {
     let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
     var session = Self.sampleSession()
     session.references = [ref]
     session.referencesScannedAt = Date()
-    let staleActivity = session.referencesScannedAt!.addingTimeInterval(-1)
-    session.updatePrimaryTerminal { $0.lastActivityAt = staleActivity }
     let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
     let lookups = LockIsolated<[String]>([])
+    let testClock = TestClock()
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      $0.continuousClock = testClock
+      $0.date = .constant(Date())
       $0.githubCLI.viewPullRequest = { owner, repo, number in
         lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
         return .open
@@ -95,8 +106,9 @@ struct BoardFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.cardAppeared(id: session.id))
+    await store.send(._runPRRefreshTick)
     await store.skipReceivedActions()
+    await store.finish()
 
     #expect(lookups.value.count == 1)
     #expect(lookups.value.first == "acme/widgets#42")
@@ -107,6 +119,10 @@ struct BoardFeatureTests {
     )
   }
 
+  /// `.cardAppeared` still drives the transcript scan + ref merge; only
+  /// the PR fetch moved to the global tick. So a cardAppeared on a
+  /// session with no prior scan should pick up scanner-supplied refs
+  /// and merge them in; PR state stays `nil` because no tick has run.
   @Test(.dependencies) func cardAppearedMergesPromptAndTerminalTranscriptReferences() async {
     var session = Self.sampleSession()
     session.references = []
@@ -120,7 +136,6 @@ struct BoardFeatureTests {
       $0.sessionReferenceScannerClient.scanTerminalTranscript = { _ in [
         .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
       ] }
-      $0.githubCLI.viewPullRequest = { _, _, _ in .open }
     }
     store.exhaustivity = .off
 
@@ -129,8 +144,51 @@ struct BoardFeatureTests {
 
     #expect(store.state.sessions.first?.references == [
       .ticket(id: "CEN-10"),
-      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open),
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
     ])
+  }
+
+  /// Once the tick runs after the scan, the PR fanout should populate
+  /// state on the same session (and any other session referencing it).
+  /// This is the dedupe-across-sessions invariant the global scheduler
+  /// was introduced for.
+  @Test(.dependencies) func prRefreshTickFansOutAcrossSessionsReferencingTheSamePR() async {
+    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
+    var s1 = Self.sampleSession()
+    s1.references = [ref]
+    s1.referencesScannedAt = Date()
+    var s2 = Self.sampleSession(id: UUID(uuidString: "00000000-0000-0000-0000-000000000099")!)
+    s2.references = [ref]
+    s2.referencesScannedAt = Date()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [s1, s2] }
+    let lookups = LockIsolated<[String]>([])
+    let testClock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = testClock
+      $0.date = .constant(Date())
+      $0.githubCLI.viewPullRequest = { owner, repo, number in
+        lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
+        return .merged
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(._runPRRefreshTick)
+    await store.skipReceivedActions()
+    await store.finish()
+
+    // Only ONE network round-trip even though TWO sessions reference
+    // the PR.
+    #expect(lookups.value.count == 1)
+    // Both sessions get the new state.
+    for session in store.state.sessions {
+      #expect(session.references == [
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .merged)
+      ])
+    }
   }
 
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {

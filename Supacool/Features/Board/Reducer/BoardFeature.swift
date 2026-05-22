@@ -131,14 +131,30 @@ struct BoardFeature {
     var trayCards: IdentifiedArrayOf<TrayCard> = []
 
     /// In-memory backoff cache keyed by `SessionReference.dedupeKey`. When
-    /// `_refreshPRStatus` fails (typically GitHub rate-limit), we record
-    /// the timestamp here so subsequent `.cardAppeared` / `._referencesScanned`
-    /// passes skip the ref for `prRefreshFailureCooldown` seconds instead of
-    /// re-spawning the same `gh pr view` subprocess each time. Failing-and-
-    /// retrying every card-appeared was responsible for episodic multi-
-    /// second beachballs (spawn storm + zsh -l startup overhead) observed
-    /// on boards with many cross-referenced PRs.
+    /// the PR-refresh tick fails (typically GitHub rate-limit or a hung
+    /// subprocess that timed out), we record the timestamp here so the
+    /// next tick skips the ref until its randomized cooldown expires.
+    /// Each entry's effective retry time is `failedAt +
+    /// prRefreshFailureCooldown + jitter` (jitter stored separately to
+    /// keep the map a simple `[String: Date]`).
     var prRefreshFailureAt: [String: Date] = [:]
+    /// Per-ref jitter added to `prRefreshFailureCooldown` so that many
+    /// refs failing in the same instant don't all become retryable at
+    /// the same instant — without this, an N-ref failure burst at T
+    /// produces an N-ref retry burst at T + cooldown, defeating the
+    /// point of the cooldown. Jitter is sampled once per failure and
+    /// kept for the lifetime of that failure entry.
+    var prRefreshFailureJitter: [String: TimeInterval] = [:]
+
+    /// Set of PR refs (dedupeKey) currently being fetched by the
+    /// scheduler tick. Lets the tick avoid double-spawning the same
+    /// ref if a long-running fetch hasn't returned by the next tick.
+    var prRefreshInFlight: Set<String> = []
+
+    /// True after the periodic PR-refresh scheduler has been started.
+    /// Started once per app launch from `BoardRootView`'s `.task`
+    /// modifier — subsequent dispatches are no-ops.
+    var prRefreshSchedulerStarted: Bool = false
 
     /// First-launch Getting Started carousel state. `isPresented` is
     /// session-only; it flips true the first time app-launch evaluation
@@ -630,6 +646,29 @@ struct BoardFeature {
     /// GitHub rate-limit pressure).
     case _prRefreshFailed(refKey: String)
 
+    // MARK: - Global PR refresh scheduler (architectural fix for storm)
+    //
+    // Replaces the per-session, per-cardAppeared spawn pattern with a
+    // single periodic refresher. One tick walks every session's refs,
+    // dedupes by dedupeKey, filters by cooldown + in-flight set, then
+    // fetches up to `prRefreshConcurrencyCap` at a time with a bounded
+    // TaskGroup. Results fan out to every session referencing the PR.
+    /// Idempotently kicks off the scheduler. Dispatched from
+    /// `BoardRootView.task { … }` on appear; reissues are no-ops.
+    case _startPRRefresher
+    /// Periodic tick — collect unresolved refs across sessions and
+    /// fetch up to N at a time.
+    case _runPRRefreshTick
+    /// Mark a ref as actively being fetched (called from the tick
+    /// effect before dispatching the subprocess). Prevents the next
+    /// tick from double-spawning.
+    case _prRefreshStarted(refKey: String)
+    /// Apply a fresh PR state to **every** session referencing the PR.
+    /// Replaces the per-session `_prStatusUpdated` for tick-driven
+    /// fetches so a single GitHub round-trip updates all referencing
+    /// sessions at once.
+    case _prStateFanout(refKey: String, state: PRState)
+
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
     /// display name for a freshly created session. Applied only if the
@@ -787,6 +826,24 @@ struct BoardFeature {
   /// failure quickly enough for the cooldown filter to block
   /// subsequent spawns. See `_refreshPRStatus` for the storm history.
   nonisolated static let prRefreshTimeout: Duration = .seconds(30)
+
+  /// Period between PR-refresh ticks. The scheduler walks every
+  /// session's refs each tick and fires up to `prRefreshConcurrencyCap`
+  /// fetches; refs already in-flight or in cooldown are skipped. 60 s
+  /// is roughly the same cadence as the old `prStateCacheWindow` but
+  /// is now applied globally rather than per-card.
+  nonisolated static let prRefreshInterval: Duration = .seconds(60)
+
+  /// Maximum number of `gh pr view` subprocesses the scheduler will
+  /// keep in flight simultaneously. The tick uses a bounded TaskGroup
+  /// to enforce this. Caps the proc-table impact of a tick even when
+  /// every ref on the board becomes eligible at the same instant.
+  nonisolated static let prRefreshConcurrencyCap: Int = 4
+
+  /// Maximum jitter added to `prRefreshFailureCooldown` (random
+  /// 0…this) so a synchronized failure burst doesn't produce a
+  /// synchronized retry burst when the cooldown expires.
+  nonisolated static let prRefreshFailureJitterMax: TimeInterval = 240
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -2086,64 +2143,39 @@ struct BoardFeature {
           return .none
         }
         // Re-scan when the references cache is missing OR the session has
-        // had activity since the last scan. This keeps PR state fresh after
-        // the agent writes something new without spamming scans on every
-        // board render.
+        // had activity since the last scan. This keeps the transcript-
+        // extracted refs (tickets, PR URLs) fresh after the agent writes
+        // something new without spamming scans on every board render.
+        //
+        // PR state refresh used to live here as well — it now lives in
+        // the global `_runPRRefreshTick` scheduler so a single periodic
+        // tick fetches each unique PR once across the whole board with
+        // bounded concurrency. Spawning per-session per-cardAppeared was
+        // architecturally wrong: it produced 200+ concurrent `gh pr
+        // view` subprocesses when many sessions referenced the same
+        // PRs and refreshed in lockstep on every busy↔idle transition.
         let needsScan = session.referencesScannedAt == nil
           || session.lastActivityAt > (session.referencesScannedAt ?? .distantPast)
-        // Also kick off PR status refresh for any PRs in the current cache,
-        // throttled by the cache window. The cooldown filter
-        // (`prRefreshFailureAt`) skips refs we already failed to fetch in
-        // the last `prRefreshFailureCooldown` so a rate-limit denial
-        // doesn't re-spawn `gh pr view` on every cardAppeared wave.
-        let cacheWindow = Self.prStateCacheWindow
-        let failureCache = state.prRefreshFailureAt
-        let now = date.now
-        let hasUnresolvedPR = session.references.contains { ref in
-          if case .pullRequest(_, _, _, nil) = ref,
-            Self.shouldRetryPRRef(ref, lastFailureAt: failureCache, now: now)
-          { return true }
-          return false
-        }
-        let shouldRefreshPRs = hasUnresolvedPR
-          || (session.referencesScannedAt.map { Date().timeIntervalSince($0) > cacheWindow } ?? true)
+        guard needsScan else { return .none }
         let worktreeID = session.worktreeID
         let agentID = session.agentNativeSessionID
         let initialPrompt = session.initialPrompt
-        let prRefs = shouldRefreshPRs
-          ? session.references.filter { ref in
-              if case .pullRequest = ref,
-                Self.shouldRetryPRRef(ref, lastFailureAt: failureCache, now: now)
-              { return true }
-              return false
-            }
-          : []
-
-        var effects: [Effect<Action>] = []
-        if needsScan {
-          effects.append(
-            .run { [scannerClient] send in
-              var refs: [SessionReference] = []
-              if let agentID, !agentID.isEmpty {
-                refs = await scannerClient.scan(worktreeID, agentID)
-              }
-              // Always also scan the initialPrompt and Supacool's own
-              // terminal transcript. The transcript pass catches Codex/raw
-              // terminal refs that never land in Claude's native JSONL.
-              let promptRefs = scannerClient.scanText(initialPrompt)
-              let terminalRefs = await scannerClient.scanTerminalTranscript(id)
-              let merged = Self.mergeReferences(
-                Self.mergeReferences(refs, with: promptRefs),
-                with: terminalRefs
-              )
-              await send(._referencesScanned(id: id, refs: merged))
-            }
+        return .run { [scannerClient] send in
+          var refs: [SessionReference] = []
+          if let agentID, !agentID.isEmpty {
+            refs = await scannerClient.scan(worktreeID, agentID)
+          }
+          // Always also scan the initialPrompt and Supacool's own
+          // terminal transcript. The transcript pass catches Codex/raw
+          // terminal refs that never land in Claude's native JSONL.
+          let promptRefs = scannerClient.scanText(initialPrompt)
+          let terminalRefs = await scannerClient.scanTerminalTranscript(id)
+          let merged = Self.mergeReferences(
+            Self.mergeReferences(refs, with: promptRefs),
+            with: terminalRefs
           )
+          await send(._referencesScanned(id: id, refs: merged))
         }
-        for ref in prRefs {
-          effects.append(.send(._refreshPRStatus(id: id, ref: ref)))
-        }
-        return .merge(effects)
 
       case ._referencesScanned(let id, let refs):
         state.$sessions.withLock { sessions in
@@ -2155,20 +2187,12 @@ struct BoardFeature {
           )
           sessions[index].referencesScannedAt = Date()
         }
-        // Kick off PR status fetches for any PR refs we just discovered
-        // and haven't tried recently (see `prRefreshFailureAt`).
-        guard let updated = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        let failureCache = state.prRefreshFailureAt
-        let now = date.now
-        let prRefs = updated.references.filter {
-          if case .pullRequest(_, _, _, let s) = $0, s == nil,
-            Self.shouldRetryPRRef($0, lastFailureAt: failureCache, now: now)
-          { return true }
-          return false
-        }
-        return .merge(prRefs.map { .send(._refreshPRStatus(id: id, ref: $0)) })
+        // No per-scan PR-refresh dispatch here anymore — the global
+        // `_runPRRefreshTick` scheduler picks up newly-discovered
+        // unresolved refs on its next tick. This eliminates the
+        // multi-session lockstep storm where every busy↔idle edge
+        // re-fetched the same PRs once per referencing session.
+        return .none
 
       case ._refreshPRStatus(let id, let ref):
         guard case .pullRequest(let owner, let repo, let number, _) = ref else {
@@ -2212,11 +2236,130 @@ struct BoardFeature {
         .cancellable(id: PRRefreshCancelID(refKey: ref.dedupeKey), cancelInFlight: true)
 
       case ._prRefreshFailed(let refKey):
-        // Record the failure timestamp so the cooldown filter skips this
-        // ref on the next scan/cardAppeared wave. Stops the spawn storm
-        // when GitHub rate-limits us — a single failed batch used to
-        // re-fire every busy→idle transition on every card.
+        // Record the failure timestamp + a random per-ref jitter so the
+        // next tick's cooldown filter spreads retries instead of letting
+        // N synchronous failures produce N synchronous retries.
         state.prRefreshFailureAt[refKey] = date.now
+        state.prRefreshFailureJitter[refKey] = Double.random(
+          in: 0...Self.prRefreshFailureJitterMax
+        )
+        state.prRefreshInFlight.remove(refKey)
+        return .none
+
+      // MARK: - Global PR refresh scheduler
+      //
+      // One scheduler per app lifetime. Walks all sessions, dedupes
+      // unresolved PR refs by dedupeKey, filters by cooldown +
+      // in-flight set, then fetches up to `prRefreshConcurrencyCap`
+      // at a time using a bounded TaskGroup. Results fan out via
+      // `_prStateFanout` so every session referencing the same PR
+      // gets the new state from a single network round-trip.
+
+      case ._startPRRefresher:
+        guard !state.prRefreshSchedulerStarted else { return .none }
+        state.prRefreshSchedulerStarted = true
+        return .run { [clock] send in
+          while !Task.isCancelled {
+            do {
+              try await clock.sleep(for: Self.prRefreshInterval)
+            } catch {
+              return
+            }
+            await send(._runPRRefreshTick)
+          }
+        }
+        .cancellable(id: PRRefresherCancelID(), cancelInFlight: true)
+
+      case ._runPRRefreshTick:
+        // Collect unique unresolved PR refs across all sessions.
+        let now = date.now
+        let failureCache = state.prRefreshFailureAt
+        let jitter = state.prRefreshFailureJitter
+        let inFlight = state.prRefreshInFlight
+        var picked: [(refKey: String, owner: String, repo: String, number: Int)] = []
+        var seenKeys = Set<String>()
+        for session in state.sessions {
+          for ref in session.references {
+            guard case .pullRequest(let owner, let repo, let number, let s) = ref,
+              s == nil
+            else { continue }
+            let key = ref.dedupeKey
+            if seenKeys.contains(key) { continue }
+            if inFlight.contains(key) { continue }
+            if !Self.shouldRetryPRRef(
+              ref, lastFailureAt: failureCache, jitter: jitter, now: now
+            ) { continue }
+            seenKeys.insert(key)
+            picked.append((key, owner, repo, number))
+          }
+        }
+        guard !picked.isEmpty else { return .none }
+        let batch = picked
+        return .run { [githubCLI, clock] send in
+          // Bounded TaskGroup: at most `prRefreshConcurrencyCap`
+          // subprocess fetches in flight at any time. As soon as one
+          // returns, the next picked ref starts.
+          await withTaskGroup(of: Void.self) { group in
+            var iter = batch.makeIterator()
+            var active = 0
+            // Prime up to the cap.
+            while active < Self.prRefreshConcurrencyCap, let next = iter.next() {
+              await send(._prRefreshStarted(refKey: next.refKey))
+              group.addTask {
+                await Self.fetchPRWithTimeout(
+                  refKey: next.refKey,
+                  owner: next.owner,
+                  repo: next.repo,
+                  number: next.number,
+                  githubCLI: githubCLI,
+                  clock: clock,
+                  send: send
+                )
+              }
+              active += 1
+            }
+            // As each finishes, kick off the next pick.
+            while await group.next() != nil {
+              active -= 1
+              if let next = iter.next() {
+                await send(._prRefreshStarted(refKey: next.refKey))
+                group.addTask {
+                  await Self.fetchPRWithTimeout(
+                    refKey: next.refKey,
+                    owner: next.owner,
+                    repo: next.repo,
+                    number: next.number,
+                    githubCLI: githubCLI,
+                    clock: clock,
+                    send: send
+                  )
+                }
+                active += 1
+              }
+            }
+          }
+        }
+        .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: true)
+
+      case ._prRefreshStarted(let refKey):
+        state.prRefreshInFlight.insert(refKey)
+        return .none
+
+      case ._prStateFanout(let refKey, let newState):
+        // Apply the fetched state to every session that references this
+        // PR. Single network result, all sessions updated.
+        state.$sessions.withLock { sessions in
+          for index in sessions.indices {
+            sessions[index].references = sessions[index].references.map { ref in
+              ref.dedupeKey == refKey
+                ? Self.updatingPRState(of: ref, to: newState)
+                : ref
+            }
+          }
+        }
+        state.prRefreshFailureAt.removeValue(forKey: refKey)
+        state.prRefreshFailureJitter.removeValue(forKey: refKey)
+        state.prRefreshInFlight.remove(refKey)
         return .none
 
       case ._prStatusUpdated(let id, let ref, let newState):
@@ -3076,11 +3219,54 @@ struct BoardFeature {
   nonisolated fileprivate static func shouldRetryPRRef(
     _ ref: SessionReference,
     lastFailureAt: [String: Date],
+    jitter: [String: TimeInterval] = [:],
     now: Date
   ) -> Bool {
     guard case .pullRequest = ref else { return false }
     guard let failedAt = lastFailureAt[ref.dedupeKey] else { return true }
-    return now.timeIntervalSince(failedAt) >= Self.prRefreshFailureCooldown
+    let perRefJitter = jitter[ref.dedupeKey] ?? 0
+    return now.timeIntervalSince(failedAt)
+      >= Self.prRefreshFailureCooldown + perRefJitter
+  }
+
+  /// Worker for the bounded-concurrency PR-refresh tick. Races the
+  /// `gh pr view` call against `prRefreshTimeout` and dispatches the
+  /// appropriate action (`_prStateFanout` on success,
+  /// `_prRefreshFailed` on failure or timeout). Pulled out as a
+  /// `nonisolated static` so the `TaskGroup` workers in
+  /// `_runPRRefreshTick` can `await` it without crossing the
+  /// `@MainActor` boundary that the reducer is on.
+  nonisolated fileprivate static func fetchPRWithTimeout(
+    refKey: String,
+    owner: String,
+    repo: String,
+    number: Int,
+    githubCLI: GithubCLIClient,
+    clock: any Clock<Duration>,
+    send: Send<Action>
+  ) async {
+    do {
+      let newState = try await withThrowingTaskGroup(of: PRState.self) { group in
+        group.addTask {
+          try await githubCLI.viewPullRequest(owner, repo, number)
+        }
+        group.addTask {
+          try await clock.sleep(for: Self.prRefreshTimeout)
+          throw PRRefreshTimeoutError()
+        }
+        defer { group.cancelAll() }
+        guard let result = try await group.next() else {
+          throw PRRefreshTimeoutError()
+        }
+        return result
+      }
+      await send(._prStateFanout(refKey: refKey, state: newState))
+    } catch {
+      boardLogger.warning(
+        "PR refresh tick failed for \(owner)/\(repo)#\(number): \(error)"
+      )
+      await send(._prRefreshFailed(refKey: refKey))
+    }
   }
 
   // MARK: - Remote helpers
@@ -3316,6 +3502,17 @@ private nonisolated struct ServerLifecycleCancelID: Hashable, Sendable {
 private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
   let refKey: String
 }
+
+/// Cancel ID for the global PR-refresh scheduler loop. There's only
+/// ever one of these per app lifetime; `cancelInFlight: true` on
+/// `_startPRRefresher` makes re-dispatching idempotent.
+private nonisolated struct PRRefresherCancelID: Hashable, Sendable {}
+
+/// Cancel ID for the in-flight `_runPRRefreshTick` effect. A new
+/// tick cancels the previous one if it hasn't drained yet — defensive
+/// against a tick that runs longer than the refresh interval under
+/// extreme network stalls.
+private nonisolated struct PRRefresherTickCancelID: Hashable, Sendable {}
 
 /// Thrown by the timeout arm of the `_refreshPRStatus` TaskGroup race.
 /// Surfaces as a generic failure via the same path as any other

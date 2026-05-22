@@ -128,6 +128,10 @@ struct BoardRootView: View {
     }
     .onDisappear { removePendingExitEscapeMonitor() }
     .task { ensureFootprintStore() }
+    // Kick off the global PR-refresh scheduler. Idempotent: reducer
+    // guards on `prRefreshSchedulerStarted` so any extra dispatches
+    // (e.g. view re-creation under SwiftUI's discretion) are no-ops.
+    .task { store.send(._startPRRefresher) }
     .environment(\.sessionFootprintStore, footprintStore)
     // Global shortcuts available in both board and full-screen modes.
     .background(
