@@ -15,9 +15,28 @@ import SwiftUI
 struct WaitingEmptyPlaceholder: View {
   var body: some View {
     ZStack {
-      MatrixRainCanvas()
-        .opacity(0.32)
-        .allowsHitTesting(false)
+      // Static glow backdrop. The previous `MatrixRainCanvas`
+      // implementation was a `Canvas` + `TimelineView` running at
+      // 12 fps with per-frame Core Text typesetting. Even with the
+      // resolved-text cache, two live `sample` captures during 1.2 s
+      // main-thread freezes (system load avg ~128) caught it as the
+      // dominant frame — and pinned to it was 258 samples of
+      // `CAContext.waitForCommitId → mach_msg` (Supacool blocking
+      // on the WindowServer round-trip every commit). Under any
+      // sustained system load, an ambient animation that drives a
+      // commit per frame is a beachball machine. Replaced with a
+      // static radial gradient that costs zero per frame.
+      RadialGradient(
+        colors: [
+          Color.green.opacity(0.22),
+          Color.green.opacity(0.04),
+          Color.clear,
+        ],
+        center: .center,
+        startRadius: 0,
+        endRadius: 180,
+      )
+      .allowsHitTesting(false)
 
       VStack(spacing: 6) {
         Image(systemName: "checkmark.seal.fill")
