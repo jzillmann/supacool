@@ -65,4 +65,76 @@ struct BoardPullRequestChecksTests {
     ]
     #expect(BoardPullRequestChecks.outcome(checks: checks) == .completed(allPassed: false))
   }
+
+  // MARK: - isWaitingExternal
+
+  @Test func waitingExternalTrueWhenChecksPending() {
+    let pullRequest = makePullRequest(checks: [
+      GithubPullRequestStatusCheck(name: "CI", status: "IN_PROGRESS"),
+    ])
+    #expect(BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalTrueWhenReviewRequired() {
+    let pullRequest = makePullRequest(reviewDecision: "REVIEW_REQUIRED")
+    #expect(BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalFalseWhenReviewApproved() {
+    let pullRequest = makePullRequest(reviewDecision: "APPROVED")
+    #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalFalseWhenChangesRequested() {
+    let pullRequest = makePullRequest(reviewDecision: "CHANGES_REQUESTED")
+    #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalFalseWhenDraftEvenIfReviewRequired() {
+    let pullRequest = makePullRequest(isDraft: true, reviewDecision: "REVIEW_REQUIRED")
+    #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalFalseWhenMerged() {
+    let pullRequest = makePullRequest(state: "MERGED", reviewDecision: "REVIEW_REQUIRED")
+    #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func waitingExternalFalseWhenNilPullRequest() {
+    #expect(!BoardPullRequestChecks.isWaitingExternal(nil))
+  }
+
+  @Test func waitingExternalFalseWhenAllGreenAndReviewApproved() {
+    let pullRequest = makePullRequest(
+      reviewDecision: "APPROVED",
+      checks: [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")]
+    )
+    #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+}
+
+private func makePullRequest(
+  state: String = "OPEN",
+  isDraft: Bool = false,
+  reviewDecision: String? = nil,
+  checks: [GithubPullRequestStatusCheck] = []
+) -> GithubPullRequest {
+  GithubPullRequest(
+    number: 42,
+    title: "Test PR",
+    state: state,
+    additions: 0,
+    deletions: 0,
+    isDraft: isDraft,
+    reviewDecision: reviewDecision,
+    mergeable: nil,
+    mergeStateStatus: nil,
+    updatedAt: nil,
+    url: "https://example.com/pull/42",
+    headRefName: "feature",
+    baseRefName: "main",
+    commitsCount: 1,
+    authorLogin: "comandante",
+    statusCheckRollup: checks.isEmpty ? nil : GithubPullRequestStatusCheckRollup(checks: checks)
+  )
 }

@@ -1,12 +1,30 @@
 import Foundation
 
-/// Board-level interpretation of PR checks. Pending or expected checks mean
-/// the session is idle because CI is running, not because it needs the user.
+/// Board-level interpretation of PR state. Either pending CI or an
+/// unanswered review request means the session is idle because something
+/// outside the agent (and outside the user) owns the next move.
 nonisolated enum BoardPullRequestChecks {
+  /// CI-only predicate — still drives the green/red completion glow via
+  /// `outcome`. For the board's "Waiting on External" row use
+  /// `isWaitingExternal` instead.
   static func isWaiting(_ pullRequest: GithubPullRequest?) -> Bool {
     guard let pullRequest, pullRequest.state.uppercased() == "OPEN" else { return false }
     guard let checks = pullRequest.statusCheckRollup?.checks else { return false }
     return isWaiting(checks: checks)
+  }
+
+  /// Broader predicate used by board classification: OPEN, non-draft, and
+  /// either CI checks pending OR reviewers haven't acted yet
+  /// (`reviewDecision == "REVIEW_REQUIRED"`). Approved / changes-requested
+  /// PRs flip back to Waiting on Me — the user owns the next move.
+  static func isWaitingExternal(_ pullRequest: GithubPullRequest?) -> Bool {
+    guard let pullRequest, pullRequest.state.uppercased() == "OPEN", !pullRequest.isDraft else {
+      return false
+    }
+    if let checks = pullRequest.statusCheckRollup?.checks, isWaiting(checks: checks) {
+      return true
+    }
+    return pullRequest.reviewDecision?.uppercased() == "REVIEW_REQUIRED"
   }
 
   /// A PR is "waiting for checks" iff at least one check is still

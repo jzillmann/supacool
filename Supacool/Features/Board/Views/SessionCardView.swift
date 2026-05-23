@@ -177,6 +177,12 @@ struct SessionCardView: View {
           Button("Wants Input", systemImage: BoardSessionStatus.awaitingInput.systemImage) {
             onSetStatusOverride(.awaitingInput)
           }
+          Button(
+            BoardSessionStatus.waitingForChecks.label,
+            systemImage: BoardSessionStatus.waitingForChecks.systemImage
+          ) {
+            onSetStatusOverride(.waitingForChecks)
+          }
           if session.manualStatusOverride != nil {
             Divider()
             Button("Clear Override", systemImage: "xmark.circle") {
