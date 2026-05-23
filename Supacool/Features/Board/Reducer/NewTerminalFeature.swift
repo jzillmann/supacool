@@ -120,9 +120,17 @@ struct NewTerminalFeature {
 
     /// The resolved workspace to run the session in. Kept in sync with
     /// `workspaceQuery` on every keystroke via `inferSelection`.
-    var selectedWorkspace: WorkspaceSelection = .repoRoot
+    ///
+    /// Defaults to a blank worktree (`.newBranch(name: "")`) — agents
+    /// must never accidentally inherit the main checkout. Spawning into
+    /// `.repoRoot` has caused the main repo to drift onto unrelated
+    /// branches and accumulate uncommitted changes when an agent runs
+    /// `git checkout` / `gh pr checkout` / `git merge` inside it. Users
+    /// who genuinely want Main scope opt in via the segmented picker.
+    var selectedWorkspace: WorkspaceSelection = .newBranch(name: "")
     /// The free-text query the user types into the workspace field.
-    /// Empty = repo root (directory mode).
+    /// Empty = no branch name yet — the segmented picker decides whether
+    /// that resolves to a blank worktree (default) or the main checkout.
     var workspaceQuery: String = ""
     /// Loaded lazily on `.task`. Local branch names (e.g. `["main", "feat-x"]`).
     var availableLocalBranches: [String] = []
@@ -262,8 +270,13 @@ struct NewTerminalFeature {
           selectedWorkspace = .newBranch(name: derived)
           workspaceQuery = derived
         }
+      } else {
+        // The previous session ran at repo root. Rerun must preserve
+        // that scope explicitly — the sheet's default flipped to a
+        // blank worktree, so leaving this implicit would silently
+        // convert a repo-root rerun into a worktree spawn.
+        selectedWorkspace = .repoRoot
       }
-      // else: repo root — selectedWorkspace stays .repoRoot
     }
 
     /// Constructor for "graduate to worktree": a repo-root session wants
@@ -520,9 +533,11 @@ struct NewTerminalFeature {
         return .none
 
       case .binding(\.selectedRepositoryID):
-        // Reload the branch list whenever the repo changes.
+        // Reload the branch list whenever the repo changes. Reset back
+        // to the sheet's default — a blank worktree — so the picker
+        // doesn't carry a stale branch name across repos.
         state.validationMessage = nil
-        state.selectedWorkspace = .repoRoot
+        state.selectedWorkspace = .newBranch(name: "")
         state.workspaceQuery = ""
         state.availableLocalBranches = []
         state.availableRemoteBranches = []

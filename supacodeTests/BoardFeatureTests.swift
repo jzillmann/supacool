@@ -1777,8 +1777,8 @@ struct BoardFeatureTests {
   @Test(.dependencies) func openNewTerminalSheetFromSessionDoesNotReuseWorktree() async {
     // New-terminal is always a fresh dialog: even when launched from a
     // session that has been converted from repo root to a worktree, it
-    // keeps only the repository preference and starts at repo root with
-    // a blank workspace field.
+    // keeps only the repository preference and starts in the sheet's
+    // default scope — a blank worktree — with an empty workspace field.
     let session = AgentSession(
       repositoryID: "/tmp/repo",
       worktreeID: "/tmp/repo", // started at repo root
@@ -1817,7 +1817,7 @@ struct BoardFeatureTests {
 
     let sheet = store.state.newTerminalSheet
     #expect(sheet?.selectedRepositoryID == "/tmp/repo")
-    #expect(sheet?.selectedWorkspace == .repoRoot)
+    #expect(sheet?.selectedWorkspace == .newBranch(name: ""))
     #expect(sheet?.workspaceQuery == "")
     #expect(sheet?.prompt == "")
     #expect(sheet?.agent == .claude)

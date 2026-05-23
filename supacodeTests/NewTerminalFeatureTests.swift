@@ -12,7 +12,12 @@ struct NewTerminalFeatureTests {
   // MARK: - Validation
 
   @Test(.dependencies) func createButtonRequiresPrompt() async {
-    let store = TestStore(initialState: Self.makeState()) {
+    // Pin workspace to repo root so this test focuses on prompt
+    // validation — otherwise the sheet's default (.newBranch(name: ""))
+    // trips the branch-name check first.
+    var state = Self.makeState()
+    state.selectedWorkspace = .repoRoot
+    let store = TestStore(initialState: state) {
       NewTerminalFeature()
     }
     store.exhaustivity = .off
@@ -77,6 +82,9 @@ struct NewTerminalFeatureTests {
   @Test(.dependencies) func createButtonEmitsSpawnRequestedDelegate() async {
     var state = Self.makeState()
     state.prompt = "Summarize the README"
+    // Pin workspace to repo root so create-button validation passes
+    // without needing a real worktree-creation path.
+    state.selectedWorkspace = .repoRoot
 
     let store = TestStore(initialState: state) {
       NewTerminalFeature()
@@ -204,7 +212,9 @@ struct NewTerminalFeatureTests {
       $0.isSuggestingBranchName = false
     }
     #expect(store.state.workspaceQuery.isEmpty)
-    #expect(store.state.selectedWorkspace == .repoRoot)
+    // Failed inference leaves the sheet at its default scope — a blank
+    // worktree — rather than silently sliding into the main checkout.
+    #expect(store.state.selectedWorkspace == .newBranch(name: ""))
   }
 
   @Test(.dependencies) func suggestBranchNameSanitizesOutput() async {
@@ -539,9 +549,10 @@ struct NewTerminalFeatureTests {
     } else {
       Issue.record("Expected .failed state, got \(store.state.pullRequestLookup)")
     }
-    // Workspace wasn't auto-changed since the PR couldn't be applied.
+    // Workspace wasn't auto-changed since the PR couldn't be applied —
+    // the sheet sits on its default scope (a blank worktree).
     #expect(store.state.workspaceQuery == "")
-    #expect(store.state.selectedWorkspace == .repoRoot)
+    #expect(store.state.selectedWorkspace == .newBranch(name: ""))
   }
 
   /// Removing the URL from the prompt clears the PR context so subsequent

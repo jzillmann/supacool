@@ -24,8 +24,11 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
   let createdAt: Date
 
   /// Whether clicking the bookmark creates a fresh worktree or runs at
-  /// the repo root. Read-only tasks (investigate / ask-a-question) want
-  /// `.repoRoot` so they don't pollute the worktree list per click.
+  /// the repo root. Defaults to `.newWorktree` — agents must never
+  /// accidentally inherit the main checkout, since `.repoRoot` lets the
+  /// agent rewrite the main repo's branch and leave uncommitted changes.
+  /// Read-only bookmarks (investigate / ask-a-question) can still opt
+  /// into `.repoRoot` explicitly when worktree pollution isn't worth it.
   nonisolated enum WorktreeMode: String, Codable, Sendable {
     case newWorktree
     case repoRoot
@@ -37,7 +40,7 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
     name: String,
     prompt: String,
     agent: AgentType? = .claude,
-    worktreeMode: WorktreeMode = .repoRoot,
+    worktreeMode: WorktreeMode = .newWorktree,
     planMode: Bool = false,
     createdAt: Date = Date()
   ) {
@@ -65,7 +68,7 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
     prompt = try c.decode(String.self, forKey: .prompt)
     agent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
     worktreeMode =
-      try c.decodeIfPresent(WorktreeMode.self, forKey: .worktreeMode) ?? .repoRoot
+      try c.decodeIfPresent(WorktreeMode.self, forKey: .worktreeMode) ?? .newWorktree
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
   }

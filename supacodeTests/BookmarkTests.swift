@@ -26,7 +26,9 @@ struct BookmarkTests {
     #expect(bookmark.name == "Investigate")
     #expect(bookmark.prompt == "/investigate")
     #expect(bookmark.agent == nil)
-    #expect(bookmark.worktreeMode == .repoRoot)
+    // Legacy bookmarks without `worktreeMode` default to a fresh
+    // worktree — agents must never silently spawn into the main checkout.
+    #expect(bookmark.worktreeMode == .newWorktree)
     #expect(bookmark.planMode == false)
   }
 
