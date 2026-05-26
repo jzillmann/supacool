@@ -121,6 +121,8 @@ nonisolated struct GithubGraphQLPullRequestResponse: Decodable {
         return 2
       case "MERGED":
         return 1
+      case "CLOSED":
+        return 0
       default:
         return 0
       }

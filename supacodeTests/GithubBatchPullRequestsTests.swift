@@ -220,6 +220,64 @@ struct GithubBatchPullRequestsTests {
     #expect(prs["feature-a"]?.title == "Open PR")
   }
 
+  @Test func fallsBackToLatestClosedWhenNoOpenOrMerged() throws {
+    let json = """
+      {
+        "data": {
+          "repository": {
+            "branch0": {
+              "nodes": [
+                {
+                  "number": 30,
+                  "title": "Closed Older",
+                  "state": "CLOSED",
+                  "additions": 1,
+                  "deletions": 0,
+                  "isDraft": false,
+                  "reviewDecision": null,
+                  "updatedAt": "2026-01-01T00:00:00Z",
+                  "url": "https://github.com/octo/repo/pull/30",
+                  "headRefName": "feature-a",
+                  "headRepository": {
+                    "name": "repo",
+                    "owner": { "login": "octo" }
+                  }
+                },
+                {
+                  "number": 31,
+                  "title": "Closed Newer",
+                  "state": "CLOSED",
+                  "additions": 2,
+                  "deletions": 1,
+                  "isDraft": false,
+                  "reviewDecision": null,
+                  "updatedAt": "2026-01-03T00:00:00Z",
+                  "url": "https://github.com/octo/repo/pull/31",
+                  "headRefName": "feature-a",
+                  "headRepository": {
+                    "name": "repo",
+                    "owner": { "login": "octo" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+      """
+    let data = Data(json.utf8)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    let response = try decoder.decode(GithubGraphQLPullRequestResponse.self, from: data)
+    let prs = response.pullRequestsByBranch(
+      aliasMap: ["branch0": "feature-a"],
+      owner: "octo",
+      repo: "repo"
+    )
+    #expect(prs["feature-a"]?.number == 31)
+    #expect(prs["feature-a"]?.state == "CLOSED")
+  }
+
   @Test func fallsBackToLatestMerged() throws {
     let json = """
       {

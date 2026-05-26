@@ -120,6 +120,61 @@ struct BoardFeatureTests {
     )
   }
 
+  @Test(.dependencies) func prRefreshTickUpdatesCachedOpenPullRequests() async {
+    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+    var session = Self.sampleSession()
+    session.references = [ref]
+    session.referencesScannedAt = Date()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let lookups = LockIsolated<[String]>([])
+    let testClock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = testClock
+      $0.date = .constant(Date())
+      $0.githubCLI.viewPullRequest = { owner, repo, number in
+        lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
+        return .closed
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(._runPRRefreshTick)
+    await store.skipReceivedActions()
+    await store.finish()
+
+    #expect(lookups.value == ["acme/widgets#42"])
+    #expect(store.state.sessions.first?.references == [
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .closed)
+    ])
+  }
+
+  @Test(.dependencies) func prRefreshTickSkipsRecentlyRefreshedPullRequests() async {
+    let now = Date(timeIntervalSince1970: 1_000)
+    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+    var session = Self.sampleSession()
+    session.references = [ref]
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.prRefreshSuccessAt[ref.dedupeKey] = now
+    let lookups = LockIsolated<[String]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now.addingTimeInterval(10))
+      $0.githubCLI.viewPullRequest = { owner, repo, number in
+        lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
+        return .closed
+      }
+    }
+
+    await store.send(._runPRRefreshTick)
+
+    #expect(lookups.value.isEmpty)
+  }
+
   /// `.cardAppeared` still drives the transcript scan + ref merge; only
   /// the PR fetch moved to the global tick. So a cardAppeared on a
   /// session with no prior scan should pick up scanner-supplied refs

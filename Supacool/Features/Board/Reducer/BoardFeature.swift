@@ -147,6 +147,11 @@ struct BoardFeature {
     /// kept for the lifetime of that failure entry.
     var prRefreshFailureJitter: [String: TimeInterval] = [:]
 
+    /// Last successful refresh per PR ref (dedupeKey). Used to throttle
+    /// user-triggered refreshes from popovers/card clicks so we do not
+    /// reintroduce the old `cardAppeared` subprocess storm.
+    var prRefreshSuccessAt: [String: Date] = [:]
+
     /// Set of PR refs (dedupeKey) currently being fetched by the
     /// scheduler tick. Lets the tick avoid double-spawning the same
     /// ref if a long-running fetch hasn't returned by the next tick.
@@ -635,9 +640,13 @@ struct BoardFeature {
     /// references are stale (never scanned, or `lastActivityAt > referencesScannedAt`).
     case cardAppeared(id: AgentSession.ID)
     case _referencesScanned(id: AgentSession.ID, refs: [SessionReference])
-    /// Fetches fresh `PRState` for a pull-request reference via `gh pr view`
-    /// and patches the in-place reference. Called after `_referencesScanned`
-    /// for each unique PR, throttled by the cache window.
+    /// User-visible refresh hook for PR reference chips/popovers. Scoped
+    /// to one session and throttled by `prStateCacheWindow` so repeated
+    /// clicks do not spawn repeated `gh pr view` calls.
+    case refreshPRReferences(id: AgentSession.ID)
+    /// Legacy one-session fetch path for a pull-request reference via
+    /// `gh pr view`. The scheduler path below is preferred because it
+    /// dedupes and fans out by PR key.
     case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
     case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, state: PRState)
     /// Records that a `gh pr view` lookup failed for the given dedupe key
@@ -657,8 +666,8 @@ struct BoardFeature {
     /// Idempotently kicks off the scheduler. Dispatched from
     /// `BoardRootView.task { … }` on appear; reissues are no-ops.
     case _startPRRefresher
-    /// Periodic tick — collect unresolved refs across sessions and
-    /// fetch up to N at a time.
+    /// Periodic tick — collect unresolved/open/draft refs across sessions
+    /// and fetch up to N at a time.
     case _runPRRefreshTick
     /// Mark a ref as actively being fetched (called from the tick
     /// effect before dispatching the subprocess). Prevents the next
@@ -818,7 +827,7 @@ struct BoardFeature {
   /// this rate-limits unnecessary `gh pr view` calls when the user is
   /// bouncing between cards. 60 s is a reasonable compromise between
   /// "current enough" and "don't spam the API".
-  private static let prStateCacheWindow: TimeInterval = 60
+  nonisolated static let prStateCacheWindow: TimeInterval = 60
 
   /// Backoff window for refs whose last `gh pr view` failed. Most
   /// failures we see in the wild are GitHub GraphQL rate-limit denials
@@ -913,7 +922,10 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
         }
-        return .send(.delegate(.refreshWorktreeRequested(worktreeID: session.worktreeID)))
+        return .merge(
+          .send(.delegate(.refreshWorktreeRequested(worktreeID: session.worktreeID))),
+          .send(.refreshPRReferences(id: id))
+        )
 
       case .setManualStatusOverride(let id, let status):
         state.$sessions.withLock { sessions in
@@ -2200,11 +2212,25 @@ struct BoardFeature {
           sessions[index].referencesScannedAt = Date()
         }
         // No per-scan PR-refresh dispatch here anymore — the global
-        // `_runPRRefreshTick` scheduler picks up newly-discovered
-        // unresolved refs on its next tick. This eliminates the
+        // `_runPRRefreshTick` scheduler picks up newly-discovered and
+        // still-active refs on its next tick. This eliminates the
         // multi-session lockstep storm where every busy↔idle edge
         // re-fetched the same PRs once per referencing session.
         return .none
+
+      case .refreshPRReferences(let id):
+        let batch = Self.pickPRRefreshCandidates(
+          sessions: state.sessions,
+          sessionID: id,
+          mode: .visible,
+          lastFailureAt: state.prRefreshFailureAt,
+          lastSuccessAt: state.prRefreshSuccessAt,
+          jitter: state.prRefreshFailureJitter,
+          inFlight: state.prRefreshInFlight,
+          now: date.now
+        )
+        guard !batch.isEmpty else { return .none }
+        return prRefreshEffect(batch: batch)
 
       case ._refreshPRStatus(let id, let ref):
         guard case .pullRequest(let owner, let repo, let number, _) = ref else {
@@ -2261,8 +2287,8 @@ struct BoardFeature {
       // MARK: - Global PR refresh scheduler
       //
       // One scheduler per app lifetime. Walks all sessions, dedupes
-      // unresolved PR refs by dedupeKey, filters by cooldown +
-      // in-flight set, then fetches up to `prRefreshConcurrencyCap`
+      // unresolved/open/draft PR refs by dedupeKey, filters by cooldown +
+      // success-cache + in-flight set, then fetches up to `prRefreshConcurrencyCap`
       // at a time using a bounded TaskGroup. Results fan out via
       // `_prStateFanout` so every session referencing the same PR
       // gets the new state from a single network round-trip.
@@ -2283,75 +2309,21 @@ struct BoardFeature {
         .cancellable(id: PRRefresherCancelID(), cancelInFlight: true)
 
       case ._runPRRefreshTick:
-        // Collect unique unresolved PR refs across all sessions.
-        let now = date.now
-        let failureCache = state.prRefreshFailureAt
-        let jitter = state.prRefreshFailureJitter
-        let inFlight = state.prRefreshInFlight
-        var picked: [(refKey: String, owner: String, repo: String, number: Int)] = []
-        var seenKeys = Set<String>()
-        for session in state.sessions {
-          for ref in session.references {
-            guard case .pullRequest(let owner, let repo, let number, let s) = ref,
-              s == nil
-            else { continue }
-            let key = ref.dedupeKey
-            if seenKeys.contains(key) { continue }
-            if inFlight.contains(key) { continue }
-            if !Self.shouldRetryPRRef(
-              ref, lastFailureAt: failureCache, jitter: jitter, now: now
-            ) { continue }
-            seenKeys.insert(key)
-            picked.append((key, owner, repo, number))
-          }
-        }
-        guard !picked.isEmpty else { return .none }
-        let batch = picked
-        return .run { [githubCLI, clock] send in
-          // Bounded TaskGroup: at most `prRefreshConcurrencyCap`
-          // subprocess fetches in flight at any time. As soon as one
-          // returns, the next picked ref starts.
-          await withTaskGroup(of: Void.self) { group in
-            var iter = batch.makeIterator()
-            var active = 0
-            // Prime up to the cap.
-            while active < Self.prRefreshConcurrencyCap, let next = iter.next() {
-              await send(._prRefreshStarted(refKey: next.refKey))
-              group.addTask {
-                await Self.fetchPRWithTimeout(
-                  refKey: next.refKey,
-                  owner: next.owner,
-                  repo: next.repo,
-                  number: next.number,
-                  githubCLI: githubCLI,
-                  clock: clock,
-                  send: send
-                )
-              }
-              active += 1
-            }
-            // As each finishes, kick off the next pick.
-            while await group.next() != nil {
-              active -= 1
-              if let next = iter.next() {
-                await send(._prRefreshStarted(refKey: next.refKey))
-                group.addTask {
-                  await Self.fetchPRWithTimeout(
-                    refKey: next.refKey,
-                    owner: next.owner,
-                    repo: next.repo,
-                    number: next.number,
-                    githubCLI: githubCLI,
-                    clock: clock,
-                    send: send
-                  )
-                }
-                active += 1
-              }
-            }
-          }
-        }
-        .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: true)
+        // Collect unique active PR refs across all sessions. `nil` refs
+        // get resolved, and OPEN/DRAFT refs are re-checked so a PR that
+        // was closed/merged externally does not stay green forever.
+        let batch = Self.pickPRRefreshCandidates(
+          sessions: state.sessions,
+          sessionID: nil,
+          mode: .automatic,
+          lastFailureAt: state.prRefreshFailureAt,
+          lastSuccessAt: state.prRefreshSuccessAt,
+          jitter: state.prRefreshFailureJitter,
+          inFlight: state.prRefreshInFlight,
+          now: date.now
+        )
+        guard !batch.isEmpty else { return .none }
+        return prRefreshEffect(batch: batch)
 
       case ._prRefreshStarted(let refKey):
         state.prRefreshInFlight.insert(refKey)
@@ -2371,6 +2343,7 @@ struct BoardFeature {
         }
         state.prRefreshFailureAt.removeValue(forKey: refKey)
         state.prRefreshFailureJitter.removeValue(forKey: refKey)
+        state.prRefreshSuccessAt[refKey] = date.now
         state.prRefreshInFlight.remove(refKey)
         return .none
 
@@ -2383,6 +2356,9 @@ struct BoardFeature {
               : existing
           }
         }
+        state.prRefreshFailureAt.removeValue(forKey: ref.dedupeKey)
+        state.prRefreshFailureJitter.removeValue(forKey: ref.dedupeKey)
+        state.prRefreshSuccessAt[ref.dedupeKey] = date.now
         return .none
 
       case ._autoDisplayNameSuggested(let id, let suggested):
@@ -3234,6 +3210,55 @@ struct BoardFeature {
     return [agentPart, modePart, cwdPart].joined(separator: ";")
   }
 
+  /// Shared effect body for scheduled and user-visible PR refreshes.
+  /// Bounded TaskGroup keeps the `gh pr view` subprocess count capped,
+  /// and the cancel ID prevents overlapping ticks from racing before
+  /// `_prRefreshStarted` lands in reducer state.
+  private func prRefreshEffect(
+    batch: [(refKey: String, owner: String, repo: String, number: Int)]
+  ) -> Effect<Action> {
+    .run { [githubCLI, clock] send in
+      await withTaskGroup(of: Void.self) { group in
+        var iter = batch.makeIterator()
+        var active = 0
+        while active < Self.prRefreshConcurrencyCap, let next = iter.next() {
+          await send(._prRefreshStarted(refKey: next.refKey))
+          group.addTask {
+            await Self.fetchPRWithTimeout(
+              refKey: next.refKey,
+              owner: next.owner,
+              repo: next.repo,
+              number: next.number,
+              githubCLI: githubCLI,
+              clock: clock,
+              send: send
+            )
+          }
+          active += 1
+        }
+        while await group.next() != nil {
+          active -= 1
+          if let next = iter.next() {
+            await send(._prRefreshStarted(refKey: next.refKey))
+            group.addTask {
+              await Self.fetchPRWithTimeout(
+                refKey: next.refKey,
+                owner: next.owner,
+                repo: next.repo,
+                number: next.number,
+                githubCLI: githubCLI,
+                clock: clock,
+                send: send
+              )
+            }
+            active += 1
+          }
+        }
+      }
+    }
+    .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: true)
+  }
+
   /// Merge two reference lists, deduping by `dedupeKey`. When
   /// `preferNewStates` is true, PR state from the new list wins; otherwise
   /// the first occurrence wins. Used to combine JSONL + prompt scans.
@@ -3258,6 +3283,71 @@ struct BoardFeature {
       }
     }
     return merged
+  }
+
+  nonisolated fileprivate enum PRRefreshMode {
+    /// Background scheduler: resolve unknown refs and keep active refs
+    /// (OPEN/DRAFT) current. Terminal states are skipped to avoid
+    /// polling ancient closed/merged PRs forever.
+    case automatic
+    /// User-visible refresh from a PR chip/popover. Still throttled, but
+    /// includes CLOSED refs because the user explicitly asked to look at
+    /// this session's PR state and closed PRs can be reopened.
+    case visible
+  }
+
+  /// Collect unique PR refs eligible for refresh under the requested mode.
+  /// Applies in-flight, failure-backoff, and success-cache throttles before
+  /// returning the bounded worker batch.
+  nonisolated fileprivate static func pickPRRefreshCandidates(
+    sessions: [AgentSession],
+    sessionID: AgentSession.ID?,
+    mode: PRRefreshMode,
+    lastFailureAt: [String: Date],
+    lastSuccessAt: [String: Date],
+    jitter: [String: TimeInterval],
+    inFlight: Set<String>,
+    now: Date
+  ) -> [(refKey: String, owner: String, repo: String, number: Int)] {
+    var picked: [(refKey: String, owner: String, repo: String, number: Int)] = []
+    var seenKeys = Set<String>()
+    for session in sessions where sessionID == nil || session.id == sessionID {
+      for ref in session.references {
+        guard case .pullRequest(let owner, let repo, let number, let state) = ref else {
+          continue
+        }
+        guard shouldRefreshPRState(state, mode: mode) else { continue }
+        let key = ref.dedupeKey
+        if seenKeys.contains(key) { continue }
+        if inFlight.contains(key) { continue }
+        if let refreshedAt = lastSuccessAt[key],
+          now.timeIntervalSince(refreshedAt) < Self.prStateCacheWindow
+        {
+          continue
+        }
+        if !shouldRetryPRRef(
+          ref,
+          lastFailureAt: lastFailureAt,
+          jitter: jitter,
+          now: now
+        ) { continue }
+        seenKeys.insert(key)
+        picked.append((key, owner, repo, number))
+      }
+    }
+    return picked
+  }
+
+  nonisolated private static func shouldRefreshPRState(
+    _ state: PRState?,
+    mode: PRRefreshMode
+  ) -> Bool {
+    switch mode {
+    case .automatic:
+      return state == nil || state == .open || state == .draft
+    case .visible:
+      return state != .merged
+    }
   }
 
   /// Returns a copy of `ref` with its PR state replaced. No-op for ticket refs.
@@ -3553,10 +3643,9 @@ private nonisolated struct ServerLifecycleCancelID: Hashable, Sendable {
   let workspacePath: String
 }
 
-/// Cancel ID for in-flight `_refreshPRStatus` effects. Keyed by the
-/// PR's `dedupeKey` so a later cardAppeared wave that re-fires the
-/// same ref cancels the prior gh subprocess instead of stacking
-/// another one on top.
+/// Cancel ID for the legacy one-session `_refreshPRStatus` effect.
+/// Keyed by the PR's `dedupeKey` so a later scoped refresh cancels the
+/// prior gh subprocess instead of stacking another one on top.
 private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
   let refKey: String
 }
@@ -3566,10 +3655,10 @@ private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
 /// `_startPRRefresher` makes re-dispatching idempotent.
 private nonisolated struct PRRefresherCancelID: Hashable, Sendable {}
 
-/// Cancel ID for the in-flight `_runPRRefreshTick` effect. A new
-/// tick cancels the previous one if it hasn't drained yet — defensive
-/// against a tick that runs longer than the refresh interval under
-/// extreme network stalls.
+/// Cancel ID for the in-flight PR-refresh worker effect. A new scheduled
+/// or user-visible refresh cancels the previous one if it hasn't drained
+/// yet — defensive against work that runs longer than the refresh interval
+/// under extreme network stalls.
 private nonisolated struct PRRefresherTickCancelID: Hashable, Sendable {}
 
 /// Thrown by the timeout arm of the `_refreshPRStatus` TaskGroup race.

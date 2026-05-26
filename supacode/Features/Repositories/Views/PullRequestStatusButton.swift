@@ -14,7 +14,7 @@ struct PullRequestStatusButton: View {
   var body: some View {
     PullRequestChecksPopoverButton(pullRequest: model.pullRequest) {
       let breakdown = PullRequestCheckBreakdown(checks: model.statusChecks)
-      let showsChecksRing = breakdown.total > 0 && model.state != "MERGED"
+      let showsChecksRing = breakdown.total > 0 && model.state == "OPEN"
       HStack(spacing: 6) {
         PullRequestBadgeView(
           text: model.badgeText,
@@ -64,7 +64,7 @@ struct PullRequestStatusModel: Equatable {
     let state = pullRequest.state.uppercased()
     self.state = state
     self.title = pullRequest.title
-    if state == "MERGED" {
+    if state == "MERGED" || state == "CLOSED" {
       self.detailText = nil
       self.statusChecks = []
       return
@@ -109,6 +109,6 @@ struct PullRequestStatusModel: Equatable {
     guard number != nil else {
       return false
     }
-    return state?.uppercased() != "CLOSED"
+    return true
   }
 }

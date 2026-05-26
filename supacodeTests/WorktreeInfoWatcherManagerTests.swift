@@ -100,6 +100,42 @@ struct WorktreeInfoWatcherManagerTests {
     try FileManager.default.removeItem(at: tempRepository.tempRoot)
   }
 
+  @Test func repeatedSelectionRefreshesAfterCooldown() async throws {
+    let clock = TestClock()
+    let tempRepository = try makeTempRepository(worktreeNames: ["sparrow", "swift"])
+    let manager = WorktreeInfoWatcherManager(
+      focusedInterval: .seconds(3_600),
+      unfocusedInterval: .seconds(3_600),
+      pullRequestSelectionRefreshCooldown: .milliseconds(500),
+      clock: clock
+    )
+    let (collector, task) = startCollecting(manager.eventStream())
+
+    manager.handleCommand(.setWorktrees(tempRepository.worktrees))
+    await drainAsyncEvents()
+    let baselineCount = await collector.pullRequestRefreshCount(repositoryRootURL: tempRepository.tempRoot)
+    let firstWorktree = try #require(tempRepository.worktrees.first)
+
+    manager.handleCommand(.setSelectedWorktreeID(firstWorktree.id))
+    await drainAsyncEvents()
+    #expect(await collector.pullRequestRefreshCount(repositoryRootURL: tempRepository.tempRoot) == baselineCount + 1)
+
+    manager.handleCommand(.setSelectedWorktreeID(firstWorktree.id))
+    await drainAsyncEvents()
+    #expect(await collector.pullRequestRefreshCount(repositoryRootURL: tempRepository.tempRoot) == baselineCount + 1)
+
+    await clock.advance(by: .milliseconds(500))
+    await drainAsyncEvents()
+
+    manager.handleCommand(.setSelectedWorktreeID(firstWorktree.id))
+    await drainAsyncEvents()
+    #expect(await collector.pullRequestRefreshCount(repositoryRootURL: tempRepository.tempRoot) == baselineCount + 2)
+
+    manager.handleCommand(.stop)
+    await task.value
+    try FileManager.default.removeItem(at: tempRepository.tempRoot)
+  }
+
   @Test func canceledSelectionCooldownDoesNotClearReplacementCooldown() async throws {
     let clock = TestClock()
     let tempRepository = try makeTempRepository(worktreeNames: ["sparrow", "swift"])

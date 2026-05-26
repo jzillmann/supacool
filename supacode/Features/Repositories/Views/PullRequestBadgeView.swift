@@ -3,6 +3,7 @@ import SwiftUI
 enum PullRequestBadgeStyle {
   static let mergedColor = Color.purple
   static let openColor = Color.green
+  static let closedColor = Color.red
 
   static func style(state: String?, number: Int?) -> (text: String, color: Color)? {
     guard let state = state?.uppercased() else {
@@ -13,6 +14,8 @@ enum PullRequestBadgeStyle {
       return (text: number.map { "#\($0)" } ?? "MERGED", color: mergedColor)
     case "OPEN":
       return (text: number.map { "#\($0)" } ?? "OPEN", color: openColor)
+    case "CLOSED":
+      return (text: number.map { "#\($0)" } ?? "CLOSED", color: closedColor)
     default:
       return nil
     }
@@ -25,6 +28,8 @@ enum PullRequestBadgeStyle {
       return url == nil ? "Pull request merged" : "Open merged pull request on GitHub"
     case "OPEN":
       return url == nil ? "Pull request open" : "Open pull request on GitHub"
+    case "CLOSED":
+      return url == nil ? "Pull request closed" : "Open closed pull request on GitHub"
     default:
       return url == nil ? "Pull request" : "Open pull request on GitHub"
     }

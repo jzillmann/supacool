@@ -321,11 +321,12 @@ struct AppFeature {
         return evaluateGettingStartedEffect(state: state)
 
       case .board(.delegate(.refreshWorktreeRequested(let worktreeID))):
-        // Replay the same watcher events that the file/branch watcher
-        // would fire on real activity. `branchChanged` also pulls in the
-        // dirty count + ahead/behind via the RepositoriesFeature path,
-        // and `filesChanged` covers anything keyed purely on file state.
-        return .merge(
+        // Replay the same watcher events that normally drive branch,
+        // dirty count, ahead/behind, and PR state. The explicit PR event
+        // matters when the user refreshes/clicks an already-selected
+        // panel — the watcher selection path intentionally coalesces
+        // duplicate selections, so it will not emit on its own.
+        var effects: [Effect<Action>] = [
           .send(
             .repositories(
               .worktreeInfoEvent(.branchChanged(worktreeID: worktreeID))
@@ -335,8 +336,25 @@ struct AppFeature {
             .repositories(
               .worktreeInfoEvent(.filesChanged(worktreeID: worktreeID))
             )
+          ),
+        ]
+        if let repositoryID = state.repositories.repositoryID(containing: worktreeID),
+          let repository = state.repositories.repositories[id: repositoryID]
+        {
+          effects.append(
+            .send(
+              .repositories(
+                .worktreeInfoEvent(
+                  .repositoryPullRequestRefresh(
+                    repositoryRootURL: repository.rootURL,
+                    worktreeIDs: repository.worktrees.map(\.id)
+                  )
+                )
+              )
+            )
           )
-        )
+        }
+        return .merge(effects)
 
       case .settings(.delegate(.hookInstallSucceeded(let slot))):
         return .merge(

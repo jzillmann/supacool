@@ -637,9 +637,11 @@ struct SessionCardView: View {
 struct ReferenceChip: View {
   let reference: SessionReference
   let linearOrgSlug: String
+  var onTap: (() -> Void)? = nil
 
   var body: some View {
     Button {
+      onTap?()
       if let url = reference.url(linearOrgSlug: linearOrgSlug) {
         NSWorkspace.shared.open(url)
       }
@@ -732,7 +734,11 @@ struct SessionReferenceSummaryChips: View {
         )
       }
       if pullRequests.count == 1, let pullRequest = pullRequests.first {
-        ReferenceChip(reference: pullRequest, linearOrgSlug: linearOrgSlug)
+        ReferenceChip(
+          reference: pullRequest,
+          linearOrgSlug: linearOrgSlug,
+          onTap: onPullRequestsPopoverOpened
+        )
       } else if pullRequests.count > 1 {
         ReferenceStackChip(
           kind: .pullRequests,

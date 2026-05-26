@@ -86,7 +86,7 @@ struct FullScreenTerminalView: View {
   /// user can spawn a debug agent without leaving the terminal view.
   let onDebug: () -> Void
 
-  /// Re-fetches worktree info (dirty count, ahead/behind, branch) for
+  /// Re-fetches worktree info (dirty count, ahead/behind, branch, PR state) for
   /// the session's backing worktree. Useful after on-disk changes made
   /// outside Supacool (e.g. command-line git operations).
   let onRefreshWorktree: () -> Void

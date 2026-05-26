@@ -366,7 +366,7 @@ struct BoardRootView: View {
           store.send(.refreshWorktreeTapped(id: session.id))
         },
         onReferencesPopoverOpened: {
-          store.send(.cardAppeared(id: session.id))
+          store.send(.refreshPRReferences(id: session.id))
         },
         activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
         onSelectTerminal: { terminalID in

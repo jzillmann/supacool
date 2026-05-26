@@ -130,6 +130,13 @@ final class WorktreeInfoWatcherManager {
 
   private func setSelectedWorktreeID(_ worktreeID: Worktree.ID?) {
     guard selectedWorktreeID != worktreeID else {
+      guard let repositoryRootURL = worktreeID.flatMap({ worktrees[$0]?.repositoryRootURL }) else {
+        return
+      }
+      updatePullRequestSchedule(
+        repositoryRootURL: repositoryRootURL,
+        immediate: shouldImmediatelyRefreshPullRequests(repositoryRootURL: repositoryRootURL)
+      )
       return
     }
     let previousWorktreeID = selectedWorktreeID

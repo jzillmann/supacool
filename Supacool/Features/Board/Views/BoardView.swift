@@ -681,6 +681,9 @@ struct BoardView: View {
                       store.send(.cardAppeared(id: session.id))
                       store.send(.serverLifecycleStatusRequested(sessionID: session.id))
                     },
+                    onReferencesPopoverOpened: {
+                      store.send(.refreshPRReferences(id: session.id))
+                    },
                     showsRepoLabelAbove: showsRepoLabelAbove
                   )
                   .frame(width: boardCardWidth)
@@ -962,6 +965,7 @@ private struct SessionCardContainer: View {
   let onServerLifecycleStart: () -> Void
   let onServerLifecycleStop: () -> Void
   let onAppear: (() -> Void)?
+  let onReferencesPopoverOpened: (() -> Void)?
   /// When true, render a small repo caption above the card (outside the
   /// card border, top-left). The board flips this on for every card when
   /// it sees ≥2 distinct repos in the currently visible session set,
@@ -1027,7 +1031,7 @@ private struct SessionCardContainer: View {
       onAutoObserverRunNow: onAutoObserverRunNow,
       onDebug: onDebug,
       onAppear: onAppear,
-      onReferencesPopoverOpened: onAppear
+      onReferencesPopoverOpened: onReferencesPopoverOpened
     )
     .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)
     .overlay {
