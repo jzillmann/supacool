@@ -3,6 +3,10 @@ import SwiftUI
 
 nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
   case inProgress
+  /// Card is idle because an external process owns the next move — most
+  /// often a PR is mid-CI or awaiting review. Historical raw value kept as
+  /// `waitingForChecks` for codable stability; UI label is "Waiting on
+  /// External". Can also be pinned manually via the card context menu.
   case waitingForChecks
   case waitingOnMe
   case awaitingInput
@@ -21,7 +25,7 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
   var label: String {
     switch self {
     case .inProgress: "Working"
-    case .waitingForChecks: "Checks Pending"
+    case .waitingForChecks: "Waiting on External"
     case .waitingOnMe: "Waiting"
     case .awaitingInput: "Wants Input"
     case .detached: "Idle"
@@ -66,7 +70,7 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
     awaitingInput: Bool,
     busy: Bool,
     deferredWork: Bool = false,
-    waitingForPullRequestChecks: Bool = false,
+    waitingExternally: Bool = false,
     now: Date = Date()
   ) -> Self {
     if session.parked {
@@ -106,7 +110,7 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
         return .fresh
       }
     }
-    return waitingForPullRequestChecks ? .waitingForChecks : .waitingOnMe
+    return waitingExternally ? .waitingForChecks : .waitingOnMe
   }
 
   private static func shouldKeepInProgressWhileIdle(

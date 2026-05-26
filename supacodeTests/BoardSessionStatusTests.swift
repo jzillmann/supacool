@@ -144,7 +144,7 @@ struct BoardSessionStatusTests {
       tabExists: true,
       awaitingInput: false,
       busy: false,
-      waitingForPullRequestChecks: true,
+      waitingExternally: true,
       now: now
     )
     #expect(status == .fresh)
@@ -162,7 +162,7 @@ struct BoardSessionStatusTests {
       tabExists: true,
       awaitingInput: false,
       busy: false,
-      waitingForPullRequestChecks: true,
+      waitingExternally: true,
       now: now
     )
     #expect(status == .waitingForChecks)
@@ -176,7 +176,7 @@ struct BoardSessionStatusTests {
         tabExists: true,
         awaitingInput: false,
         busy: true,
-        waitingForPullRequestChecks: true
+        waitingExternally: true
       ) == .inProgress
     )
     #expect(
@@ -185,7 +185,7 @@ struct BoardSessionStatusTests {
         tabExists: true,
         awaitingInput: true,
         busy: true,
-        waitingForPullRequestChecks: true
+        waitingExternally: true
       ) == .awaitingInput
     )
   }
@@ -241,7 +241,7 @@ struct BoardSessionStatusTests {
       tabExists: false,
       awaitingInput: false,
       busy: false,
-      waitingForPullRequestChecks: true
+      waitingExternally: true
     )
     #expect(status == .detached)
   }

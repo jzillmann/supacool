@@ -220,6 +220,13 @@ struct BoardRootView: View {
     .modifier(PriorityTerminationAlertModifier(store: store))
     .modifier(DirtySessionRemovalConfirmationModifier(store: store))
     .modifier(WorktreeConflictAlertModifier(store: store))
+    .modifier(
+      PinnedExternalOverrideReconciler(
+        store: store,
+        repositories: repositories,
+        worktreeInfoByID: worktreeInfoByID
+      )
+    )
     .sheet(
       isPresented: Binding(
         get: { store.isTrashSheetPresented },
@@ -862,7 +869,7 @@ struct BoardRootView: View {
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
       deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID),
-      waitingForPullRequestChecks: BoardPullRequestChecks.isWaiting(matchedPullRequest(for: session))
+      waitingExternally: BoardPullRequestChecks.isWaitingExternal(matchedPullRequest(for: session))
     )
     if !tabExists, store.reinitializingSessionIDs.contains(session.id) {
       return .inProgress
@@ -1102,5 +1109,62 @@ private struct WorktreeConflictAlertModifier: ViewModifier {
     } message: { alert in
       Text(alert.message)
     }
+  }
+}
+
+/// Auto-clears pinned `Waiting on External` overrides when the underlying
+/// PR transitions out of an external-wait state (review arrived, CI
+/// settled, PR merged/closed). Sessions with no matched PR never
+/// auto-clear — a pin without a PR is treated as a pure user signal that
+/// the agent is parked on something Supacool can't introspect (Slack
+/// thread, email, manual deployment, …).
+private struct PinnedExternalOverrideReconciler: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+  let repositories: IdentifiedArrayOf<Repository>
+  let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
+
+  @State private var baseline: [AgentSession.ID: Bool] = [:]
+
+  func body(content: Content) -> some View {
+    content.onChange(of: snapshot, initial: true) { _, current in
+      reconcile(current: current)
+    }
+  }
+
+  private var snapshot: [AgentSession.ID: Bool] {
+    var out: [AgentSession.ID: Bool] = [:]
+    for session in store.sessions where session.manualStatusOverride == .waitingForChecks {
+      guard let pullRequest = matchedPullRequest(for: session) else { continue }
+      out[session.id] = BoardPullRequestChecks.isWaitingExternal(pullRequest)
+    }
+    return out
+  }
+
+  private func reconcile(current: [AgentSession.ID: Bool]) {
+    baseline = baseline.filter { current.keys.contains($0.key) }
+    for (id, isExternalNow) in current {
+      if isExternalNow {
+        baseline[id] = true
+      } else if baseline[id] == true {
+        store.send(.setManualStatusOverride(id: id, status: nil))
+      } else {
+        baseline[id] = false
+      }
+    }
+  }
+
+  private func matchedPullRequest(for session: AgentSession) -> GithubPullRequest? {
+    guard let repo = repositories[id: session.repositoryID] else { return nil }
+    let rootPath = repo.rootURL.standardizedFileURL.path(percentEncoded: false)
+    let workspacePath = session.currentWorkspacePath
+    guard workspacePath != rootPath else { return nil }
+    guard let worktree = repo.worktrees.first(where: { $0.id == workspacePath }) else {
+      return nil
+    }
+    guard let pullRequest = worktreeInfoByID[workspacePath]?.pullRequest else { return nil }
+    guard pullRequest.headRefName == nil || pullRequest.headRefName == worktree.name else {
+      return nil
+    }
+    return pullRequest
   }
 }
