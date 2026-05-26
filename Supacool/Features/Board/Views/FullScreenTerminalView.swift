@@ -408,9 +408,8 @@ struct FullScreenTerminalView: View {
   }
 
   /// Always-on workspace badge beside the repo name. On a worktree it
-  /// shows the branch in accent color; at repo root it shows a muted
-  /// "repo root" pill so the user is never in doubt about whether they
-  /// are editing the tracked working copy directly.
+  /// shows the branch in accent color; at repo root it shows a compact
+  /// home icon so the user can tell they are in the tracked working copy.
   @ViewBuilder
   private var workspaceBadge: some View {
     if let worktreeLabel {
@@ -432,19 +431,14 @@ struct FullScreenTerminalView: View {
         convertBranchDraft = suggestedBranchName(from: session.displayName)
         isConvertPopoverShown = true
       } label: {
-        HStack(spacing: 3) {
-          Image(systemName: "dot.circle")
-            .font(.caption2)
-          Text("repo root")
-            .font(.caption.weight(.medium))
-          Image(systemName: "arrow.right.circle")
-            .font(.caption2)
-        }
-        .foregroundStyle(.orange)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(Color.orange.opacity(0.12))
-        .clipShape(Capsule())
+        Image(systemName: "house")
+          .font(.caption.weight(.medium))
+          .accessibilityLabel("Repo root")
+          .foregroundStyle(.orange)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(Color.orange.opacity(0.12))
+          .clipShape(Capsule())
       }
       .buttonStyle(.plain)
       .help("Running at repo root — click to create a worktree and cd into it.")
