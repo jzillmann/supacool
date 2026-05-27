@@ -177,9 +177,22 @@ struct WorktreeJanitorSheet: View {
   /// Custom list (not `Table`) so we can inline an expandable diff-stat
   /// drawer per row. `Table` lives in a grid layout that doesn't
   /// support variable-height rows.
+  ///
+  /// Uses an eager `VStack` rather than `LazyVStack`. With `LazyVStack`,
+  /// the enclosing sheet's `minWidth/minHeight`-only frame caused
+  /// SwiftUI to oscillate: the sheet asked for ideal size → measured
+  /// the lazy stack → lazy stack deferred per-row → some rows were
+  /// "expanded" (diff-stat drawer) so reported sizes depended on
+  /// state → state changes re-invalidated the parent → re-measure,
+  /// loop. A `sample` capture during a stuck-sheet freeze showed
+  /// 100% of main thread (5 back-to-back 1.6 s stalls) inside
+  /// `SheetContentRoot.sizeThatFits → LazyStack.measureEstimates →
+  /// ForEachList.applyNodes → LazyLayoutViewCache.placeSubviews`.
+  /// Eager VStack does the layout once per state mutation — typical
+  /// worktree counts (10–50 rows) make the lazy savings irrelevant.
   private var rowsList: some View {
     ScrollView {
-      LazyVStack(alignment: .leading, spacing: 0) {
+      VStack(alignment: .leading, spacing: 0) {
         rowHeader
         Divider()
         ForEach(store.sortedRows) { row in
