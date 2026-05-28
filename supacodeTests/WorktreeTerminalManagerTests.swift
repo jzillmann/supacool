@@ -1483,6 +1483,130 @@ struct WorktreeTerminalManagerTests {
     #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
   }
 
+  @Test func firstHookDeadmanFiresWhenNoHooksArrive() async {
+    let clock = TestClock()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      optimisticBusyTTL: .seconds(60),
+      firstHookDeadmanDelay: .seconds(10),
+      startPromptScreenScanning: false,
+      clock: clock,
+      readScreenContents: { _, _ in "shell prompt captured by deadman" },
+    )
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .claude,
+          initialPrompt: "fix CEN-4841",
+        ),
+      ]
+    }
+
+    manager.scheduleFirstHookDeadmanForTesting(worktreeID: worktree.id, tabID: tabID)
+
+    await Task.yield()
+    await clock.advance(by: .seconds(10))
+    await Task.yield()
+
+    #expect(manager.firstHookDeadmanFireCount == 1)
+  }
+
+  @Test func firstHookDeadmanIsCancelledWhenHookArrivesFirst() async {
+    let socket = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-deadman-cancel")
+    let clock = TestClock()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      socketServer: socket,
+      optimisticBusyTTL: .seconds(60),
+      firstHookDeadmanDelay: .seconds(10),
+      startPromptScreenScanning: false,
+      clock: clock,
+      readScreenContents: { _, _ in "should not be read" },
+    )
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    let tab = state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: .claude,
+          initialPrompt: "fix CEN-4841",
+        ),
+      ]
+    }
+
+    manager.scheduleFirstHookDeadmanForTesting(worktreeID: worktree.id, tabID: tabID)
+    socket.onBusy?(worktree.id, tabID.rawValue, tab.surfaceID, true, 12345)
+
+    await Task.yield()
+    await clock.advance(by: .seconds(10))
+    await Task.yield()
+
+    #expect(manager.firstHookDeadmanFireCount == 0)
+  }
+
+  @Test func firstHookDeadmanIgnoresShellSessions() async {
+    let clock = TestClock()
+    let manager = WorktreeTerminalManager(
+      runtime: GhosttyRuntime(),
+      firstHookDeadmanDelay: .seconds(10),
+      startPromptScreenScanning: false,
+      clock: clock,
+      readScreenContents: { _, _ in "should not be read" },
+    )
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let sessionID = UUID()
+    let tabID = TerminalTabID(rawValue: sessionID)
+    state.registerTestTab(tabID: sessionID)
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock {
+      $0 = [
+        AgentSession(
+          id: sessionID,
+          repositoryID: worktree.id,
+          worktreeID: worktree.id,
+          agent: nil,
+          initialPrompt: "",
+        ),
+      ]
+    }
+
+    manager.scheduleFirstHookDeadmanForTesting(worktreeID: worktree.id, tabID: tabID)
+
+    await Task.yield()
+    await clock.advance(by: .seconds(10))
+    await Task.yield()
+
+    #expect(manager.firstHookDeadmanFireCount == 0)
+  }
+
+  @Test func firstHookDeadmanContextStringFormatsDuration() {
+    #expect(
+      WorktreeTerminalManager.firstHookDeadmanContext(for: .seconds(10))
+        == "no agent hook within 10s"
+    )
+    #expect(
+      WorktreeTerminalManager.firstHookDeadmanContext(for: .seconds(30))
+        == "no agent hook within 30s"
+    )
+  }
+
   @Test func selectTabWithStaleIdIsNoOp() {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

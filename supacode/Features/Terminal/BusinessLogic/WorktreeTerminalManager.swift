@@ -22,6 +22,15 @@ private let ownedProcessRefreshIntervalDefault: Duration = .seconds(60)
 private let optimisticBusyTTLDefault: Duration = .seconds(15)
 nonisolated private let deferredWorkFallbackTTLDefault: Duration = .seconds(15 * 60)
 nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
+/// Window between session creation and the first expected agent hook
+/// event. When this elapses without any `hookBusy`/`hookEvent` landing
+/// for a tab that received a submitted initial input, the manager
+/// force-snapshots the current screen into the transcript and writes a
+/// synthetic `sessionLifecycle("firstHookDeadman")` event so a debug
+/// agent has something to look at when the trace would otherwise be
+/// silent. `optimisticBusyTTL` already keeps the board card honest;
+/// this exists purely to leave post-mortem evidence in the trace.
+private let firstHookDeadmanDelayDefault: Duration = .seconds(10)
 
 private let defaultIsProcessAlive: @Sendable (Int32) -> Bool = { pid in
   // `kill(pid, 0)` returns 0 when the process exists (signal-less ping).
@@ -74,6 +83,7 @@ final class WorktreeTerminalManager {
   private let optimisticBusyTTL: Duration
   private let deferredWorkFallbackTTL: Duration
   private let deferredWorkLeaseBuffer: Duration
+  private let firstHookDeadmanDelay: Duration
   private let isProcessAlive: @Sendable (Int32) -> Bool
   /// Tracker that attributes orphaned (`ppid == 1`) processes whose cwd
   /// is under `~/.supacool/repos/` to their owning worktree. Refresh is
@@ -99,6 +109,19 @@ final class WorktreeTerminalManager {
   private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var optimisticBusyByTab: [UUID: OptimisticBusyTracker] = [:]
   private var optimisticBusyExpiryTasks: [UUID: Task<Void, Never>] = [:]
+  /// Per-tab one-shot timer that snapshots the surface and writes a
+  /// synthetic lifecycle event when no agent hook lands within
+  /// `firstHookDeadmanDelay`. Cancelled the moment any hook is observed
+  /// or the tab tree disappears. Keyed by raw tab UUID so cancellation
+  /// from `markInitialAgentEventObserved` is O(1).
+  private var firstHookDeadmanTasks: [UUID: Task<Void, Never>] = [:]
+  #if DEBUG
+    /// Test-only counter incremented every time the deadman actually
+    /// fires (vs. being cancelled). Exposed because the recorder's
+    /// disk-writing side effect is hard to observe synchronously and
+    /// the existing test suite mocks behavior, not files.
+    private(set) var firstHookDeadmanFireCount: Int = 0
+  #endif
   /// Per-tab PID registry, keyed by PID so a surface running multiple
   /// agents (pi spawning codex on the same PTY) keeps a registration for
   /// each. Without per-PID keying the inner agent's registration would
@@ -128,6 +151,7 @@ final class WorktreeTerminalManager {
     optimisticBusyTTL: Duration = optimisticBusyTTLDefault,
     deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
+    firstHookDeadmanDelay: Duration = firstHookDeadmanDelayDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     ownedProcessTracker: WorktreeOwnedProcessTracker? = nil,
     startPromptScreenScanning: Bool = true,
@@ -144,6 +168,7 @@ final class WorktreeTerminalManager {
     self.optimisticBusyTTL = optimisticBusyTTL
     self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
+    self.firstHookDeadmanDelay = firstHookDeadmanDelay
     self.isProcessAlive = isProcessAlive
     self.ownedProcessTracker = ownedProcessTracker
     self.sleep = { duration in
@@ -554,6 +579,7 @@ final class WorktreeTerminalManager {
         $0.lastActivityAt = Date()
       }
     }
+    firstHookDeadmanTasks.removeValue(forKey: tabID)?.cancel()
   }
 
   // MARK: - Supacool Matrix Board queries
@@ -1214,6 +1240,7 @@ final class WorktreeTerminalManager {
   ) {
     guard let initialInput, Self.isSubmittedInput(initialInput) else { return }
     markOptimisticBusy(worktreeID: worktreeID, tabID: tabID)
+    scheduleFirstHookDeadman(worktreeID: worktreeID, tabID: tabID)
   }
 
   #if DEBUG
@@ -1228,7 +1255,83 @@ final class WorktreeTerminalManager {
         initialInput: initialInput,
       )
     }
+
+    func scheduleFirstHookDeadmanForTesting(
+      worktreeID: Worktree.ID,
+      tabID: TerminalTabID
+    ) {
+      scheduleFirstHookDeadman(worktreeID: worktreeID, tabID: tabID)
+    }
   #endif
+
+  private func scheduleFirstHookDeadman(worktreeID: Worktree.ID, tabID: TerminalTabID) {
+    let rawTabID = tabID.rawValue
+    // Shell sessions never produce hooks; scheduling for them would
+    // guarantee a fired deadman + snapshot for every plain terminal.
+    guard let session = agentSessions.first(where: { $0.id == rawTabID }),
+      session.agent != nil
+    else { return }
+    // Resume / rerun paths land on a session that already saw hooks in
+    // a previous run — skip rather than schedule a no-op.
+    if let terminal = session.terminals.first(where: { $0.id == rawTabID }),
+      terminal.hasObservedInitialAgentEvent
+    {
+      return
+    }
+
+    firstHookDeadmanTasks.removeValue(forKey: rawTabID)?.cancel()
+
+    let sleep = self.sleep
+    let delay = self.firstHookDeadmanDelay
+    firstHookDeadmanTasks[rawTabID] = Task { [weak self, sleep, delay] in
+      do {
+        try await sleep(delay)
+      } catch {
+        return
+      }
+      guard let self else { return }
+      self.fireFirstHookDeadman(worktreeID: worktreeID, tabID: tabID)
+    }
+  }
+
+  private func fireFirstHookDeadman(worktreeID: Worktree.ID, tabID: TerminalTabID) {
+    firstHookDeadmanTasks[tabID.rawValue] = nil
+    // Tab torn down before the deadman fired — nothing to snapshot.
+    guard states[worktreeID]?.containsTabTree(tabID) == true else { return }
+    // Last-second race: a hook may have landed between the sleep
+    // resuming and this method running. `cancel()` from
+    // `markInitialAgentEventObserved` is best-effort, not synchronous.
+    if let session = agentSessions.first(where: { $0.id == tabID.rawValue }),
+      let terminal = session.terminals.first(where: { $0.id == tabID.rawValue }),
+      terminal.hasObservedInitialAgentEvent
+    {
+      return
+    }
+    let fullText = readScreenContentsOverride?(worktreeID, tabID)
+      ?? states[worktreeID]?.readScreenContents(tabID: tabID, scope: .surface)
+    if let fullText, !fullText.isEmpty {
+      TranscriptRecorder.shared.snapshotOutput(tabID: tabID, fullText: fullText)
+    }
+    TranscriptRecorder.shared.append(
+      event: .sessionLifecycle(
+        kind: "firstHookDeadman",
+        context: Self.firstHookDeadmanContext(for: firstHookDeadmanDelay),
+        at: Date()
+      ),
+      tabID: tabID
+    )
+    #if DEBUG
+      firstHookDeadmanFireCount += 1
+    #endif
+  }
+
+  /// Compact human-readable description of the deadman delay, suitable
+  /// for the synthetic lifecycle event's `context`. `Duration`'s default
+  /// description (`Duration(seconds: 10, attoseconds: 0)`) is too noisy
+  /// for a transcript line.
+  nonisolated static func firstHookDeadmanContext(for delay: Duration) -> String {
+    "no agent hook within \(delay.components.seconds)s"
+  }
 
   private func markOptimisticBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) {
     let rawTabID = tabID.rawValue
