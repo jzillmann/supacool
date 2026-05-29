@@ -7,6 +7,10 @@ import Testing
 struct CodexSettingsInstallerTests {
   private let fileManager = FileManager.default
 
+  @Test func enableHooksCommandUsesCurrentCodexFeatureFlag() {
+    #expect(CodexSettingsInstaller.enableHooksCommand == "codex features enable hooks")
+  }
+
   private func makeTempHomeURL() -> URL {
     URL(fileURLWithPath: NSTemporaryDirectory())
       .appendingPathComponent("supacode-codex-installer-\(UUID().uuidString)", isDirectory: true)

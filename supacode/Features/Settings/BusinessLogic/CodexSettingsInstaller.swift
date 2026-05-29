@@ -2,6 +2,8 @@ import Darwin
 import Foundation
 
 nonisolated struct CodexSettingsInstaller {
+  static let enableHooksCommand = "codex features enable hooks"
+
   struct CommandResult: Equatable, Sendable {
     let status: Int32
     let standardError: String
@@ -118,7 +120,7 @@ nonisolated struct CodexSettingsInstaller {
   static func runEnableHooksCommand() async throws -> CommandResult {
     let process = Process()
     process.executableURL = loginShellURL()
-    process.arguments = ["-l", "-c", "codex features enable codex_hooks"]
+    process.arguments = ["-l", "-c", enableHooksCommand]
     let errorPipe = Pipe()
     process.standardError = errorPipe
     let status = try await withCheckedThrowingContinuation { continuation in
