@@ -282,8 +282,26 @@ struct AppFeature {
         // sets `state.alert`, but that alert renders in the dead
         // sidebar UI which Supacool doesn't show. The tray card is the
         // only place a Matrix Board user will actually notice this.
+        // Also drop the in-flight `.worktreeDeleting` card so the
+        // failure replaces it (mirrors `.sessionCreating` →
+        // `.sessionSpawnFailed`).
         let card = TrayCard(kind: .worktreeDeleteFailed(path: worktreeID, message: message))
+        return .merge(
+          .send(.board(.trayNoteWorktreeDeleteResolved(worktreeID: worktreeID))),
+          .send(.board(.trayCardPushed(card)))
+        )
+
+      case .repositories(.delegate(.worktreeDeleteStarted(let worktreeID, let displayName))):
+        // Push an in-progress tray card mirroring `.sessionCreating`.
+        // The card is auto-dismissed by `.worktreeDeleteSucceeded` or
+        // replaced by the failure card via `.worktreeDeleteFailed`.
+        let card = TrayCard(
+          kind: .worktreeDeleting(worktreeID: worktreeID, displayName: displayName)
+        )
         return .send(.board(.trayCardPushed(card)))
+
+      case .repositories(.delegate(.worktreeDeleteSucceeded(let worktreeID))):
+        return .send(.board(.trayNoteWorktreeDeleteResolved(worktreeID: worktreeID)))
 
       case .board(.delegate(.prioritySessionTerminated(let title, let body))):
         guard state.scenePhase != .active, state.settings.systemNotificationsEnabled else {

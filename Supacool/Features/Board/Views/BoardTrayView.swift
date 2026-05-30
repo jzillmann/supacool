@@ -185,7 +185,7 @@ private struct TrayCardView: View {
   @ViewBuilder
   private var leadingIndicator: some View {
     switch card.kind {
-    case .sessionCreating:
+    case .sessionCreating, .worktreeDeleting:
       // Spinner in place of an icon so the card reads as "in progress"
       // at a glance — matches the "creation takes a while" framing.
       ProgressView()
@@ -222,6 +222,14 @@ private struct TrayCardView: View {
         title: "Starting session",
         subtitle: displayName,
         helpText: "Open this session"
+      )
+    case .worktreeDeleting(_, let displayName):
+      return TrayCardPresentation(
+        icon: "trash",  // unused — leadingIndicator shows a spinner
+        tint: Color.secondary,
+        title: "Removing worktree",
+        subtitle: displayName,
+        helpText: "Tap to dismiss."
       )
     case .hookInstallFailed(let slot, let message):
       return TrayCardPresentation(

@@ -2229,11 +2229,13 @@ struct RepositoriesFeatureTests {
     await store.receive(\.deleteWorktreeApply) {
       $0.deletingWorktreeIDs = [featureWorktree.id]
     }
+    await store.receive(\.delegate.worktreeDeleteStarted)
     await store.receive(\.worktreeDeleted) {
       $0.deletingWorktreeIDs = []
       $0.repositories = [makeRepository(id: repoRoot, worktrees: [mainWorktree])]
     }
     await store.receive(\.delegate.repositoriesChanged)
+    await store.receive(\.delegate.worktreeDeleteSucceeded)
     await store.receive(\.reloadRepositories)
     await store.receive(\.repositoriesLoaded) {
       $0.isInitialLoadComplete = true
@@ -2330,11 +2332,13 @@ struct RepositoriesFeatureTests {
     await store.receive(\.deleteWorktreeApply) {
       $0.deletingWorktreeIDs = [featureWorktree.id]
     }
+    await store.receive(\.delegate.worktreeDeleteStarted)
     await store.receive(\.worktreeDeleted) {
       $0.deletingWorktreeIDs = []
       $0.repositories = [makeRepository(id: repoRoot, worktrees: [mainWorktree])]
     }
     await store.receive(\.delegate.repositoriesChanged)
+    await store.receive(\.delegate.worktreeDeleteSucceeded)
     await store.receive(\.reloadRepositories)
     await store.receive(\.repositoriesLoaded) {
       $0.isInitialLoadComplete = true
@@ -2970,6 +2974,7 @@ struct RepositoriesFeatureTests {
       $0.repositories = [updatedRepository]
     }
     await store.receive(\.delegate.repositoriesChanged)
+    await store.receive(\.delegate.worktreeDeleteSucceeded)
     await store.receive(\.reloadRepositories)
     await store.receive(\.repositoriesLoaded) {
       $0.isInitialLoadComplete = true
@@ -3004,6 +3009,7 @@ struct RepositoriesFeatureTests {
       $0.selection = .worktree(mainWorktree.id)
     }
     await store.receive(\.delegate.repositoriesChanged)
+    await store.receive(\.delegate.worktreeDeleteSucceeded)
     await store.receive(\.delegate.selectedWorktreeChanged)
     await store.receive(\.reloadRepositories)
     await store.receive(\.repositoriesLoaded) {

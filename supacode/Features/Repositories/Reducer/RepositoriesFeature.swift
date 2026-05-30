@@ -316,6 +316,15 @@ struct RepositoriesFeature {
     /// `deleteWorktreeFailed` so AppFeature/Supacool can surface the
     /// error (the legacy alert path is invisible on the Matrix Board).
     case worktreeDeleteFailed(worktreeID: Worktree.ID, message: String)
+    /// `git worktree remove` is now running. Emitted from
+    /// `deleteWorktreeApply` so AppFeature/Supacool can push an
+    /// in-progress tray card (mirrors `.sessionCreating`). `displayName`
+    /// is the folder name to surface in the card.
+    case worktreeDeleteStarted(worktreeID: Worktree.ID, displayName: String)
+    /// `git worktree remove` succeeded for this worktree. Emitted from
+    /// `worktreeDeleted` so AppFeature/Supacool can dismiss the matching
+    /// in-flight tray card.
+    case worktreeDeleteSucceeded(worktreeID: Worktree.ID)
   }
 
   @Dependency(AnalyticsClient.self) private var analyticsClient
@@ -1857,7 +1866,15 @@ struct RepositoriesFeature {
         @Shared(.settingsFile) var settingsFile
         let deleteBranchOnDeleteWorktree = settingsFile.global.deleteBranchOnDeleteWorktree
         let worktreePathForRelease = worktree.workingDirectory.path(percentEncoded: false)
-        return .run { send in
+        let deleteStartedDelegate: Effect<Action> = .send(
+          .delegate(
+            .worktreeDeleteStarted(
+              worktreeID: worktree.id,
+              displayName: worktree.name
+            )
+          )
+        )
+        let runDelete: Effect<Action> = .run { send in
           // Stop adopted dev processes before the worktree directory
           // disappears so they have a chance to shut down cleanly.
           await terminalClient.send(.releaseOwnedProcesses(worktreePath: worktreePathForRelease))
@@ -1878,6 +1895,7 @@ struct RepositoriesFeature {
             await send(.deleteWorktreeFailed(error.localizedDescription, worktreeID: worktree.id))
           }
         }
+        return .merge(deleteStartedDelegate, runDelete)
 
       case .worktreeDeleted(
         let worktreeID,
@@ -1927,7 +1945,8 @@ struct RepositoriesFeature {
           selectedWorktree: selectedWorktree
         )
         var immediateEffects: [Effect<Action>] = [
-          .send(.delegate(.repositoriesChanged(repositories)))
+          .send(.delegate(.repositoriesChanged(repositories))),
+          .send(.delegate(.worktreeDeleteSucceeded(worktreeID: worktreeID))),
         ]
         if selectionChanged {
           immediateEffects.append(.send(.delegate(.selectedWorktreeChanged(selectedWorktree))))

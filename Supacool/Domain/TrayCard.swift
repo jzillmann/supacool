@@ -28,6 +28,15 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// jumps straight into the fresh terminal.
   case sessionCreating(sessionID: AgentSession.ID, displayName: String)
 
+  /// A worktree is being removed via `git worktree remove`. Auto-dismissed
+  /// when `RepositoriesFeature.worktreeDeleted` fires (success) or replaced
+  /// by `.worktreeDeleteFailed` on error. `worktreeID` is the worktree
+  /// path (its stable identifier); `displayName` is the folder name shown
+  /// in the card subtitle. Mirrors `.sessionCreating` visually (spinner
+  /// leading indicator). Primary tap dismisses — there's nothing to
+  /// navigate to during a transient delete.
+  case worktreeDeleting(worktreeID: String, displayName: String)
+
   /// A hook install / reinstall errored. Surfaced as a red tray card so
   /// users see failures initiated from both the tray (reinstall on a
   /// stale-hooks card) and Settings → Coding Agents. Primary tap opens
@@ -62,8 +71,8 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   var hasSecondaryAction: Bool {
     switch self {
     case .staleHooks: true
-    case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed,
-      .sessionSpawnFailed: false
+    case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
+      .worktreeDeleteFailed, .sessionSpawnFailed: false
     }
   }
 
@@ -73,7 +82,7 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// prompt. Non-error kinds return `nil`.
   var errorContent: (title: String, message: String)? {
     switch self {
-    case .staleHooks, .sessionCreating: return nil
+    case .staleHooks, .sessionCreating, .worktreeDeleting: return nil
     case .hookInstallFailed(let slot, let message):
       let label: String = {
         switch slot {

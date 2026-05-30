@@ -719,6 +719,11 @@ struct BoardFeature {
     /// progress (card shrinks as slots get fixed) and disappears when
     /// the last slot is handled.
     case trayNoteHookInstalled(slot: AgentHookSlot)
+    /// Fired by AppFeature when RepositoriesFeature reports a worktree
+    /// delete has resolved (success or failure). Removes any in-flight
+    /// `.worktreeDeleting` card for that worktree. Mirrors the
+    /// `trayNoteHookInstalled` pattern.
+    case trayNoteWorktreeDeleteResolved(worktreeID: String)
 
     // MARK: Getting Started
     /// Fired by AppFeature after it's re-computed the pending tasks.
@@ -2427,6 +2432,11 @@ struct BoardFeature {
         case .sessionCreating(let sessionID, _):
           state.trayCards.remove(id: id)
           return .send(.focusSession(id: sessionID))
+        case .worktreeDeleting:
+          // Nothing to navigate to during an in-flight delete; tap just
+          // dismisses, same as `.worktreeDeleteFailed`.
+          state.trayCards.remove(id: id)
+          return .none
         case .hookInstallFailed:
           state.trayCards.remove(id: id)
           return .send(.delegate(.openSettingsRequested(section: .codingAgents)))
@@ -2457,8 +2467,8 @@ struct BoardFeature {
           // `.hookInstallFailed` card describing the failure.
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
-        case .sessionCreating, .hookInstallFailed, .worktreeDeleteFailed,
-          .sessionSpawnFailed:
+        case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
+          .worktreeDeleteFailed, .sessionSpawnFailed:
           return .none
         }
 
@@ -2508,6 +2518,14 @@ struct BoardFeature {
             state.trayCards.remove(id: card.id)
           default:
             break
+          }
+        }
+        return .none
+
+      case .trayNoteWorktreeDeleteResolved(let worktreeID):
+        for card in state.trayCards {
+          if case .worktreeDeleting(let id, _) = card.kind, id == worktreeID {
+            state.trayCards.remove(id: card.id)
           }
         }
         return .none
