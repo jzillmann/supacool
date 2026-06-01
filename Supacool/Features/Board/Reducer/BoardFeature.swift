@@ -1439,6 +1439,7 @@ struct BoardFeature {
           }
         }()
         let planMode = bookmark.agent?.supportsPlanMode == true && bookmark.planMode
+        let remoteControl = bookmark.agent?.supportsRemoteControl == true && bookmark.remoteControl
         let bypassPermissions =
           UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
         @Shared(.settingsFile) var settingsFile
@@ -1451,6 +1452,8 @@ struct BoardFeature {
           agent: bookmark.agent,
           prompt: bookmark.prompt,
           planMode: planMode,
+          remoteControl: remoteControl,
+          remoteControlName: nil,
           bypassPermissions: bypassPermissions,
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,
@@ -2701,6 +2704,8 @@ struct BoardFeature {
           agent: agent,
           prompt: prompt,
           planMode: false,
+          remoteControl: false,
+          remoteControlName: nil,
           bypassPermissions: bypass,
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,

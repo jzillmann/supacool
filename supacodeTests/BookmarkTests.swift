@@ -30,6 +30,8 @@ struct BookmarkTests {
     // worktree — agents must never silently spawn into the main checkout.
     #expect(bookmark.worktreeMode == .newWorktree)
     #expect(bookmark.planMode == false)
+    // Pre-remote-control bookmarks decode the new bit as false.
+    #expect(bookmark.remoteControl == false)
   }
 
   @Test func encodingThenDecodingRoundTripsAllFields() throws {
@@ -42,6 +44,7 @@ struct BookmarkTests {
       agent: .claude,
       worktreeMode: .newWorktree,
       planMode: true,
+      remoteControl: true,
       createdAt: created
     )
     let encoder = JSONEncoder()

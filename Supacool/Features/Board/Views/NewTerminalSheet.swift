@@ -25,9 +25,6 @@ struct NewTerminalSheet: View {
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
-  /// Persists the disclosure state of the Advanced section so it stays
-  /// open across re-renders within a single sheet presentation.
-  @State private var isAdvancedExpanded: Bool = false
 
   var body: some View {
     Form {
@@ -91,48 +88,14 @@ struct NewTerminalSheet: View {
             }
           }
         }
-        if store.agent != nil {
-          DisclosureGroup(isExpanded: $isAdvancedExpanded) {
-            if store.agent?.supportsPlanMode == true {
-              planModeToggle
-            }
-            bypassPermissionsToggle
-          } label: {
-            // SwiftUI's default DisclosureGroup only toggles when the
-            // chevron itself is clicked — clicking the label text
-            // does nothing. Widening the hit area + a manual
-            // onTapGesture makes the whole row act like a button,
-            // which is what the user expects.
-            Text("Advanced")
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .contentShape(Rectangle())
-              .onTapGesture {
-                withAnimation(.easeOut(duration: 0.18)) {
-                  isAdvancedExpanded.toggle()
-                }
-              }
-          }
-        }
       } footer: {
         if let message = store.validationMessage, !message.isEmpty {
           Text(message).foregroundStyle(.red)
         }
       }
 
-      if !store.destination.isManualRemote {
-        Section {
-          Toggle("Save as bookmark", isOn: $store.saveAsBookmark)
-            .help("Pin this launch as a one-click pill above Waiting on Me.")
-          if store.saveAsBookmark {
-            TextField("Bookmark name", text: $store.bookmarkName)
-          }
-        } footer: {
-          if store.saveAsBookmark {
-            Text("Bookmarks are scoped to the selected repository.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
+      if hasAnyLaunchOptions {
+        launchOptionsSection
       }
     }
     .formStyle(.grouped)
@@ -502,22 +465,88 @@ struct NewTerminalSheet: View {
     )
   }
 
-  private var bypassPermissionsToggle: some View {
-    Toggle(isOn: $bypassPermissions) {
-      Text("Skip permission prompts")
-      Text(
-        store.planMode && store.agent?.supportsPlanMode == true
-          ? "Disabled while plan mode is on."
-          : "Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use."
-      )
-    }
-    .disabled(store.planMode && store.agent?.supportsPlanMode == true)
+  // MARK: - Launch options tag cloud
+
+  private var agentSupportsPlanMode: Bool { store.agent?.supportsPlanMode == true }
+  private var agentSupportsSkip: Bool { store.agent?.bypassPermissionsFlag != nil }
+  private var agentSupportsRemoteControl: Bool { store.agent?.supportsRemoteControl == true }
+  /// Bookmarks are local-only — no pill on a manual remote SSH session.
+  private var canBookmark: Bool { !store.destination.isManualRemote }
+
+  /// Plan mode and Skip permissions are mutually exclusive (plan wins in
+  /// the rendered command), so Skip is inert while plan is armed.
+  private var skipDisabledByPlanMode: Bool { store.planMode && agentSupportsPlanMode }
+
+  private var hasAnyLaunchOptions: Bool {
+    agentSupportsPlanMode || agentSupportsSkip || agentSupportsRemoteControl || canBookmark
   }
 
-  private var planModeToggle: some View {
-    Toggle(isOn: $store.planMode) {
-      Text("Plan mode")
-      Text("Launch Claude with --permission-mode plan. It can inspect and propose changes, but won't execute them until you approve.")
+  /// The "launch options" section: a wrapping cloud of toggleable pills
+  /// (Plan mode · Skip permissions · Remote control · Save as bookmark),
+  /// each filtered to the agents / destinations that support it, plus the
+  /// inline name fields that the Remote-control and Bookmark pills reveal.
+  @ViewBuilder
+  private var launchOptionsSection: some View {
+    Section {
+      FlowLayout(spacing: 8, lineSpacing: 8) {
+        if agentSupportsPlanMode {
+          FeatureTag(
+            isOn: $store.planMode,
+            title: "Plan mode",
+            systemImage: "list.bullet.clipboard",
+            help: "Launch Claude with --permission-mode plan. It can inspect and "
+              + "propose changes, but won't execute them until you approve."
+          )
+        }
+        if agentSupportsSkip {
+          FeatureTag(
+            isOn: $bypassPermissions,
+            title: "Skip permissions",
+            systemImage: "bolt",
+            help: skipDisabledByPlanMode
+              ? "Disabled while Plan mode is on."
+              : "Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). "
+                + "Lets it act without confirming each tool use.",
+            isEnabled: !skipDisabledByPlanMode
+          )
+        }
+        if agentSupportsRemoteControl {
+          FeatureTag(
+            isOn: $store.remoteControl,
+            title: "Remote control",
+            systemImage: "iphone.gen3",
+            help: "Launch Claude with --remote-control so you can drive this "
+              + "session from claude.ai/code or the Claude mobile app. Runs "
+              + "locally the whole time."
+          )
+        }
+        if canBookmark {
+          FeatureTag(
+            isOn: $store.saveAsBookmark,
+            title: "Save as bookmark",
+            systemImage: "bookmark",
+            help: "Pin this launch as a one-click pill above Waiting on Me."
+          )
+        }
+      }
+      if store.remoteControl && agentSupportsRemoteControl {
+        TextField(
+          "Remote session name",
+          text: $store.remoteControlName,
+          prompt: Text("Optional — defaults to this machine's name")
+        )
+      }
+      if store.saveAsBookmark && canBookmark {
+        TextField("Bookmark name", text: $store.bookmarkName)
+      }
+    } header: {
+      Text("Advanced")
+    } footer: {
+      if store.saveAsBookmark && canBookmark {
+        Text("Bookmarks are scoped to the selected repository.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
     }
   }
 

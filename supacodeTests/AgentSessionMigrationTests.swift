@@ -174,6 +174,50 @@ struct AgentSessionMigrationTests {
     #expect(decoded.parkedActive == false)
   }
 
+  @Test func remoteControlDefaultsToFalseWhenMissing() throws {
+    // A snapshot from before `remoteControl` existed. The decoder must
+    // synthesize `false` rather than throwing.
+    let sessionID = UUID()
+    let json = """
+    {
+      "id": "\(sessionID.uuidString)",
+      "repositoryID": "/tmp/repo",
+      "worktreeID": "/tmp/repo",
+      "currentWorkspacePath": "/tmp/repo",
+      "displayName": "p",
+      "createdAt": 1750000000,
+      "planMode": true,
+      "terminals": [
+        {
+          "id": "\(sessionID.uuidString)",
+          "role": "agent",
+          "agent": "claude",
+          "initialPrompt": "p",
+          "createdAt": 1750000000,
+          "lastActivityAt": 1750000000
+        }
+      ],
+      "primaryTerminalID": "\(sessionID.uuidString)"
+    }
+    """
+    let decoded = try JSONDecoder().decode(AgentSession.self, from: Data(json.utf8))
+    #expect(decoded.planMode == true)
+    #expect(decoded.remoteControl == false)
+  }
+
+  @Test func remoteControlRoundTrips() throws {
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "p",
+      remoteControl: true
+    )
+    let data = try JSONEncoder().encode(session)
+    let decoded = try JSONDecoder().decode(AgentSession.self, from: data)
+    #expect(decoded.remoteControl == true)
+  }
+
   @Test func parkedActiveRoundTrips() throws {
     var session = AgentSession(
       repositoryID: "/tmp/repo",

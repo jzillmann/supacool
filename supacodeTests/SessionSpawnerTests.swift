@@ -99,6 +99,34 @@ struct SessionSpawnerTests {
     #expect(spawnedInput.value == "claude --permission-mode plan 'Plan the refactor'\r")
   }
 
+  @Test(.dependencies) func claudeRemoteControlSpawnsWithFlagAndNameAndMarksSession() async throws {
+    let request = Self.makeRequest(
+      selection: .repoRoot,
+      agent: .claude,
+      prompt: "Pair from my phone",
+      remoteControl: true,
+      remoteControlName: "Couch",
+      bypassPermissions: true
+    )
+    let spawnedInput = LockIsolated<String?>(nil)
+    let session = try await withDependencies {
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput(_, let input, _, _) = command {
+          spawnedInput.setValue(input)
+        }
+      }
+      $0.repoSync = RepoSyncClient(syncIfSafe: { _ in .skippedDirtyTree })
+    } operation: {
+      try await SessionSpawner.spawnLocal(request)
+    }
+    #expect(
+      spawnedInput.value
+        == "claude --dangerously-skip-permissions --remote-control 'Couch' 'Pair from my phone'\r"
+    )
+    // The flag is persisted on the session so rerun re-arms it.
+    #expect(session.remoteControl == true)
+  }
+
   // MARK: - Setup script flag
 
   @Test(.dependencies) func runSetupScriptIsTrueForWorktreeMode() async throws {
@@ -486,6 +514,8 @@ struct SessionSpawnerTests {
     agent: AgentType? = .claude,
     prompt: String = "Do the thing",
     planMode: Bool = false,
+    remoteControl: Bool = false,
+    remoteControlName: String? = nil,
     bypassPermissions: Bool = true,
     fetchOriginBeforeCreation: Bool = false,
     pullRequestLookup: PullRequestLookupState = .idle
@@ -497,6 +527,8 @@ struct SessionSpawnerTests {
       agent: agent,
       prompt: prompt,
       planMode: planMode,
+      remoteControl: remoteControl,
+      remoteControlName: remoteControlName,
       bypassPermissions: bypassPermissions,
       fetchOriginBeforeCreation: fetchOriginBeforeCreation,
       rerunOwnedWorktreeID: nil,

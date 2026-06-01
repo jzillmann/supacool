@@ -63,6 +63,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// that respects this on spawn / rerun.
   var planMode: Bool
 
+  /// Launches the agent with Remote Control enabled when the selected CLI
+  /// supports it (Claude Code `--remote-control`). Persisted so rerun
+  /// re-arms the same toggle. Like `planMode`, this is session-level.
+  var remoteControl: Bool
+
   /// User explicitly parked this session.
   var parked: Bool
 
@@ -142,6 +147,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     removeBackingWorktreeOnDelete: Bool = false,
     isPriority: Bool = false,
     planMode: Bool = false,
+    remoteControl: Bool = false,
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
     parkedActive: Bool = false,
@@ -167,6 +173,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.removeBackingWorktreeOnDelete = removeBackingWorktreeOnDelete
     self.isPriority = isPriority
     self.planMode = planMode
+    self.remoteControl = remoteControl
     self.parked = parked
     self.parkedActive = parkedActive
     self.autoObserver = autoObserver
@@ -210,7 +217,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case displayName
     case sourceBookmarkID, debugSourceSessionID
     case createdAt
-    case removeBackingWorktreeOnDelete, isPriority, planMode
+    case removeBackingWorktreeOnDelete, isPriority, planMode, remoteControl
     case parked, parkedActive
     case autoObserver, autoObserverPrompt
     case references, referencesScannedAt
@@ -241,6 +248,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       try c.decodeIfPresent(Bool.self, forKey: .removeBackingWorktreeOnDelete) ?? false
     isPriority = try c.decodeIfPresent(Bool.self, forKey: .isPriority) ?? false
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
+    remoteControl = try c.decodeIfPresent(Bool.self, forKey: .remoteControl) ?? false
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     parkedActive = try c.decodeIfPresent(Bool.self, forKey: .parkedActive) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
@@ -323,6 +331,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(removeBackingWorktreeOnDelete, forKey: .removeBackingWorktreeOnDelete)
     try c.encode(isPriority, forKey: .isPriority)
     try c.encode(planMode, forKey: .planMode)
+    try c.encode(remoteControl, forKey: .remoteControl)
     try c.encode(parked, forKey: .parked)
     try c.encode(parkedActive, forKey: .parkedActive)
     try c.encode(autoObserver, forKey: .autoObserver)

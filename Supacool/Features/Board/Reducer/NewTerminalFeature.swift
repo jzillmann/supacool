@@ -143,6 +143,14 @@ struct NewTerminalFeature {
     var validationMessage: String?
     var isCreating: Bool = false
     var planMode: Bool = false
+    /// True when the user armed Claude Code's Remote Control on launch.
+    /// Only meaningful for agents that support it; gated at submit time
+    /// against `agent.supportsRemoteControl`.
+    var remoteControl: Bool = false
+    /// Optional session title passed to `--remote-control "<name>"`. Blank
+    /// → Claude auto-names the remote session. Sheet-local only — not
+    /// persisted on bookmarks/drafts.
+    var remoteControlName: String = ""
     /// True while the background inference client is generating a branch name.
     var isSuggestingBranchName: Bool = false
     /// If rerun came from a session-owned worktree, preserve ownership only
@@ -222,6 +230,7 @@ struct NewTerminalFeature {
       prompt = previous.initialPrompt
       agent = previous.agent
       planMode = previous.planMode
+      remoteControl = previous.remoteControl
 
       if previous.isRemote {
         @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
@@ -294,6 +303,7 @@ struct NewTerminalFeature {
         ?? availableRepositories.first?.id
       agent = previous.agent
       planMode = previous.planMode
+      remoteControl = previous.remoteControl
       selectedWorkspace = .newBranch(name: "")
       workspaceQuery = ""
     }
@@ -312,6 +322,7 @@ struct NewTerminalFeature {
       prompt = bookmark.prompt
       agent = bookmark.agent
       planMode = bookmark.planMode
+      remoteControl = bookmark.remoteControl
       saveAsBookmark = true
       bookmarkName = bookmark.name
       editingBookmarkID = bookmark.id
@@ -345,6 +356,7 @@ struct NewTerminalFeature {
       prompt = draft.prompt
       agent = draft.agent
       planMode = draft.planMode
+      remoteControl = draft.remoteControl
       workspaceQuery = draft.workspaceQuery
       // Initial best-effort selection inference. The branches list is
       // empty at init time so anything non-empty falls into `.newBranch`,
@@ -379,7 +391,8 @@ struct NewTerminalFeature {
         prompt: session.initialPrompt,
         agent: session.agent,
         worktreeMode: worktreeMode,
-        planMode: session.planMode
+        planMode: session.planMode,
+        remoteControl: session.remoteControl
       )
     }
   }
@@ -699,6 +712,7 @@ struct NewTerminalFeature {
           agent: state.agent,
           workspaceQuery: state.workspaceQuery,
           planMode: state.planMode,
+          remoteControl: state.remoteControl,
           createdAt: Date(),
           updatedAt: Date()
         )
@@ -910,6 +924,11 @@ struct NewTerminalFeature {
 
     let agent = state.agent
     let planMode = agent?.supportsPlanMode == true && state.planMode
+    let remoteControl = agent?.supportsRemoteControl == true && state.remoteControl
+    let remoteControlName: String? = {
+      let trimmed = state.remoteControlName.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }()
     // Mirror supacode's sidebar flow: obey the global "Fetch origin
     // before creating worktree" toggle so both paths behave the same.
     @Shared(.settingsFile) var settingsFile
@@ -930,6 +949,8 @@ struct NewTerminalFeature {
       agent: agent,
       prompt: trimmedPrompt,
       planMode: planMode,
+      remoteControl: remoteControl,
+      remoteControlName: remoteControlName,
       bypassPermissions: bypassPermissions,
       fetchOriginBeforeCreation: fetchOriginBeforeCreation,
       rerunOwnedWorktreeID: rerunOwnedWorktreeID,
@@ -962,7 +983,8 @@ struct NewTerminalFeature {
         prompt: trimmedPrompt,
         agent: agent,
         worktreeMode: worktreeMode,
-        planMode: planMode
+        planMode: planMode,
+        remoteControl: remoteControl
       )
     }()
 
@@ -980,6 +1002,7 @@ struct NewTerminalFeature {
       agent: state.agent,
       workspaceQuery: state.workspaceQuery,
       planMode: state.planMode,
+      remoteControl: state.remoteControl,
       createdAt: now,
       updatedAt: now
     )
@@ -1072,6 +1095,11 @@ struct NewTerminalFeature {
     let repositoryID = repositoryIDOverride ?? worktreeKey
     let agent = state.agent
     let planMode = agent?.supportsPlanMode == true && state.planMode
+    let remoteControl = agent?.supportsRemoteControl == true && state.remoteControl
+    let remoteControlName: String? = {
+      let trimmed = state.remoteControlName.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
+    }()
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
 
@@ -1080,12 +1108,16 @@ struct NewTerminalFeature {
       agentCommand = agent.command(
         prompt: trimmedPrompt,
         bypassPermissions: bypassPermissions,
-        planMode: planMode
+        planMode: planMode,
+        remoteControl: remoteControl,
+        remoteControlName: remoteControlName
       )
     } else if let agent {
       agentCommand = agent.commandWithoutPrompt(
         bypassPermissions: bypassPermissions,
-        planMode: planMode
+        planMode: planMode,
+        remoteControl: remoteControl,
+        remoteControlName: remoteControlName
       )
     } else {
       agentCommand = nil
@@ -1132,6 +1164,7 @@ struct NewTerminalFeature {
       displayName: Self.suggestedDisplayName(state: state),
       removeBackingWorktreeOnDelete: false,
       planMode: planMode,
+      remoteControl: remoteControl,
       references: seededReferences,
       referencesScannedAt: seededReferences.isEmpty ? nil : Date(),
       remoteWorkspaceID: workspace.id,
