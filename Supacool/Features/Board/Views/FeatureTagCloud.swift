@@ -4,7 +4,8 @@ import SwiftUI
 /// line when the next subview would overflow the proposed width. Backs the
 /// New Terminal "launch options" tag cloud. A custom `Layout` (rather than
 /// `GeometryReader` + manual math) per the project's UI guidelines.
-struct FlowLayout: Layout {
+/// Named distinctly from the chip-only `FlowLayout` in `SessionInfoPopover`.
+struct TagFlowLayout: Layout {
   var spacing: CGFloat = 8
   var lineSpacing: CGFloat = 8
 

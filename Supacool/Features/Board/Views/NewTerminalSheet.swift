@@ -488,7 +488,7 @@ struct NewTerminalSheet: View {
   @ViewBuilder
   private var launchOptionsSection: some View {
     Section {
-      FlowLayout(spacing: 8, lineSpacing: 8) {
+      TagFlowLayout(spacing: 8, lineSpacing: 8) {
         if agentSupportsPlanMode {
           FeatureTag(
             isOn: $store.planMode,
