@@ -3,8 +3,8 @@ import SwiftUI
 
 /// In-house "what did I change?" dialog for a worktree. Left column:
 /// changed files (from `git status --porcelain`). Right pane: the diff
-/// for the selected file (from `git diff HEAD -- <path>`). Read-only —
-/// no staging or committing from here.
+/// for the selected file (from `git diff HEAD -- <path>`). Untracked rows
+/// can be moved to Trash or appended to `.gitignore` from the context menu.
 struct QuickDiffSheet: View {
   let worktreeURL: URL
   let onDismiss: () -> Void
@@ -16,6 +16,7 @@ struct QuickDiffSheet: View {
   @State private var isLoadingDiff: Bool = false
   @State private var errorMessage: String?
   @State private var refreshTrigger: Int = 0
+  @State private var pendingDeletion: ChangedFile?
 
   /// Two source options: uncommitted working-tree changes vs. HEAD
   /// (default) or the branch's committed delta vs. its merge base.
@@ -39,12 +40,26 @@ struct QuickDiffSheet: View {
     .frame(minWidth: 860, minHeight: 560)
     .task { await resolveBranchRefs() }
     .task(id: "\(refreshTrigger)-\(diffMode)") { await loadFiles() }
+    .alert(
+      item: $pendingDeletion,
+      title: { _ in Text("Move untracked file to Trash?") },
+      actions: { file in
+        Button("Move to Trash", role: .destructive) {
+          moveUntrackedFileToTrash(file)
+        }
+        Button("Cancel", role: .cancel) {}
+      },
+      message: { file in
+        Text("This moves “\(file.path)” to the Trash and refreshes the diff.")
+      }
+    )
   }
 
   private var header: some View {
     HStack(spacing: 10) {
       Image(systemName: "plus.forwardslash.minus")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text("Quick diff")
         .font(.headline)
       Text(worktreeURL.lastPathComponent)
@@ -130,9 +145,31 @@ struct QuickDiffSheet: View {
       ForEach(files) { file in
         FileRow(file: file)
           .tag(file.path)
+          .contextMenu {
+            fileContextMenu(for: file)
+          }
       }
     }
     .listStyle(.sidebar)
+  }
+
+  @ViewBuilder
+  private func fileContextMenu(for file: ChangedFile) -> some View {
+    if diffMode == .workingTree, file.status == .untracked {
+      Button {
+        addUntrackedFileToGitignore(file)
+      } label: {
+        Label("Add to .gitignore", systemImage: "hand.raised")
+      }
+      Button(role: .destructive) {
+        pendingDeletion = file
+      } label: {
+        Label("Move to Trash…", systemImage: "trash")
+      }
+    } else {
+      Button("Actions available for untracked working-tree files") {}
+        .disabled(true)
+    }
   }
 
   // MARK: - Diff pane
@@ -175,6 +212,7 @@ struct QuickDiffSheet: View {
     HStack(spacing: 8) {
       Image(systemName: file.status.systemImage)
         .foregroundStyle(.secondary)
+        .accessibilityLabel(file.status.accessibilityLabel)
       Text(file.path)
         .font(.callout.monospaced())
         .textSelection(.enabled)
@@ -197,11 +235,15 @@ struct QuickDiffSheet: View {
       Image(systemName: "questionmark.diamond")
         .font(.largeTitle)
         .foregroundStyle(.tertiary)
+        .accessibilityHidden(true)
       Text("Untracked file")
         .font(.headline)
         .foregroundStyle(.secondary)
       Text("Git doesn't have a previous version to diff against.")
         .font(.callout)
+        .foregroundStyle(.tertiary)
+      Text("Right-click the file to move it to Trash or add it to .gitignore.")
+        .font(.caption)
         .foregroundStyle(.tertiary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -210,7 +252,10 @@ struct QuickDiffSheet: View {
   private var diffScrollView: some View {
     ScrollView([.vertical, .horizontal]) {
       LazyVStack(alignment: .leading, spacing: 0) {
-        ForEach(Array(diffText.split(separator: "\n", omittingEmptySubsequences: false).enumerated()), id: \.offset) { _, line in
+        ForEach(
+          Array(diffText.split(separator: "\n", omittingEmptySubsequences: false).enumerated()),
+          id: \.offset
+        ) { _, line in
           let str = String(line)
           DiffLineView(line: str)
         }
@@ -229,6 +274,7 @@ struct QuickDiffSheet: View {
       Image(systemName: "sparkles")
         .font(.system(size: 42))
         .foregroundStyle(.tertiary)
+        .accessibilityHidden(true)
       Text(emptyStateTitle)
         .font(.title3.weight(.medium))
         .foregroundStyle(.secondary)
@@ -258,6 +304,7 @@ struct QuickDiffSheet: View {
       Image(systemName: "exclamationmark.triangle")
         .font(.largeTitle)
         .foregroundStyle(.orange)
+        .accessibilityHidden(true)
       Text("Couldn't load diff")
         .font(.headline)
       Text(message)
@@ -270,6 +317,80 @@ struct QuickDiffSheet: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .padding()
+  }
+
+  // MARK: - File actions
+
+  private func moveUntrackedFileToTrash(_ file: ChangedFile) {
+    guard file.status == .untracked, diffMode == .workingTree else { return }
+    do {
+      let fileURL = try resolvedWorktreeFileURL(for: file.path)
+      var trashedURL: NSURL?
+      try FileManager.default.trashItem(at: fileURL, resultingItemURL: &trashedURL)
+      selectedPath = nil
+      errorMessage = nil
+      refreshTrigger &+= 1
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func addUntrackedFileToGitignore(_ file: ChangedFile) {
+    guard file.status == .untracked, diffMode == .workingTree else { return }
+    do {
+      _ = try resolvedWorktreeFileURL(for: file.path)
+      let pattern = GitignorePattern.repoRootAnchoredPattern(for: file.path)
+      try appendGitignorePattern(pattern)
+      selectedPath = nil
+      errorMessage = nil
+      refreshTrigger &+= 1
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func resolvedWorktreeFileURL(for path: String) throws -> URL {
+    guard !path.hasPrefix("/") else {
+      throw QuickDiffFileActionError.absolutePath(path)
+    }
+    let baseURL = worktreeURL.standardizedFileURL
+    let fileURL = baseURL.appending(path: path).standardizedFileURL
+    guard isPath(fileURL, inside: baseURL) else {
+      throw QuickDiffFileActionError.pathEscapesWorktree(path)
+    }
+    return fileURL
+  }
+
+  private func appendGitignorePattern(_ pattern: String) throws {
+    let gitignoreURL = worktreeURL
+      .standardizedFileURL
+      .appending(path: ".gitignore", directoryHint: .notDirectory)
+    let fileManager = FileManager.default
+    let gitignorePath = gitignoreURL.path(percentEncoded: false)
+    guard fileManager.fileExists(atPath: gitignorePath) else {
+      try "# Added by Supacool Quick Diff\n\(pattern)\n"
+        .write(to: gitignoreURL, atomically: true, encoding: .utf8)
+      return
+    }
+
+    var contents = try String(contentsOf: gitignoreURL, encoding: .utf8)
+    let existingPatterns = contents
+      .split(separator: "\n", omittingEmptySubsequences: false)
+      .map(String.init)
+    guard !existingPatterns.contains(pattern) else { return }
+    if !contents.isEmpty, !contents.hasSuffix("\n") {
+      contents.append("\n")
+    }
+    contents.append(pattern)
+    contents.append("\n")
+    try contents.write(to: gitignoreURL, atomically: true, encoding: .utf8)
+  }
+
+  private func isPath(_ fileURL: URL, inside baseURL: URL) -> Bool {
+    let basePath = baseURL.path(percentEncoded: false)
+    let filePath = fileURL.path(percentEncoded: false)
+    let normalizedBasePath = basePath.hasSuffix("/") ? basePath : basePath + "/"
+    return filePath.hasPrefix(normalizedBasePath)
   }
 
   // MARK: - Loading
@@ -371,6 +492,20 @@ struct QuickDiffSheet: View {
 
 // MARK: - File row
 
+private enum QuickDiffFileActionError: LocalizedError {
+  case absolutePath(String)
+  case pathEscapesWorktree(String)
+
+  var errorDescription: String? {
+    switch self {
+    case .absolutePath(let path):
+      "Refusing to modify absolute path: \(path)"
+    case .pathEscapesWorktree(let path):
+      "Refusing to modify path outside the worktree: \(path)"
+    }
+  }
+}
+
 private struct FileRow: View {
   let file: ChangedFile
 
@@ -379,6 +514,7 @@ private struct FileRow: View {
       Image(systemName: file.status.systemImage)
         .foregroundStyle(iconColor)
         .font(.body)
+        .accessibilityLabel(file.status.accessibilityLabel)
       VStack(alignment: .leading, spacing: 1) {
         Text(fileName)
           .font(.callout)

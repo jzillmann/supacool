@@ -70,6 +70,19 @@ nonisolated enum ChangeStatus: Hashable, Sendable {
     case .unknown: "questionmark.circle"
     }
   }
+
+  var accessibilityLabel: String {
+    switch self {
+    case .added: "Added"
+    case .modified: "Modified"
+    case .deleted: "Deleted"
+    case .renamed: "Renamed"
+    case .copied: "Copied"
+    case .untracked: "Untracked"
+    case .typeChanged: "Type changed"
+    case .unknown: "Unknown status"
+    }
+  }
 }
 
 /// Splits `git status --porcelain=v1 -z` output into `ChangedFile`s.
