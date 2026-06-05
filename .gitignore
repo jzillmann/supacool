@@ -68,3 +68,6 @@ Resources/terminfo
 *.profraw
 .env
 .DS_Store
+
+# Isolated DerivedData used by scripts/build-and-preview.sh
+/build/
