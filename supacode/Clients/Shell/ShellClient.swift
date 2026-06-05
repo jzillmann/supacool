@@ -191,8 +191,15 @@ nonisolated private func runProcessStream(
       // hold a thread. Handler is installed before `run()` to
       // guarantee delivery (it only fires for exits that happen
       // after install).
+      // `Process.terminationStatus` raises an uncatchable Objective-C exception if read while the
+      // task is not terminated (e.g. a worktree dir deleted mid-command). Capture it inside the
+      // handler, where Foundation guarantees validity, so a subprocess can't abort the app.
+      let terminationStatus = LockIsolated<Int32>(0)
       let (terminationStream, terminationContinuation) = AsyncStream.makeStream(of: Void.self)
-      process.terminationHandler = { _ in terminationContinuation.finish() }
+      process.terminationHandler = { process in
+        terminationStatus.setValue(process.terminationStatus)
+        terminationContinuation.finish()
+      }
       do {
         try process.run()
         let stdoutTask = Task.detached {
@@ -224,8 +231,9 @@ nonisolated private func runProcessStream(
         for await _ in terminationStream {}
         await stdoutTask.value
         await stderrTask.value
-        let output = await outputAccumulator.output(exitCode: process.terminationStatus)
-        if process.terminationStatus != 0 {
+        let exitCode = terminationStatus.value
+        let output = await outputAccumulator.output(exitCode: exitCode)
+        if exitCode != 0 {
           continuation.finish(
             throwing: ShellClientError(
               command: command,

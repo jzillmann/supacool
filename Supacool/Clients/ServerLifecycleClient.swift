@@ -103,8 +103,16 @@ nonisolated private func runServerLifecycleScript(
   process.standardOutput = stdoutPipe
   process.standardError = stderrPipe
 
+  // `Process.terminationStatus` raises an uncatchable Objective-C exception if read while the
+  // task is not in a terminated state (e.g. the working directory was deleted out from under a
+  // worktree teardown script). Capture it inside the termination handler, where Foundation
+  // guarantees the status is valid, so a background lifecycle script can never abort the app.
+  let terminationStatus = LockIsolated<Int32>(0)
   let (terminationStream, terminationContinuation) = AsyncStream.makeStream(of: Void.self)
-  process.terminationHandler = { _ in terminationContinuation.finish() }
+  process.terminationHandler = { process in
+    terminationStatus.setValue(process.terminationStatus)
+    terminationContinuation.finish()
+  }
 
   serverLifecycleLogger.debug(
     "Running \(kind.rawValue) lifecycle script in \(worktree.workingDirectory.path(percentEncoded: false))"
@@ -118,7 +126,7 @@ nonisolated private func runServerLifecycleScript(
   let stdout = String(data: try await stdoutData, encoding: .utf8) ?? ""
   let stderr = String(data: try await stderrData, encoding: .utf8) ?? ""
   return ServerLifecycleScriptResult(
-    exitCode: process.terminationStatus,
+    exitCode: terminationStatus.value,
     stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
     stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
   )
