@@ -106,6 +106,43 @@ DispatchQueue.main.async { [weak textView] in
 
 Not strictly a Swift 6 issue, but in the same family of "the compiler won't catch you, but your users will." All persisted Codable types need manual decoders.
 
+## 8. `Process.terminationStatus` must be read inside `terminationHandler`
+
+**Symptom** (a crash, not a compiler error — `EXC_CRASH (SIGABRT)`):
+```
+-[NSConcreteTask terminationStatus] -> objc_exception_throw
+  -> demangling_terminate_handler() -> abort
+```
+
+`Process.terminationStatus` (and friends) raise an Objective-C `NSInvalidArgumentException`
+if read while the task is not in a terminated state — e.g. it never launched, or a race
+where the working directory was deleted out from under the process mid-run (worktree
+teardown / janitor). **Swift cannot catch Objective-C exceptions**, so a `do/catch` does
+nothing and the whole app `abort()`s. A single optional background script can take down
+Supacool.
+
+Real crash (2026-06-04): a server lifecycle "stop" script in `ServerLifecycleClient.swift`
+ran against a worktree being deleted concurrently.
+
+**Fix**: capture the status *inside* the `terminationHandler` closure, where Foundation
+guarantees the value is valid, then read the captured copy from the async flow:
+
+```swift
+let terminationStatus = LockIsolated<Int32>(0)
+let (terminationStream, terminationContinuation) = AsyncStream.makeStream(of: Void.self)
+process.terminationHandler = { process in
+  terminationStatus.setValue(process.terminationStatus)  // valid exactly here
+  terminationContinuation.finish()
+}
+try process.run()
+for await _ in terminationStream {}
+return Result(exitCode: terminationStatus.value, ...)  // never reads process.terminationStatus
+```
+
+Never read `process.terminationStatus` from the main flow after the wait. Audited sites:
+`ServerLifecycleClient` and `ShellClient` are fixed; `BackgroundInferenceClient` already
+read it inside its handler. See `ServerLifecycleClientTests` for the regression coverage.
+
 ---
 
 If you hit an isolation error not listed here, the first debugging moves that usually work:
