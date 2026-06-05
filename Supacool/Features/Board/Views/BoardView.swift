@@ -26,7 +26,6 @@ struct BoardView: View {
   /// alone makes the view focus-eligible but doesn't *grant* focus —
   /// without this FocusState binding, arrow keys just beep.
   @FocusState private var hasKeyboardFocus: Bool
-  @Namespace private var cardTransitionNamespace
 
   /// Per-card frames in the board's shared coordinate space. Populated by
   /// each card via `BoardCardFramesKey`; read by Up/Down navigation so
@@ -691,7 +690,6 @@ struct BoardView: View {
                   )
                   .frame(width: boardCardWidth)
                   .id(session.id)
-                  .matchedGeometryEffect(id: session.id, in: cardTransitionNamespace)
                   .transition(.opacity.combined(with: .scale(scale: 0.98)))
                   .background(
                     // Publishes this card's frame in the board's shared
