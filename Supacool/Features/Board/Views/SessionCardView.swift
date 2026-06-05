@@ -52,6 +52,8 @@ struct SessionCardView: View {
   /// Called when the PR reference popover opens so visible PR states get
   /// a cache-throttled refresh without adding extra chrome to the popover.
   var onReferencesPopoverOpened: (() -> Void)?
+  /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
+  var onRemoveReference: ((SessionReference) -> Void)?
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
@@ -493,7 +495,8 @@ struct SessionCardView: View {
   private var referenceChips: some View {
     SessionReferenceSummaryChips(
       references: session.references,
-      onPullRequestsPopoverOpened: onReferencesPopoverOpened
+      onPullRequestsPopoverOpened: onReferencesPopoverOpened,
+      onRemoveReference: onRemoveReference
     )
   }
 
@@ -638,6 +641,8 @@ struct ReferenceChip: View {
   let reference: SessionReference
   let linearOrgSlug: String
   var onTap: (() -> Void)? = nil
+  /// Unlink a wrongly-associated reference. Nil hides the affordance.
+  var onRemove: (() -> Void)? = nil
 
   var body: some View {
     Button {
@@ -664,6 +669,13 @@ struct ReferenceChip: View {
     }
     .buttonStyle(.plain)
     .help(tooltip)
+    .contextMenu {
+      if let onRemove {
+        Button(role: .destructive, action: onRemove) {
+          Label("Remove link", systemImage: "link.badge.minus")
+        }
+      }
+    }
   }
 
   private var chipBackground: some ShapeStyle {
@@ -704,6 +716,8 @@ struct ReferenceChip: View {
 struct SessionReferenceSummaryChips: View {
   let references: [SessionReference]
   var onPullRequestsPopoverOpened: (() -> Void)? = nil
+  /// Unlink a wrongly-associated reference. Nil hides the affordance.
+  var onRemoveReference: ((SessionReference) -> Void)? = nil
 
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
 
@@ -724,27 +738,34 @@ struct SessionReferenceSummaryChips: View {
   var body: some View {
     HStack(spacing: 4) {
       if let ticket = tickets.first {
-        ReferenceChip(reference: ticket, linearOrgSlug: linearOrgSlug)
+        ReferenceChip(
+          reference: ticket,
+          linearOrgSlug: linearOrgSlug,
+          onRemove: onRemoveReference.map { remove in { remove(ticket) } }
+        )
       }
       if tickets.count > 1 {
         ReferenceStackChip(
           kind: .tickets,
           references: Array(tickets.dropFirst()),
-          linearOrgSlug: linearOrgSlug
+          linearOrgSlug: linearOrgSlug,
+          onRemoveReference: onRemoveReference
         )
       }
       if pullRequests.count == 1, let pullRequest = pullRequests.first {
         ReferenceChip(
           reference: pullRequest,
           linearOrgSlug: linearOrgSlug,
-          onTap: onPullRequestsPopoverOpened
+          onTap: onPullRequestsPopoverOpened,
+          onRemove: onRemoveReference.map { remove in { remove(pullRequest) } }
         )
       } else if pullRequests.count > 1 {
         ReferenceStackChip(
           kind: .pullRequests,
           references: pullRequests,
           linearOrgSlug: linearOrgSlug,
-          onPopoverOpened: onPullRequestsPopoverOpened
+          onPopoverOpened: onPullRequestsPopoverOpened,
+          onRemoveReference: onRemoveReference
         )
       }
     }
@@ -755,41 +776,48 @@ struct SessionReferenceSummaryChips: View {
 
 /// Presentation model for the reference stack popover.
 ///
-/// Once merged PR noise crosses the threshold, merged PRs collapse into one
-/// expandable row so active/open PRs stay immediately visible.
+/// Once merged or closed PR noise reaches the threshold, those settled PRs
+/// collapse into their own expandable rows so active/open PRs stay
+/// immediately visible. Merged and closed collapse independently.
 nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
-  static let mergedPullRequestCollapseThreshold = 5
+  /// Collapse a settled-state PR group once it reaches this many entries.
+  static let pullRequestCollapseThreshold = 3
 
   let primaryReferences: [SessionReference]
   let collapsedMergedPullRequests: [SessionReference]
+  let collapsedClosedPullRequests: [SessionReference]
 
   init(
     references: [SessionReference],
-    collapseMergedPullRequests: Bool,
-    threshold: Int = Self.mergedPullRequestCollapseThreshold
+    collapsePullRequests: Bool,
+    threshold: Int = Self.pullRequestCollapseThreshold
   ) {
-    guard collapseMergedPullRequests else {
+    guard collapsePullRequests else {
       primaryReferences = references
       collapsedMergedPullRequests = []
+      collapsedClosedPullRequests = []
       return
     }
 
-    let mergedPullRequests = references.filter { $0.isMergedPullRequest }
-    guard mergedPullRequests.count > threshold else {
-      primaryReferences = references
-      collapsedMergedPullRequests = []
-      return
-    }
+    let merged = references.filter { $0.isPullRequest(in: .merged) }
+    let closed = references.filter { $0.isPullRequest(in: .closed) }
+    let collapseMerged = merged.count >= threshold
+    let collapseClosed = closed.count >= threshold
 
-    primaryReferences = references.filter { !$0.isMergedPullRequest }
-    collapsedMergedPullRequests = mergedPullRequests
+    collapsedMergedPullRequests = collapseMerged ? merged : []
+    collapsedClosedPullRequests = collapseClosed ? closed : []
+    primaryReferences = references.filter { reference in
+      if collapseMerged, reference.isPullRequest(in: .merged) { return false }
+      if collapseClosed, reference.isPullRequest(in: .closed) { return false }
+      return true
+    }
   }
 }
 
 private extension SessionReference {
-  nonisolated var isMergedPullRequest: Bool {
-    guard case .pullRequest(_, _, _, let state) = self else { return false }
-    return state == .merged
+  nonisolated func isPullRequest(in state: PRState) -> Bool {
+    guard case .pullRequest(_, _, _, let prState) = self else { return false }
+    return prState == state
   }
 }
 
@@ -817,9 +845,12 @@ private struct ReferenceStackChip: View {
   let references: [SessionReference]
   let linearOrgSlug: String
   var onPopoverOpened: (() -> Void)? = nil
+  /// Unlink a wrongly-associated reference. Nil hides the affordance.
+  var onRemoveReference: ((SessionReference) -> Void)? = nil
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
+  @State private var isClosedPullRequestsExpanded: Bool = false
 
   var body: some View {
     Button {
@@ -906,7 +937,7 @@ private struct ReferenceStackChip: View {
   private var popoverPresentation: ReferenceStackPopoverPresentation {
     ReferenceStackPopoverPresentation(
       references: references,
-      collapseMergedPullRequests: kind == .pullRequests
+      collapsePullRequests: kind == .pullRequests
     )
   }
 
@@ -920,13 +951,18 @@ private struct ReferenceStackChip: View {
           referenceRow(reference)
         }
         if !popoverPresentation.collapsedMergedPullRequests.isEmpty {
-          mergedPullRequestsDisclosureRow(count: popoverPresentation.collapsedMergedPullRequests.count)
-          if isMergedPullRequestsExpanded {
-            ForEach(popoverPresentation.collapsedMergedPullRequests, id: \.dedupeKey) { reference in
-              referenceRow(reference)
-                .padding(.leading, 18)
-            }
-          }
+          collapsedPullRequestsSection(
+            state: .merged,
+            references: popoverPresentation.collapsedMergedPullRequests,
+            isExpanded: $isMergedPullRequestsExpanded
+          )
+        }
+        if !popoverPresentation.collapsedClosedPullRequests.isEmpty {
+          collapsedPullRequestsSection(
+            state: .closed,
+            references: popoverPresentation.collapsedClosedPullRequests,
+            isExpanded: $isClosedPullRequestsExpanded
+          )
         }
       }
     }
@@ -934,20 +970,40 @@ private struct ReferenceStackChip: View {
     .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
   }
 
-  private func mergedPullRequestsDisclosureRow(count: Int) -> some View {
-    Button {
-      isMergedPullRequestsExpanded.toggle()
+  @ViewBuilder
+  private func collapsedPullRequestsSection(
+    state: PRState,
+    references: [SessionReference],
+    isExpanded: Binding<Bool>
+  ) -> some View {
+    settledPullRequestsDisclosureRow(state: state, count: references.count, isExpanded: isExpanded)
+    if isExpanded.wrappedValue {
+      ForEach(references, id: \.dedupeKey) { reference in
+        referenceRow(reference)
+          .padding(.leading, 18)
+      }
+    }
+  }
+
+  private func settledPullRequestsDisclosureRow(
+    state: PRState,
+    count: Int,
+    isExpanded: Binding<Bool>
+  ) -> some View {
+    let label = state == .merged ? "merged" : "closed"
+    return Button {
+      isExpanded.wrappedValue.toggle()
     } label: {
       HStack(spacing: 8) {
-        Image(systemName: PRState.merged.systemImage)
+        Image(systemName: state.systemImage)
           .font(.caption)
-          .foregroundStyle(prStateColor(.merged))
+          .foregroundStyle(prStateColor(state))
           .frame(width: 14)
         VStack(alignment: .leading, spacing: 1) {
-          Text("\(count) merged pull requests")
+          Text("\(count) \(label) pull requests")
             .font(.caption.weight(.medium))
             .lineLimit(1)
-          Text(isMergedPullRequestsExpanded ? "Hide merged PRs" : "Show merged PRs")
+          Text(isExpanded.wrappedValue ? "Hide \(label) PRs" : "Show \(label) PRs")
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(1)
@@ -956,13 +1012,13 @@ private struct ReferenceStackChip: View {
         Image(systemName: "chevron.right")
           .font(.caption2.weight(.semibold))
           .foregroundStyle(.tertiary)
-          .rotationEffect(.degrees(isMergedPullRequestsExpanded ? 90 : 0))
+          .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
       }
       .contentShape(Rectangle())
       .padding(.vertical, 4)
     }
     .buttonStyle(.plain)
-    .help("\(isMergedPullRequestsExpanded ? "Hide" : "Show") \(count) merged pull requests")
+    .help("\(isExpanded.wrappedValue ? "Hide" : "Show") \(count) \(label) pull requests")
   }
 
   private func referenceRow(_ reference: SessionReference) -> some View {
@@ -993,6 +1049,16 @@ private struct ReferenceStackChip: View {
     }
     .buttonStyle(.plain)
     .help(rowHelp(for: reference))
+    .contextMenu {
+      if let onRemoveReference {
+        Button(role: .destructive) {
+          onRemoveReference(reference)
+          isPopoverShown = false
+        } label: {
+          Label("Remove link", systemImage: "link.badge.minus")
+        }
+      }
+    }
   }
 
   private func open(_ reference: SessionReference) {

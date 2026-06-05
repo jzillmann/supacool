@@ -84,6 +84,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// When the references list was last computed.
   var referencesScannedAt: Date?
 
+  /// Dedupe keys the user has explicitly unlinked (e.g. a PR the scanner
+  /// wrongly associated with this session). Persisted so a later transcript
+  /// rescan does not re-surface them.
+  var dismissedReferenceKeys: Set<String>
+
   /// Non-nil when this session runs on a remote host.
   var remoteWorkspaceID: RemoteWorkspace.ID?
 
@@ -149,6 +154,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     autoObserverPrompt: String = "",
     references: [SessionReference] = [],
     referencesScannedAt: Date? = nil,
+    dismissedReferenceKeys: Set<String> = [],
     remoteWorkspaceID: RemoteWorkspace.ID? = nil,
     remoteHostID: RemoteHost.ID? = nil,
     repositoryRemoteTargetID: RepositoryRemoteTarget.ID? = nil,
@@ -173,6 +179,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.autoObserverPrompt = autoObserverPrompt
     self.references = references
     self.referencesScannedAt = referencesScannedAt
+    self.dismissedReferenceKeys = dismissedReferenceKeys
     self.remoteWorkspaceID = remoteWorkspaceID
     self.remoteHostID = remoteHostID
     self.repositoryRemoteTargetID = repositoryRemoteTargetID
@@ -213,7 +220,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case removeBackingWorktreeOnDelete, isPriority, planMode
     case parked, parkedActive
     case autoObserver, autoObserverPrompt
-    case references, referencesScannedAt
+    case references, referencesScannedAt, dismissedReferenceKeys
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
     case manualStatusOverride
@@ -247,6 +254,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
+    dismissedReferenceKeys = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReferenceKeys) ?? []
     remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
     remoteHostID = try c.decodeIfPresent(UUID.self, forKey: .remoteHostID)
     repositoryRemoteTargetID = try c.decodeIfPresent(UUID.self, forKey: .repositoryRemoteTargetID)
@@ -329,6 +337,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
     try c.encode(references, forKey: .references)
     try c.encodeIfPresent(referencesScannedAt, forKey: .referencesScannedAt)
+    try c.encode(dismissedReferenceKeys, forKey: .dismissedReferenceKeys)
     try c.encodeIfPresent(remoteWorkspaceID, forKey: .remoteWorkspaceID)
     try c.encodeIfPresent(remoteHostID, forKey: .remoteHostID)
     try c.encodeIfPresent(repositoryRemoteTargetID, forKey: .repositoryRemoteTargetID)

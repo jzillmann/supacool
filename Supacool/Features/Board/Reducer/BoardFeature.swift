@@ -644,6 +644,10 @@ struct BoardFeature {
     /// to one session and throttled by `prStateCacheWindow` so repeated
     /// clicks do not spawn repeated `gh pr view` calls.
     case refreshPRReferences(id: AgentSession.ID)
+    /// User unlinked a wrongly-associated reference from a card. Drops it
+    /// from `references` and records its dedupe key in `dismissedReferenceKeys`
+    /// so a later transcript rescan does not re-surface it.
+    case removeReference(id: AgentSession.ID, dedupeKey: String)
     /// Legacy one-session fetch path for a pull-request reference via
     /// `gh pr view`. The scheduler path below is preferred because it
     /// dedupes and fans out by PR key.
@@ -2209,11 +2213,15 @@ struct BoardFeature {
       case ._referencesScanned(let id, let refs):
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].references = Self.mergeReferences(
+          let dismissed = sessions[index].dismissedReferenceKeys
+          let merged = Self.mergeReferences(
             refs,
             with: sessions[index].references,
             preferNewStates: true
           )
+          // Honor user unlinks: never re-surface a reference the user
+          // explicitly removed, even if it is still in the transcript.
+          sessions[index].references = merged.filter { !dismissed.contains($0.dedupeKey) }
           sessions[index].referencesScannedAt = Date()
         }
         // No per-scan PR-refresh dispatch here anymore — the global
@@ -2221,6 +2229,14 @@ struct BoardFeature {
         // still-active refs on its next tick. This eliminates the
         // multi-session lockstep storm where every busy↔idle edge
         // re-fetched the same PRs once per referencing session.
+        return .none
+
+      case .removeReference(let id, let dedupeKey):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].references.removeAll { $0.dedupeKey == dedupeKey }
+          sessions[index].dismissedReferenceKeys.insert(dedupeKey)
+        }
         return .none
 
       case .refreshPRReferences(let id):

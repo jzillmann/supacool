@@ -95,6 +95,9 @@ struct FullScreenTerminalView: View {
   /// reference popover opens.
   let onReferencesPopoverOpened: (() -> Void)?
 
+  /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
+  var onRemoveReference: ((SessionReference) -> Void)? = nil
+
   /// Which terminal in `session.terminals` is currently rendered. Pass
   /// `session.primaryTerminalID` for single-terminal sessions.
   let activeTerminalID: UUID
@@ -402,7 +405,8 @@ struct FullScreenTerminalView: View {
     if !session.references.isEmpty {
       SessionReferenceSummaryChips(
         references: session.references,
-        onPullRequestsPopoverOpened: onReferencesPopoverOpened
+        onPullRequestsPopoverOpened: onReferencesPopoverOpened,
+        onRemoveReference: onRemoveReference
       )
     }
   }

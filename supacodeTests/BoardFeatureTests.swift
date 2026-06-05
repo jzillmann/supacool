@@ -120,6 +120,48 @@ struct BoardFeatureTests {
     )
   }
 
+  @Test(.dependencies) func removeReferenceUnlinksAndRecordsDismissal() async {
+    let kept = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 1, state: .merged)
+    let unlinked = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 2, state: .open)
+    var session = Self.sampleSession()
+    session.references = [kept, unlinked]
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.removeReference(id: session.id, dedupeKey: unlinked.dedupeKey)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].references = [kept]
+        sessions[0].dismissedReferenceKeys = [unlinked.dedupeKey]
+      }
+    }
+  }
+
+  @Test(.dependencies) func dismissedReferenceDoesNotReturnOnRescan() async {
+    let kept = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 1, state: .open)
+    let dismissed = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 2, state: .merged)
+    var session = Self.sampleSession()
+    session.references = [kept]
+    session.dismissedReferenceKeys = [dismissed.dedupeKey]
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    // `_referencesScanned` stamps `referencesScannedAt` off the real clock,
+    // so assert the references outcome directly rather than exhaustively.
+    store.exhaustivity = .off
+
+    // A rescan re-discovers the dismissed PR in the transcript; it must
+    // be filtered back out rather than re-surfaced.
+    await store.send(._referencesScanned(id: session.id, refs: [kept, dismissed]))
+    await store.finish()
+
+    #expect(store.state.sessions.first?.references == [kept])
+  }
+
   @Test(.dependencies) func prRefreshTickUpdatesCachedOpenPullRequests() async {
     let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
     var session = Self.sampleSession()

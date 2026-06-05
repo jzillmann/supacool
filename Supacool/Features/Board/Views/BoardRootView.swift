@@ -368,6 +368,9 @@ struct BoardRootView: View {
         onReferencesPopoverOpened: {
           store.send(.refreshPRReferences(id: session.id))
         },
+        onRemoveReference: { reference in
+          store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
+        },
         activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
         onSelectTerminal: { terminalID in
           store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))
