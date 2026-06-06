@@ -89,11 +89,42 @@ struct SessionReferenceScannerTests {
     )
   }
 
-  @Test func scanJSONLRecursesIntoToolResults() {
+  @Test func scanJSONLDropsSingleToolResultOnlyRef() {
+    // A ticket id that only ever shows up once, inside a tool_result dump
+    // (e.g. a `git log`/Linear-list/grep that scrolled a CEN- id on screen),
+    // is noise — it must not become a persistent chip. Mirrors the terminal
+    // transcript's ≥2-turn gate.
     let jsonl = [
       #"{"type":"user","message":{"role":"user","content":["#,
       #"{"tool_use_id":"abc","type":"tool_result","content":["#,
       #"{"type":"text","text":"Output mentions CEN-99"}]}]}}"#,
+    ].joined()
+    let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
+    #expect(refs.isEmpty)
+  }
+
+  @Test func scanJSONLKeepsToolResultRefAcrossTwoMessages() {
+    // The same ref appearing in tool output across two separate messages is
+    // a recurring focus, not a one-shot dump — keep it.
+    let jsonl = [
+      #"{"type":"user","message":{"role":"user","content":["#,
+      #"{"tool_use_id":"a","type":"tool_result","content":[{"type":"text","text":"CEN-99 here"}]}]}}"#,
+      "\n",
+      #"{"type":"user","message":{"role":"user","content":["#,
+      #"{"tool_use_id":"b","type":"tool_result","content":[{"type":"text","text":"CEN-99 again"}]}]}}"#,
+    ].joined()
+    let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
+    #expect(refs == [.ticket(id: "CEN-99")])
+  }
+
+  @Test func scanJSONLPromotesToolResultRefViaHighSignalText() {
+    // One tool-result occurrence is normally dropped, but if the user or the
+    // assistant also mentions the ticket in prose it is a real focus — keep it.
+    let jsonl = [
+      #"{"type":"user","message":{"role":"user","content":"Let's tackle CEN-99"}}"#,
+      "\n",
+      #"{"type":"user","message":{"role":"user","content":["#,
+      #"{"tool_use_id":"a","type":"tool_result","content":[{"type":"text","text":"log mentions CEN-99"}]}]}}"#,
     ].joined()
     let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
     #expect(refs == [.ticket(id: "CEN-99")])

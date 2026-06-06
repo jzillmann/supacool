@@ -128,9 +128,28 @@ nonisolated enum SessionReferenceScannerLive {
 
   /// Parse a JSONL blob, extract message text, run reference regexes,
   /// dedupe by canonical key.
+  ///
+  /// Signal-vs-noise mirrors `scanTranscriptEntries`: text the user typed and
+  /// prose the assistant wrote are high-signal — a single occurrence is kept.
+  /// `tool_result` blocks are the noisy source: one `git log`, Linear-list, or
+  /// grep dump can drop dozens of incidental ticket ids into a transcript, and
+  /// because `_referencesScanned` merges cumulatively those phantom chips
+  /// persist forever. So a ref that only ever appears in tool output must recur
+  /// across **≥ 2 messages** to count — a real focus comes back in
+  /// conversation; a one-shot in a tool dump does not.
   static func scanJSONL(_ jsonl: String) -> [SessionReference] {
-    var seen = Set<String>()
-    var results: [SessionReference] = []
+    var firstSeen: [String: SessionReference] = [:]
+    var order: [String] = []
+    var highSignalKeys = Set<String>()
+    var toolResultMessageCounts: [String: Int] = [:]
+
+    func recordFirstSeen(_ ref: SessionReference) {
+      if firstSeen[ref.dedupeKey] == nil {
+        firstSeen[ref.dedupeKey] = ref
+        order.append(ref.dedupeKey)
+      }
+    }
+
     for line in jsonl.split(whereSeparator: \.isNewline) {
       guard let data = String(line).data(using: .utf8) else { continue }
       guard
@@ -142,20 +161,58 @@ nonisolated enum SessionReferenceScannerLive {
         continue
       }
       guard let message = obj["message"] as? [String: Any] else { continue }
-      let text = extractText(from: message["content"])
-      for ref in scanText(text) {
-        if seen.insert(ref.dedupeKey).inserted {
-          results.append(ref)
+      let (highSignal, toolResult) = partitionText(from: message["content"])
+
+      for ref in scanText(highSignal) {
+        recordFirstSeen(ref)
+        highSignalKeys.insert(ref.dedupeKey)
+      }
+      var seenInMessage = Set<String>()
+      for ref in scanText(toolResult) {
+        recordFirstSeen(ref)
+        if seenInMessage.insert(ref.dedupeKey).inserted {
+          toolResultMessageCounts[ref.dedupeKey, default: 0] += 1
         }
       }
     }
-    return results
+
+    return order.compactMap { key in
+      guard let ref = firstSeen[key] else { return nil }
+      if highSignalKeys.contains(key) { return ref }
+      if (toolResultMessageCounts[key] ?? 0) >= 2 { return ref }
+      return nil
+    }
   }
 
-  /// Message content is either a plain string (simple user turn) or an
-  /// array of typed blocks. We recursively pull out `text` and `tool_result`
-  /// content, skipping `thinking` (Claude's internal monologue) and
-  /// `tool_use` (noisy tool invocations).
+  /// Split a message's content into high-signal text (what the user typed and
+  /// the prose the assistant wrote) and low-signal `tool_result` text (command
+  /// / tool output dumps). `thinking` (Claude's internal monologue) and
+  /// `tool_use` (noisy tool invocations) are skipped entirely.
+  static func partitionText(from content: Any?) -> (highSignal: String, toolResult: String) {
+    // A plain string is a real user turn — always high-signal.
+    if let str = content as? String { return (str, "") }
+    guard let blocks = content as? [Any] else { return ("", "") }
+    var high: [String] = []
+    var tool: [String] = []
+    for block in blocks {
+      guard let dict = block as? [String: Any] else { continue }
+      switch dict["type"] as? String {
+      case "text":
+        if let t = dict["text"] as? String { high.append(t) }
+      case "tool_result":
+        // Everything nested under a tool result is low-signal output.
+        tool.append(extractText(from: dict["content"]))
+      default:
+        continue
+      }
+    }
+    return (high.joined(separator: "\n"), tool.joined(separator: "\n"))
+  }
+
+  /// Recursively pull out `text` and `tool_result` content from a content
+  /// value, skipping `thinking` and `tool_use`. Used for nested tool-result
+  /// payloads where the high/low-signal split no longer matters (the caller
+  /// has already classified the whole subtree as one or the other).
   static func extractText(from content: Any?) -> String {
     if let str = content as? String { return str }
     guard let blocks = content as? [Any] else { return "" }

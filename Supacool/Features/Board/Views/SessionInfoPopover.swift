@@ -155,47 +155,55 @@ struct SessionInfoPopover: View {
   }()
 }
 
-/// Wrapping row of ReferenceChips for the info popover (no overflow cap —
-/// shows everything). Uses iOS-16+ SwiftUI Layout via `WrappingHStack`
-/// isn't available; we fall back to a LazyVStack of rows with HStack
-/// wrapping isn't trivial, so use a simple HStack that wraps via
-/// `.layoutPriority` and modest width.
+/// Wrapping row of ReferenceChips for the info popover. Reference-heavy
+/// sessions (e.g. a `git log` that dumps dozens of ticket ids into the
+/// transcript) would otherwise flood the popover into an unreadable wall of
+/// chips, so anything past `collapseThreshold` is hidden behind a "+N more"
+/// toggle. The first chips stay visible; tapping the toggle reveals the rest.
 private struct FlowingChips: View {
   let references: [SessionReference]
   let linearOrgSlug: String
 
-  var body: some View {
-    WrapView(references, id: \.dedupeKey) { ref in
-      ReferenceChip(reference: ref, linearOrgSlug: linearOrgSlug)
-    }
-  }
-}
+  /// Show at most this many chips before collapsing the remainder behind a
+  /// toggle. Kept small so the popover stays a glanceable summary.
+  static let collapseThreshold = 5
 
-/// Minimal wrapping container for chips. Uses WidthReader + a simple
-/// two-pass packing to avoid pulling in an extra dependency.
-private struct WrapView<Data: RandomAccessCollection, ID: Hashable, Content: View>: View
-where Data.Element: Equatable {
-  let data: Data
-  let id: KeyPath<Data.Element, ID>
-  let content: (Data.Element) -> Content
+  @State private var isExpanded: Bool = false
 
-  init(
-    _ data: Data,
-    id: KeyPath<Data.Element, ID>,
-    @ViewBuilder content: @escaping (Data.Element) -> Content
-  ) {
-    self.data = data
-    self.id = id
-    self.content = content
+  private var isCollapsible: Bool { references.count > Self.collapseThreshold }
+
+  private var visibleReferences: [SessionReference] {
+    guard isCollapsible, !isExpanded else { return references }
+    return Array(references.prefix(Self.collapseThreshold))
   }
 
   var body: some View {
-    // SwiftUI's new layout protocol handles this elegantly.
     FlowLayout(spacing: 4) {
-      ForEach(Array(data), id: id) { item in
-        content(item)
+      ForEach(visibleReferences, id: \.dedupeKey) { ref in
+        ReferenceChip(reference: ref, linearOrgSlug: linearOrgSlug)
+      }
+      if isCollapsible {
+        toggleChip
       }
     }
+  }
+
+  private var toggleChip: some View {
+    let hiddenCount = references.count - Self.collapseThreshold
+    return Button {
+      isExpanded.toggle()
+    } label: {
+      Text(isExpanded ? "Show less" : "+\(hiddenCount) more")
+        .font(.caption2.weight(.medium))
+        .lineLimit(1)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Color.secondary.opacity(0.12))
+        .clipShape(Capsule())
+    }
+    .buttonStyle(.plain)
+    .help(isExpanded ? "Collapse references" : "Show \(hiddenCount) more references")
   }
 }
 
