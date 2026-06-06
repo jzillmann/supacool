@@ -40,6 +40,22 @@ xcodebuild test -project supacool.xcodeproj -scheme supacool \
 
 If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to missing Metal Toolchain`: the Makefile already passes `-Dxcframework-target=native` to keep the ghostty build macOS-only. If you still hit it, the fallback is `xcodebuild -downloadComponent MetalToolchain` (~1GB one-time). See [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md).
 
+### Previewing a branch as a second instance
+
+To eyeball a branch's UI/behaviour next to your real Supacool **without disturbing its data**, use the helper in `scripts/`:
+
+```bash
+scripts/build-and-preview.sh [optional/repo/to/seed/on/the/board]
+```
+
+It builds the current branch into an isolated DerivedData (`build/`, gitignored), then launches a **detached preview instance**. `scripts/preview-isolated.sh` does the launch alone if you've already built.
+
+Isolation matters because the app stores state in two non-obvious places, neither of which a normal launch separates:
+- **File data** (`settings.json`, sessions, bookmarks) lives at a fixed `~/.supacool/` path, *not* under a bundle-id container. The scripts redirect `$HOME` to `~/.supacool-preview-sandbox` to isolate it (delete that dir to reset the preview).
+- **UserDefaults** (repo list/order, sidebar state, the `bypassPermissions` flag, …) is keyed by **bundle id** via `cfprefsd`, which ignores `$HOME`. So the scripts re-stamp the built app's bundle id to `io.morethan.supacool.preview` (and ad-hoc re-sign) to get a separate prefs domain.
+
+Without **both** moves, a second instance silently shares — and can corrupt — your real app's repo ordering, settings, and board state. The scripts also strip inherited `SUPACOOL_*` env vars so a preview launched from inside a Supacool terminal can't cross-talk with the parent app's hook socket.
+
 ---
 
 ## Repo layout

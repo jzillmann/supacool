@@ -25,9 +25,6 @@ struct NewTerminalSheet: View {
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
-  /// Persists the disclosure state of the Advanced section so it stays
-  /// open across re-renders within a single sheet presentation.
-  @State private var isAdvancedExpanded: Bool = false
 
   var body: some View {
     Form {
@@ -58,60 +55,12 @@ struct NewTerminalSheet: View {
         if store.destination.isManualRemote {
           remoteWorkingDirectoryField
         }
-        if !store.destination.isManualRemote {
-          if store.destination.isRemote {
-            repositoryRemoteTargetRow
-          } else {
-            worktreeModePicker
-              .disabled(isWorkspaceLockedByPR)
-            if isUsingWorktree {
-              // Keep the field visible even when PR-locked — otherwise the
-              // user has no in-form readout of the branch that will be
-              // checked out. Disabled (not hidden) so the binding still
-              // reflects `workspaceQuery`, which the PR flow populates
-              // with `context.metadata.headRefName`.
-              workspaceField
-                .disabled(isWorkspaceLockedByPR)
-              if !isWorkspaceLockedByPR {
-                ForEach(workspaceSuggestions, id: \.id) { suggestion in
-                  WorkspaceSuggestionRow(
-                    suggestion: suggestion,
-                    isSelected: suggestion.selection == store.selectedWorkspace
-                  )
-                  .contentShape(Rectangle())
-                  .onTapGesture {
-                    store.send(.workspaceSelected(suggestion.selection))
-                  }
-                  // The suggestion list is part of the Workspace row, not its
-                  // own section — drop the auto-rendered divider above so the
-                  // field + matches read as one unit.
-                  .listRowSeparator(.hidden, edges: .top)
-                }
-              }
-            }
-          }
-        }
-        if store.agent != nil {
-          DisclosureGroup(isExpanded: $isAdvancedExpanded) {
-            if store.agent?.supportsPlanMode == true {
-              planModeToggle
-            }
-            bypassPermissionsToggle
-          } label: {
-            // SwiftUI's default DisclosureGroup only toggles when the
-            // chevron itself is clicked — clicking the label text
-            // does nothing. Widening the hit area + a manual
-            // onTapGesture makes the whole row act like a button,
-            // which is what the user expects.
-            Text("Advanced")
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .contentShape(Rectangle())
-              .onTapGesture {
-                withAnimation(.easeOut(duration: 0.18)) {
-                  isAdvancedExpanded.toggle()
-                }
-              }
-          }
+        // Repo-linked remote targets still show their read-only target row
+        // here. The local Scope choice (Main / Worktree) + branch picker
+        // moved into the launch-options tag cloud below, so every binary
+        // launch choice lives in one place.
+        if !store.destination.isManualRemote && store.destination.isRemote {
+          repositoryRemoteTargetRow
         }
       } footer: {
         if let message = store.validationMessage, !message.isEmpty {
@@ -119,20 +68,8 @@ struct NewTerminalSheet: View {
         }
       }
 
-      if !store.destination.isManualRemote {
-        Section {
-          Toggle("Save as bookmark", isOn: $store.saveAsBookmark)
-            .help("Pin this launch as a one-click pill above Waiting on Me.")
-          if store.saveAsBookmark {
-            TextField("Bookmark name", text: $store.bookmarkName)
-          }
-        } footer: {
-          if store.saveAsBookmark {
-            Text("Bookmarks are scoped to the selected repository.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
+      if hasAnyLaunchOptions {
+        launchOptionsSection
       }
     }
     .formStyle(.grouped)
@@ -468,19 +405,31 @@ struct NewTerminalSheet: View {
     }
   }
 
-  /// Two-segment picker that mirrors the Agent picker's visual style.
-  /// "Main" runs the agent at the repo root (read-only intent);
-  /// "Worktree" reveals the branch field below where the user picks or
-  /// creates a branch to check out into a fresh worktree.
-  private var worktreeModePicker: some View {
-    Picker(selection: useWorktreeBinding) {
-      Text("Main").tag(false)
-      Text("Worktree").tag(true)
-    } label: {
-      Text("Scope")
-      Text("Main runs at repo root, or work on a branch in a worktree.")
+  /// Branch field + suggestion list revealed beneath the launch-options
+  /// cloud when the Worktree pill is on. Keeps the field visible (disabled)
+  /// when PR-locked so the user still sees the branch that will be checked
+  /// out — the binding reflects `workspaceQuery`, which the PR flow fills
+  /// with `context.metadata.headRefName`.
+  @ViewBuilder
+  private var worktreeBranchReveal: some View {
+    workspaceField
+      .disabled(isWorkspaceLockedByPR)
+    if !isWorkspaceLockedByPR {
+      ForEach(workspaceSuggestions, id: \.id) { suggestion in
+        WorkspaceSuggestionRow(
+          suggestion: suggestion,
+          isSelected: suggestion.selection == store.selectedWorkspace
+        )
+        .contentShape(Rectangle())
+        .onTapGesture {
+          store.send(.workspaceSelected(suggestion.selection))
+        }
+        // The suggestion list is part of the Workspace row, not its own
+        // section — drop the auto-rendered divider above so the field +
+        // matches read as one unit.
+        .listRowSeparator(.hidden, edges: .top)
+      }
     }
-    .pickerStyle(.segmented)
   }
 
   /// True when the current selection isn't `.repoRoot` — i.e. the user
@@ -502,22 +451,111 @@ struct NewTerminalSheet: View {
     )
   }
 
-  private var bypassPermissionsToggle: some View {
-    Toggle(isOn: $bypassPermissions) {
-      Text("Skip permission prompts")
-      Text(
-        store.planMode && store.agent?.supportsPlanMode == true
-          ? "Disabled while plan mode is on."
-          : "Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). Lets it act without confirming each tool use."
-      )
-    }
-    .disabled(store.planMode && store.agent?.supportsPlanMode == true)
+  // MARK: - Launch options tag cloud
+
+  private var agentSupportsPlanMode: Bool { store.agent?.supportsPlanMode == true }
+  private var agentSupportsSkip: Bool { store.agent?.bypassPermissionsFlag != nil }
+  private var agentSupportsRemoteControl: Bool { store.agent?.supportsRemoteControl == true }
+  /// Bookmarks are local-only — no pill on a manual remote SSH session.
+  private var canBookmark: Bool { !store.destination.isManualRemote }
+
+  /// The Main/Worktree scope choice only applies to a local repo-backed
+  /// session (remote + repo-remote targets have no worktree concept).
+  private var canChooseWorktree: Bool {
+    !store.destination.isManualRemote && !store.destination.isRemote
   }
 
-  private var planModeToggle: some View {
-    Toggle(isOn: $store.planMode) {
-      Text("Plan mode")
-      Text("Launch Claude with --permission-mode plan. It can inspect and propose changes, but won't execute them until you approve.")
+  /// Plan mode and Skip permissions are mutually exclusive (plan wins in
+  /// the rendered command), so Skip is inert while plan is armed.
+  private var skipDisabledByPlanMode: Bool { store.planMode && agentSupportsPlanMode }
+
+  private var hasAnyLaunchOptions: Bool {
+    canChooseWorktree || agentSupportsPlanMode || agentSupportsSkip
+      || agentSupportsRemoteControl || canBookmark
+  }
+
+  /// The "launch options" section: a wrapping cloud of toggleable pills
+  /// (Worktree · Plan mode · Skip permissions · Remote control · Save as
+  /// bookmark), each filtered to the agents / destinations that support it,
+  /// plus the inline fields that the Worktree, Remote-control, and Bookmark
+  /// pills reveal directly beneath the cloud.
+  @ViewBuilder
+  private var launchOptionsSection: some View {
+    Section {
+      TagFlowLayout(spacing: 8, lineSpacing: 8) {
+        if canChooseWorktree {
+          FeatureTag(
+            isOn: useWorktreeBinding,
+            title: "Worktree",
+            systemImage: "arrow.triangle.branch",
+            help: isWorkspaceLockedByPR
+              ? "Locked to the PR's branch."
+              : "Off runs at the repo root (Main). On checks out a branch in a "
+                + "fresh worktree — pick or name it below.",
+            isEnabled: !isWorkspaceLockedByPR
+          )
+        }
+        if agentSupportsPlanMode {
+          FeatureTag(
+            isOn: $store.planMode,
+            title: "Plan mode",
+            systemImage: "list.bullet.clipboard",
+            help: "Launch Claude with --permission-mode plan. It can inspect and "
+              + "propose changes, but won't execute them until you approve."
+          )
+        }
+        if agentSupportsSkip {
+          FeatureTag(
+            isOn: $bypassPermissions,
+            title: "Skip permissions",
+            systemImage: "bolt",
+            help: skipDisabledByPlanMode
+              ? "Disabled while Plan mode is on."
+              : "Launch the agent with \(store.agent?.bypassPermissionsFlag ?? "--"). "
+                + "Lets it act without confirming each tool use.",
+            isEnabled: !skipDisabledByPlanMode
+          )
+        }
+        if agentSupportsRemoteControl {
+          FeatureTag(
+            isOn: $store.remoteControl,
+            title: "Remote control",
+            systemImage: "iphone.gen3",
+            help: "Launch Claude with --remote-control so you can drive this "
+              + "session from claude.ai/code or the Claude mobile app. Runs "
+              + "locally the whole time."
+          )
+        }
+        if canBookmark {
+          FeatureTag(
+            isOn: $store.saveAsBookmark,
+            title: "Save as bookmark",
+            systemImage: "bookmark",
+            help: "Pin this launch as a one-click pill above Waiting on Me."
+          )
+        }
+      }
+      if canChooseWorktree && isUsingWorktree {
+        worktreeBranchReveal
+      }
+      if store.remoteControl && agentSupportsRemoteControl {
+        TextField(
+          "Remote session name",
+          text: $store.remoteControlName,
+          prompt: Text("Optional — defaults to this machine's name")
+        )
+      }
+      if store.saveAsBookmark && canBookmark {
+        TextField("Bookmark name", text: $store.bookmarkName)
+      }
+    } header: {
+      Text("Launch options")
+    } footer: {
+      if store.saveAsBookmark && canBookmark {
+        Text("Bookmarks are scoped to the selected repository.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
     }
   }
 

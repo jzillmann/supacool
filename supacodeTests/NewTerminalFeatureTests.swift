@@ -155,7 +155,8 @@ struct NewTerminalFeatureTests {
       agent: .codex,
       initialPrompt: "Write tests for auth",
       displayName: "Write tests for auth",
-      planMode: true
+      planMode: true,
+      remoteControl: true
     )
     let repos = IdentifiedArray(uniqueElements: [
       Self.makeRepository(id: "/tmp/repo", name: "test-repo")
@@ -166,6 +167,7 @@ struct NewTerminalFeatureTests {
     #expect(state.prompt == "Write tests for auth")
     #expect(state.agent == .codex)
     #expect(state.planMode == true)
+    #expect(state.remoteControl == true)
     #expect(state.selectedRepositoryID == "/tmp/repo")
     #expect(state.selectedWorkspace == .repoRoot)
     #expect(state.workspaceQuery.isEmpty)

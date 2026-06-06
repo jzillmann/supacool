@@ -22,6 +22,11 @@ enum SessionSpawner {
     let agent: AgentType?
     let prompt: String
     let planMode: Bool
+    let remoteControl: Bool
+    /// Optional human-friendly session title passed to `--remote-control`.
+    /// Sheet-local (not persisted on bookmarks/drafts); `nil` lets Claude
+    /// auto-name the remote session.
+    let remoteControlName: String?
     let bypassPermissions: Bool
     let fetchOriginBeforeCreation: Bool
     let rerunOwnedWorktreeID: String?
@@ -97,7 +102,9 @@ enum SessionSpawner {
       agent: request.agent,
       prompt: request.prompt,
       bypassPermissions: request.bypassPermissions,
-      planMode: request.planMode
+      planMode: request.planMode,
+      remoteControl: request.remoteControl,
+      remoteControlName: request.remoteControlName
     )
     await terminalClient.send(
       .createTabWithInput(
@@ -130,6 +137,7 @@ enum SessionSpawner {
       displayName: request.suggestedDisplayName,
       removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
       planMode: request.planMode,
+      remoteControl: request.remoteControl,
       references: seededReferences,
       referencesScannedAt: seededReferences.isEmpty ? nil : Date()
     )
@@ -398,19 +406,25 @@ enum SessionSpawner {
     agent: AgentType?,
     prompt: String,
     bypassPermissions: Bool,
-    planMode: Bool
+    planMode: Bool,
+    remoteControl: Bool,
+    remoteControlName: String?
   ) -> String {
     switch (agent, prompt.isEmpty) {
     case (let agent?, false):
       return agent.command(
         prompt: prompt,
         bypassPermissions: bypassPermissions,
-        planMode: planMode
+        planMode: planMode,
+        remoteControl: remoteControl,
+        remoteControlName: remoteControlName
       ) + "\r"
     case (let agent?, true):
       return agent.commandWithoutPrompt(
         bypassPermissions: bypassPermissions,
-        planMode: planMode
+        planMode: planMode,
+        remoteControl: remoteControl,
+        remoteControlName: remoteControlName
       ) + "\r"
     case (nil, false):
       return prompt + "\r"

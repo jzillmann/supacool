@@ -71,6 +71,7 @@ nonisolated enum AgentRegistry {
     binary: "claude",
     bypassPermissionsFlag: "--dangerously-skip-permissions",
     supportsPlanMode: true,
+    remoteControlFlag: "--remote-control",
     icon: .asset("claude-code-mark"),
     tintColorName: "orange",
     launchTemplate: "{binary}{flags} {prompt}",

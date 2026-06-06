@@ -101,6 +101,56 @@ struct AgentRegistryTests {
     #expect(cmd == "claude --permission-mode plan 'design system'")
   }
 
+  @Test func claudeAppendsRemoteControlFlagAfterPermissionFlag() {
+    let cmd = AgentType.claude.command(
+      prompt: "ship it",
+      bypassPermissions: true,
+      remoteControl: true
+    )
+    #expect(cmd == "claude --dangerously-skip-permissions --remote-control 'ship it'")
+  }
+
+  @Test func claudeRemoteControlCombinesWithPlanMode() {
+    let cmd = AgentType.claude.command(
+      prompt: "design",
+      bypassPermissions: true,
+      planMode: true,
+      remoteControl: true
+    )
+    // Plan wins over bypass; remote-control is orthogonal and still appends.
+    #expect(cmd == "claude --permission-mode plan --remote-control 'design'")
+  }
+
+  @Test func claudeRemoteControlShellQuotesOptionalName() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      remoteControl: true,
+      remoteControlName: "My Project"
+    )
+    #expect(cmd == "claude --remote-control 'My Project' 'go'")
+  }
+
+  @Test func claudeRemoteControlBlankNameOmitsName() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      remoteControl: true,
+      remoteControlName: "   "
+    )
+    #expect(cmd == "claude --remote-control 'go'")
+  }
+
+  @Test func claudeSupportsRemoteControlCodexAndPiDoNot() {
+    #expect(AgentType.claude.supportsRemoteControl)
+    #expect(AgentType.claude.remoteControlFlag == "--remote-control")
+    #expect(AgentType.codex.supportsRemoteControl == false)
+    #expect(AgentType.pi.supportsRemoteControl == false)
+  }
+
+  @Test func codexSilentlyDropsRemoteControlWhenUnsupported() {
+    let cmd = AgentType.codex.command(prompt: "hi", remoteControl: true)
+    #expect(cmd == "codex 'hi'")
+  }
+
   @Test func piSilentlyDropsBypassFlagWhenAgentHasNone() {
     let cmd = AgentType.pi.command(prompt: "hi", bypassPermissions: true)
     #expect(cmd == "pi 'hi'")

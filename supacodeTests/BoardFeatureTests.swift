@@ -3017,6 +3017,8 @@ struct BoardFeatureTests {
       agent: .claude,
       prompt: "Continue work",
       planMode: false,
+      remoteControl: false,
+      remoteControlName: nil,
       bypassPermissions: true,
       fetchOriginBeforeCreation: false,
       rerunOwnedWorktreeID: nil,

@@ -27,6 +27,16 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// Claude Code via `--permission-mode plan`).
   let supportsPlanMode: Bool
 
+  /// CLI flag that starts an interactive session with Remote Control enabled
+  /// (drivable from claude.ai/code or the Claude mobile app). `nil` for agents
+  /// with no remote-control concept. Currently only Claude Code
+  /// (`--remote-control`). Unlike plan/bypass, this combines with them rather
+  /// than being mutually exclusive.
+  let remoteControlFlag: String?
+
+  /// Convenience: whether this agent exposes a remote-control launch flag.
+  var supportsRemoteControl: Bool { remoteControlFlag != nil }
+
   /// How the card / picker render this agent visually.
   let icon: AgentIcon
   let tintColorName: String
@@ -87,6 +97,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     binary: String,
     bypassPermissionsFlag: String?,
     supportsPlanMode: Bool,
+    remoteControlFlag: String? = nil,
     icon: AgentIcon,
     tintColorName: String,
     launchTemplate: String = "{binary}{flags} {prompt}",
@@ -100,6 +111,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     self.binary = binary
     self.bypassPermissionsFlag = bypassPermissionsFlag
     self.supportsPlanMode = supportsPlanMode
+    self.remoteControlFlag = remoteControlFlag
     self.icon = icon
     self.tintColorName = tintColorName
     self.launchTemplate = launchTemplate
@@ -116,9 +128,16 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   func command(
     prompt: String,
     bypassPermissions: Bool = false,
-    planMode: Bool = false
+    planMode: Bool = false,
+    remoteControl: Bool = false,
+    remoteControlName: String? = nil
   ) -> String {
-    let flagFragment = renderFlags(bypassPermissions: bypassPermissions, planMode: planMode)
+    let flagFragment = renderFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: planMode,
+      remoteControl: remoteControl,
+      remoteControlName: remoteControlName
+    )
     return launchTemplate
       .replacingOccurrences(of: "{binary}", with: binary)
       .replacingOccurrences(of: "{flags}", with: flagFragment)
@@ -128,9 +147,16 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// Command used when no prompt is provided.
   func commandWithoutPrompt(
     bypassPermissions: Bool = false,
-    planMode: Bool = false
+    planMode: Bool = false,
+    remoteControl: Bool = false,
+    remoteControlName: String? = nil
   ) -> String {
-    let flagFragment = renderFlags(bypassPermissions: bypassPermissions, planMode: planMode)
+    let flagFragment = renderFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: planMode,
+      remoteControl: remoteControl,
+      remoteControlName: remoteControlName
+    )
     // Drop the `{prompt}` placeholder along with any leading whitespace so
     // the rendered string doesn't end with a stray space.
     let stripped = launchTemplate
@@ -146,7 +172,12 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// Returns `nil` if the agent has no resume-by-id template configured.
   func resumeCommand(sessionID: String, bypassPermissions: Bool = false) -> String? {
     guard let template = resumeTemplate else { return nil }
-    let flagFragment = renderFlags(bypassPermissions: bypassPermissions, planMode: false)
+    let flagFragment = renderFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: false,
+      remoteControl: false,
+      remoteControlName: nil
+    )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
       .replacingOccurrences(of: "{flags}", with: flagFragment)
@@ -158,25 +189,46 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// concept Supacool can invoke.
   func resumePickerCommand(bypassPermissions: Bool = false) -> String? {
     guard let template = resumePickerTemplate else { return nil }
-    let flagFragment = renderFlags(bypassPermissions: bypassPermissions, planMode: false)
+    let flagFragment = renderFlags(
+      bypassPermissions: bypassPermissions,
+      planMode: false,
+      remoteControl: false,
+      remoteControlName: nil
+    )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
       .replacingOccurrences(of: "{flags}", with: flagFragment)
   }
 
   /// Builds the leading-space-prefixed flag fragment used by the templates
-  /// (`" --dangerously-skip-permissions"` or `""`). Plan mode wins over
-  /// bypass-permissions so the two never conflict in the rendered command.
-  /// Agents without a `bypassPermissionsFlag` silently drop the bypass
-  /// request — same for plan mode on agents that don't support it.
-  private func renderFlags(bypassPermissions: Bool, planMode: Bool) -> String {
+  /// (e.g. `" --dangerously-skip-permissions --remote-control"` or `""`).
+  ///
+  /// Plan mode wins over bypass-permissions so those two never conflict in
+  /// the rendered command. Remote control is orthogonal — it combines with
+  /// whichever permission flag (if any) applies. Agents without a
+  /// `bypassPermissionsFlag` / `remoteControlFlag` silently drop the
+  /// respective request — same for plan mode on agents that don't support it.
+  private func renderFlags(
+    bypassPermissions: Bool,
+    planMode: Bool,
+    remoteControl: Bool,
+    remoteControlName: String?
+  ) -> String {
+    var fragments: [String] = []
     if planMode, supportsPlanMode {
-      return " --permission-mode plan"
+      fragments.append("--permission-mode plan")
+    } else if bypassPermissions, let flag = bypassPermissionsFlag {
+      fragments.append(flag)
     }
-    if bypassPermissions, let flag = bypassPermissionsFlag {
-      return " \(flag)"
+    if remoteControl, let flag = remoteControlFlag {
+      fragments.append(flag)
+      let trimmedName = remoteControlName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !trimmedName.isEmpty {
+        fragments.append(Self.shellQuote(trimmedName))
+      }
     }
-    return ""
+    guard !fragments.isEmpty else { return "" }
+    return " " + fragments.joined(separator: " ")
   }
 
   /// Single-quote escape: wraps the input in `'...'`, replacing any embedded
