@@ -40,7 +40,10 @@ echo "      BUILD SUCCEEDED"
 
 # Re-stamping the bundle id is what isolates UserDefaults (cfprefsd keys by it).
 # A fresh xcodebuild always resets it to io.morethan.supacool, so re-do each run.
-echo "[2/4] re-stamp bundle id -> $PREVIEW_BUNDLE_ID…"
+# Brace the expansion: under a non-UTF-8 locale (this machine's setlocale
+# falls back to C), bash's bare `$VAR…` greedily eats the multibyte ellipsis
+# into the variable name and `set -u` then aborts on the bogus name.
+echo "[2/4] re-stamp bundle id -> ${PREVIEW_BUNDLE_ID}…"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $PREVIEW_BUNDLE_ID" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleName $PREVIEW_BUNDLE_NAME" "$APP/Contents/Info.plist" 2>/dev/null || true
 
