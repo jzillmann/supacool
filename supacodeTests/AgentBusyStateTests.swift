@@ -181,6 +181,26 @@ struct AgentBusyStateTests {
     #expect(fixture.surface.bridge.state.agentBusy == true)
   }
 
+  /// `clearAgentBusy(tabID:)` is the all-PIDs reset. A single call must
+  /// drop a multi-agent (pi + codex) busy latch to idle — where a
+  /// per-PID `setAgentBusy(active: false)` clears only the PID it names,
+  /// and a caller that doesn't know the live PIDs (an awaiting-input
+  /// hook carries none) couldn't otherwise release the latch at all.
+  @Test func clearAgentBusyResetsAllPIDsOnSurface() {
+    let worktree = makeWorktree()
+    let fixture = makeStateWithSurface(worktree: worktree)
+
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 32196, active: true)
+    fixture.state.setAgentBusy(surfaceID: fixture.surface.id, tabID: fixture.tabId, pid: 63935, active: true)
+    #expect(fixture.surface.bridge.state.agentBusy == true)
+    #expect(fixture.manager.taskStatus(for: worktree.id) == .running)
+
+    fixture.state.clearAgentBusy(tabID: fixture.tabId)
+
+    #expect(fixture.surface.bridge.state.agentBusy == false)
+    #expect(fixture.manager.taskStatus(for: worktree.id) == .idle)
+  }
+
   @Test func taskStatusChangedEmittedOnBusyToggle() async {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()
