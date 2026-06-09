@@ -677,6 +677,79 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression for the card stuck in "In Progress" (trace
+  /// 3683DFE7…): Claude goes busy, then fires its idle "waiting for
+  /// your input" Notification *without* a preceding Stop / busy=false
+  /// edge. The busy latch is set only by hook edges, so unless an
+  /// awaiting-input hook implies not-busy the latch stays stuck on and
+  /// `classify` pins the card green forever. An awaiting-input hook must
+  /// release the busy latch immediately, and the card must NOT fall back
+  /// to busy after the awaiting lease's TTL expires.
+  @Test func awaitingInputHookClearsStuckBusyLatch() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-awaiting-clears-busy")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        // Agent working: busy latched on by a PreToolUse-style hook.
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 60594)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Claude's idle "waiting for input" notification — no Stop and
+        // no busy=false edge precedes it.
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude is waiting for your input",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+
+        // The awaiting hook releases the busy latch immediately.
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Chip presents after the on-debounce; still not busy.
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Lease holds until the TTL.
+        await clock.advance(by: .seconds(7) + .milliseconds(750))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // After the lease expires the card must stay out of "In
+        // Progress": neither awaiting nor busy.
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   /// Codex auto-approve round-trip (PermissionRequest → ~400ms →
   /// PreToolUse busyOn) must not produce a visible "Wants Input"
   /// blink. Guarded by the 750ms default on-debounce.

@@ -457,6 +457,30 @@ final class WorktreeTerminalState {
     emitTaskStatusIfChanged()
   }
 
+  /// Fully clears the agent-busy latch for every surface in a tab,
+  /// regardless of which PIDs set it. `setAgentBusy(active: false)` is
+  /// per-PID and carries no effect for a caller that doesn't know the
+  /// reporting PID; this is the all-PIDs reset used when an authoritative
+  /// awaiting-input hook proves the agent has yielded its turn but no
+  /// `busy == false` edge arrived. Claude's idle "waiting for input"
+  /// notification doesn't always follow a `Stop` hook, which otherwise
+  /// leaves the latch stuck on and pins the board card in "In Progress".
+  /// Leaves `progressState` (OSC long-running-command progress) untouched
+  /// — a genuinely-running command still reads busy via `isTabBusy`.
+  func clearAgentBusy(tabID: TerminalTabID) {
+    #if DEBUG
+      testBusySurfaceIDsByTab.removeValue(forKey: tabID)
+    #endif
+    if let tree = trees[tabID] {
+      for surface in tree.leaves() {
+        busyPIDsBySurface.removeValue(forKey: surface.id)
+        surface.bridge.state.agentBusy = false
+      }
+    }
+    tabManager.updateDirty(tabID, isDirty: isTabBusy(tabID))
+    emitTaskStatusIfChanged()
+  }
+
   func focusSelectedTab() {
     guard let tabId = tabManager.selectedTabId else { return }
     focusSurface(in: tabId)
