@@ -140,6 +140,143 @@ struct SkillCatalogTests {
     #expect(builtinHelper.source == .builtin)
   }
 
+  @Test func discoverSurfacesSlashCommandsAsUserInvocableSkills() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let userSkillsRoot = root.appending(path: "user-skills", directoryHint: .isDirectory)
+    let userCommandsRoot = root.appending(path: "user-commands", directoryHint: .isDirectory)
+    let projectCommandsRoot = root.appending(path: "project-commands", directoryHint: .isDirectory)
+
+    try writeSkill(
+      named: "world-builder",
+      description: "Use this skill when building worlds.",
+      to: userSkillsRoot
+    )
+    // Command with frontmatter description.
+    try writeCommand(
+      relativePath: "c-ci-triage.md",
+      contents: """
+      ---
+      description: Triage CI failures for the repo.
+      ---
+
+      Do the triage.
+      """,
+      to: projectCommandsRoot
+    )
+    // Command without frontmatter — description falls back to the first body line.
+    try writeCommand(
+      relativePath: "make-plan.md",
+      contents: """
+      # Make a plan
+
+      Analyze the problem and produce a plan.
+      """,
+      to: userCommandsRoot
+    )
+    // Namespaced command in a subdirectory → `git:commit`.
+    try writeCommand(
+      relativePath: "git/commit.md",
+      contents: "Stage and commit.",
+      to: userCommandsRoot
+    )
+
+    let skills = await SkillCatalog.discover(
+      userSkillsRoot: userSkillsRoot,
+      projectSkillsRoot: nil,
+      userCommandsRoot: userCommandsRoot,
+      projectCommandsRoot: projectCommandsRoot
+    )
+
+    #expect(skills.map(\.name) == ["c-ci-triage", "git:commit", "make-plan", "world-builder"])
+
+    let triage = try #require(skills.first(where: { $0.name == "c-ci-triage" }))
+    #expect(triage.isUserInvocable)
+    #expect(triage.source == .project)
+    #expect(triage.description == "Triage CI failures for the repo.")
+
+    let makePlan = try #require(skills.first(where: { $0.name == "make-plan" }))
+    #expect(makePlan.description == "Make a plan")
+
+    let commit = try #require(skills.first(where: { $0.name == "git:commit" }))
+    #expect(commit.description == "Stage and commit.")
+    #expect(commit.isUserInvocable)
+  }
+
+  @Test func discoverLetsSkillsKeepPrecedenceOverSameNamedCommands() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let userSkillsRoot = root.appending(path: "user-skills", directoryHint: .isDirectory)
+    let userCommandsRoot = root.appending(path: "user-commands", directoryHint: .isDirectory)
+
+    try writeSkill(
+      named: "overlap",
+      description: "Use this skill when overlapping.",
+      to: userSkillsRoot
+    )
+    try writeCommand(
+      relativePath: "overlap.md",
+      contents: "A command that shares the skill's name.",
+      to: userCommandsRoot
+    )
+
+    let skills = await SkillCatalog.discover(
+      userSkillsRoot: userSkillsRoot,
+      projectSkillsRoot: nil,
+      userCommandsRoot: userCommandsRoot,
+      projectCommandsRoot: nil
+    )
+
+    let overlap = try #require(skills.first(where: { $0.name == "overlap" }))
+    #expect(skills.filter { $0.name == "overlap" }.count == 1)
+    #expect(overlap.description == "Use this skill when overlapping.")
+  }
+
+  @Test func discoverTreatsDisableModelInvocationSkillsAsUserInvocable() async throws {
+    let root = FileManager.default.temporaryDirectory
+      .appending(path: UUID().uuidString, directoryHint: .isDirectory)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    let userSkillsRoot = root.appending(path: "user-skills", directoryHint: .isDirectory)
+    let skillDirectory = userSkillsRoot.appending(path: "c-ci-triage", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: skillDirectory, withIntermediateDirectories: true)
+    // No "use this skill when" / "triggers on" phrasing in the description, so
+    // the description heuristic alone would mark it non-user-invocable. The
+    // `disable-model-invocation: true` flag must override that.
+    try """
+    ---
+    name: c-ci-triage
+    description: Autonomous CI triage evaluator that spawns a doer subagent.
+    disable-model-invocation: true
+    ---
+
+    # c-ci-triage
+    """.write(
+      to: skillDirectory.appending(path: "SKILL.md", directoryHint: .notDirectory),
+      atomically: true,
+      encoding: .utf8
+    )
+
+    let skills = await SkillCatalog.discover(userSkillsRoot: userSkillsRoot, projectSkillsRoot: nil)
+
+    let triage = try #require(skills.first(where: { $0.name == "c-ci-triage" }))
+    #expect(triage.isUserInvocable)
+  }
+
+  private func writeCommand(relativePath: String, contents: String, to root: URL) throws {
+    let fileURL = root.appending(path: relativePath, directoryHint: .notDirectory)
+    try FileManager.default.createDirectory(
+      at: fileURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true,
+      attributes: nil
+    )
+    try contents.write(to: fileURL, atomically: true, encoding: .utf8)
+  }
+
   private func writeSkill(named name: String, description: String, to root: URL) throws {
     let directory = root.appending(path: name, directoryHint: .isDirectory)
     try FileManager.default.createDirectory(
