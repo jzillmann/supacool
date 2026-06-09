@@ -108,6 +108,39 @@ struct LinearInboxFeatureTests {
     #expect(store.state.fetchingTicketIDs.isEmpty)
   }
 
+  @Test(.dependencies) func taskRefreshesExistingTicketsOnOpen() async {
+    resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", stateType: "started")])
+    let now = Date(timeIntervalSince1970: 9_000)
+    let fresh = LinearIssue(
+      id: "u1",
+      identifier: "CEN-1",
+      title: "Fresh",
+      description: nil,
+      stateName: "Done",
+      stateType: "completed",
+      assigneeName: "me",
+      assignedToMe: true,
+      url: nil
+    )
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchIssues = { ids in
+        #expect(ids == ["CEN-1"])
+        return [fresh]
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    await store.receive(\._issuesFetched)
+    #expect(store.state.tickets[0].title == "Fresh")
+    #expect(store.state.tickets[0].isDone)
+    #expect(store.state.doneCount == 1)
+  }
+
   @Test(.dependencies) func importReplacePreservesStartedMetadata() async {
     let started = Date(timeIntervalSince1970: 10)
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Old", startedAt: started)])

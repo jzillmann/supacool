@@ -21,6 +21,9 @@ struct LinearInboxSheet: View {
       }
     }
     .frame(width: 660, height: 580)
+    // Refresh state/assignee/title (and the done count) on open so the
+    // inbox never shows stale cache.
+    .task { await store.send(.task).finish() }
   }
 
   // MARK: - Tickets tab
