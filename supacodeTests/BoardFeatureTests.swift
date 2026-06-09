@@ -252,14 +252,14 @@ struct BoardFeatureTests {
   /// was introduced for.
   @Test(.dependencies) func prRefreshTickFansOutAcrossSessionsReferencingTheSamePR() async {
     let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
-    var s1 = Self.sampleSession()
-    s1.references = [ref]
-    s1.referencesScannedAt = Date()
-    var s2 = Self.sampleSession(id: UUID(uuidString: "00000000-0000-0000-0000-000000000099")!)
-    s2.references = [ref]
-    s2.referencesScannedAt = Date()
+    var session1 = Self.sampleSession()
+    session1.references = [ref]
+    session1.referencesScannedAt = Date()
+    var session2 = Self.sampleSession(id: UUID(uuidString: "00000000-0000-0000-0000-000000000099")!)
+    session2.references = [ref]
+    session2.referencesScannedAt = Date()
     let state = BoardFeature.State()
-    state.$sessions.withLock { $0 = [s1, s2] }
+    state.$sessions.withLock { $0 = [session1, session2] }
     let lookups = LockIsolated<[String]>([])
     let testClock = TestClock()
     let store = TestStore(initialState: state) {
@@ -2775,12 +2775,12 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     }
-    let pb = NSPasteboard.general
-    pb.clearContents()
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
 
     await store.send(.trayCardCopyTapped(id: card.id))
     #expect(store.state.trayCards.count == 1)  // card stays
-    #expect(pb.string(forType: .string) == "Couldn't start Retry me\nGit command failed: permission denied")
+    #expect(pasteboard.string(forType: .string) == "Couldn't start Retry me\nGit command failed: permission denied")
   }
 
   /// Copy is a no-op on non-error cards (no `errorContent`). Nothing
@@ -2792,13 +2792,13 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     }
-    let pb = NSPasteboard.general
-    pb.clearContents()
-    pb.setString("sentinel", forType: .string)
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString("sentinel", forType: .string)
 
     await store.send(.trayCardCopyTapped(id: card.id))
     #expect(store.state.trayCards.count == 1)
-    #expect(pb.string(forType: .string) == "sentinel")
+    #expect(pasteboard.string(forType: .string) == "sentinel")
   }
 
   /// Debug button opens the debug sheet with a `.spawnFailure` source

@@ -114,7 +114,7 @@ nonisolated private struct TypeNameCacheKey: Hashable, Sendable {
 /// Class wrapper so the cache and its lock live on a single
 /// nonisolated reference, sidestepping the Swift 6 @MainActor
 /// default-isolation rules that block top-level mutable globals.
-nonisolated final class _TypeNameCache: @unchecked Sendable {
+nonisolated final class TypeNameCache: @unchecked Sendable {
   private let lock = NSLock()
   private var storage: [TypeNameCacheKey: String] = [:]
   fileprivate func get(_ key: TypeNameCacheKey) -> String? {
@@ -126,7 +126,7 @@ nonisolated final class _TypeNameCache: @unchecked Sendable {
     storage[key] = value
   }
 }
-nonisolated private let typeNameCache = _TypeNameCache()
+nonisolated private let typeNameCache = TypeNameCache()
 
 private func typeName(
   _ type: Any.Type,
