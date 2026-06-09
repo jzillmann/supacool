@@ -73,6 +73,10 @@ struct BoardFeature {
     /// The new-terminal sheet state, if open.
     @Presents var newTerminalSheet: NewTerminalFeature.State?
 
+    /// The Linear Inbox sheet, if open. Paste ticket URLs, refresh
+    /// metadata, assign to me, and start a session on any of them.
+    @Presents var linearInbox: LinearInboxFeature.State?
+
     /// "Debug this session…" sheet, if open. Captures a free-text
     /// observation from the user before BoardFeature spawns a debug
     /// agent in the supacool repo primed with the source trace.
@@ -497,6 +501,10 @@ struct BoardFeature {
     case toggleRepository(id: String)
     case focusRepository(id: String)
     case showAllRepositories
+
+    // MARK: Linear inbox
+    case openLinearInbox(repositories: [Repository])
+    case linearInbox(PresentationAction<LinearInboxFeature.Action>)
 
     // MARK: New-terminal sheet
     case openNewTerminalSheet(repositories: [Repository])
@@ -1351,6 +1359,66 @@ struct BoardFeature {
         state.$filters.withLock { $0.selectedRepositoryIDs = [] }
         return .none
 
+      case .openLinearInbox(let repositories):
+        state.linearInbox = LinearInboxFeature.State(
+          availableRepositories: IdentifiedArray(uniqueElements: repositories)
+        )
+        return .none
+
+      // The Linear Inbox embeds the New Terminal sheet as a tab and bubbles
+      // its spawn/bookmark/draft delegates straight up here, so the inbox
+      // reuses BoardFeature's session-creation machinery rather than
+      // re-implementing it. Unlike the standalone sheet, we clear only the
+      // embedded `newTerminal` tab (not the whole inbox) so the user lands
+      // back on the ticket list to pick the next one.
+      case .linearInbox(.presented(.delegate(.newTerminalDelegate(let inner)))):
+        switch inner {
+        case .created(let session):
+          state.linearInbox?.newTerminal = nil
+          state.linearInbox?.selectedTab = .inbox
+          return finalizeCreatedSession(session, state: &state)
+
+        case .spawnRequested(let request, let displayName, let draftSnapshot):
+          state.linearInbox?.newTerminal = nil
+          state.linearInbox?.selectedTab = .inbox
+          return beginLocalSpawn(
+            request,
+            displayName: displayName,
+            draftSnapshot: draftSnapshot,
+            state: &state
+          )
+
+        case .bookmarkSaved(let bookmark):
+          state.$bookmarks.withLock { bookmarks in
+            if let index = bookmarks.firstIndex(where: { $0.id == bookmark.id }) {
+              bookmarks[index] = bookmark
+            } else {
+              bookmarks.append(bookmark)
+            }
+          }
+          return .none
+
+        case .draftSaved(let draft):
+          state.$drafts.withLock { drafts in
+            if let index = drafts.firstIndex(where: { $0.id == draft.id }) {
+              drafts[index] = draft
+            } else {
+              drafts.append(draft)
+            }
+          }
+          state.linearInbox?.newTerminal = nil
+          state.linearInbox?.selectedTab = .inbox
+          return .none
+
+        case .draftConsumed(let id):
+          state.$drafts.withLock { $0.removeAll { $0.id == id } }
+          return .none
+
+        case .cancel:
+          // Handled inside LinearInboxFeature (closes the tab); nothing to do.
+          return .none
+        }
+
       case .openNewTerminalSheet(let repositories):
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories),
@@ -1388,6 +1456,22 @@ struct BoardFeature {
               in: repositories,
               filters: filtersSnapshot
             ) ?? updated.first?.id
+          }
+        }
+        if state.linearInbox != nil {
+          let filtersSnapshot = state.filters
+          state.linearInbox?.availableRepositories = updated
+          // Keep an open embedded New Terminal tab's picker in sync too.
+          if state.linearInbox?.newTerminal != nil {
+            let embeddedSelection = state.linearInbox?.newTerminal?.selectedRepositoryID
+            state.linearInbox?.newTerminal?.availableRepositories = updated
+            if let embeddedSelection, updated[id: embeddedSelection] != nil {
+              // Selection still valid — leave it.
+            } else {
+              state.linearInbox?.newTerminal?.selectedRepositoryID =
+                filteredPreferredRepositoryID(in: repositories, filters: filtersSnapshot)
+                ?? updated.first?.id
+            }
           }
         }
         // First successful repositories load after launch — spawn every
@@ -1904,80 +1988,21 @@ struct BoardFeature {
 
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
         state.newTerminalSheet = nil
-        var sessionToCreate = session
-        // Preserve lineage across rerun so coupled cards/bookmarks stay
-        // linked for the replacement incarnation too.
-        if let pendingID = state.pendingRerunSessionID,
-          let previous = state.sessions.first(where: { $0.id == pendingID })
-        {
-          if sessionToCreate.sourceBookmarkID == nil {
-            sessionToCreate.sourceBookmarkID = previous.sourceBookmarkID
-          }
-          if sessionToCreate.debugSourceSessionID == nil {
-            sessionToCreate.debugSourceSessionID = previous.debugSourceSessionID
-          }
-        }
-        // The rerun's replacement is ready — drop the original now.
-        if let pendingID = state.pendingRerunSessionID {
-          state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
-          state.pendingRerunSessionID = nil
-        }
-        return .send(.createSession(sessionToCreate))
+        return finalizeCreatedSession(session, state: &state)
 
       case .newTerminalSheet(
         .presented(.delegate(.spawnRequested(let request, let displayName, let draftSnapshot)))
       ):
         // Local-path submit: dismiss the sheet immediately so the user
-        // doesn't sit through worktree creation. A placeholder tray
-        // card stands in until the real session card is created — its
-        // ID is anchored to the pre-allocated session UUID, so when
-        // `.createSession` runs, `IdentifiedArrayOf.append` no-ops on
-        // the duplicate ID and the same card transitions seamlessly
-        // into the post-spawn lifecycle.
-        //
-        // `draftSnapshot` rides along in the closure so a failure can
-        // attach it to the resulting red card — that's what enables
-        // tap-to-reopen.
+        // doesn't sit through worktree creation. See `beginLocalSpawn`
+        // for the placeholder-tray-card / anchored-UUID mechanics.
         state.newTerminalSheet = nil
-        let placeholder = TrayCard(
-          id: request.sessionID,
-          kind: .sessionCreating(sessionID: request.sessionID, displayName: displayName)
+        return beginLocalSpawn(
+          request,
+          displayName: displayName,
+          draftSnapshot: draftSnapshot,
+          state: &state
         )
-        state.trayCards.append(placeholder)
-        return .run { send in
-          do {
-            let session = try await SessionSpawner.spawnLocal(request)
-            await send(._sessionSpawnCompleted(session: session))
-          } catch let conflict as NewTerminalError {
-            if case .branchAlreadyCheckedOut(let branch, let existing) = conflict {
-              await send(
-                ._sessionSpawnConflict(
-                  sessionID: request.sessionID,
-                  placeholderDisplayName: displayName,
-                  request: request,
-                  branch: branch,
-                  existing: existing
-                )
-              )
-            } else {
-              await send(
-                ._sessionSpawnFailed(
-                  sessionID: request.sessionID,
-                  message: conflict.localizedDescription,
-                  draftSnapshot: draftSnapshot
-                )
-              )
-            }
-          } catch {
-            await send(
-              ._sessionSpawnFailed(
-                sessionID: request.sessionID,
-                message: error.localizedDescription,
-                draftSnapshot: draftSnapshot
-              )
-            )
-          }
-        }
 
       case ._sessionSpawnCompleted(let session):
         var sessionToCreate = session
@@ -2664,6 +2689,9 @@ struct BoardFeature {
       case .newTerminalSheet:
         return .none
 
+      case .linearInbox:
+        return .none
+
       case .debugSessionRequested(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -2784,6 +2812,9 @@ struct BoardFeature {
     }
     .ifLet(\.$newTerminalSheet, action: \.newTerminalSheet) {
       NewTerminalFeature()
+    }
+    .ifLet(\.$linearInbox, action: \.linearInbox) {
+      LinearInboxFeature()
     }
     .ifLet(\.$debugSheet, action: \.debugSheet) {
       DebugSessionFeature()
@@ -3253,6 +3284,82 @@ struct BoardFeature {
   /// Bounded TaskGroup keeps the `gh pr view` subprocess count capped,
   /// and the cancel ID prevents overlapping ticks from racing before
   /// `_prRefreshStarted` lands in reducer state.
+  /// Shared local-spawn dispatch used by both the standalone New Terminal
+  /// sheet and the Linear Inbox's embedded tab. Drops a placeholder tray
+  /// card anchored on the pre-allocated session UUID (so `.createSession`
+  /// no-ops the duplicate id and the same card transitions into the
+  /// post-spawn lifecycle), then runs `SessionSpawner.spawnLocal`.
+  /// `draftSnapshot` rides along so a failure can attach it to the red
+  /// card for tap-to-reopen.
+  private func beginLocalSpawn(
+    _ request: SessionSpawner.LocalRequest,
+    displayName: String,
+    draftSnapshot: Draft,
+    state: inout State
+  ) -> Effect<Action> {
+    let placeholder = TrayCard(
+      id: request.sessionID,
+      kind: .sessionCreating(sessionID: request.sessionID, displayName: displayName)
+    )
+    state.trayCards.append(placeholder)
+    return .run { send in
+      do {
+        let session = try await SessionSpawner.spawnLocal(request)
+        await send(._sessionSpawnCompleted(session: session))
+      } catch let conflict as NewTerminalError {
+        if case .branchAlreadyCheckedOut(let branch, let existing) = conflict {
+          await send(
+            ._sessionSpawnConflict(
+              sessionID: request.sessionID,
+              placeholderDisplayName: displayName,
+              request: request,
+              branch: branch,
+              existing: existing
+            )
+          )
+        } else {
+          await send(
+            ._sessionSpawnFailed(
+              sessionID: request.sessionID,
+              message: conflict.localizedDescription,
+              draftSnapshot: draftSnapshot
+            )
+          )
+        }
+      } catch {
+        await send(
+          ._sessionSpawnFailed(
+            sessionID: request.sessionID,
+            message: error.localizedDescription,
+            draftSnapshot: draftSnapshot
+          )
+        )
+      }
+    }
+  }
+
+  /// Shared "remote-path session is ready" handler: preserves rerun lineage
+  /// (bookmark/debug links) and drops the original session being replaced,
+  /// then creates the new one. Used by both sheet entry points.
+  private func finalizeCreatedSession(_ session: AgentSession, state: inout State) -> Effect<Action> {
+    var sessionToCreate = session
+    if let pendingID = state.pendingRerunSessionID,
+      let previous = state.sessions.first(where: { $0.id == pendingID })
+    {
+      if sessionToCreate.sourceBookmarkID == nil {
+        sessionToCreate.sourceBookmarkID = previous.sourceBookmarkID
+      }
+      if sessionToCreate.debugSourceSessionID == nil {
+        sessionToCreate.debugSourceSessionID = previous.debugSourceSessionID
+      }
+    }
+    if let pendingID = state.pendingRerunSessionID {
+      state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
+      state.pendingRerunSessionID = nil
+    }
+    return .send(.createSession(sessionToCreate))
+  }
+
   private func prRefreshEffect(
     batch: [(refKey: String, owner: String, repo: String, number: Int)]
   ) -> Effect<Action> {
