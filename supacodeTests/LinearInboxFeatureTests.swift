@@ -44,6 +44,19 @@ struct LinearTicketParsingTests {
   }
 }
 
+// MARK: - Done derivation (pure)
+
+struct LinearTicketDoneTests {
+  @Test func isDoneReflectsLinearStateType() {
+    #expect(LinearTicket(identifier: "A-1", stateType: "completed").isDone)
+    #expect(LinearTicket(identifier: "A-2", stateType: "canceled").isDone)
+    #expect(!LinearTicket(identifier: "A-3", stateType: "started").isDone)
+    #expect(!LinearTicket(identifier: "A-4", stateType: "backlog").isDone)
+    // Unfetched tickets (no state) are never done.
+    #expect(!LinearTicket(identifier: "A-5").isDone)
+  }
+}
+
 // MARK: - Reducer
 
 @MainActor
@@ -181,6 +194,30 @@ struct LinearInboxFeatureTests {
     #expect(store.state.pendingSessionTicketID == nil)
     // No ticket was started — Cancel is not a spawn.
     #expect(store.state.tickets[0].startedAt == nil)
+  }
+
+  @Test(.dependencies) func toggleShowDoneFiltersCompletedTickets() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Open", stateType: "started"),
+      LinearTicket(identifier: "CEN-2", title: "Finished", stateType: "completed"),
+      LinearTicket(identifier: "CEN-3", title: "Dropped", stateType: "canceled"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    // Default: everything visible.
+    #expect(store.state.doneCount == 2)
+    #expect(store.state.visibleTickets.count == 3)
+
+    await store.send(.toggleShowDone)
+    #expect(store.state.showDone == false)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+
+    await store.send(.toggleShowDone)
+    #expect(store.state.visibleTickets.count == 3)
   }
 
   @Test(.dependencies) func removeTicketDropsItFromTheInbox() async {

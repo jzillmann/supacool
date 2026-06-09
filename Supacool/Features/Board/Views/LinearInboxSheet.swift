@@ -34,8 +34,33 @@ struct LinearInboxSheet: View {
         errorBanner(message)
       }
       Divider()
+      if !store.tickets.isEmpty {
+        doneFilterBar
+      }
       ticketList
     }
+  }
+
+  /// "N/M done" progress link — toggles whether completed/canceled tickets
+  /// are shown, so the list can read as a worklist of what's left.
+  private var doneFilterBar: some View {
+    HStack {
+      Button {
+        store.send(.toggleShowDone)
+      } label: {
+        Label(
+          "\(store.doneCount)/\(store.tickets.count) done",
+          systemImage: store.showDone ? "eye" : "eye.slash"
+        )
+        .font(.callout)
+      }
+      .buttonStyle(.link)
+      .disabled(store.doneCount == 0)
+      .help(store.showDone ? "Hide done tickets" : "Show done tickets")
+      Spacer()
+    }
+    .padding(.horizontal)
+    .padding(.vertical, 6)
   }
 
   private var header: some View {
@@ -125,9 +150,16 @@ struct LinearInboxSheet: View {
         description: Text("Paste one or more Linear issue links above to get started.")
       )
       .frame(maxHeight: .infinity)
+    } else if store.visibleTickets.isEmpty {
+      ContentUnavailableView(
+        "All done",
+        systemImage: "checkmark.circle",
+        description: Text("Every ticket is completed. Tap “\(store.doneCount)/\(store.tickets.count) done” to show them.")
+      )
+      .frame(maxHeight: .infinity)
     } else {
       List {
-        ForEach(store.tickets) { ticket in
+        ForEach(store.visibleTickets) { ticket in
           LinearTicketRow(
             ticket: ticket,
             isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
@@ -181,7 +213,8 @@ private struct LinearTicketRow: View {
 
       Text(ticket.title ?? "Loading…")
         .lineLimit(1)
-        .foregroundStyle(ticket.title == nil ? .secondary : .primary)
+        .strikethrough(ticket.isDone, color: .secondary)
+        .foregroundStyle(ticket.isDone || ticket.title == nil ? .secondary : .primary)
 
       Spacer(minLength: 8)
 

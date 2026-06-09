@@ -23,6 +23,9 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   var title: String?
   var summary: String?
   var stateName: String?
+  /// Linear workflow state category (`backlog`/`unstarted`/`started`/
+  /// `completed`/`canceled`); `isDone` keys off this.
+  var stateType: String?
   var assigneeName: String?
   var assignedToMe: Bool
   var url: String?
@@ -41,6 +44,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     title: String? = nil,
     summary: String? = nil,
     stateName: String? = nil,
+    stateType: String? = nil,
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
     url: String? = nil,
@@ -53,6 +57,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.title = title
     self.summary = summary
     self.stateName = stateName
+    self.stateType = stateType
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
     self.url = url
@@ -64,7 +69,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
-    case identifier, linearID, title, summary, stateName, assigneeName
+    case identifier, linearID, title, summary, stateName, stateType, assigneeName
     case assignedToMe, url, fetchedAt, addedAt, startedAt
   }
 
@@ -75,6 +80,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     title = try c.decodeIfPresent(String.self, forKey: .title)
     summary = try c.decodeIfPresent(String.self, forKey: .summary)
     stateName = try c.decodeIfPresent(String.self, forKey: .stateName)
+    stateType = try c.decodeIfPresent(String.self, forKey: .stateType)
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
     url = try c.decodeIfPresent(String.self, forKey: .url)
@@ -92,6 +98,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     title = issue.title
     summary = issue.description
     stateName = issue.stateName
+    stateType = issue.stateType
     assigneeName = issue.assigneeName
     assignedToMe = issue.assignedToMe
     url = issue.url
@@ -99,6 +106,13 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   }
 
   // MARK: - Display
+
+  /// True once Linear reports the ticket in a completed or canceled state.
+  /// Unknown (not yet fetched) tickets are never done. Drives the inbox's
+  /// "done" count and show/hide filter.
+  var isDone: Bool {
+    stateType == "completed" || stateType == "canceled"
+  }
 
   /// Prompt seed for a coding session, e.g. `Fix CEN-7404: <title>`.
   var sessionPrompt: String {

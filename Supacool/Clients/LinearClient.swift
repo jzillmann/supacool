@@ -17,6 +17,9 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var description: String?
   /// Workflow state name, e.g. `In Progress`.
   var stateName: String?
+  /// Workflow state category, one of Linear's state types: `backlog`,
+  /// `unstarted`, `started`, `completed`, `canceled`. Drives "done".
+  var stateType: String? = nil
   /// Assignee display name, or nil when unassigned.
   var assigneeName: String?
   /// True when the current API-key holder is the assignee.
@@ -120,7 +123,7 @@ private nonisolated enum LinearLive {
   /// GraphQL selection set shared by the batch query and the assign
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
-    "id identifier title description url state { name } assignee { displayName isMe }"
+    "id identifier title description url state { name type } assignee { displayName isMe }"
 
   static func currentAPIKey() -> String? {
     let key = UserDefaults.standard.string(forKey: "supacool.linear.apiKey") ?? ""
@@ -252,6 +255,7 @@ private nonisolated enum LinearLive {
       title: title.trimmingCharacters(in: .whitespacesAndNewlines),
       description: (dict["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
       stateName: state?["name"] as? String,
+      stateType: state?["type"] as? String,
       assigneeName: assignee?["displayName"] as? String,
       assignedToMe: (assignee?["isMe"] as? Bool) ?? false,
       url: dict["url"] as? String

@@ -23,6 +23,9 @@ struct LinearInboxFeature {
     /// Free-text in the import field (pasted URLs / ids).
     var pasteText: String = ""
     var selectedTab: Tab = .inbox
+    /// When false, tickets in a completed/canceled Linear state are hidden
+    /// from the list so the inbox reads as a worklist of what's left.
+    var showDone: Bool = true
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
@@ -42,6 +45,14 @@ struct LinearInboxFeature {
     }
 
     var hasNewTerminalTab: Bool { newTerminal != nil }
+
+    /// Number of tickets Linear reports as done (completed/canceled).
+    var doneCount: Int { tickets.filter(\.isDone).count }
+
+    /// Tickets shown in the list, honoring the show/hide-done toggle.
+    var visibleTickets: [LinearTicket] {
+      showDone ? Array(tickets) : tickets.filter { !$0.isDone }
+    }
   }
 
   nonisolated enum Tab: String, Equatable, Sendable, CaseIterable {
@@ -61,6 +72,7 @@ struct LinearInboxFeature {
     case assignToMeTapped(ticketID: String)
     case startSessionTapped(ticketID: String)
     case removeTicketTapped(ticketID: String)
+    case toggleShowDone
     case clearError
     case closeTapped
 
@@ -170,6 +182,10 @@ struct LinearInboxFeature {
       case let .removeTicketTapped(ticketID):
         state.$tickets.withLock { $0.removeAll { $0.identifier == ticketID } }
         state.expandedTicketIDs.remove(ticketID)
+        return .none
+
+      case .toggleShowDone:
+        state.showDone.toggle()
         return .none
 
       case .clearError:
