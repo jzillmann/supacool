@@ -26,9 +26,14 @@ if [ ! -d "$ROOT/Frameworks/GhosttyKit.xcframework" ]; then
 fi
 
 echo "[1/4] building (Debug, isolated DerivedData)…"
+# Resolve SPM packages into a repo-local cache (gitignored under build/), not a
+# shared /tmp or ~/Library dir. A shared cache can carry stale workspace-state
+# pointing at half-extracted binary xcframeworks (Sentry / Sparkle missing
+# Info.plist), failing the build with a baffling "There is no Info.plist found
+# at …". Per-checkout keeps it reproducible.
 xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Debug build \
   -skipMacroValidation \
-  -clonedSourcePackagesDirPath /tmp/supacool-spm-cache/SourcePackages \
+  -clonedSourcePackagesDirPath "$ROOT/build/spm-cache" \
   -derivedDataPath build/dd > "$LOG" 2>&1
 grep -qE "BUILD SUCCEEDED" "$LOG" || { echo "BUILD FAILED — last errors:"; grep -n "error:" "$LOG" | tail -15; exit 1; }
 echo "      BUILD SUCCEEDED"
