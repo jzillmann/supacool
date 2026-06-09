@@ -128,6 +128,22 @@ nonisolated struct AgentSessionsKey: SharedKey {
   }
   private static let coalescer = SaveCoalescer()
 
+  /// Snapshot of the most recently persisted set, used by the crash-safety
+  /// backstop to detect sessions that disappear between writes. Touched only
+  /// on `saveQueue` (serial), but guarded so the type stays `Sendable`.
+  /// Seeded lazily from disk on the first save so a session dropped by the
+  /// very first post-launch mutation (the 2026-06-04 crash scenario) is still
+  /// caught.
+  private static let lastPersisted = LockIsolated<[AgentSession]?>(nil)
+
+  private static func previouslyPersisted(storage: SettingsFileStorage) -> [AgentSession]? {
+    if let cached = lastPersisted.value { return cached }
+    guard let data = try? storage.load(Self.fileURL) else { return nil }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return try? decoder.decode([AgentSession].self, from: data)
+  }
+
   var id: AgentSessionsKeyID { AgentSessionsKeyID() }
 
   static var fileURL: URL {
@@ -190,7 +206,20 @@ nonisolated struct AgentSessionsKey: SharedKey {
           let data = try encoder.encode(batch.value)
           let payloadHash = data.hashValue
           let sessionCount = batch.value.count
+          // Crash-safety backstop: before overwriting the file with a
+          // smaller set, record any dropped sessions to the recovery store
+          // FIRST. A crash between this and the main write leaves the old
+          // (atomic) file intact; a crash after leaves the dropped sessions
+          // recoverable. Either way nothing is silently lost. Never throws.
+          if let previous = Self.previouslyPersisted(storage: resolvedStorage) {
+            SessionRecoveryStore.recordRemovals(
+              previous: previous,
+              next: batch.value,
+              storage: resolvedStorage
+            )
+          }
           try resolvedStorage.save(data, Self.fileURL)
+          Self.lastPersisted.setValue(batch.value)
           for c in batch.continuations { c.resume() }
           Task {
             if let summary = await Self.telemetry.recordEncode(
