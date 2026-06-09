@@ -759,7 +759,9 @@ struct NewTerminalSheet: View {
 
   private var selectedProjectRoot: URL? {
     guard let repoID = store.selectedRepositoryID else { return nil }
-    return store.availableRepositories[id: repoID]?.rootURL.standardizedFileURL
+    // Use the repo's skill-discovery root, not its bare `rootURL`: bare git-wt
+    // repos keep `.claude/skills` inside each checkout, not at the container.
+    return store.availableRepositories[id: repoID]?.skillDiscoveryRoot.standardizedFileURL
   }
 
   private var skillAutocompleteAgent: AgentType? {

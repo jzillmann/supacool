@@ -11,6 +11,22 @@ struct Repository: Identifiable, Hashable, Sendable {
     Self.initials(from: name)
   }
 
+  /// Directory to use for project-scoped skill / slash-command discovery.
+  ///
+  /// `rootURL` is not always a working checkout: for bare git-wt repos it is a
+  /// container that holds the worktrees and has no `.claude/` of its own, so
+  /// project skills (e.g. a `.claude/skills -> .agent-os/skills` symlink) live
+  /// inside each checkout. Discovering against `rootURL` there finds nothing.
+  /// Prefer the primary checkout when it coincides with `rootURL`, otherwise
+  /// fall back to any worktree's working directory.
+  var skillDiscoveryRoot: URL {
+    let standardizedRoot = rootURL.standardizedFileURL
+    if worktrees.contains(where: { $0.workingDirectory.standardizedFileURL == standardizedRoot }) {
+      return rootURL
+    }
+    return worktrees.first?.workingDirectory ?? rootURL
+  }
+
   static func name(for rootURL: URL) -> String {
     let name = rootURL.lastPathComponent
     if name == ".bare" || name == ".git" {

@@ -31,22 +31,33 @@ enum SkillCatalog {
   }
 
   static func discoverClaude(projectRoot: URL?) async -> [Skill] {
-    let userSkillsRoot = FileManager.default.homeDirectoryForCurrentUser
-      .appending(path: ".claude/skills", directoryHint: .isDirectory)
+    let home = FileManager.default.homeDirectoryForCurrentUser
+    let userSkillsRoot = home.appending(path: ".claude/skills", directoryHint: .isDirectory)
     let projectSkillsRoot = projectRoot?.appending(path: ".claude/skills", directoryHint: .isDirectory)
+    let userCommandsRoot = home.appending(path: ".claude/commands", directoryHint: .isDirectory)
+    let projectCommandsRoot = projectRoot?.appending(path: ".claude/commands", directoryHint: .isDirectory)
 
     return await discover(
       userSkillsRoot: userSkillsRoot,
-      projectSkillsRoot: projectSkillsRoot
+      projectSkillsRoot: projectSkillsRoot,
+      userCommandsRoot: userCommandsRoot,
+      projectCommandsRoot: projectCommandsRoot
     )
   }
 
   static func discover(
     userSkillsRoot: URL?,
-    projectSkillsRoot: URL?
+    projectSkillsRoot: URL?,
+    userCommandsRoot: URL? = nil,
+    projectCommandsRoot: URL? = nil
   ) async -> [Skill] {
     async let userSkills = loadSkills(in: userSkillsRoot, source: .user, isUserInvocable: nil)
     async let projectSkills = loadSkills(in: projectSkillsRoot, source: .project, isUserInvocable: nil)
+    // Slash commands (`.claude/commands/*.md`) are a separate Claude Code
+    // concept from skills, but the autocomplete surfaces them in the same
+    // "Slash Commands" bucket. They're always user-invocable.
+    async let userCommands = loadCommands(in: userCommandsRoot, source: .user)
+    async let projectCommands = loadCommands(in: projectCommandsRoot, source: .project)
 
     var mergedByName: [String: Skill] = [:]
     for skill in await userSkills {
@@ -54,6 +65,19 @@ enum SkillCatalog {
     }
     for skill in await projectSkills {
       mergedByName[skill.name] = skill
+    }
+    // Commands fill in names not already claimed by a skill (skills are the
+    // richer concept and keep precedence). Project commands override user
+    // commands of the same name, mirroring the skill merge above.
+    var commandsByName: [String: Skill] = [:]
+    for command in await userCommands {
+      commandsByName[command.name] = command
+    }
+    for command in await projectCommands {
+      commandsByName[command.name] = command
+    }
+    for (name, command) in commandsByName where mergedByName[name] == nil {
+      mergedByName[name] = command
     }
 
     return mergedByName.values.sorted {
@@ -189,6 +213,104 @@ enum SkillCatalog {
     }
   }
 
+  /// Loads slash commands from a `.claude/commands` directory. Each `.md`
+  /// file is one command, invoked by filename (not by a frontmatter
+  /// `name:`). Namespaced subdirectories map to colon-separated triggers —
+  /// `commands/git/commit.md` → `git:commit`, matching Claude Code's
+  /// command resolution.
+  private static func loadCommands(
+    in root: URL?,
+    source: Skill.Source
+  ) -> [Skill] {
+    let fileManager = FileManager.default
+    guard let root else { return [] }
+    guard let enumerator = fileManager.enumerator(
+      at: root,
+      includingPropertiesForKeys: [.isRegularFileKey],
+      options: [.skipsHiddenFiles]
+    ) else {
+      return []
+    }
+
+    let rootComponents = root.standardizedFileURL.pathComponents
+    return enumerator.compactMap { entry in
+      guard let fileURL = entry as? URL else { return nil }
+      guard fileURL.pathExtension.lowercased() == "md" else { return nil }
+      return loadCommand(
+        at: fileURL,
+        rootComponents: rootComponents,
+        source: source
+      )
+    }
+  }
+
+  private static func loadCommand(
+    at url: URL,
+    rootComponents: [String],
+    source: Skill.Source
+  ) -> Skill? {
+    let fileManager = FileManager.default
+    guard fileManager.fileExists(atPath: url.path) else { return nil }
+    guard let content = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+
+    // Command name is the path relative to the commands root, minus the
+    // `.md` extension, with directory separators turned into `:`.
+    var relativeComponents = url.standardizedFileURL.pathComponents
+    if relativeComponents.starts(with: rootComponents) {
+      relativeComponents.removeFirst(rootComponents.count)
+    }
+    guard var last = relativeComponents.popLast() else { return nil }
+    if last.lowercased().hasSuffix(".md") {
+      last = String(last.dropLast(3))
+    }
+    let name = (relativeComponents + [last]).joined(separator: ":")
+    guard !name.isEmpty else { return nil }
+
+    // Description is optional for commands: prefer a frontmatter
+    // `description:`, otherwise fall back to the first meaningful line of
+    // the body so the popover always has a subtitle to render.
+    let frontmatter = parseFrontmatter(in: content)
+    let description =
+      frontmatter?["description"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        .nilIfEmpty
+      ?? firstBodyLine(in: content)
+      ?? "Slash command"
+
+    return Skill(
+      name: name,
+      description: description,
+      source: source,
+      definitionPath: url.path(percentEncoded: false),
+      isUserInvocable: true
+    )
+  }
+
+  /// First non-empty body line, skipping a leading frontmatter fence and
+  /// any leading Markdown heading markers. Used as a command's subtitle
+  /// when it has no frontmatter `description:`.
+  private static func firstBodyLine(in content: String) -> String? {
+    let lines = content.components(separatedBy: .newlines)
+    var index = lines.startIndex
+    if lines.first?.trimmingCharacters(in: .whitespacesAndNewlines) == "---" {
+      index = lines.index(after: index)
+      while index < lines.endIndex,
+        lines[index].trimmingCharacters(in: .whitespacesAndNewlines) != "---"
+      {
+        index = lines.index(after: index)
+      }
+      if index < lines.endIndex { index = lines.index(after: index) }
+    }
+    while index < lines.endIndex {
+      let trimmed = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty {
+        return trimmed.drop(while: { $0 == "#" || $0 == " " }).nilIfEmpty.map(String.init)
+          ?? trimmed
+      }
+      index = lines.index(after: index)
+    }
+    return nil
+  }
+
   private static func loadSkill(
     at url: URL,
     source: Skill.Source,
@@ -208,12 +330,17 @@ enum SkillCatalog {
       return nil
     }
 
+    // A skill that opts out of model invocation (`disable-model-invocation: true`)
+    // is slash-only, so it belongs in the user-invocable bucket regardless of
+    // how its description reads. Otherwise fall back to the description heuristic.
+    let disablesModelInvocation = parseBool(frontmatter["disable-model-invocation"])
     return Skill(
       name: name,
       description: description,
       source: source,
       definitionPath: url.path(percentEncoded: false),
-      isUserInvocable: isUserInvocable ?? self.isUserInvocable(description: description)
+      isUserInvocable: isUserInvocable
+        ?? (disablesModelInvocation || self.isUserInvocable(description: description))
     )
   }
 
@@ -234,7 +361,7 @@ enum SkillCatalog {
       }
       guard let colon = line.firstIndex(of: ":") else { continue }
       let key = line[..<colon].trimmingCharacters(in: .whitespacesAndNewlines)
-      guard key == "name" || key == "description" else { continue }
+      guard key == "name" || key == "description" || key == "disable-model-invocation" else { continue }
       let valueStart = line.index(after: colon)
       let rawValue = line[valueStart...].trimmingCharacters(in: .whitespacesAndNewlines)
       values[key] = unquote(rawValue)
@@ -254,6 +381,11 @@ enum SkillCatalog {
     return value
   }
 
+  private static func parseBool(_ raw: String?) -> Bool {
+    guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else { return false }
+    return raw == "true" || raw == "yes" || raw == "1"
+  }
+
   private static func isDirectory(_ url: URL, fileManager: FileManager) -> Bool {
     guard let values = try? url.resourceValues(forKeys: [.isDirectoryKey]) else { return false }
     return values.isDirectory == true
@@ -271,5 +403,12 @@ enum SkillCatalog {
     case .admin: 2
     case .builtin: 3
     }
+  }
+}
+
+extension StringProtocol {
+  /// `nil` when the (already-trimmed) string is empty, otherwise `self`.
+  fileprivate var nilIfEmpty: Self? {
+    isEmpty ? nil : self
   }
 }
