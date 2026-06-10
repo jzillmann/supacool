@@ -516,6 +516,7 @@ struct SessionSpawnerTests {
     planMode: Bool = false,
     remoteControl: Bool = false,
     remoteControlName: String? = nil,
+    model: String? = nil,
     bypassPermissions: Bool = true,
     fetchOriginBeforeCreation: Bool = false,
     pullRequestLookup: PullRequestLookupState = .idle
@@ -529,6 +530,7 @@ struct SessionSpawnerTests {
       planMode: planMode,
       remoteControl: remoteControl,
       remoteControlName: remoteControlName,
+      model: model,
       bypassPermissions: bypassPermissions,
       fetchOriginBeforeCreation: fetchOriginBeforeCreation,
       rerunOwnedWorktreeID: nil,

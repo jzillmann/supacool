@@ -51,6 +51,9 @@ struct NewTerminalSheet: View {
 
       Section {
         agentPicker
+        if let agent = store.agent, agent.supportsModelSelection {
+          modelPicker(for: agent)
+        }
         destinationPicker
         if store.destination.isManualRemote {
           remoteWorkingDirectoryField
@@ -194,6 +197,30 @@ struct NewTerminalSheet: View {
       Text("Agent")
       Text("Pick a CLI to spawn, or Shell for a raw terminal.")
     }
+  }
+
+  /// Per-agent model choice, rendered as its own trailing-anchored menu
+  /// row (same shape as Destination) so the control neither clips the
+  /// agent segments nor jumps when the selected model's text width
+  /// changes. "Default" (empty string) renders no model flag, letting
+  /// the agent pick its own model. Only shown for agents that declare a
+  /// `modelFlag` in the registry.
+  private func modelPicker(for agent: AgentType) -> some View {
+    Picker(selection: $store.model) {
+      Text("Default").tag("")
+      ForEach(agent.knownModels, id: \.self) { model in
+        Text(model).tag(model)
+      }
+      // Keep a prefilled value (rerun/bookmark/draft) selectable even
+      // when it's no longer in the registry's suggestion list.
+      if !store.model.isEmpty, !agent.knownModels.contains(store.model) {
+        Text(store.model).tag(store.model)
+      }
+    } label: {
+      Text("Model")
+      Text("Model to launch \(agent.displayName) with. Default lets the agent choose.")
+    }
+    .pickerStyle(.menu)
   }
 
   private var headerSubtitle: String {

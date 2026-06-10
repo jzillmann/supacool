@@ -27,6 +27,8 @@ enum SessionSpawner {
     /// Sheet-local (not persisted on bookmarks/drafts); `nil` lets Claude
     /// auto-name the remote session.
     let remoteControlName: String?
+    /// Model passed to the agent's model flag. `nil` = agent default.
+    let model: String?
     let bypassPermissions: Bool
     let fetchOriginBeforeCreation: Bool
     let rerunOwnedWorktreeID: String?
@@ -104,7 +106,8 @@ enum SessionSpawner {
       bypassPermissions: request.bypassPermissions,
       planMode: request.planMode,
       remoteControl: request.remoteControl,
-      remoteControlName: request.remoteControlName
+      remoteControlName: request.remoteControlName,
+      model: request.model
     )
     await terminalClient.send(
       .createTabWithInput(
@@ -138,6 +141,7 @@ enum SessionSpawner {
       removeBackingWorktreeOnDelete: removeBackingWorktreeOnDelete,
       planMode: request.planMode,
       remoteControl: request.remoteControl,
+      model: request.model,
       references: seededReferences,
       referencesScannedAt: seededReferences.isEmpty ? nil : Date()
     )
@@ -408,7 +412,8 @@ enum SessionSpawner {
     bypassPermissions: Bool,
     planMode: Bool,
     remoteControl: Bool,
-    remoteControlName: String?
+    remoteControlName: String?,
+    model: String?
   ) -> String {
     switch (agent, prompt.isEmpty) {
     case (let agent?, false):
@@ -417,14 +422,16 @@ enum SessionSpawner {
         bypassPermissions: bypassPermissions,
         planMode: planMode,
         remoteControl: remoteControl,
-        remoteControlName: remoteControlName
+        remoteControlName: remoteControlName,
+        model: model
       ) + "\r"
     case (let agent?, true):
       return agent.commandWithoutPrompt(
         bypassPermissions: bypassPermissions,
         planMode: planMode,
         remoteControl: remoteControl,
-        remoteControlName: remoteControlName
+        remoteControlName: remoteControlName,
+        model: model
       ) + "\r"
     case (nil, false):
       return prompt + "\r"

@@ -3090,6 +3090,7 @@ struct BoardFeatureTests {
       planMode: false,
       remoteControl: false,
       remoteControlName: nil,
+      model: nil,
       bypassPermissions: true,
       fetchOriginBeforeCreation: false,
       rerunOwnedWorktreeID: nil,

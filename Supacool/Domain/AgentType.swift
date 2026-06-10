@@ -34,8 +34,24 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// than being mutually exclusive.
   let remoteControlFlag: String?
 
+  /// CLI flag that selects a model for the session (e.g. `--model` for
+  /// Claude Code, `-m` for Codex). `nil` for agents whose model-selection
+  /// flag we haven't verified — the New Terminal sheet hides the model
+  /// picker for those.
+  let modelFlag: String?
+
+  /// Suggested model values for the picker. Passed to `modelFlag` verbatim,
+  /// so prefer stable aliases over dated ids where the CLI supports them.
+  /// The list is suggestions only — model strings travel through the
+  /// command builders as free-form text, so a stale list never blocks a
+  /// model the CLI itself accepts.
+  let knownModels: [String]
+
   /// Convenience: whether this agent exposes a remote-control launch flag.
   var supportsRemoteControl: Bool { remoteControlFlag != nil }
+
+  /// Convenience: whether the New Terminal sheet should offer a model picker.
+  var supportsModelSelection: Bool { modelFlag != nil }
 
   /// How the card / picker render this agent visually.
   let icon: AgentIcon
@@ -98,6 +114,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     bypassPermissionsFlag: String?,
     supportsPlanMode: Bool,
     remoteControlFlag: String? = nil,
+    modelFlag: String? = nil,
+    knownModels: [String] = [],
     icon: AgentIcon,
     tintColorName: String,
     launchTemplate: String = "{binary}{flags} {prompt}",
@@ -112,6 +130,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     self.bypassPermissionsFlag = bypassPermissionsFlag
     self.supportsPlanMode = supportsPlanMode
     self.remoteControlFlag = remoteControlFlag
+    self.modelFlag = modelFlag
+    self.knownModels = knownModels
     self.icon = icon
     self.tintColorName = tintColorName
     self.launchTemplate = launchTemplate
@@ -130,13 +150,15 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     bypassPermissions: Bool = false,
     planMode: Bool = false,
     remoteControl: Bool = false,
-    remoteControlName: String? = nil
+    remoteControlName: String? = nil,
+    model: String? = nil
   ) -> String {
     let flagFragment = renderFlags(
       bypassPermissions: bypassPermissions,
       planMode: planMode,
       remoteControl: remoteControl,
-      remoteControlName: remoteControlName
+      remoteControlName: remoteControlName,
+      model: model
     )
     return launchTemplate
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -149,13 +171,15 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     bypassPermissions: Bool = false,
     planMode: Bool = false,
     remoteControl: Bool = false,
-    remoteControlName: String? = nil
+    remoteControlName: String? = nil,
+    model: String? = nil
   ) -> String {
     let flagFragment = renderFlags(
       bypassPermissions: bypassPermissions,
       planMode: planMode,
       remoteControl: remoteControl,
-      remoteControlName: remoteControlName
+      remoteControlName: remoteControlName,
+      model: model
     )
     // Drop the `{prompt}` placeholder along with any leading whitespace so
     // the rendered string doesn't end with a stray space.
@@ -170,13 +194,18 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
 
   /// Shell command that resumes a prior session by its agent-native id.
   /// Returns `nil` if the agent has no resume-by-id template configured.
-  func resumeCommand(sessionID: String, bypassPermissions: Bool = false) -> String? {
+  func resumeCommand(
+    sessionID: String,
+    bypassPermissions: Bool = false,
+    model: String? = nil
+  ) -> String? {
     guard let template = resumeTemplate else { return nil }
     let flagFragment = renderFlags(
       bypassPermissions: bypassPermissions,
       planMode: false,
       remoteControl: false,
-      remoteControlName: nil
+      remoteControlName: nil,
+      model: model
     )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -193,7 +222,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       bypassPermissions: bypassPermissions,
       planMode: false,
       remoteControl: false,
-      remoteControlName: nil
+      remoteControlName: nil,
+      model: nil
     )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -206,13 +236,15 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// Plan mode wins over bypass-permissions so those two never conflict in
   /// the rendered command. Remote control is orthogonal — it combines with
   /// whichever permission flag (if any) applies. Agents without a
-  /// `bypassPermissionsFlag` / `remoteControlFlag` silently drop the
-  /// respective request — same for plan mode on agents that don't support it.
+  /// `bypassPermissionsFlag` / `remoteControlFlag` / `modelFlag` silently
+  /// drop the respective request — same for plan mode on agents that don't
+  /// support it. A nil/blank model means "agent default": no flag rendered.
   private func renderFlags(
     bypassPermissions: Bool,
     planMode: Bool,
     remoteControl: Bool,
-    remoteControlName: String?
+    remoteControlName: String?,
+    model: String?
   ) -> String {
     var fragments: [String] = []
     if planMode, supportsPlanMode {
@@ -225,6 +257,12 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       let trimmedName = remoteControlName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if !trimmedName.isEmpty {
         fragments.append(Self.shellQuote(trimmedName))
+      }
+    }
+    if let flag = modelFlag {
+      let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+      if !trimmedModel.isEmpty {
+        fragments.append("\(flag) \(Self.shellQuote(trimmedModel))")
       }
     }
     guard !fragments.isEmpty else { return "" }

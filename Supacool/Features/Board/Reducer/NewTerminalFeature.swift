@@ -95,6 +95,10 @@ struct NewTerminalFeature {
     var prompt: String = ""
     /// `nil` = raw shell session (no agent CLI invoked).
     var agent: AgentType? = .claude
+    /// Model passed to the agent's model flag at launch. Empty string =
+    /// "Default" (no flag rendered — the agent picks its own model).
+    /// Resets when the agent changes since model ids are per-agent.
+    var model: String = ""
 
     // MARK: - Destination (local vs. remote host)
 
@@ -231,6 +235,7 @@ struct NewTerminalFeature {
       agent = previous.agent
       planMode = previous.planMode
       remoteControl = previous.remoteControl
+      model = previous.model ?? ""
 
       if previous.isRemote {
         @Shared(.remoteWorkspaces) var remoteWorkspaces: [RemoteWorkspace]
@@ -304,6 +309,7 @@ struct NewTerminalFeature {
       agent = previous.agent
       planMode = previous.planMode
       remoteControl = previous.remoteControl
+      model = previous.model ?? ""
       selectedWorkspace = .newBranch(name: "")
       workspaceQuery = ""
     }
@@ -323,6 +329,7 @@ struct NewTerminalFeature {
       agent = bookmark.agent
       planMode = bookmark.planMode
       remoteControl = bookmark.remoteControl
+      model = bookmark.model ?? ""
       saveAsBookmark = true
       bookmarkName = bookmark.name
       editingBookmarkID = bookmark.id
@@ -357,6 +364,7 @@ struct NewTerminalFeature {
       agent = draft.agent
       planMode = draft.planMode
       remoteControl = draft.remoteControl
+      model = draft.model ?? ""
       workspaceQuery = draft.workspaceQuery
       // Initial best-effort selection inference. The branches list is
       // empty at init time so anything non-empty falls into `.newBranch`,
@@ -392,8 +400,17 @@ struct NewTerminalFeature {
         agent: session.agent,
         worktreeMode: worktreeMode,
         planMode: session.planMode,
-        remoteControl: session.remoteControl
+        remoteControl: session.remoteControl,
+        model: session.model
       )
+    }
+
+    /// The model to launch with: trimmed, empty → nil ("Default"), and
+    /// dropped entirely for agents without a model flag.
+    var normalizedModel: String? {
+      guard agent?.supportsModelSelection == true else { return nil }
+      let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+      return trimmed.isEmpty ? nil : trimmed
     }
   }
 
@@ -713,6 +730,7 @@ struct NewTerminalFeature {
           workspaceQuery: state.workspaceQuery,
           planMode: state.planMode,
           remoteControl: state.remoteControl,
+          model: state.normalizedModel,
           createdAt: Date(),
           updatedAt: Date()
         )
@@ -835,6 +853,16 @@ struct NewTerminalFeature {
         return .none
       }
     }
+    .onChange(of: \.agent) { _, _ in
+      Reduce { state, _ in
+        // Model ids are per-agent vocabulary ("opus" means nothing to
+        // codex) — flip back to Default whenever the agent changes.
+        // `.onChange` only fires on actual value changes, so binding
+        // round-trips can't wipe a prefilled model.
+        state.model = ""
+        return .none
+      }
+    }
   }
 
   // MARK: - Local create
@@ -929,6 +957,7 @@ struct NewTerminalFeature {
       let trimmed = state.remoteControlName.trimmingCharacters(in: .whitespacesAndNewlines)
       return trimmed.isEmpty ? nil : trimmed
     }()
+    let model = state.normalizedModel
     // Mirror supacode's sidebar flow: obey the global "Fetch origin
     // before creating worktree" toggle so both paths behave the same.
     @Shared(.settingsFile) var settingsFile
@@ -951,6 +980,7 @@ struct NewTerminalFeature {
       planMode: planMode,
       remoteControl: remoteControl,
       remoteControlName: remoteControlName,
+      model: model,
       bypassPermissions: bypassPermissions,
       fetchOriginBeforeCreation: fetchOriginBeforeCreation,
       rerunOwnedWorktreeID: rerunOwnedWorktreeID,
@@ -984,7 +1014,8 @@ struct NewTerminalFeature {
         agent: agent,
         worktreeMode: worktreeMode,
         planMode: planMode,
-        remoteControl: remoteControl
+        remoteControl: remoteControl,
+        model: model
       )
     }()
 
@@ -1003,6 +1034,7 @@ struct NewTerminalFeature {
       workspaceQuery: state.workspaceQuery,
       planMode: state.planMode,
       remoteControl: state.remoteControl,
+      model: model,
       createdAt: now,
       updatedAt: now
     )
@@ -1100,6 +1132,7 @@ struct NewTerminalFeature {
       let trimmed = state.remoteControlName.trimmingCharacters(in: .whitespacesAndNewlines)
       return trimmed.isEmpty ? nil : trimmed
     }()
+    let model = state.normalizedModel
     let bypassPermissions =
       UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
 
@@ -1110,14 +1143,16 @@ struct NewTerminalFeature {
         bypassPermissions: bypassPermissions,
         planMode: planMode,
         remoteControl: remoteControl,
-        remoteControlName: remoteControlName
+        remoteControlName: remoteControlName,
+        model: model
       )
     } else if let agent {
       agentCommand = agent.commandWithoutPrompt(
         bypassPermissions: bypassPermissions,
         planMode: planMode,
         remoteControl: remoteControl,
-        remoteControlName: remoteControlName
+        remoteControlName: remoteControlName,
+        model: model
       )
     } else {
       agentCommand = nil
@@ -1165,6 +1200,7 @@ struct NewTerminalFeature {
       removeBackingWorktreeOnDelete: false,
       planMode: planMode,
       remoteControl: remoteControl,
+      model: model,
       references: seededReferences,
       referencesScannedAt: seededReferences.isEmpty ? nil : Date(),
       remoteWorkspaceID: workspace.id,

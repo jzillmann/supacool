@@ -1613,6 +1613,7 @@ struct BoardFeature {
           planMode: planMode,
           remoteControl: remoteControl,
           remoteControlName: nil,
+          model: bookmark.agent?.supportsModelSelection == true ? bookmark.model : nil,
           bypassPermissions: bypassPermissions,
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,
@@ -1736,7 +1737,8 @@ struct BoardFeature {
         guard
           let resumeCommand = agent.resumeCommand(
             sessionID: sessionID,
-            bypassPermissions: Self.readBypassPermissions()
+            bypassPermissions: Self.readBypassPermissions(),
+            model: session.model
           )
         else {
           return .send(
@@ -2917,6 +2919,7 @@ struct BoardFeature {
           planMode: false,
           remoteControl: false,
           remoteControlName: nil,
+          model: nil,
           bypassPermissions: bypass,
           fetchOriginBeforeCreation: fetchOrigin,
           rerunOwnedWorktreeID: nil,
@@ -3903,11 +3906,19 @@ struct BoardFeature {
   ) -> String {
     let bypass = readBypassPermissions()
     if let resumeID = session.agentNativeSessionID, !resumeID.isEmpty,
-      let resumeCommand = agent.resumeCommand(sessionID: resumeID, bypassPermissions: bypass)
+      let resumeCommand = agent.resumeCommand(
+        sessionID: resumeID,
+        bypassPermissions: bypass,
+        model: session.model
+      )
     {
       return resumeCommand
     }
-    return agent.command(prompt: session.initialPrompt, bypassPermissions: bypass)
+    return agent.command(
+      prompt: session.initialPrompt,
+      bypassPermissions: bypass,
+      model: session.model
+    )
   }
 
   fileprivate static func shellRestoreWorktree(

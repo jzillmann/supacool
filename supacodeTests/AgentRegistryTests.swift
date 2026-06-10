@@ -177,4 +177,57 @@ struct AgentRegistryTests {
     // POSIX `'\''` escape inside the single-quoted wrapper.
     #expect(cmd == "claude 'it'\\''s fine'")
   }
+
+  // MARK: - Model flag
+
+  @Test func claudeAndCodexSupportModelSelectionPiDoesNot() {
+    #expect(AgentType.claude.supportsModelSelection)
+    #expect(AgentType.claude.modelFlag == "--model")
+    #expect(AgentType.codex.supportsModelSelection)
+    #expect(AgentType.codex.modelFlag == "-m")
+    #expect(AgentType.pi.supportsModelSelection == false)
+  }
+
+  @Test func claudeRendersModelFlagAfterPermissionFlags() {
+    let cmd = AgentType.claude.command(
+      prompt: "hello",
+      bypassPermissions: true,
+      model: "opus"
+    )
+    #expect(cmd == "claude --dangerously-skip-permissions --model 'opus' 'hello'")
+  }
+
+  @Test func nilModelRendersNoModelFlag() {
+    let cmd = AgentType.claude.command(prompt: "hello", model: nil)
+    #expect(cmd == "claude 'hello'")
+  }
+
+  @Test func blankModelRendersNoModelFlag() {
+    let cmd = AgentType.claude.command(prompt: "hello", model: "   ")
+    #expect(cmd == "claude 'hello'")
+  }
+
+  @Test func codexRendersShortModelFlag() {
+    let cmd = AgentType.codex.command(prompt: "hi", model: "gpt-5.1-codex")
+    #expect(cmd == "codex -m 'gpt-5.1-codex' 'hi'")
+  }
+
+  @Test func piSilentlyDropsModelWhenAgentHasNoFlag() {
+    let cmd = AgentType.pi.command(prompt: "hi", model: "gpt-5")
+    #expect(cmd == "pi 'hi'")
+  }
+
+  @Test func claudeResumeAppendsModelFlag() {
+    let cmd = AgentType.claude.resumeCommand(
+      sessionID: "abc-123",
+      bypassPermissions: true,
+      model: "sonnet"
+    )
+    #expect(cmd == "claude --resume 'abc-123' --dangerously-skip-permissions --model 'sonnet'")
+  }
+
+  @Test func commandWithoutPromptRendersModelFlag() {
+    let cmd = AgentType.claude.commandWithoutPrompt(model: "haiku")
+    #expect(cmd == "claude --model 'haiku'")
+  }
 }

@@ -72,6 +72,10 @@ nonisolated enum AgentRegistry {
     bypassPermissionsFlag: "--dangerously-skip-permissions",
     supportsPlanMode: true,
     remoteControlFlag: "--remote-control",
+    modelFlag: "--model",
+    // Stable aliases (each resolves to the latest model of its tier), not
+    // dated ids — so this list doesn't rot on every model release.
+    knownModels: ["fable", "opus", "sonnet", "haiku"],
     icon: .asset("claude-code-mark"),
     tintColorName: "orange",
     launchTemplate: "{binary}{flags} {prompt}",
@@ -87,6 +91,11 @@ nonisolated enum AgentRegistry {
     binary: "codex",
     bypassPermissionsFlag: "--dangerously-bypass-approvals-and-sandbox",
     supportsPlanMode: false,
+    modelFlag: "-m",
+    // Codex has no tier aliases, so these are concrete ids and will need a
+    // refresh when OpenAI ships a new codex generation. Free-form values
+    // still pass through verbatim — a stale list never blocks anything.
+    knownModels: ["gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
     icon: .asset("codex-mark"),
     tintColorName: "indigo",
     launchTemplate: "{binary}{flags} {prompt}",
@@ -100,6 +109,8 @@ nonisolated enum AgentRegistry {
   // - No `--dangerously-*` flag; pi has no permission popups by design
   //   (extensions can add gates, but vanilla pi just runs).
   // - No interactive plan mode.
+  // - `modelFlag` left nil: pi selects models via provider/model config and
+  //   we haven't verified a launch-flag form. Wire it up once confirmed.
   // - Resume is `pi --session <id>`; picker is `pi -r`.
   // - `skillSyntax` left nil for now: pi's `/skill:name` syntax doesn't
   //   match the simple single-character trigger model the existing

@@ -38,6 +38,9 @@ nonisolated struct Draft: Identifiable, Equatable, Hashable, Codable, Sendable {
   /// Re-arms Claude Code's `--remote-control` flag on resume. Only honored
   /// for agents that support it (see `AgentType.supportsRemoteControl`).
   var remoteControl: Bool
+  /// Model passed to the agent's model flag on launch. `nil` = agent
+  /// default. Only honored for agents with a `modelFlag`.
+  var model: String?
   let createdAt: Date
   var updatedAt: Date
 
@@ -49,6 +52,7 @@ nonisolated struct Draft: Identifiable, Equatable, Hashable, Codable, Sendable {
     workspaceQuery: String = "",
     planMode: Bool = false,
     remoteControl: Bool = false,
+    model: String? = nil,
     createdAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -59,6 +63,7 @@ nonisolated struct Draft: Identifiable, Equatable, Hashable, Codable, Sendable {
     self.workspaceQuery = workspaceQuery
     self.planMode = planMode
     self.remoteControl = remoteControl
+    self.model = model
     self.createdAt = createdAt
     self.updatedAt = updatedAt
   }
@@ -66,7 +71,7 @@ nonisolated struct Draft: Identifiable, Equatable, Hashable, Codable, Sendable {
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
-    case id, repositoryID, prompt, agent, workspaceQuery, planMode, remoteControl, createdAt, updatedAt
+    case id, repositoryID, prompt, agent, workspaceQuery, planMode, remoteControl, model, createdAt, updatedAt
   }
 
   init(from decoder: Decoder) throws {
@@ -78,6 +83,7 @@ nonisolated struct Draft: Identifiable, Equatable, Hashable, Codable, Sendable {
     workspaceQuery = try c.decodeIfPresent(String.self, forKey: .workspaceQuery) ?? ""
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     remoteControl = try c.decodeIfPresent(Bool.self, forKey: .remoteControl) ?? false
+    model = try c.decodeIfPresent(String.self, forKey: .model)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
   }

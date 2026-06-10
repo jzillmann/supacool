@@ -156,7 +156,8 @@ struct NewTerminalFeatureTests {
       initialPrompt: "Write tests for auth",
       displayName: "Write tests for auth",
       planMode: true,
-      remoteControl: true
+      remoteControl: true,
+      model: "gpt-5.1-codex"
     )
     let repos = IdentifiedArray(uniqueElements: [
       Self.makeRepository(id: "/tmp/repo", name: "test-repo")
@@ -168,9 +169,61 @@ struct NewTerminalFeatureTests {
     #expect(state.agent == .codex)
     #expect(state.planMode == true)
     #expect(state.remoteControl == true)
+    #expect(state.model == "gpt-5.1-codex")
     #expect(state.selectedRepositoryID == "/tmp/repo")
     #expect(state.selectedWorkspace == .repoRoot)
     #expect(state.workspaceQuery.isEmpty)
+  }
+
+  // MARK: - Model selection
+
+  @Test func normalizedModelTrimsAndGatesOnAgentSupport() {
+    var state = Self.makeState()
+    state.agent = .claude
+    state.model = "  opus  "
+    #expect(state.normalizedModel == "opus")
+
+    state.model = "   "
+    #expect(state.normalizedModel == nil)
+
+    state.model = ""
+    #expect(state.normalizedModel == nil)
+
+    // Pi has no model flag — a leftover value must not leak into spawn.
+    state.agent = .pi
+    state.model = "opus"
+    #expect(state.normalizedModel == nil)
+  }
+
+  @Test(.dependencies) func changingAgentResetsModelToDefault() async {
+    var state = Self.makeState()
+    state.agent = .codex
+    state.model = "gpt-5.1-codex"
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.agentSelected(.claude))
+
+    #expect(store.state.agent == .claude)
+    #expect(store.state.model.isEmpty)
+  }
+
+  @Test(.dependencies) func reselectingSameAgentKeepsModel() async {
+    var state = Self.makeState()
+    state.agent = .claude
+    state.model = "opus"
+
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.agentSelected(.claude))
+
+    #expect(store.state.model == "opus")
   }
 
   // MARK: - Branch name suggestion

@@ -24,6 +24,9 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
   /// Re-arms Claude Code's `--remote-control` flag on launch. Only honored
   /// for agents that support it (see `AgentType.supportsRemoteControl`).
   var remoteControl: Bool
+  /// Model passed to the agent's model flag on launch. `nil` = agent
+  /// default. Only honored for agents with a `modelFlag`.
+  var model: String?
   let createdAt: Date
 
   /// Whether clicking the bookmark creates a fresh worktree or runs at
@@ -46,6 +49,7 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
     worktreeMode: WorktreeMode = .newWorktree,
     planMode: Bool = false,
     remoteControl: Bool = false,
+    model: String? = nil,
     createdAt: Date = Date()
   ) {
     self.id = id
@@ -56,13 +60,14 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
     self.worktreeMode = worktreeMode
     self.planMode = planMode
     self.remoteControl = remoteControl
+    self.model = model
     self.createdAt = createdAt
   }
 
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
-    case id, repositoryID, name, prompt, agent, worktreeMode, planMode, remoteControl, createdAt
+    case id, repositoryID, name, prompt, agent, worktreeMode, planMode, remoteControl, model, createdAt
   }
 
   init(from decoder: Decoder) throws {
@@ -76,6 +81,7 @@ nonisolated struct Bookmark: Identifiable, Equatable, Hashable, Codable, Sendabl
       try c.decodeIfPresent(WorktreeMode.self, forKey: .worktreeMode) ?? .newWorktree
     planMode = try c.decodeIfPresent(Bool.self, forKey: .planMode) ?? false
     remoteControl = try c.decodeIfPresent(Bool.self, forKey: .remoteControl) ?? false
+    model = try c.decodeIfPresent(String.self, forKey: .model)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
   }
 
