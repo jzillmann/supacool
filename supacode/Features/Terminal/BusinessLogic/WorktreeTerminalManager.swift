@@ -291,6 +291,19 @@ final class WorktreeTerminalManager {
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
       if awaiting {
+        // An authoritative awaiting-input hook means the agent has
+        // yielded its turn and is blocked on the user — it is, by
+        // definition, not busy. Clear the busy latch (and any optimistic
+        // busy) so the card leaves "In Progress" for the waiting bucket.
+        // Without this, Claude's idle "waiting for input" notification —
+        // which does not always follow a Stop/busy=false edge — leaves
+        // the latch stuck on and the card pinned green forever. This is
+        // the mirror of `onBusy` clearing awaiting in the other
+        // direction; busy and awaiting are mutually exclusive. Self-
+        // correcting on a classifier false positive: the agent's next
+        // busy hook re-sets busy and clears awaiting within seconds.
+        self?.clearOptimisticBusy(tabID: tabID)
+        state.clearAgentBusy(tabID: wrappedTabID)
         self?.clearDeferredWork(tabID: tabID)
         self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID, source: "hook")
       } else if let duration = self?.deferredWorkLeaseDuration(for: notification) {

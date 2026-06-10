@@ -252,14 +252,14 @@ struct BoardFeatureTests {
   /// was introduced for.
   @Test(.dependencies) func prRefreshTickFansOutAcrossSessionsReferencingTheSamePR() async {
     let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
-    var s1 = Self.sampleSession()
-    s1.references = [ref]
-    s1.referencesScannedAt = Date()
-    var s2 = Self.sampleSession(id: UUID(uuidString: "00000000-0000-0000-0000-000000000099")!)
-    s2.references = [ref]
-    s2.referencesScannedAt = Date()
+    var session1 = Self.sampleSession()
+    session1.references = [ref]
+    session1.referencesScannedAt = Date()
+    var session2 = Self.sampleSession(id: UUID(uuidString: "00000000-0000-0000-0000-000000000099")!)
+    session2.references = [ref]
+    session2.referencesScannedAt = Date()
     let state = BoardFeature.State()
-    state.$sessions.withLock { $0 = [s1, s2] }
+    state.$sessions.withLock { $0 = [session1, session2] }
     let lookups = LockIsolated<[String]>([])
     let testClock = TestClock()
     let store = TestStore(initialState: state) {
@@ -287,6 +287,77 @@ struct BoardFeatureTests {
         .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .merged)
       ])
     }
+  }
+
+  /// Regression: a popover-driven `.refreshPRReferences` that fires while a
+  /// scheduler `_runPRRefreshTick` fetch is still in-flight used to strand the
+  /// in-flight PR key forever, freezing its card (a merged PR stuck rendering
+  /// OPEN/green). Both call sites share `PRRefresherTickCancelID`; with
+  /// `cancelInFlight: true` the popover refresh tore down the live tick batch,
+  /// and TCA's `Send` no-ops once `Task.isCancelled`, so the terminal
+  /// `_prStateFanout` that removes the key from `prRefreshInFlight` was
+  /// swallowed. After the fix (`cancelInFlight: false`) batches always drain,
+  /// so the key clears and the fresh `.merged` state lands.
+  ///
+  /// `#3613` is the open PR whose tick fetch we gate mid-flight; `#3622` is a
+  /// closed ref the popover refresh (visible mode includes CLOSED) picks up,
+  /// giving the second `prRefreshEffect` a non-empty batch so it actually
+  /// dispatches and — under the old code — cancels the tick.
+  @Test(.dependencies) func popoverRefreshDuringInFlightTickDoesNotStrandPRState() async {
+    let gated = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 3613, state: .open)
+    let closed = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 3622, state: .closed)
+    var session = Self.sampleSession()
+    session.references = [gated, closed]
+    session.referencesScannedAt = Date()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    // Gate the #3613 fetch so it is genuinely in-flight when the popover
+    // refresh arrives. No clocks/sleeps: `started` fires the instant the
+    // fetch is entered, `release` lets it complete on the test's command.
+    let started = AsyncStream.makeStream(of: Void.self)
+    let release = AsyncStream.makeStream(of: Void.self)
+    let testClock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = testClock
+      $0.date = .constant(Date())
+      $0.githubCLI.viewPullRequest = { _, _, number in
+        if number == 3613 {
+          started.continuation.yield(())
+          var iterator = release.stream.makeAsyncIterator()
+          _ = await iterator.next()
+          return .merged
+        }
+        return .closed
+      }
+    }
+    store.exhaustivity = .off
+
+    // Kick the scheduler tick; the #3613 fetch parks on the gate.
+    await store.send(._runPRRefreshTick)
+    var startedIterator = started.stream.makeAsyncIterator()
+    _ = await startedIterator.next()
+
+    // Open the PR popover while #3613 is still fetching — shares the cancel ID.
+    await store.send(.refreshPRReferences(id: session.id))
+
+    // Let the parked fetch finish and drain everything.
+    release.continuation.yield(())
+    release.continuation.finish()
+    started.continuation.finish()
+    await store.skipReceivedActions()
+    await store.finish()
+
+    // The in-flight bookkeeping must fully drain — no stranded keys.
+    #expect(store.state.prRefreshInFlight.isEmpty)
+    // And the gated PR must have picked up its fresh merged state.
+    #expect(
+      store.state.sessions.first?.references.contains(
+        .pullRequest(owner: "acme", repo: "widgets", number: 3613, state: .merged)
+      ) == true
+    )
   }
 
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {
@@ -2775,12 +2846,12 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     }
-    let pb = NSPasteboard.general
-    pb.clearContents()
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
 
     await store.send(.trayCardCopyTapped(id: card.id))
     #expect(store.state.trayCards.count == 1)  // card stays
-    #expect(pb.string(forType: .string) == "Couldn't start Retry me\nGit command failed: permission denied")
+    #expect(pasteboard.string(forType: .string) == "Couldn't start Retry me\nGit command failed: permission denied")
   }
 
   /// Copy is a no-op on non-error cards (no `errorContent`). Nothing
@@ -2792,13 +2863,13 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     }
-    let pb = NSPasteboard.general
-    pb.clearContents()
-    pb.setString("sentinel", forType: .string)
+    let pasteboard = NSPasteboard.general
+    pasteboard.clearContents()
+    pasteboard.setString("sentinel", forType: .string)
 
     await store.send(.trayCardCopyTapped(id: card.id))
     #expect(store.state.trayCards.count == 1)
-    #expect(pb.string(forType: .string) == "sentinel")
+    #expect(pasteboard.string(forType: .string) == "sentinel")
   }
 
   /// Debug button opens the debug sheet with a `.spawnFailure` source

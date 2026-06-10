@@ -3280,10 +3280,6 @@ struct BoardFeature {
     return [agentPart, modePart, cwdPart].joined(separator: ";")
   }
 
-  /// Shared effect body for scheduled and user-visible PR refreshes.
-  /// Bounded TaskGroup keeps the `gh pr view` subprocess count capped,
-  /// and the cancel ID prevents overlapping ticks from racing before
-  /// `_prRefreshStarted` lands in reducer state.
   /// Shared local-spawn dispatch used by both the standalone New Terminal
   /// sheet and the Linear Inbox's embedded tab. Drops a placeholder tray
   /// card anchored on the pre-allocated session UUID (so `.createSession`
@@ -3360,6 +3356,12 @@ struct BoardFeature {
     return .send(.createSession(sessionToCreate))
   }
 
+  /// Shared effect body for scheduled and user-visible PR refreshes.
+  /// Bounded TaskGroup keeps the `gh pr view` subprocess count capped.
+  /// Overlap between a scheduler tick and a popover-driven refresh is
+  /// handled by the `prRefreshInFlight` dedupe in `pickPRRefreshCandidates`,
+  /// not by cancellation — see the `cancelInFlight: false` note below for
+  /// why tearing a batch down mid-flight would strand in-flight keys.
   private func prRefreshEffect(
     batch: [(refKey: String, owner: String, repo: String, number: Int)]
   ) -> Effect<Action> {
@@ -3402,7 +3404,18 @@ struct BoardFeature {
         }
       }
     }
-    .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: true)
+    // `cancelInFlight: false` is load-bearing, not a default. This effect
+    // inserts each refKey into `prRefreshInFlight` via `_prRefreshStarted`
+    // and only ever removes it via the terminal `_prStateFanout` /
+    // `_prRefreshFailed` sends. TCA's `Send` opens with
+    // `guard !Task.isCancelled` — so if a tick or popover-driven refresh
+    // tore down a still-fetching batch (both call sites share this id), the
+    // terminal send is swallowed and the key is stranded in-flight forever.
+    // `pickPRRefreshCandidates` then permanently skips it, freezing that PR
+    // at its last state (e.g. a merged PR stuck rendering OPEN/green). Letting
+    // batches always drain is safe: the in-flight set already dedupes work, so
+    // overlapping batches skip each other's keys instead of racing.
+    .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: false)
   }
 
   /// Merge two reference lists, deduping by `dedupeKey`. When
@@ -3801,10 +3814,12 @@ private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
 /// `_startPRRefresher` makes re-dispatching idempotent.
 private nonisolated struct PRRefresherCancelID: Hashable, Sendable {}
 
-/// Cancel ID for the in-flight PR-refresh worker effect. A new scheduled
-/// or user-visible refresh cancels the previous one if it hasn't drained
-/// yet — defensive against work that runs longer than the refresh interval
-/// under extreme network stalls.
+/// Cancel ID for the in-flight PR-refresh worker effect. Registered so the
+/// batch can be torn down on store teardown, but dispatched with
+/// `cancelInFlight: false`: a new scheduled or user-visible refresh must NOT
+/// cancel a still-fetching batch, because cancellation swallows the terminal
+/// `_prStateFanout` / `_prRefreshFailed` send (TCA `Send` no-ops once
+/// `Task.isCancelled`) and strands the refKey in `prRefreshInFlight` forever.
 private nonisolated struct PRRefresherTickCancelID: Hashable, Sendable {}
 
 /// Thrown by the timeout arm of the `_refreshPRStatus` TaskGroup race.

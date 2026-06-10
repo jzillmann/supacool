@@ -1,4 +1,5 @@
 import Foundation
+import IdentifiedCollections
 import Testing
 
 @testable import Supacool
@@ -14,6 +15,55 @@ struct RepositoryNameTests {
     let root = URL(fileURLWithPath: "/tmp/work/repo-alpha")
 
     #expect(Repository.name(for: root) == "repo-alpha")
+  }
+}
+
+struct RepositorySkillDiscoveryRootTests {
+  private func worktree(at path: String, repositoryRoot: String, branch: String?) -> Worktree {
+    Worktree(
+      id: path,
+      name: URL(fileURLWithPath: path).lastPathComponent,
+      detail: "",
+      workingDirectory: URL(fileURLWithPath: path),
+      repositoryRootURL: URL(fileURLWithPath: repositoryRoot),
+      branch: branch
+    )
+  }
+
+  @Test func usesRootWhenAPrimaryCheckoutCoincidesWithIt() {
+    let root = URL(fileURLWithPath: "/tmp/work/repo-alpha")
+    let repo = Repository(
+      id: root.path,
+      rootURL: root,
+      name: "repo-alpha",
+      worktrees: [
+        worktree(at: "/tmp/work/repo-alpha", repositoryRoot: root.path, branch: nil),
+        worktree(at: "/tmp/work/repo-alpha-worktrees/feature", repositoryRoot: root.path, branch: "feature"),
+      ]
+    )
+
+    #expect(repo.skillDiscoveryRoot.standardizedFileURL == root.standardizedFileURL)
+  }
+
+  @Test func fallsBackToAWorktreeForBareContainerRoots() {
+    // git-wt layout: the root holds worktrees and has no checkout of its own.
+    let root = URL(fileURLWithPath: "/tmp/repos/centrum_backend")
+    let checkout = "/tmp/repos/centrum_backend/feature-branch"
+    let repo = Repository(
+      id: root.path,
+      rootURL: root,
+      name: "centrum_backend",
+      worktrees: [worktree(at: checkout, repositoryRoot: root.path, branch: "feature-branch")]
+    )
+
+    #expect(repo.skillDiscoveryRoot.path == checkout)
+  }
+
+  @Test func fallsBackToRootWhenThereAreNoWorktrees() {
+    let root = URL(fileURLWithPath: "/tmp/work/repo-alpha")
+    let repo = Repository(id: root.path, rootURL: root, name: "repo-alpha", worktrees: [])
+
+    #expect(repo.skillDiscoveryRoot == root)
   }
 }
 
