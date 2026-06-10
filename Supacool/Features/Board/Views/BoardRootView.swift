@@ -195,6 +195,11 @@ struct BoardRootView: View {
       NewTerminalSheet(store: sheetStore)
     }
     .sheet(
+      store: store.scope(state: \.$linearInbox, action: \.linearInbox)
+    ) { sheetStore in
+      LinearInboxSheet(store: sheetStore)
+    }
+    .sheet(
       store: store.scope(state: \.$debugSheet, action: \.debugSheet)
     ) { sheetStore in
       DebugSessionSheetView(store: sheetStore)
@@ -803,6 +808,15 @@ struct BoardRootView: View {
           ? "Open cleanup archive (removed cards + worktrees)"
           : "Open cleanup archive — \(store.trashedSessions.count) recoverable card(s)"
       )
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        store.send(.openLinearInbox(repositories: Array(repositories)))
+      } label: {
+        Label("Linear Inbox", systemImage: "tray.and.arrow.down")
+      }
+      .help("Import Linear tickets to triage and start sessions on")
+      .disabled(repositories.isEmpty)
     }
     ToolbarItem(placement: .primaryAction) {
       Button {
