@@ -288,10 +288,12 @@ private struct LinearTicketRow: View {
         .disabled(isAssigning || ticket.assignedToMe)
 
         if let urlString = ticket.url, let url = URL(string: urlString) {
-          Link(destination: url) {
+          Button {
+            openInLinear(webURL: url)
+          } label: {
             Label("Open in Linear", systemImage: "arrow.up.right.square")
           }
-          .help("Open the ticket in your browser")
+          .help("Open the ticket in the Linear desktop app")
         }
 
         Spacer()
@@ -317,5 +319,17 @@ private struct LinearTicketRow: View {
       return summary
     }
     return ticket.fetchedAt == nil ? "Loading description…" : "No description."
+  }
+
+  /// Linear's desktop app registers the `linear://` scheme; any
+  /// `https://linear.app/…` URL becomes a deep link by swapping the prefix.
+  /// Falls back to the browser when the desktop app isn't installed.
+  private func openInLinear(webURL: URL) {
+    let deepLink = URL(string: webURL.absoluteString.replacing("https://linear.app/", with: "linear://"))
+    if let deepLink, deepLink != webURL, NSWorkspace.shared.urlForApplication(toOpen: deepLink) != nil {
+      NSWorkspace.shared.open(deepLink)
+    } else {
+      NSWorkspace.shared.open(webURL)
+    }
   }
 }
