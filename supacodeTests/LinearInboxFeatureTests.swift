@@ -176,6 +176,24 @@ struct LinearInboxFeatureTests {
     #expect(store.state.newTerminal?.prompt == "Fix CEN-1: Do thing")
     #expect(store.state.selectedTab == .newTerminal)
     #expect(store.state.pendingSessionTicketID == "CEN-1")
+    // The known title arms the worktree exactly like typing the ticket id
+    // into the New Terminal screen would.
+    #expect(store.state.newTerminal?.workspaceQuery == "cen-1-do-thing")
+    #expect(store.state.newTerminal?.selectedWorkspace == .newBranch(name: "cen-1-do-thing"))
+  }
+
+  @Test(.dependencies) func startSessionWithoutTitleLeavesWorkspaceUntouched() async {
+    resetInbox([LinearTicket(identifier: "CEN-2")])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startSessionTapped(ticketID: "CEN-2"))
+    #expect(store.state.newTerminal?.prompt == "Fix CEN-2")
+    // No title yet — nothing to derive a branch name from.
+    #expect(store.state.newTerminal?.workspaceQuery.isEmpty == true)
   }
 
   @Test(.dependencies) func spawnDelegateStampsTicketStartedAndForwardsUp() async {

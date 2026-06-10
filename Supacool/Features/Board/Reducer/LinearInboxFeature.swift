@@ -175,6 +175,14 @@ struct LinearInboxFeature {
         state.pendingSessionTicketID = ticketID
         var newTerminal = NewTerminalFeature.State(availableRepositories: state.availableRepositories)
         newTerminal.prompt = ticket.sessionPrompt
+        // Setting the prompt programmatically bypasses the `binding(\.prompt)`
+        // path that normally resolves the ticket title and arms the worktree.
+        // The inbox already knows the title, so seed the cache and run the
+        // same auto-fill the New Terminal screen uses.
+        if let title = ticket.title, !title.isEmpty {
+          newTerminal.linearTitleCache[ticket.identifier.uppercased()] = title
+          _ = NewTerminalFeature.maybeAutoFillWorkspaceQueryFromLinear(state: &newTerminal)
+        }
         state.newTerminal = newTerminal
         state.selectedTab = .newTerminal
         return .none
