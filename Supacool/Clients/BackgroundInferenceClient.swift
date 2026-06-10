@@ -321,8 +321,14 @@ nonisolated func sanitizeBranchName(_ raw: String) -> String {
   result = result.replacing(/[^a-z0-9\-\/]/, with: "")
   // Collapse consecutive hyphens.
   result = result.replacing(/\-{2,}/, with: "-")
+  // Collapse consecutive slashes — git rejects "//" in a ref name.
+  result = result.replacing(/\/{2,}/, with: "/")
+  // Truncate FIRST, then strip. Doing it the other way round lets the
+  // truncation land on a "-" or "/" boundary and re-introduce a trailing
+  // separator, which git rejects ("not a valid branch name") — the
+  // CEN-7527 trailing-slash failure.
+  result = String(result.prefix(40))
   // Strip leading/trailing hyphens and slashes.
   result = result.trimmingCharacters(in: CharacterSet(charactersIn: "-/"))
-  // Truncate.
-  return String(result.prefix(40))
+  return result
 }

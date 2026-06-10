@@ -524,6 +524,22 @@ struct NewTerminalFeatureTests {
     #expect(sanitizeBranchName(long).count <= 40)
   }
 
+  // Regression (CEN-7527 "not a valid branch name"): truncating to 40 chars
+  // must not re-introduce a trailing separator. The 40-char cut landed on a
+  // "/" and git rejected the ref. Truncate-then-strip fixes it.
+  @Test func sanitizeBranchNameTruncationNeverEndsWithSeparator() {
+    // 8 five-char "xxxx/" groups = exactly 40 chars, so prefix(40) lands on
+    // the slash after "hhhh".
+    let slashy = "aaaa/bbbb/cccc/dddd/eeee/ffff/gggg/hhhh/iiii"
+    let result = sanitizeBranchName(slashy)
+    #expect(result.count <= 40)
+    #expect(!result.hasSuffix("/"))
+    #expect(!result.hasSuffix("-"))
+    #expect(result == "aaaa/bbbb/cccc/dddd/eeee/ffff/gggg/hhhh")
+    // "//" is also an invalid git ref — collapse it.
+    #expect(sanitizeBranchName("feat//double//slash") == "feat/double/slash")
+  }
+
   // MARK: - PR URL flow
 
   /// Happy path: pasting a PR URL triggers a gh lookup, matches it against
