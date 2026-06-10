@@ -18,6 +18,21 @@ runs:
     - run: mise install
       shell: bash
 
+    # The macos-26 runner image defaults to Xcode 26.4.1 (SDK macosx26.4),
+    # whose libSystem.tbd is incompatible with the Zig 0.15.2 linker used to
+    # build GhosttyKit — the link fails with `undefined symbol:
+    # _realpath$DARWIN_EXTSN` / `__availability_version_check`. Xcode 26.2
+    # (Build 17C52) links cleanly (it matches the local dev toolchain), so
+    # pin to it for the whole job. Revisit when bumping Zig.
+    - name: Select Xcode 26.2 (Zig/GhosttyKit link compatibility)
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo xcode-select -s /Applications/Xcode_26.2.app
+        printf '%s\n' "DEVELOPER_DIR=/Applications/Xcode_26.2.app/Contents/Developer" >> "$GITHUB_ENV"
+        xcodebuild -version
+        echo "macOS SDK $(xcrun --show-sdk-version) at $(xcrun --show-sdk-path)"
+
     - name: Ghostty cache key
       shell: bash
       run: |

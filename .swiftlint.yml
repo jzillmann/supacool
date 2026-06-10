@@ -28,6 +28,13 @@ cyclomatic_complexity:
   warning: 15
   error: 20
 
+# The forward-compatible Codable convention (docs/agent-guides/persistence.md)
+# requires a nested CodingKeys enum inside every persisted struct, including
+# structs already nested one level — so persisted types legitimately nest two
+# deep. Allow it rather than fight the pattern.
+nesting:
+  type_level: 2
+
 function_body_length:
   warning: 100
   error: 150

@@ -17,9 +17,9 @@ struct TerminalLayoutSnapshot: Codable, Equatable, Sendable {
   }
 
   init(from decoder: Decoder) throws {
-    let c = try decoder.container(keyedBy: CodingKeys.self)
-    tabs = try c.decodeIfPresent([TabSnapshot].self, forKey: .tabs) ?? []
-    selectedTabIndex = try c.decodeIfPresent(Int.self, forKey: .selectedTabIndex) ?? 0
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    tabs = try container.decodeIfPresent([TabSnapshot].self, forKey: .tabs) ?? []
+    selectedTabIndex = try container.decodeIfPresent(Int.self, forKey: .selectedTabIndex) ?? 0
   }
 
   struct TabSnapshot: Codable, Equatable, Sendable {
@@ -58,16 +58,16 @@ struct TerminalLayoutSnapshot: Codable, Equatable, Sendable {
     }
 
     init(from decoder: Decoder) throws {
-      let c = try decoder.container(keyedBy: CodingKeys.self)
-      id = try c.decodeIfPresent(UUID.self, forKey: .id)
-      title = try c.decodeIfPresent(String.self, forKey: .title) ?? ""
-      icon = try c.decodeIfPresent(String.self, forKey: .icon)
-      tintColor = try c.decodeIfPresent(TerminalTabTintColor.self, forKey: .tintColor)
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      id = try container.decodeIfPresent(UUID.self, forKey: .id)
+      title = try container.decodeIfPresent(String.self, forKey: .title) ?? ""
+      icon = try container.decodeIfPresent(String.self, forKey: .icon)
+      tintColor = try container.decodeIfPresent(TerminalTabTintColor.self, forKey: .tintColor)
       // `layout` is the only structurally required field — a snapshot
       // without it is meaningless and should fail the whole tab.
-      layout = try c.decode(LayoutNode.self, forKey: .layout)
-      focusedLeafIndex = try c.decodeIfPresent(Int.self, forKey: .focusedLeafIndex) ?? 0
-      sessionID = try c.decodeIfPresent(UUID.self, forKey: .sessionID)
+      layout = try container.decode(LayoutNode.self, forKey: .layout)
+      focusedLeafIndex = try container.decodeIfPresent(Int.self, forKey: .focusedLeafIndex) ?? 0
+      sessionID = try container.decodeIfPresent(UUID.self, forKey: .sessionID)
     }
   }
 
