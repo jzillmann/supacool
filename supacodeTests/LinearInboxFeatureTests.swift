@@ -241,16 +241,17 @@ struct LinearInboxFeatureTests {
     }
     store.exhaustivity = .off
 
-    // Default: everything visible.
+    // Default hides done — the inbox is a worklist of what's left.
     #expect(store.state.doneCount == 2)
-    #expect(store.state.visibleTickets.count == 3)
-
-    await store.send(.toggleShowDone)
     #expect(store.state.showDone == false)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
 
     await store.send(.toggleShowDone)
+    #expect(store.state.showDone == true)
     #expect(store.state.visibleTickets.count == 3)
+
+    await store.send(.toggleShowDone)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
   @Test(.dependencies) func removeTicketDropsItFromTheInbox() async {

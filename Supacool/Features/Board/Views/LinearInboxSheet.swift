@@ -55,9 +55,10 @@ struct LinearInboxSheet: View {
           "\(store.doneCount)/\(store.tickets.count) done",
           systemImage: store.showDone ? "eye" : "eye.slash"
         )
-        .font(.callout)
+        .font(.caption)
+        .foregroundStyle(.secondary)
       }
-      .buttonStyle(.link)
+      .buttonStyle(.plain)
       .disabled(store.doneCount == 0)
       .help(store.showDone ? "Hide done tickets" : "Show done tickets")
       Spacer()

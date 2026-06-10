@@ -23,9 +23,9 @@ struct LinearInboxFeature {
     /// Free-text in the import field (pasted URLs / ids).
     var pasteText: String = ""
     var selectedTab: Tab = .inbox
-    /// When false, tickets in a completed/canceled Linear state are hidden
-    /// from the list so the inbox reads as a worklist of what's left.
-    var showDone: Bool = true
+    /// When false (the default), tickets in a completed/canceled Linear
+    /// state are hidden so the inbox reads as a worklist of what's left.
+    var showDone: Bool = false
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
