@@ -219,22 +219,23 @@ struct BoardView: View {
     let candidates = cardFrames
       .filter { eligible.contains($0.key) && $0.key != currentID }
       .map { (id: $0.key, frame: $0.value) }
-    // Half a card-height tolerance for "same row" — anything within
-    // that band of the current card's midY is skipped so Up/Down only
-    // ever crosses rows.
-    let rowTolerance = currentFrame.height * 0.5
+    // Cards are top-aligned in every layout (carousel rails and matrix
+    // grid rows), so cards in the same row share their top edge. Keying
+    // rows off minY — not midY — keeps Up/Down from mistaking a much
+    // taller same-row neighbor for the row below.
+    let rowEpsilon: CGFloat = 8
     let inDirection = candidates.filter {
       direction < 0
-        ? $0.frame.midY < currentFrame.midY - rowTolerance
-        : $0.frame.midY > currentFrame.midY + rowTolerance
+        ? $0.frame.minY < currentFrame.minY - rowEpsilon
+        : $0.frame.minY > currentFrame.minY + rowEpsilon
     }
     guard !inDirection.isEmpty else { return }
-    // Nearest row first (smallest |Δy|), then nearest column within that
-    // row (smallest |Δx|).
+    // Nearest row first (smallest |Δy| between top edges), then nearest
+    // column within that row (smallest |Δx|).
     let target = inDirection.min { lhs, rhs in
-      let lhsRow = abs(lhs.frame.midY - currentFrame.midY)
-      let rhsRow = abs(rhs.frame.midY - currentFrame.midY)
-      if abs(lhsRow - rhsRow) > rowTolerance {
+      let lhsRow = abs(lhs.frame.minY - currentFrame.minY)
+      let rhsRow = abs(rhs.frame.minY - currentFrame.minY)
+      if abs(lhsRow - rhsRow) > rowEpsilon {
         return lhsRow < rhsRow
       }
       return abs(lhs.frame.midX - currentFrame.midX)

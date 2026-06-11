@@ -41,9 +41,9 @@ struct SessionSwitcherOverlay: View {
     .focused($hasFocus)
     .task { hasFocus = true }
     .onKeyPress(.leftArrow) { moveCursor(by: -1); return .handled }
-    .onKeyPress(.upArrow) { moveCursor(by: -1); return .handled }
+    .onKeyPress(.upArrow) { moveCursorAcrossRows(by: -1); return .handled }
     .onKeyPress(.rightArrow) { moveCursor(by: +1); return .handled }
-    .onKeyPress(.downArrow) { moveCursor(by: +1); return .handled }
+    .onKeyPress(.downArrow) { moveCursorAcrossRows(by: +1); return .handled }
     .onKeyPress(.return) { onCommit(); return .handled }
     .onExitCommand { onCancel() }
     .onAppear { installFlagsMonitor() }
@@ -196,6 +196,32 @@ struct SessionSwitcherOverlay: View {
       next = (currentIndex + delta + ids.count) % ids.count
     }
     highlightedSessionID = ids[next]
+  }
+
+  /// Up/Down jump between the Waiting and Working rows, landing on the
+  /// same column position (clamped to the shorter row) instead of
+  /// stepping through the flat order. With only one row on screen they
+  /// fall back to plain prev/next so the keys never go dead.
+  private func moveCursorAcrossRows(by delta: Int) {
+    let waiting = sessions.filter { BoardNavOrder.isWaitingStatus(classify($0)) }
+    let working = sessions.filter { !BoardNavOrder.isWaitingStatus(classify($0)) }
+    guard !waiting.isEmpty, !working.isEmpty else {
+      moveCursor(by: delta)
+      return
+    }
+    let targetRow: [AgentSession]
+    let column: Int
+    if let index = waiting.firstIndex(where: { $0.id == highlightedSessionID }) {
+      targetRow = working
+      column = index
+    } else if let index = working.firstIndex(where: { $0.id == highlightedSessionID }) {
+      targetRow = waiting
+      column = index
+    } else {
+      targetRow = delta < 0 ? working : waiting
+      column = 0
+    }
+    highlightedSessionID = targetRow[min(column, targetRow.count - 1)].id
   }
 
   // MARK: - ⌘⌥-release detection
