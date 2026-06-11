@@ -40,6 +40,12 @@ struct BoardView: View {
   @State private var standbyBucketExpanded: Bool = false
   @State private var parkedBucketExpanded: Bool = false
 
+  /// Bucket layout mode, shared with the toolbar toggle in BoardRootView
+  /// via the same UserDefaults key (⇧⌘M). Carousel (default) renders each
+  /// bucket as one horizontally scrolling rail; matrix wraps the cards
+  /// into a grid so every session is visible at once.
+  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = false
+
   private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
   private let boardCardWidth: CGFloat = 280
   private let boardCarouselSpacing: CGFloat = 14
@@ -274,163 +280,174 @@ struct BoardView: View {
       // one repo on disk) the caption is implied, so we keep the cards
       // clean.
       let showsRepoLabelAbove = Set(visible.map(\.repositoryID)).count >= 2
-      ScrollView {
-        VStack(alignment: .leading, spacing: 20) {
-          // Drafts row sits ABOVE bookmarks. Always rendered when there's
-          // at least one draft, regardless of the repo filter — drafts
-          // are user inbox-state, not project-scoped artefacts; hiding
-          // them on a filter switch would be the most reliable way to
-          // forget about them.
-          let visibleDrafts = store.drafts
-          if !visibleDrafts.isEmpty {
-            DraftPillRow(
-              drafts: visibleDrafts,
-              repoLabelByID: draftRepoLabels,
-              onTap: { draft in
-                store.send(
-                  .draftTapped(
-                    id: draft.id,
-                    repositories: Array(repositories)
+      ScrollViewReader { boardProxy in
+        ScrollView {
+          VStack(alignment: .leading, spacing: 20) {
+            // Drafts row sits ABOVE bookmarks. Always rendered when there's
+            // at least one draft, regardless of the repo filter — drafts
+            // are user inbox-state, not project-scoped artefacts; hiding
+            // them on a filter switch would be the most reliable way to
+            // forget about them.
+            let visibleDrafts = store.drafts
+            if !visibleDrafts.isEmpty {
+              DraftPillRow(
+                drafts: visibleDrafts,
+                repoLabelByID: draftRepoLabels,
+                onTap: { draft in
+                  store.send(
+                    .draftTapped(
+                      id: draft.id,
+                      repositories: Array(repositories)
+                    )
                   )
-                )
-              },
-              onDelete: { draft in
-                store.send(.draftDeleteRequested(id: draft.id))
-              }
-            )
-          }
-          // Bookmark pills render above "Waiting on Me" when a specific
-          // repo is selected (not "All repos") and that repo has at
-          // least one saved bookmark. Off-filter → hidden entirely so
-          // the attention-zone stays tight.
-          let relevantBookmarks = visibleBookmarks
-          let unavailableBookmarkIDs = store.unavailableBookmarkIDs
-          if !relevantBookmarks.isEmpty {
-            BookmarkPillRow(
-              bookmarks: relevantBookmarks,
-              unavailableBookmarkIDs: unavailableBookmarkIDs,
-              onTap: { bookmark in
-                store.send(
-                  .bookmarkTapped(
-                    id: bookmark.id,
-                    repositories: Array(repositories)
-                  )
-                )
-              },
-              onEdit: { bookmark in
-                store.send(
-                  .bookmarkEditRequested(
-                    id: bookmark.id,
-                    repositories: Array(repositories)
-                  )
-                )
-              },
-              onDelete: { bookmark in
-                store.send(.bookmarkDeleteRequested(id: bookmark.id))
-              }
-            )
-          }
-          // "Waiting on Me" always renders — when empty it shows a subtle
-          // "Nothing waiting on you" message so the bucket stays visible and
-          // the board never looks like the attention-zone just vanished.
-          section(
-            title: "Waiting on Me",
-            systemImage: "exclamationmark.circle.fill",
-            color: .orange,
-            sessions: waiting,
-            dimmed: false,
-            emptyMessage: "Nothing waiting on you.",
-            showsRepoLabelAbove: showsRepoLabelAbove
-          )
-          if !checksPending.isEmpty {
-            Divider()
-              .padding(.vertical, 4)
-            section(
-              title: BoardSessionStatus.waitingForChecks.label,
-              systemImage: BoardSessionStatus.waitingForChecks.systemImage,
-              color: BoardSessionStatus.waitingForChecks.color,
-              sessions: checksPending,
-              dimmed: true,
-              emptyMessage: nil,
-              showsRepoLabelAbove: showsRepoLabelAbove
-            )
-          }
-          if !inProgress.isEmpty {
-            Divider()
-              .padding(.vertical, 4)
-            section(
-              title: "In Progress",
-              systemImage: "circle.fill",
-              color: .green,
-              sessions: inProgress,
-              dimmed: true,
-              emptyMessage: nil,
-              showsRepoLabelAbove: showsRepoLabelAbove
-            )
-          }
-          if !standby.isEmpty || !coldParked.isEmpty {
-            Divider()
-              .padding(.vertical, 4)
-            HStack(spacing: 8) {
-              if !standby.isEmpty {
-                DormantBucketPill(
-                  title: "Standby",
-                  count: standby.count,
-                  systemImage: "bolt.circle",
-                  color: .yellow,
-                  isExpanded: standbyBucketExpanded,
-                  action: {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                      standbyBucketExpanded.toggle()
-                    }
-                  }
-                )
-              }
-              if !coldParked.isEmpty {
-                DormantBucketPill(
-                  title: "Parked",
-                  count: coldParked.count,
-                  systemImage: "parkingsign",
-                  color: .secondary,
-                  isExpanded: parkedBucketExpanded,
-                  action: {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                      parkedBucketExpanded.toggle()
-                    }
-                  }
-                )
-              }
-              Spacer()
-            }
-            if standbyBucketExpanded && !standby.isEmpty {
-              section(
-                title: "Standby",
-                systemImage: "bolt.circle",
-                color: .yellow,
-                sessions: standby,
-                dimmed: false,
-                emptyMessage: nil,
-                hidesHeader: true,
-                showsRepoLabelAbove: showsRepoLabelAbove
+                },
+                onDelete: { draft in
+                  store.send(.draftDeleteRequested(id: draft.id))
+                }
               )
             }
-            if parkedBucketExpanded && !coldParked.isEmpty {
+            // Bookmark pills render above "Waiting on Me" when a specific
+            // repo is selected (not "All repos") and that repo has at
+            // least one saved bookmark. Off-filter → hidden entirely so
+            // the attention-zone stays tight.
+            let relevantBookmarks = visibleBookmarks
+            let unavailableBookmarkIDs = store.unavailableBookmarkIDs
+            if !relevantBookmarks.isEmpty {
+              BookmarkPillRow(
+                bookmarks: relevantBookmarks,
+                unavailableBookmarkIDs: unavailableBookmarkIDs,
+                onTap: { bookmark in
+                  store.send(
+                    .bookmarkTapped(
+                      id: bookmark.id,
+                      repositories: Array(repositories)
+                    )
+                  )
+                },
+                onEdit: { bookmark in
+                  store.send(
+                    .bookmarkEditRequested(
+                      id: bookmark.id,
+                      repositories: Array(repositories)
+                    )
+                  )
+                },
+                onDelete: { bookmark in
+                  store.send(.bookmarkDeleteRequested(id: bookmark.id))
+                }
+              )
+            }
+            // "Waiting on Me" always renders — when empty it shows a subtle
+            // "Nothing waiting on you" message so the bucket stays visible and
+            // the board never looks like the attention-zone just vanished.
+            section(
+              title: "Waiting on Me",
+              systemImage: "exclamationmark.circle.fill",
+              color: .orange,
+              sessions: waiting,
+              dimmed: false,
+              emptyMessage: "Nothing waiting on you.",
+              showsRepoLabelAbove: showsRepoLabelAbove
+            )
+            if !checksPending.isEmpty {
+              Divider()
+                .padding(.vertical, 4)
               section(
-                title: "Parked",
-                systemImage: "parkingsign",
-                color: .secondary,
-                sessions: coldParked,
+                title: BoardSessionStatus.waitingForChecks.label,
+                systemImage: BoardSessionStatus.waitingForChecks.systemImage,
+                color: BoardSessionStatus.waitingForChecks.color,
+                sessions: checksPending,
                 dimmed: true,
                 emptyMessage: nil,
-                hidesHeader: true,
                 showsRepoLabelAbove: showsRepoLabelAbove
               )
             }
+            if !inProgress.isEmpty {
+              Divider()
+                .padding(.vertical, 4)
+              section(
+                title: "In Progress",
+                systemImage: "circle.fill",
+                color: .green,
+                sessions: inProgress,
+                dimmed: true,
+                emptyMessage: nil,
+                showsRepoLabelAbove: showsRepoLabelAbove
+              )
+            }
+            if !standby.isEmpty || !coldParked.isEmpty {
+              Divider()
+                .padding(.vertical, 4)
+              HStack(spacing: 8) {
+                if !standby.isEmpty {
+                  DormantBucketPill(
+                    title: "Standby",
+                    count: standby.count,
+                    systemImage: "bolt.circle",
+                    color: .yellow,
+                    isExpanded: standbyBucketExpanded,
+                    action: {
+                      withAnimation(.easeInOut(duration: 0.18)) {
+                        standbyBucketExpanded.toggle()
+                      }
+                    }
+                  )
+                }
+                if !coldParked.isEmpty {
+                  DormantBucketPill(
+                    title: "Parked",
+                    count: coldParked.count,
+                    systemImage: "parkingsign",
+                    color: .secondary,
+                    isExpanded: parkedBucketExpanded,
+                    action: {
+                      withAnimation(.easeInOut(duration: 0.18)) {
+                        parkedBucketExpanded.toggle()
+                      }
+                    }
+                  )
+                }
+                Spacer()
+              }
+              if standbyBucketExpanded && !standby.isEmpty {
+                section(
+                  title: "Standby",
+                  systemImage: "bolt.circle",
+                  color: .yellow,
+                  sessions: standby,
+                  dimmed: false,
+                  emptyMessage: nil,
+                  hidesHeader: true,
+                  showsRepoLabelAbove: showsRepoLabelAbove
+                )
+              }
+              if parkedBucketExpanded && !coldParked.isEmpty {
+                section(
+                  title: "Parked",
+                  systemImage: "parkingsign",
+                  color: .secondary,
+                  sessions: coldParked,
+                  dimmed: true,
+                  emptyMessage: nil,
+                  hidesHeader: true,
+                  showsRepoLabelAbove: showsRepoLabelAbove
+                )
+              }
+            }
+          }
+          .padding(20)
+        }
+        .animation(boardReorderAnimation, value: boardLayoutSignature(visible: visible))
+        // In matrix mode the per-bucket carousels (and their scroll
+        // proxies) don't exist, so keep the keyboard-highlighted card
+        // in view by scrolling the whole board instead.
+        .onChange(of: highlightedSessionID) { _, newValue in
+          guard matrixLayoutEnabled, let newValue else { return }
+          withAnimation(.easeOut(duration: 0.18)) {
+            boardProxy.scrollTo(newValue)
           }
         }
-        .padding(20)
       }
-      .animation(boardReorderAnimation, value: boardLayoutSignature(visible: visible))
     }
   }
 
@@ -523,203 +540,235 @@ struct BoardView: View {
         }
 
         if !sessions.isEmpty {
-          ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: true) {
-              LazyHStack(alignment: .top, spacing: boardCarouselSpacing) {
-                let bulkResumeRoutes = selectedResumeRoutes
-                let selectedResumeCount = bulkResumeRoutes.count
-                let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
-                ForEach(sessions, id: \.id) { session in
-                  let sessionStatus = classify(session)
-                  let sessionHasTab = sessionTabExists(session)
-                  let activeParked = session.parkedActive
-                  let debugLink = debugLinkDescriptor(for: session)
-                  let onDebugLinkTap: (() -> Void)? = {
-                    guard let targetID = debugLink?.targetID else { return nil }
-                    return { store.send(.focusSession(id: targetID)) }
-                  }()
-                  SessionCardContainer(
-                    session: session,
-                    repositoryName: repositories[id: session.repositoryID]?.name,
-                    pullRequest: matchedPullRequest(for: session),
-                    status: sessionStatus,
-                    serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
-                    debugLinkTitle: debugLink?.title,
-                    onDebugLinkTap: onDebugLinkTap,
-                    dimmed: dimmed,
-                    isHighlighted: highlightedSessionID == session.id,
-                    isActiveParked: activeParked,
-                    isSelected: selectedSessionIDs.contains(session.id),
-                    selectedResumeCount: selectedResumeCount,
-                    selectedPickerResumeCount: selectedPickerResumeCount,
-                    onTap: { handleCardTap(session) },
-                    onRemove: { store.send(.requestRemoveSession(id: session.id)) },
-                    onRename: { onRenameSession(session) },
-                    onTogglePriority: { store.send(.togglePriority(id: session.id)) },
-                    onSetStatusOverride: { status in
-                      store.send(.setManualStatusOverride(id: session.id, status: status))
-                    },
-                    onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
-                      ? {
-                        store.send(
-                          .rerunDetachedSession(
-                            id: session.id,
-                            repositories: Array(repositories)
-                          )
-                        )
-                      }
-                      : nil,
-                    onResume: canDirectResume(session, status: sessionStatus)
-                      ? {
-                        store.send(
-                          .resumeDetachedSession(
-                            id: session.id,
-                            repositories: Array(repositories)
-                          )
-                        )
-                      }
-                      : nil,
-                    onResumeInPlace: BoardResumeEligibility.canDirectResume(
-                      session,
-                      status: sessionStatus,
-                      tabExists: sessionHasTab,
-                      includingParked: true
-                    )
-                      ? {
-                        store.send(
-                          .resumeDetachedSession(
-                            id: session.id,
-                            repositories: Array(repositories),
-                            focusOnComplete: false
-                          )
-                        )
-                      }
-                      : nil,
-                    onResumePicker: canResumeWithPicker(session, status: sessionStatus)
-                      ? {
-                        store.send(
-                          .resumeDetachedSessionWithPicker(
-                            id: session.id,
-                            repositories: Array(repositories)
-                          )
-                        )
-                      }
-                      : nil,
-                    onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
-                      ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
-                      : nil,
-                    onPark: (sessionStatus != .parked)
-                      ? {
-                        store.send(
-                          .parkSession(
-                            id: session.id,
-                            repositories: Array(repositories)
-                          )
-                        )
-                      }
-                      : nil,
-                    onParkActive: (sessionStatus != .parked && sessionHasTab)
-                      ? {
-                        store.send(.parkActiveSession(id: session.id))
-                      }
-                      : nil,
-                    // Unpark routing:
-                    //   • Still has a live tab (Park as Active) → just clear
-                    //     the parked bit; the running terminal stays untouched.
-                    //   • Captured session id → one-click resume, same as
-                    //     detached cards with the same state.
-                    //   • No captured id (shell session, or agent whose id we
-                    //     never learned) → focus the card. The full-screen
-                    //     detached UI takes over with explicit Rerun / Resume
-                    //     via Picker / Remove buttons, matching the behavior
-                    //     of a non-parked detached card. This gives the user
-                    //     a choice rather than picking for them.
-                    onUnpark: (sessionStatus == .parked)
-                      ? {
-                        if sessionHasTab {
-                          store.send(.unparkSession(id: session.id))
-                        } else if session.agent != nil && hasCapturedNativeSessionID(session) {
-                          store.send(
-                            .resumeDetachedSession(
-                              id: session.id,
-                              repositories: Array(repositories)
-                            )
-                          )
-                        } else {
-                          store.send(.focusSession(id: session.id))
-                        }
-                      }
-                      : nil,
-                    onAutoObserverToggle: {
-                      store.send(.toggleAutoObserver(id: session.id))
-                    },
-                    onAutoObserverPromptChanged: { prompt in
-                      store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
-                    },
-                    onAutoObserverRunNow: {
-                      store.send(.autoObserverTriggered(id: session.id))
-                    },
-                    onDebug: {
-                      store.send(
-                        .debugSessionRequested(
-                          id: session.id,
-                          repositories: Array(repositories)
-                        )
-                      )
-                    },
-                    onServerLifecycleRefresh: {
-                      store.send(.serverLifecycleStatusRequested(sessionID: session.id))
-                    },
-                    onServerLifecycleStart: {
-                      store.send(.serverLifecycleStartTapped(sessionID: session.id))
-                    },
-                    onServerLifecycleStop: {
-                      store.send(.serverLifecycleStopTapped(sessionID: session.id))
-                    },
-                    onAppear: {
-                      store.send(.cardAppeared(id: session.id))
-                      store.send(.serverLifecycleStatusRequested(sessionID: session.id))
-                    },
-                    onReferencesPopoverOpened: {
-                      store.send(.refreshPRReferences(id: session.id))
-                    },
-                    onRemoveReference: { reference in
-                      store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
-                    },
-                    showsRepoLabelAbove: showsRepoLabelAbove
-                  )
-                  .frame(width: boardCardWidth)
-                  .id(session.id)
-                  .transition(.opacity.combined(with: .scale(scale: 0.98)))
-                  .background(
-                    // Publishes this card's frame in the board's shared
-                    // coordinate space so Up/Down can jump spatially — see
-                    // `moveVertical`.
-                    GeometryReader { geo in
-                      Color.clear.preference(
-                        key: BoardCardFramesKey.self,
-                        value: [session.id: geo.frame(in: .named(Self.boardGridCoordSpace))]
-                      )
-                    }
-                  )
+          if matrixLayoutEnabled {
+            // Full matrix: wrap the bucket's cards into as many rows as
+            // needed so every session is visible without horizontal
+            // scrolling. Column width is pinned to the card width so the
+            // grid packs exactly as many columns as fit the window.
+            LazyVGrid(
+              columns: [
+                GridItem(
+                  .adaptive(minimum: boardCardWidth, maximum: boardCardWidth),
+                  spacing: boardCarouselSpacing,
+                  alignment: .top
+                ),
+              ],
+              alignment: .leading,
+              spacing: boardCarouselSpacing
+            ) {
+              sectionCards(sessions: sessions, dimmed: dimmed, showsRepoLabelAbove: showsRepoLabelAbove)
+            }
+            .padding(.vertical, 2)
+          } else {
+            ScrollViewReader { proxy in
+              ScrollView(.horizontal, showsIndicators: true) {
+                LazyHStack(alignment: .top, spacing: boardCarouselSpacing) {
+                  sectionCards(sessions: sessions, dimmed: dimmed, showsRepoLabelAbove: showsRepoLabelAbove)
                 }
+                .scrollTargetLayout()
+                .padding(.vertical, 2)
+                .padding(.bottom, 14)
               }
-              .scrollTargetLayout()
-              .padding(.vertical, 2)
-              .padding(.bottom, 14)
-            }
-            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-            .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-            .contentMargins(.trailing, boardCardWidth / 2, for: .scrollContent)
-            .onAppear {
-              scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
-            }
-            .onChange(of: highlightedSessionID) { _, _ in
-              scrollHighlightedCard(in: sessions, proxy: proxy)
+              .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+              .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
+              .contentMargins(.trailing, boardCardWidth / 2, for: .scrollContent)
+              .onAppear {
+                scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
+              }
+              .onChange(of: highlightedSessionID) { _, _ in
+                scrollHighlightedCard(in: sessions, proxy: proxy)
+              }
             }
           }
         }
       }
+    }
+  }
+
+  /// Per-card wiring shared by both bucket layouts (carousel rail and
+  /// matrix grid) so the two can't drift apart.
+  @ViewBuilder
+  private func sectionCards(
+    sessions: [AgentSession],
+    dimmed: Bool,
+    showsRepoLabelAbove: Bool
+  ) -> some View {
+    let bulkResumeRoutes = selectedResumeRoutes
+    let selectedResumeCount = bulkResumeRoutes.count
+    let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
+    ForEach(sessions, id: \.id) { session in
+      let sessionStatus = classify(session)
+      let sessionHasTab = sessionTabExists(session)
+      let activeParked = session.parkedActive
+      let debugLink = debugLinkDescriptor(for: session)
+      let onDebugLinkTap: (() -> Void)? = {
+        guard let targetID = debugLink?.targetID else { return nil }
+        return { store.send(.focusSession(id: targetID)) }
+      }()
+      SessionCardContainer(
+        session: session,
+        repositoryName: repositories[id: session.repositoryID]?.name,
+        pullRequest: matchedPullRequest(for: session),
+        status: sessionStatus,
+        serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
+        debugLinkTitle: debugLink?.title,
+        onDebugLinkTap: onDebugLinkTap,
+        dimmed: dimmed,
+        isHighlighted: highlightedSessionID == session.id,
+        isActiveParked: activeParked,
+        isSelected: selectedSessionIDs.contains(session.id),
+        selectedResumeCount: selectedResumeCount,
+        selectedPickerResumeCount: selectedPickerResumeCount,
+        onTap: { handleCardTap(session) },
+        onRemove: { store.send(.requestRemoveSession(id: session.id)) },
+        onRename: { onRenameSession(session) },
+        onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+        onSetStatusOverride: { status in
+          store.send(.setManualStatusOverride(id: session.id, status: status))
+        },
+        onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
+          ? {
+            store.send(
+              .rerunDetachedSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onResume: canDirectResume(session, status: sessionStatus)
+          ? {
+            store.send(
+              .resumeDetachedSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onResumeInPlace: BoardResumeEligibility.canDirectResume(
+          session,
+          status: sessionStatus,
+          tabExists: sessionHasTab,
+          includingParked: true
+        )
+          ? {
+            store.send(
+              .resumeDetachedSession(
+                id: session.id,
+                repositories: Array(repositories),
+                focusOnComplete: false
+              )
+            )
+          }
+          : nil,
+        onResumePicker: canResumeWithPicker(session, status: sessionStatus)
+          ? {
+            store.send(
+              .resumeDetachedSessionWithPicker(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
+          ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
+          : nil,
+        onPark: (sessionStatus != .parked)
+          ? {
+            store.send(
+              .parkSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
+        onParkActive: (sessionStatus != .parked && sessionHasTab)
+          ? {
+            store.send(.parkActiveSession(id: session.id))
+          }
+          : nil,
+        // Unpark routing:
+        //   • Still has a live tab (Park as Active) → just clear
+        //     the parked bit; the running terminal stays untouched.
+        //   • Captured session id → one-click resume, same as
+        //     detached cards with the same state.
+        //   • No captured id (shell session, or agent whose id we
+        //     never learned) → focus the card. The full-screen
+        //     detached UI takes over with explicit Rerun / Resume
+        //     via Picker / Remove buttons, matching the behavior
+        //     of a non-parked detached card. This gives the user
+        //     a choice rather than picking for them.
+        onUnpark: (sessionStatus == .parked)
+          ? {
+            if sessionHasTab {
+              store.send(.unparkSession(id: session.id))
+            } else if session.agent != nil && hasCapturedNativeSessionID(session) {
+              store.send(
+                .resumeDetachedSession(
+                  id: session.id,
+                  repositories: Array(repositories)
+                )
+              )
+            } else {
+              store.send(.focusSession(id: session.id))
+            }
+          }
+          : nil,
+        onAutoObserverToggle: {
+          store.send(.toggleAutoObserver(id: session.id))
+        },
+        onAutoObserverPromptChanged: { prompt in
+          store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
+        },
+        onAutoObserverRunNow: {
+          store.send(.autoObserverTriggered(id: session.id))
+        },
+        onDebug: {
+          store.send(
+            .debugSessionRequested(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        },
+        onServerLifecycleRefresh: {
+          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        },
+        onServerLifecycleStart: {
+          store.send(.serverLifecycleStartTapped(sessionID: session.id))
+        },
+        onServerLifecycleStop: {
+          store.send(.serverLifecycleStopTapped(sessionID: session.id))
+        },
+        onAppear: {
+          store.send(.cardAppeared(id: session.id))
+          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        },
+        onReferencesPopoverOpened: {
+          store.send(.refreshPRReferences(id: session.id))
+        },
+        onRemoveReference: { reference in
+          store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
+        },
+        showsRepoLabelAbove: showsRepoLabelAbove
+      )
+      .frame(width: boardCardWidth)
+      .id(session.id)
+      .transition(.opacity.combined(with: .scale(scale: 0.98)))
+      .background(
+        // Publishes this card's frame in the board's shared
+        // coordinate space so Up/Down can jump spatially — see
+        // `moveVertical`.
+        GeometryReader { geo in
+          Color.clear.preference(
+            key: BoardCardFramesKey.self,
+            value: [session.id: geo.frame(in: .named(Self.boardGridCoordSpace))]
+          )
+        }
+      )
     }
   }
 

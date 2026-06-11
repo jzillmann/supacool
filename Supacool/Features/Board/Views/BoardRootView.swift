@@ -48,6 +48,11 @@ struct BoardRootView: View {
   /// doesn't bounce out.
   @AppStorage("supacool.autoZoomBackOnPrompt") private var autoZoomBackOnPrompt: Bool = true
 
+  /// Board bucket layout: carousel rails (default) vs full matrix grid.
+  /// Read by BoardView via the same UserDefaults key; toggled from the
+  /// toolbar button below or ⇧⌘M.
+  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = false
+
   /// Pending auto-navigate triggered by an idle→busy transition. `destination`
   /// nil = back to board; otherwise the session to focus next. The view
   /// shows a countdown banner and commits the nav when the task completes;
@@ -775,6 +780,22 @@ struct BoardRootView: View {
     // Push the + button to the far right so there's breathing room
     // between the title/repo block and the action.
     ToolbarSpacer(.flexible)
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        matrixLayoutEnabled.toggle()
+      } label: {
+        Label(
+          matrixLayoutEnabled ? "Carousel Layout" : "Matrix Layout",
+          systemImage: matrixLayoutEnabled ? "rectangle.split.3x1" : "square.grid.3x3"
+        )
+      }
+      .keyboardShortcut("m", modifiers: [.command, .shift])
+      .help(
+        matrixLayoutEnabled
+          ? "Switch to carousel layout — one scrolling row per bucket (⇧⌘M)"
+          : "Switch to matrix layout — wrap all cards into a grid (⇧⌘M)"
+      )
+    }
     ToolbarItem(placement: .primaryAction) {
       Button {
         autoZoomBackOnPrompt.toggle()
