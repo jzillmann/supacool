@@ -1485,6 +1485,14 @@ struct BoardFeature {
           return .none
         }
 
+      case .linearInbox(.presented(.delegate(.openSession(let sessionID)))):
+        // Jump from a started ticket to its live session: close the inbox
+        // and open the session full screen. Defensive existence check —
+        // the inbox already verified, but sessions can die in between.
+        guard state.sessions.contains(where: { $0.id == sessionID }) else { return .none }
+        state.linearInbox = nil
+        return .send(.focusSession(id: sessionID))
+
       case .openNewTerminalSheet(let repositories):
         state.newTerminalSheet = NewTerminalFeature.State(
           availableRepositories: IdentifiedArray(uniqueElements: repositories),

@@ -220,10 +220,48 @@ struct LinearInboxFeatureTests {
     )
     await store.send(.newTerminal(.presented(.delegate(.created(session)))))
     #expect(store.state.tickets[0].startedAt == now)
+    #expect(store.state.tickets[0].startedSessionID == session.id)
     #expect(store.state.pendingSessionTicketID == nil)
     #expect(store.state.selectedTab == .inbox)
 
     await store.receive(\.delegate.newTerminalDelegate)
+  }
+
+  @Test(.dependencies) func openSessionDelegatesWhenTheSessionStillLives() async {
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Do thing", startedAt: Date(), startedSessionID: session.id)
+    ])
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.openSessionTapped(ticketID: "CEN-1"))
+    await store.receive(\.delegate.openSession)
+  }
+
+  @Test(.dependencies) func openSessionIsANoOpWhenTheSessionWasDeleted() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Do thing", startedAt: Date(), startedSessionID: UUID())
+    ])
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    }
+
+    // Exhaustive: no delegate (or any other action) may follow.
+    await store.send(.openSessionTapped(ticketID: "CEN-1"))
   }
 
   @Test(.dependencies) func cancelDelegateClosesTheTabWithoutForwarding() async {

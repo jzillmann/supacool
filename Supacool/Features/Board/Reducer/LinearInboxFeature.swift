@@ -16,6 +16,11 @@ struct LinearInboxFeature {
     /// Persisted list of pasted tickets. Survives relaunch.
     @Shared(.linearInbox) var tickets: [LinearTicket] = []
 
+    /// Live board sessions — read-only here. Lets a started ticket offer
+    /// "Open session" instead of spawning a duplicate, and lets the row
+    /// fall back to "Start session" when the session was deleted.
+    @Shared(.agentSessions) var sessions: [AgentSession] = []
+
     /// Live-synced by BoardFeature so the embedded New Terminal tab's
     /// repo picker stays current with repos added/removed while open.
     var availableRepositories: IdentifiedArrayOf<Repository>
@@ -53,6 +58,13 @@ struct LinearInboxFeature {
     var visibleTickets: [LinearTicket] {
       showDone ? Array(tickets) : tickets.filter { !$0.isDone }
     }
+
+    /// The ticket's started session id, but only while that session still
+    /// exists on the board. Nil means the row should offer "Start session".
+    func liveStartedSessionID(for ticket: LinearTicket) -> UUID? {
+      guard let sessionID = ticket.startedSessionID else { return nil }
+      return sessions.contains(where: { $0.id == sessionID }) ? sessionID : nil
+    }
   }
 
   nonisolated enum Tab: String, Equatable, Sendable, CaseIterable {
@@ -71,6 +83,8 @@ struct LinearInboxFeature {
     case toggleExpanded(ticketID: String)
     case assignToMeTapped(ticketID: String)
     case startSessionTapped(ticketID: String)
+    /// Jump to the session already spawned from this ticket.
+    case openSessionTapped(ticketID: String)
     case removeTicketTapped(ticketID: String)
     case toggleShowDone
     case clearError
@@ -89,6 +103,8 @@ struct LinearInboxFeature {
       /// Bubble the embedded New Terminal sheet's delegate up to
       /// BoardFeature, which owns spawning, bookmarks and drafts.
       case newTerminalDelegate(NewTerminalFeature.Action.Delegate)
+      /// Dismiss the inbox and focus this session on the board.
+      case openSession(sessionID: UUID)
     }
   }
 
@@ -187,6 +203,12 @@ struct LinearInboxFeature {
         state.selectedTab = .newTerminal
         return .none
 
+      case let .openSessionTapped(ticketID):
+        guard let ticket = state.tickets.first(where: { $0.identifier == ticketID }),
+          let sessionID = state.liveStartedSessionID(for: ticket)
+        else { return .none }
+        return .send(.delegate(.openSession(sessionID: sessionID)))
+
       case let .removeTicketTapped(ticketID):
         state.$tickets.withLock { $0.removeAll { $0.identifier == ticketID } }
         state.expandedTicketIDs.remove(ticketID)
@@ -250,13 +272,21 @@ struct LinearInboxFeature {
           state.pendingSessionTicketID = nil
           return .none
         case .spawnRequested, .created:
-          // Stamp the originating ticket as started, then hand the spawn
+          // Stamp the originating ticket as started (with the session id,
+          // so the row can jump back to it later), then hand the spawn
           // to BoardFeature (it closes the tab and owns the lifecycle).
           if let ticketID = state.pendingSessionTicketID {
             let now = date.now
+            let sessionID: UUID? =
+              switch inner {
+              case .created(let session): session.id
+              case .spawnRequested(let request, _, _): request.sessionID
+              default: nil
+              }
             state.$tickets.withLock { tickets in
               if let index = tickets.firstIndex(where: { $0.identifier == ticketID }) {
                 tickets[index].startedAt = now
+                tickets[index].startedSessionID = sessionID
               }
             }
           }

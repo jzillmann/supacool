@@ -74,6 +74,41 @@ struct BoardFeatureTests {
     // before calling infer because displayName != deriveDisplayName(prompt).
   }
 
+  // MARK: - Linear inbox
+
+  @Test(.dependencies) func linearInboxOpenSessionClosesTheInboxAndFocuses() async {
+    let session = Self.sampleSession()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.linearInbox = LinearInboxFeature.State(availableRepositories: [])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.linearInbox(.presented(.delegate(.openSession(sessionID: session.id)))))
+    await store.receive(\.focusSession)
+    #expect(store.state.linearInbox == nil)
+    #expect(store.state.focusedSessionID == session.id)
+  }
+
+  @Test(.dependencies) func linearInboxOpenSessionIgnoresDeadSessions() async {
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [] }
+    state.linearInbox = LinearInboxFeature.State(availableRepositories: [])
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.linearInbox(.presented(.delegate(.openSession(sessionID: UUID())))))
+    // Inbox stays open, nothing gets focused.
+    #expect(store.state.linearInbox != nil)
+    #expect(store.state.focusedSessionID == nil)
+  }
+
   // MARK: - References
 
   /// PR refresh used to be triggered directly by `.cardAppeared`. That

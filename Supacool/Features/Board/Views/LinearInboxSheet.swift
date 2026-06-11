@@ -169,9 +169,11 @@ struct LinearInboxSheet: View {
             isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
             isFetching: store.fetchingTicketIDs.contains(ticket.identifier),
             isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
+            hasLiveSession: store.state.liveStartedSessionID(for: ticket) != nil,
             onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
             onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
             onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
+            onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
             onRemove: { store.send(.removeTicketTapped(ticketID: ticket.identifier)) }
           )
         }
@@ -188,9 +190,13 @@ private struct LinearTicketRow: View {
   let isExpanded: Bool
   let isFetching: Bool
   let isAssigning: Bool
+  /// True while the session spawned from this ticket still exists on the
+  /// board — swaps "Start session" for "Open session".
+  let hasLiveSession: Bool
   let onToggleExpanded: () -> Void
   let onAssignToMe: () -> Void
   let onStartSession: () -> Void
+  let onOpenSession: () -> Void
   let onRemove: () -> Void
 
   var body: some View {
@@ -268,12 +274,21 @@ private struct LinearTicketRow: View {
         .frame(maxWidth: .infinity, alignment: .leading)
 
       HStack(spacing: 8) {
-        Button {
-          onStartSession()
-        } label: {
-          Label("Start session", systemImage: "play.fill")
+        if hasLiveSession {
+          Button {
+            onOpenSession()
+          } label: {
+            Label("Open session", systemImage: "terminal")
+          }
+          .help("Jump to the session already running for this ticket")
+        } else {
+          Button {
+            onStartSession()
+          } label: {
+            Label("Start session", systemImage: "play.fill")
+          }
+          .help("Open a New Terminal pre-filled with “Fix \(ticket.identifier): …”")
         }
-        .help("Open a New Terminal pre-filled with “Fix \(ticket.identifier): …”")
 
         Button {
           onAssignToMe()

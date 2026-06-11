@@ -37,6 +37,11 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   /// Non-nil once the user kicked off a coding session on this ticket —
   /// drives the "in progress" check mark so you can see what's been picked.
   var startedAt: Date?
+  /// Id of the `AgentSession` spawned from this ticket, recorded alongside
+  /// `startedAt`. Lets the row jump straight to the session instead of
+  /// starting a duplicate. The session may have been deleted since —
+  /// always check it still exists before navigating.
+  var startedSessionID: UUID?
 
   init(
     identifier: String,
@@ -50,7 +55,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     url: String? = nil,
     fetchedAt: Date? = nil,
     addedAt: Date = Date(),
-    startedAt: Date? = nil
+    startedAt: Date? = nil,
+    startedSessionID: UUID? = nil
   ) {
     self.identifier = identifier
     self.linearID = linearID
@@ -64,13 +70,14 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.fetchedAt = fetchedAt
     self.addedAt = addedAt
     self.startedAt = startedAt
+    self.startedSessionID = startedSessionID
   }
 
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, url, fetchedAt, addedAt, startedAt
+    case assignedToMe, url, fetchedAt, addedAt, startedAt, startedSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -87,6 +94,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
     addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
     startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+    startedSessionID = try c.decodeIfPresent(UUID.self, forKey: .startedSessionID)
   }
 
   // MARK: - Updates
