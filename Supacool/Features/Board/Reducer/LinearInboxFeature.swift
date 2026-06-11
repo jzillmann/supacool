@@ -289,6 +289,10 @@ struct LinearInboxFeature {
                 tickets[index].startedSessionID = sessionID
               }
             }
+            // Collapse the row so landing back on the list visibly reacts
+            // to the submit: the summary line now carries the started
+            // checkmark (and "Open session" once the spawn completes).
+            state.expandedTicketIDs.remove(ticketID)
           }
           state.pendingSessionTicketID = nil
           state.selectedTab = .inbox

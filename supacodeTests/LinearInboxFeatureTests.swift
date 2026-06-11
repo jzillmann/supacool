@@ -203,6 +203,7 @@ struct LinearInboxFeatureTests {
     var state = LinearInboxFeature.State(availableRepositories: [])
     state.pendingSessionTicketID = "CEN-1"
     state.selectedTab = .newTerminal
+    state.expandedTicketIDs = ["CEN-1"]
     state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
 
     let store = TestStore(initialState: state) {
@@ -223,6 +224,8 @@ struct LinearInboxFeatureTests {
     #expect(store.state.tickets[0].startedSessionID == session.id)
     #expect(store.state.pendingSessionTicketID == nil)
     #expect(store.state.selectedTab == .inbox)
+    // The submitted ticket collapses so the list visibly reacts.
+    #expect(!store.state.expandedTicketIDs.contains("CEN-1"))
 
     await store.receive(\.delegate.newTerminalDelegate)
   }
