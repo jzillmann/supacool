@@ -47,10 +47,12 @@ struct GithubCLIClient: Sendable {
   var mergePullRequest: @Sendable (URL, Int, PullRequestMergeStrategy) async throws -> Void
   var closePullRequest: @Sendable (URL, Int) async throws -> Void
   var markPullRequestReady: @Sendable (URL, Int) async throws -> Void
-  /// Fetch just enough PR info to render a status chip: open/merged/closed/draft.
+  /// Fetch just enough PR info to render a status chip and a one-line
+  /// reference row: open/merged/closed/draft plus the PR title.
   /// Used by Supacool's SessionReference enrichment. No repoRoot needed —
   /// passes `--repo owner/repo` directly.
-  var viewPullRequest: @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> PRState
+  var viewPullRequest:
+    @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> PullRequestSnapshot
   var rerunFailedJobs: @Sendable (URL, Int) async throws -> Void
   var failedRunLogs: @Sendable (URL, Int) async throws -> String
   var runLogs: @Sendable (URL, Int) async throws -> String
@@ -86,7 +88,7 @@ extension GithubCLIClient: DependencyKey {
     mergePullRequest: { _, _, _ in },
     closePullRequest: { _, _ in },
     markPullRequestReady: { _, _ in },
-    viewPullRequest: { _, _, _ in .open },
+    viewPullRequest: { _, _, _ in PullRequestSnapshot(state: .open, title: "Test PR") },
     rerunFailedJobs: { _, _ in },
     failedRunLogs: { _, _ in "" },
     runLogs: { _, _ in "" },
@@ -316,10 +318,17 @@ nonisolated private func markPullRequestReadyFetcher(
   }
 }
 
+/// State + title of a PR, fetched together — the title rides along on the
+/// same `gh pr view` round-trip the chip refresh already pays for.
+nonisolated struct PullRequestSnapshot: Equatable, Sendable {
+  let state: PRState
+  let title: String
+}
+
 nonisolated private func viewPullRequestFetcher(
   shell: ShellClient,
   resolver: GithubCLIExecutableResolver
-) -> @Sendable (String, String, Int) async throws -> PRState {
+) -> @Sendable (String, String, Int) async throws -> PullRequestSnapshot {
   { owner, repo, number in
     let stdout = try await runGh(
       shell: shell,
@@ -331,24 +340,25 @@ nonisolated private func viewPullRequestFetcher(
         "--repo",
         "\(owner)/\(repo)",
         "--json",
-        "state,isDraft",
+        "state,isDraft,title",
       ],
       repoRoot: nil
     )
     struct PRViewResponse: Decodable {
       let state: String  // "OPEN", "MERGED", "CLOSED"
       let isDraft: Bool
+      let title: String
     }
     let data = Data(stdout.utf8)
     let response = try JSONDecoder().decode(PRViewResponse.self, from: data)
-    switch response.state.uppercased() {
-    case "MERGED": return .merged
-    case "CLOSED": return .closed
-    case "OPEN":
-      return response.isDraft ? .draft : .open
-    default:
-      return .open
-    }
+    let state: PRState =
+      switch response.state.uppercased() {
+      case "MERGED": .merged
+      case "CLOSED": .closed
+      case "OPEN": response.isDraft ? .draft : .open
+      default: .open
+      }
+    return PullRequestSnapshot(state: state, title: response.title)
   }
 }
 

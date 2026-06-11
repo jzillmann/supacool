@@ -652,7 +652,7 @@ struct ReferenceChip: View {
       }
     } label: {
       HStack(spacing: 3) {
-        if case .pullRequest(_, _, _, let state) = reference, let state {
+        if case .pullRequest(_, _, _, let state, _) = reference, let state {
           Image(systemName: state.systemImage)
             .font(.caption2)
             .foregroundStyle(prStateColor(state))
@@ -682,7 +682,7 @@ struct ReferenceChip: View {
     switch reference {
     case .ticket:
       return AnyShapeStyle(Color.blue.opacity(0.15))
-    case .pullRequest(_, _, _, let state):
+    case .pullRequest(_, _, _, let state, _):
       guard let state else { return AnyShapeStyle(Color.secondary.opacity(0.12)) }
       return AnyShapeStyle(prStateColor(state).opacity(0.15))
     }
@@ -703,9 +703,10 @@ struct ReferenceChip: View {
       return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? "Open \(id) in the Linear desktop app"
         : "Open \(id) in Linear"
-    case .pullRequest(let owner, let repo, let number, let state):
+    case .pullRequest(let owner, let repo, let number, let state, let title):
       let stateLabel = state?.rawValue ?? "loading…"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)) on GitHub"
+      let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel))\(titleSuffix) on GitHub"
     }
   }
 }
@@ -816,7 +817,7 @@ nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
 
 private extension SessionReference {
   nonisolated func isPullRequest(in state: PRState) -> Bool {
-    guard case .pullRequest(_, _, _, let prState) = self else { return false }
+    guard case .pullRequest(_, _, _, let prState, _) = self else { return false }
     return prState == state
   }
 }
@@ -897,7 +898,7 @@ private struct ReferenceStackChip: View {
   private var chipText: String {
     switch kind {
     case .pullRequests:
-      guard case .pullRequest(_, _, let number, _) = references.first else {
+      guard case .pullRequest(_, _, let number, _, _) = references.first else {
         return "\(references.count) PRs"
       }
       return "#\(number) +\(references.count - 1)"
@@ -922,7 +923,7 @@ private struct ReferenceStackChip: View {
       return .blue
     case .pullRequests:
       let states = references.compactMap { ref -> PRState? in
-        if case .pullRequest(_, _, _, let state) = ref { return state }
+        if case .pullRequest(_, _, _, let state, _) = ref { return state }
         return nil
       }
       // Open PRs signal active work, so green wins over stale closed/draft/merged refs.
@@ -967,7 +968,7 @@ private struct ReferenceStackChip: View {
       }
     }
     .padding(12)
-    .frame(minWidth: 220, maxWidth: 340, alignment: .leading)
+    .frame(minWidth: 220, maxWidth: 420, alignment: .leading)
   }
 
   @ViewBuilder
@@ -1038,6 +1039,9 @@ private struct ReferenceStackChip: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
             .lineLimit(1)
+            // Middle truncation keeps both the repo's tail and the PR state
+            // visible when owner/repo is long.
+            .truncationMode(.middle)
         }
         Spacer(minLength: 12)
         Image(systemName: "arrow.up.forward")
@@ -1080,18 +1084,22 @@ private struct ReferenceStackChip: View {
     switch reference {
     case .ticket:
       return .blue
-    case .pullRequest(_, _, _, let state):
+    case .pullRequest(_, _, _, let state, _):
       guard let state else { return .secondary }
       return prStateColor(state)
     }
   }
 
+  /// Row headline: the id and the work-item title are what the user scans
+  /// for, so they get the full line width. Repo coordinates move to the
+  /// subtitle where truncation is harmless.
   private func rowTitle(for reference: SessionReference) -> String {
     switch reference {
     case .ticket(let id):
       return id
-    case .pullRequest(let owner, let repo, let number, _):
-      return "\(owner)/\(repo) #\(number)"
+    case .pullRequest(_, _, let number, _, let title):
+      guard let title, !title.isEmpty else { return "#\(number)" }
+      return "#\(number) \(title)"
     }
   }
 
@@ -1101,8 +1109,8 @@ private struct ReferenceStackChip: View {
       return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? "Linear desktop app"
         : "Linear issue"
-    case .pullRequest(_, _, _, let state):
-      return "GitHub pull request · \((state?.rawValue ?? "loading…").capitalized)"
+    case .pullRequest(let owner, let repo, _, let state, _):
+      return "\(owner)/\(repo) · \((state?.rawValue ?? "loading…").capitalized)"
     }
   }
 
@@ -1112,9 +1120,10 @@ private struct ReferenceStackChip: View {
       return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? "Open \(id) in the Linear desktop app"
         : "Open \(id) in Linear"
-    case .pullRequest(let owner, let repo, let number, let state):
+    case .pullRequest(let owner, let repo, let number, let state, let title):
       let stateLabel = state?.rawValue ?? "loading…"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)) on GitHub"
+      let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel))\(titleSuffix) on GitHub"
     }
   }
 
@@ -1137,8 +1146,11 @@ private struct ReferenceStackChip: View {
     displayName: "Refactor auth module",
     references: [
       .ticket(id: "CEN-1234"),
-      .pullRequest(owner: "foo", repo: "bar", number: 42, state: .open),
-      .pullRequest(owner: "foo", repo: "bar", number: 43, state: .draft),
+      .pullRequest(
+        owner: "foo", repo: "bar", number: 42, state: .open,
+        title: "Refactor the auth module to use async/await"
+      ),
+      .pullRequest(owner: "foo", repo: "bar", number: 43, state: .draft, title: nil),
     ]
   )
   return VStack {

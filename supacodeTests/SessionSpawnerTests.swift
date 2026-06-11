@@ -303,7 +303,7 @@ struct SessionSpawnerTests {
     #expect(
       session.references == [
         .ticket(id: "CEN-123"),
-        .pullRequest(owner: "acme", repo: "widgets", number: 2349, state: nil),
+        .pullRequest(owner: "acme", repo: "widgets", number: 2349, state: nil, title: "refactor"),
       ]
     )
     #expect(session.referencesScannedAt != nil)

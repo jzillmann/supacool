@@ -122,7 +122,9 @@ struct BoardFeatureTests {
   /// the mocked `viewPullRequest` (which returns synchronously) is
   /// guaranteed to win the TaskGroup race.
   @Test(.dependencies) func prRefreshTickResolvesUnresolvedPullRequests() async {
-    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 42, state: nil, title: nil
+    )
     var session = Self.sampleSession()
     session.references = [ref]
     session.referencesScannedAt = Date()
@@ -137,7 +139,7 @@ struct BoardFeatureTests {
       $0.date = .constant(Date())
       $0.githubCLI.viewPullRequest = { owner, repo, number in
         lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
-        return .open
+        return PullRequestSnapshot(state: .open, title: "Add widgets")
       }
     }
     store.exhaustivity = .off
@@ -150,14 +152,18 @@ struct BoardFeatureTests {
     #expect(lookups.value.first == "acme/widgets#42")
     #expect(
       store.state.sessions.first?.references == [
-        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open, title: "Add widgets")
       ]
     )
   }
 
   @Test(.dependencies) func removeReferenceUnlinksAndRecordsDismissal() async {
-    let kept = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 1, state: .merged)
-    let unlinked = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 2, state: .open)
+    let kept = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 1, state: .merged, title: nil
+    )
+    let unlinked = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 2, state: .open, title: nil
+    )
     var session = Self.sampleSession()
     session.references = [kept, unlinked]
     let state = BoardFeature.State()
@@ -175,8 +181,12 @@ struct BoardFeatureTests {
   }
 
   @Test(.dependencies) func dismissedReferenceDoesNotReturnOnRescan() async {
-    let kept = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 1, state: .open)
-    let dismissed = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 2, state: .merged)
+    let kept = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 1, state: .open, title: nil
+    )
+    let dismissed = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 2, state: .merged, title: nil
+    )
     var session = Self.sampleSession()
     session.references = [kept]
     session.dismissedReferenceKeys = [dismissed.dedupeKey]
@@ -198,7 +208,9 @@ struct BoardFeatureTests {
   }
 
   @Test(.dependencies) func prRefreshTickUpdatesCachedOpenPullRequests() async {
-    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 42, state: .open, title: "Add widgets"
+    )
     var session = Self.sampleSession()
     session.references = [ref]
     session.referencesScannedAt = Date()
@@ -213,7 +225,7 @@ struct BoardFeatureTests {
       $0.date = .constant(Date())
       $0.githubCLI.viewPullRequest = { owner, repo, number in
         lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
-        return .closed
+        return PullRequestSnapshot(state: .closed, title: "Add widgets")
       }
     }
     store.exhaustivity = .off
@@ -224,13 +236,15 @@ struct BoardFeatureTests {
 
     #expect(lookups.value == ["acme/widgets#42"])
     #expect(store.state.sessions.first?.references == [
-      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .closed)
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .closed, title: "Add widgets")
     ])
   }
 
   @Test(.dependencies) func prRefreshTickSkipsRecentlyRefreshedPullRequests() async {
     let now = Date(timeIntervalSince1970: 1_000)
-    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open)
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 42, state: .open, title: "Add widgets"
+    )
     var session = Self.sampleSession()
     session.references = [ref]
     var state = BoardFeature.State()
@@ -243,7 +257,7 @@ struct BoardFeatureTests {
       $0.date = .constant(now.addingTimeInterval(10))
       $0.githubCLI.viewPullRequest = { owner, repo, number in
         lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
-        return .closed
+        return PullRequestSnapshot(state: .closed, title: "Add widgets")
       }
     }
 
@@ -267,7 +281,7 @@ struct BoardFeatureTests {
     } withDependencies: {
       $0.sessionReferenceScannerClient.scanText = { _ in [.ticket(id: "CEN-10")] }
       $0.sessionReferenceScannerClient.scanTerminalTranscript = { _ in [
-        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil, title: nil),
       ] }
     }
     store.exhaustivity = .off
@@ -277,7 +291,7 @@ struct BoardFeatureTests {
 
     #expect(store.state.sessions.first?.references == [
       .ticket(id: "CEN-10"),
-      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil, title: nil),
     ])
   }
 
@@ -286,7 +300,9 @@ struct BoardFeatureTests {
   /// This is the dedupe-across-sessions invariant the global scheduler
   /// was introduced for.
   @Test(.dependencies) func prRefreshTickFansOutAcrossSessionsReferencingTheSamePR() async {
-    let ref = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil)
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 42, state: nil, title: nil
+    )
     var session1 = Self.sampleSession()
     session1.references = [ref]
     session1.referencesScannedAt = Date()
@@ -304,7 +320,7 @@ struct BoardFeatureTests {
       $0.date = .constant(Date())
       $0.githubCLI.viewPullRequest = { owner, repo, number in
         lookups.withValue { $0.append("\(owner)/\(repo)#\(number)") }
-        return .merged
+        return PullRequestSnapshot(state: .merged, title: "Add widgets")
       }
     }
     store.exhaustivity = .off
@@ -319,7 +335,7 @@ struct BoardFeatureTests {
     // Both sessions get the new state.
     for session in store.state.sessions {
       #expect(session.references == [
-        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .merged)
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .merged, title: "Add widgets")
       ])
     }
   }
@@ -339,8 +355,15 @@ struct BoardFeatureTests {
   /// giving the second `prRefreshEffect` a non-empty batch so it actually
   /// dispatches and — under the old code — cancels the tick.
   @Test(.dependencies) func popoverRefreshDuringInFlightTickDoesNotStrandPRState() async {
-    let gated = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 3613, state: .open)
-    let closed = SessionReference.pullRequest(owner: "acme", repo: "widgets", number: 3622, state: .closed)
+    // Both carry titles: a nil title would pull the closed ref into the
+    // automatic tick (title backfill), emptying the popover refresh's batch
+    // and silently de-fanging this regression scenario.
+    let gated = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 3613, state: .open, title: "Gated"
+    )
+    let closed = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 3622, state: .closed, title: "Closed"
+    )
     var session = Self.sampleSession()
     session.references = [gated, closed]
     session.referencesScannedAt = Date()
@@ -363,9 +386,9 @@ struct BoardFeatureTests {
           started.continuation.yield(())
           var iterator = release.stream.makeAsyncIterator()
           _ = await iterator.next()
-          return .merged
+          return PullRequestSnapshot(state: .merged, title: "Gated")
         }
-        return .closed
+        return PullRequestSnapshot(state: .closed, title: "Closed")
       }
     }
     store.exhaustivity = .off
@@ -390,7 +413,7 @@ struct BoardFeatureTests {
     // And the gated PR must have picked up its fresh merged state.
     #expect(
       store.state.sessions.first?.references.contains(
-        .pullRequest(owner: "acme", repo: "widgets", number: 3613, state: .merged)
+        .pullRequest(owner: "acme", repo: "widgets", number: 3613, state: .merged, title: "Gated")
       ) == true
     )
   }

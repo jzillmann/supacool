@@ -84,5 +84,5 @@ struct ReferenceStackPopoverPresentationTests {
 }
 
 private func pr(_ number: Int, state: PRState?) -> SessionReference {
-  .pullRequest(owner: "foo", repo: "bar", number: number, state: state)
+  .pullRequest(owner: "foo", repo: "bar", number: number, state: state, title: nil)
 }

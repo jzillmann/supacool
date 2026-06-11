@@ -9,15 +9,17 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   /// slug (not stored — the slug can change without needing a rescan).
   case ticket(id: String)
   /// GitHub pull request, parsed from a full URL like
-  /// `https://github.com/foo/bar/pull/42`. `state` is fetched lazily via
-  /// `gh pr view` and cached on the session; nil means "not yet resolved".
-  case pullRequest(owner: String, repo: String, number: Int, state: PRState?)
+  /// `https://github.com/foo/bar/pull/42`. `state` and `title` are fetched
+  /// lazily via `gh pr view` and cached on the session; nil means "not yet
+  /// resolved". `title` is display-only — it never participates in
+  /// `dedupeKey`, so a title change can't duplicate a reference.
+  case pullRequest(owner: String, repo: String, number: Int, state: PRState?, title: String?)
 
   // MARK: - Codable (forward-compatible per docs/agent-guides/persistence.md)
 
   enum DiscriminantKeys: String, CodingKey { case kind }
   enum TicketKeys: String, CodingKey { case id }
-  enum PRKeys: String, CodingKey { case owner, repo, number, state }
+  enum PRKeys: String, CodingKey { case owner, repo, number, state, title }
 
   init(from decoder: Decoder) throws {
     let d = try decoder.container(keyedBy: DiscriminantKeys.self)
@@ -33,7 +35,8 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       let repo = try c.decode(String.self, forKey: .repo)
       let number = try c.decode(Int.self, forKey: .number)
       let state = try c.decodeIfPresent(PRState.self, forKey: .state)
-      self = .pullRequest(owner: owner, repo: repo, number: number, state: state)
+      let title = try c.decodeIfPresent(String.self, forKey: .title)
+      self = .pullRequest(owner: owner, repo: repo, number: number, state: state, title: title)
     default:
       throw DecodingError.dataCorruptedError(
         forKey: .kind,
@@ -50,7 +53,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       try d.encode("ticket", forKey: .kind)
       var c = encoder.container(keyedBy: TicketKeys.self)
       try c.encode(id, forKey: .id)
-    case .pullRequest(let owner, let repo, let number, let state):
+    case .pullRequest(let owner, let repo, let number, let state, let title):
       var d = encoder.container(keyedBy: DiscriminantKeys.self)
       try d.encode("pullRequest", forKey: .kind)
       var c = encoder.container(keyedBy: PRKeys.self)
@@ -58,6 +61,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       try c.encode(repo, forKey: .repo)
       try c.encode(number, forKey: .number)
       try c.encodeIfPresent(state, forKey: .state)
+      try c.encodeIfPresent(title, forKey: .title)
     }
   }
 
@@ -68,7 +72,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   var dedupeKey: String {
     switch self {
     case .ticket(let id): return "ticket:\(id)"
-    case .pullRequest(let owner, let repo, let number, _):
+    case .pullRequest(let owner, let repo, let number, _, _):
       return "pr:\(owner)/\(repo)#\(number)"
     }
   }
@@ -77,7 +81,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   var chipLabel: String {
     switch self {
     case .ticket(let id): return id
-    case .pullRequest(_, _, let number, _): return "#\(number)"
+    case .pullRequest(_, _, let number, _, _): return "#\(number)"
     }
   }
 
@@ -91,7 +95,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       let slug = linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !slug.isEmpty else { return URL(string: "linear://issue/\(id)") }
       return URL(string: "https://linear.app/\(slug)/issue/\(id)")
-    case .pullRequest(let owner, let repo, let number, _):
+    case .pullRequest(let owner, let repo, let number, _, _):
       return URL(string: "https://github.com/\(owner)/\(repo)/pull/\(number)")
     }
   }

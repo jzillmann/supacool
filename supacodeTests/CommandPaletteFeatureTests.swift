@@ -279,7 +279,7 @@ struct CommandPaletteFeatureTests {
       displayName: "Fix auth tests",
       references: [
         .ticket(id: "CEN-123"),
-        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open),
+        .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open, title: nil),
       ]
     )
     let items = CommandPaletteFeature.commandPaletteItems(

@@ -337,7 +337,7 @@ nonisolated enum SessionReferenceScannerLive {
       let repo = String(match.output.2)
       guard let number = Int(match.output.3) else { continue }
       let ref = SessionReference.pullRequest(
-        owner: owner, repo: repo, number: number, state: nil
+        owner: owner, repo: repo, number: number, state: nil, title: nil
       )
       if seen.insert(ref.dedupeKey).inserted {
         results.append(ref)

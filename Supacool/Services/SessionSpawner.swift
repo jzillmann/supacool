@@ -161,7 +161,8 @@ enum SessionSpawner {
           owner: context.parsed.owner,
           repo: context.parsed.repo,
           number: context.parsed.number,
-          state: nil
+          state: nil,
+          title: context.metadata.title
         )
       )
     }

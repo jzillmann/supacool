@@ -326,10 +326,13 @@ private func sessionReferenceLabels(_ references: [SessionReference]) -> [String
     switch ref {
     case .ticket(let id):
       return [id]
-    case .pullRequest(let owner, let repo, let number, let state):
+    case .pullRequest(let owner, let repo, let number, let state, let title):
       var labels = ["#\(number)", "\(owner)/\(repo)#\(number)", "github.com/\(owner)/\(repo)/pull/\(number)"]
       if let state {
         labels.append("PR \(state.rawValue)")
+      }
+      if let title, !title.isEmpty {
+        labels.append(title)
       }
       return labels
     }

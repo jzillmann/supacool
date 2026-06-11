@@ -19,7 +19,7 @@ struct SessionReferenceScannerTests {
     #expect(refs.count == 1)
     #expect(
       refs.first
-        == .pullRequest(owner: "foo", repo: "bar", number: 42, state: nil)
+        == .pullRequest(owner: "foo", repo: "bar", number: 42, state: nil, title: nil)
     )
   }
 
@@ -34,7 +34,7 @@ struct SessionReferenceScannerTests {
     #expect(refs.contains(.ticket(id: "FOO-5")))
     #expect(
       refs.contains(
-        .pullRequest(owner: "org", repo: "repo", number: 100, state: nil)
+        .pullRequest(owner: "org", repo: "repo", number: 100, state: nil, title: nil)
       )
     )
   }
@@ -85,7 +85,7 @@ struct SessionReferenceScannerTests {
     ].joined()
     let refs = SessionReferenceScannerLive.scanJSONL(jsonl)
     #expect(
-      refs == [.pullRequest(owner: "foo", repo: "bar", number: 7, state: nil)]
+      refs == [.pullRequest(owner: "foo", repo: "bar", number: 7, state: nil, title: nil)]
     )
   }
 
@@ -186,7 +186,7 @@ struct SessionReferenceScannerTests {
     let refs = SessionReferenceScannerLive.scanTranscriptEntries(entries)
     #expect(refs == [
       .ticket(id: "CEN-77"),
-      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil),
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil, title: nil),
     ])
   }
 
@@ -364,7 +364,7 @@ struct SessionReferenceScannerTests {
 
   @Test func pullRequestURL() {
     let ref = SessionReference.pullRequest(
-      owner: "foo", repo: "bar", number: 42, state: .open
+      owner: "foo", repo: "bar", number: 42, state: .open, title: nil
     )
     #expect(
       ref.url(linearOrgSlug: "")
@@ -377,10 +377,22 @@ struct SessionReferenceScannerTests {
   @Test func referenceRoundTripsThroughJSON() throws {
     let original: [SessionReference] = [
       .ticket(id: "CEN-1234"),
-      .pullRequest(owner: "foo", repo: "bar", number: 42, state: .merged),
+      .pullRequest(owner: "foo", repo: "bar", number: 42, state: .merged, title: "Fix dataset collisions"),
     ]
     let data = try JSONEncoder().encode(original)
     let decoded = try JSONDecoder().decode([SessionReference].self, from: data)
     #expect(decoded == original)
+  }
+
+  /// Refs persisted before the `title` field existed must keep decoding
+  /// (forward-compatible Codable per docs/agent-guides/persistence.md).
+  @Test func pullRequestDecodesLegacyJSONWithoutTitle() throws {
+    let legacy = Data(
+      #"{"kind":"pullRequest","owner":"foo","repo":"bar","number":42,"state":"merged"}"#.utf8
+    )
+    let decoded = try JSONDecoder().decode(SessionReference.self, from: legacy)
+    #expect(
+      decoded == .pullRequest(owner: "foo", repo: "bar", number: 42, state: .merged, title: nil)
+    )
   }
 }

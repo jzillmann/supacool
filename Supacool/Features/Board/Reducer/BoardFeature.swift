@@ -683,7 +683,7 @@ struct BoardFeature {
     /// `gh pr view`. The scheduler path below is preferred because it
     /// dedupes and fans out by PR key.
     case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
-    case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, state: PRState)
+    case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, snapshot: PullRequestSnapshot)
     /// Records that a `gh pr view` lookup failed for the given dedupe key
     /// so subsequent scan/cardAppeared passes skip it for
     /// `prRefreshFailureCooldown` seconds instead of immediately re-
@@ -712,7 +712,7 @@ struct BoardFeature {
     /// Replaces the per-session `_prStatusUpdated` for tick-driven
     /// fetches so a single GitHub round-trip updates all referencing
     /// sessions at once.
-    case _prStateFanout(refKey: String, state: PRState)
+    case _prStateFanout(refKey: String, snapshot: PullRequestSnapshot)
 
     // MARK: PR Pulse (repo-wide open-PR monitoring)
     /// Pushed from `BoardRootView` when the registered repository list
@@ -2358,7 +2358,7 @@ struct BoardFeature {
         return prRefreshEffect(batch: batch)
 
       case ._refreshPRStatus(let id, let ref):
-        guard case .pullRequest(let owner, let repo, let number, _) = ref else {
+        guard case .pullRequest(let owner, let repo, let number, _, _) = ref else {
           return .none
         }
         return .run { [githubCLI] send in
@@ -2373,7 +2373,7 @@ struct BoardFeature {
             // accumulated stuck gh wrappers in the wild before this
             // fix; the cumulative slot consumption then *causes* more
             // forks to fail, so the storm self-reinforces.
-            let newState = try await withThrowingTaskGroup(of: PRState.self) {
+            let snapshot = try await withThrowingTaskGroup(of: PullRequestSnapshot.self) {
               group in
               group.addTask {
                 try await githubCLI.viewPullRequest(owner, repo, number)
@@ -2388,7 +2388,7 @@ struct BoardFeature {
               }
               return result
             }
-            await send(._prStatusUpdated(id: id, ref: ref, state: newState))
+            await send(._prStatusUpdated(id: id, ref: ref, snapshot: snapshot))
           } catch {
             boardLogger.warning(
               "Failed to fetch PR state for \(owner)/\(repo)#\(number): \(error)"
@@ -2467,14 +2467,14 @@ struct BoardFeature {
         state.prRefreshInFlight.insert(refKey)
         return .none
 
-      case ._prStateFanout(let refKey, let newState):
+      case ._prStateFanout(let refKey, let snapshot):
         // Apply the fetched state to every session that references this
         // PR. Single network result, all sessions updated.
         state.$sessions.withLock { sessions in
           for index in sessions.indices {
             sessions[index].references = sessions[index].references.map { ref in
               ref.dedupeKey == refKey
-                ? Self.updatingPRState(of: ref, to: newState)
+                ? Self.updatingPRSnapshot(of: ref, to: snapshot)
                 : ref
             }
           }
@@ -2555,12 +2555,12 @@ struct BoardFeature {
         state.prPulseFailureAt[repositoryID] = date.now
         return .none
 
-      case ._prStatusUpdated(let id, let ref, let newState):
+      case ._prStatusUpdated(let id, let ref, let snapshot):
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].references = sessions[index].references.map { existing in
             existing.dedupeKey == ref.dedupeKey
-              ? Self.updatingPRState(of: existing, to: newState)
+              ? Self.updatingPRSnapshot(of: existing, to: snapshot)
               : existing
           }
         }
@@ -3737,12 +3737,14 @@ struct BoardFeature {
       if seen.insert(key).inserted {
         merged.append(ref)
       } else if preferNewStates,
-        case .pullRequest(_, _, _, let newState) = ref,
+        case .pullRequest(_, _, _, let newState, let newTitle) = ref,
         newState != nil,
         let idx = merged.firstIndex(where: { $0.dedupeKey == key }),
-        case .pullRequest(let o, let r, let n, _) = merged[idx]
+        case .pullRequest(let o, let r, let n, _, let oldTitle) = merged[idx]
       {
-        merged[idx] = .pullRequest(owner: o, repo: r, number: n, state: newState)
+        merged[idx] = .pullRequest(
+          owner: o, repo: r, number: n, state: newState, title: newTitle ?? oldTitle
+        )
       }
     }
     return merged
@@ -3776,10 +3778,10 @@ struct BoardFeature {
     var seenKeys = Set<String>()
     for session in sessions where sessionID == nil || session.id == sessionID {
       for ref in session.references {
-        guard case .pullRequest(let owner, let repo, let number, let state) = ref else {
+        guard case .pullRequest(let owner, let repo, let number, let state, let title) = ref else {
           continue
         }
-        guard shouldRefreshPRState(state, mode: mode) else { continue }
+        guard shouldRefreshPRState(state, title: title, mode: mode) else { continue }
         let key = ref.dedupeKey
         if seenKeys.contains(key) { continue }
         if inFlight.contains(key) { continue }
@@ -3803,8 +3805,13 @@ struct BoardFeature {
 
   nonisolated private static func shouldRefreshPRState(
     _ state: PRState?,
+    title: String?,
     mode: PRRefreshMode
   ) -> Bool {
+    // Refs persisted before titles existed have `title == nil` even in
+    // terminal states. Fetch them once so the popover can show the title;
+    // the success cache + the now-populated title stop further polling.
+    if title == nil { return true }
     switch mode {
     case .automatic:
       return state == nil || state == .open || state == .draft
@@ -3813,13 +3820,19 @@ struct BoardFeature {
     }
   }
 
-  /// Returns a copy of `ref` with its PR state replaced. No-op for ticket refs.
-  nonisolated fileprivate static func updatingPRState(
+  /// Returns a copy of `ref` with its PR state and title replaced.
+  /// No-op for ticket refs.
+  nonisolated fileprivate static func updatingPRSnapshot(
     of ref: SessionReference,
-    to newState: PRState
+    to snapshot: PullRequestSnapshot
   ) -> SessionReference {
-    if case .pullRequest(let owner, let repo, let number, _) = ref {
-      return .pullRequest(owner: owner, repo: repo, number: number, state: newState)
+    if case .pullRequest(let owner, let repo, let number, _, let title) = ref {
+      // An empty fetched title still ends the nil-title backfill (store ""),
+      // otherwise `shouldRefreshPRState` would re-poll this ref forever.
+      let newTitle = snapshot.title.isEmpty ? (title ?? "") : snapshot.title
+      return .pullRequest(
+        owner: owner, repo: repo, number: number, state: snapshot.state, title: newTitle
+      )
     }
     return ref
   }
@@ -3857,7 +3870,7 @@ struct BoardFeature {
     send: Send<Action>
   ) async {
     do {
-      let newState = try await withThrowingTaskGroup(of: PRState.self) { group in
+      let snapshot = try await withThrowingTaskGroup(of: PullRequestSnapshot.self) { group in
         group.addTask {
           try await githubCLI.viewPullRequest(owner, repo, number)
         }
@@ -3871,7 +3884,7 @@ struct BoardFeature {
         }
         return result
       }
-      await send(._prStateFanout(refKey: refKey, state: newState))
+      await send(._prStateFanout(refKey: refKey, snapshot: snapshot))
     } catch {
       boardLogger.warning(
         "PR refresh tick failed for \(owner)/\(repo)#\(number): \(error)"
