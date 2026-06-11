@@ -166,6 +166,29 @@ struct BoardFeature {
     /// modifier — subsequent dispatches are no-ops.
     var prRefreshSchedulerStarted: Bool = false
 
+    // MARK: PR Pulse (repo-wide open-PR monitoring)
+
+    /// Board repositories the pulse scheduler monitors. Pushed from
+    /// `BoardRootView` (which owns the `Repository` list) whenever the
+    /// registered repos change.
+    var prPulseTargets: [PRPulseTarget] = []
+
+    /// Latest open-PR snapshot per repository, keyed by `Repository.ID`.
+    /// In-memory only — refetched within one tick after relaunch.
+    var prPulseSnapshots: [String: RepoPullRequestSnapshot] = [:]
+
+    /// Repositories currently being fetched. Prevents a slow `gh pr list`
+    /// from being double-spawned by the next tick.
+    var prPulseInFlight: Set<String> = []
+
+    /// Last successful snapshot fetch per repository — throttles manual
+    /// refreshes from the popover.
+    var prPulseSuccessAt: [String: Date] = [:]
+
+    /// Last failed snapshot fetch per repository — the tick skips repos
+    /// inside `prPulseFailureCooldown` (rate limits, offline, no `gh`).
+    var prPulseFailureAt: [String: Date] = [:]
+
     /// First-launch Getting Started carousel state. `isPresented` is
     /// session-only; it flips true the first time app-launch evaluation
     /// finds any incomplete, non-skipped tasks, and flips false as soon
@@ -691,6 +714,22 @@ struct BoardFeature {
     /// sessions at once.
     case _prStateFanout(refKey: String, state: PRState)
 
+    // MARK: PR Pulse (repo-wide open-PR monitoring)
+    /// Pushed from `BoardRootView` when the registered repository list
+    /// changes (including on first appear). Repos new to the board are
+    /// fetched immediately rather than waiting for the next tick.
+    case prPulseRepositoriesChanged(targets: [PRPulseTarget])
+    /// Manual refresh from the pulse popover. Clears failure cooldowns
+    /// and refetches everything not fetched within the last few seconds.
+    case prPulseRefreshRequested
+    /// Periodic tick — refetch any target outside its cooldown windows.
+    case _runPRPulseTick
+    /// Marks a repository as being fetched (sent from the effect before
+    /// the subprocess spawns).
+    case _prPulseFetchStarted(repositoryID: String)
+    case _prPulseSnapshotLoaded(snapshot: RepoPullRequestSnapshot)
+    case _prPulseFetchFailed(repositoryID: String)
+
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
     /// display name for a freshly created session. Applied only if the
@@ -835,6 +874,7 @@ struct BoardFeature {
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(PiSettingsClient.self) var piSettingsClient
   @Dependency(GitClientDependency.self) var gitClient
+  @Dependency(PRMonitorClient.self) var prMonitor
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
@@ -882,6 +922,32 @@ struct BoardFeature {
   /// 0…this) so a synchronized failure burst doesn't produce a
   /// synchronized retry burst when the cooldown expires.
   nonisolated static let prRefreshFailureJitterMax: TimeInterval = 240
+
+  /// Period between PR Pulse ticks. Repo-wide `gh pr list` is one
+  /// subprocess per repo (plus a comments lookup per *changed* PR for the
+  /// Greptile score), so this can be slower than the per-ref refresher.
+  nonisolated static let prPulseInterval: Duration = .seconds(180)
+
+  /// A snapshot fetched more recently than this is considered fresh by
+  /// the tick. Slightly under `prPulseInterval` so clock drift between
+  /// the ticker and `date.now` never causes a skipped cycle.
+  nonisolated static let prPulseFreshnessWindow: TimeInterval = 150
+
+  /// Minimum spacing for popover-driven manual refreshes.
+  nonisolated static let prPulseManualThrottle: TimeInterval = 15
+
+  /// Backoff after a failed snapshot fetch (rate limit, offline, missing
+  /// `gh`). Mirrors `prRefreshFailureCooldown` rationale.
+  nonisolated static let prPulseFailureCooldown: TimeInterval = 300
+
+  /// Wall-clock cap for one repo's whole snapshot fetch (PR list + score
+  /// lookups). Generous: a 50-PR repo with cold scores is ~18 sequential
+  /// subprocess calls in bounded-concurrency groups of three.
+  nonisolated static let prPulseTimeout: Duration = .seconds(60)
+
+  /// Concurrency cap for per-PR Greptile comment lookups within one
+  /// snapshot fetch.
+  nonisolated static let prPulseScoreConcurrencyCap: Int = 3
 
   var body: some Reducer<State, Action> {
     BindingReducer()
@@ -2345,17 +2411,30 @@ struct BoardFeature {
       case ._startPRRefresher:
         guard !state.prRefreshSchedulerStarted else { return .none }
         state.prRefreshSchedulerStarted = true
-        return .run { [clock] send in
-          while !Task.isCancelled {
-            do {
-              try await clock.sleep(for: Self.prRefreshInterval)
-            } catch {
-              return
+        return .merge(
+          .run { [clock] send in
+            while !Task.isCancelled {
+              do {
+                try await clock.sleep(for: Self.prRefreshInterval)
+              } catch {
+                return
+              }
+              await send(._runPRRefreshTick)
             }
-            await send(._runPRRefreshTick)
           }
-        }
-        .cancellable(id: PRRefresherCancelID(), cancelInFlight: true)
+          .cancellable(id: PRRefresherCancelID(), cancelInFlight: true),
+          .run { [clock] send in
+            while !Task.isCancelled {
+              do {
+                try await clock.sleep(for: Self.prPulseInterval)
+              } catch {
+                return
+              }
+              await send(._runPRPulseTick)
+            }
+          }
+          .cancellable(id: PRPulseTickerCancelID(), cancelInFlight: true)
+        )
 
       case ._runPRRefreshTick:
         // Collect unique active PR refs across all sessions. `nil` refs
@@ -2394,6 +2473,76 @@ struct BoardFeature {
         state.prRefreshFailureJitter.removeValue(forKey: refKey)
         state.prRefreshSuccessAt[refKey] = date.now
         state.prRefreshInFlight.remove(refKey)
+        return .none
+
+      // MARK: - PR Pulse (repo-wide open-PR monitoring)
+
+      case .prPulseRepositoriesChanged(let targets):
+        let known = Set(state.prPulseTargets.map(\.repositoryID))
+        let current = Set(targets.map(\.repositoryID))
+        state.prPulseTargets = targets
+        // Drop bookkeeping for repos removed from the board.
+        state.prPulseSnapshots = state.prPulseSnapshots.filter { current.contains($0.key) }
+        state.prPulseSuccessAt = state.prPulseSuccessAt.filter { current.contains($0.key) }
+        state.prPulseFailureAt = state.prPulseFailureAt.filter { current.contains($0.key) }
+        // Fetch newly registered repos right away instead of waiting up
+        // to a full tick for the badge to populate.
+        let fresh = targets.filter {
+          !known.contains($0.repositoryID) && !state.prPulseInFlight.contains($0.repositoryID)
+        }
+        guard !fresh.isEmpty else { return .none }
+        return .merge(fresh.map { prPulseFetchEffect(target: $0, previous: nil) })
+
+      case .prPulseRefreshRequested:
+        // The user explicitly asked — failure cooldowns don't apply, but
+        // a short throttle still guards against click-spamming.
+        state.prPulseFailureAt = [:]
+        let due = Self.pickPRPulseDueTargets(
+          targets: state.prPulseTargets,
+          inFlight: state.prPulseInFlight,
+          successAt: state.prPulseSuccessAt,
+          failureAt: state.prPulseFailureAt,
+          freshness: Self.prPulseManualThrottle,
+          now: date.now
+        )
+        guard !due.isEmpty else { return .none }
+        return .merge(
+          due.map { prPulseFetchEffect(target: $0, previous: state.prPulseSnapshots[$0.repositoryID]) }
+        )
+
+      case ._runPRPulseTick:
+        let due = Self.pickPRPulseDueTargets(
+          targets: state.prPulseTargets,
+          inFlight: state.prPulseInFlight,
+          successAt: state.prPulseSuccessAt,
+          failureAt: state.prPulseFailureAt,
+          freshness: Self.prPulseFreshnessWindow,
+          now: date.now
+        )
+        guard !due.isEmpty else { return .none }
+        return .merge(
+          due.map { prPulseFetchEffect(target: $0, previous: state.prPulseSnapshots[$0.repositoryID]) }
+        )
+
+      case ._prPulseFetchStarted(let repositoryID):
+        state.prPulseInFlight.insert(repositoryID)
+        return .none
+
+      case ._prPulseSnapshotLoaded(var snapshot):
+        state.prPulseInFlight.remove(snapshot.repositoryID)
+        state.prPulseFailureAt.removeValue(forKey: snapshot.repositoryID)
+        state.prPulseSuccessAt[snapshot.repositoryID] = date.now
+        // The repo may have been removed from the board while the fetch
+        // was in flight; don't resurrect its snapshot.
+        if state.prPulseTargets.contains(where: { $0.repositoryID == snapshot.repositoryID }) {
+          snapshot.fetchedAt = date.now
+          state.prPulseSnapshots[snapshot.repositoryID] = snapshot
+        }
+        return .none
+
+      case ._prPulseFetchFailed(let repositoryID):
+        state.prPulseInFlight.remove(repositoryID)
+        state.prPulseFailureAt[repositoryID] = date.now
         return .none
 
       case ._prStatusUpdated(let id, let ref, let newState):
@@ -3418,6 +3567,150 @@ struct BoardFeature {
     .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: false)
   }
 
+  // MARK: - PR Pulse fetch
+
+  /// Fetch one repository's open-PR snapshot. Deliberately NOT
+  /// `.cancellable` — like `prRefreshEffect` above, the in-flight set is
+  /// only cleared by the terminal `_prPulseSnapshotLoaded` /
+  /// `_prPulseFetchFailed` sends, so a cancellation would strand the
+  /// repository in `prPulseInFlight` forever. The in-flight set itself
+  /// already dedupes overlapping fetches.
+  private func prPulseFetchEffect(
+    target: PRPulseTarget,
+    previous: RepoPullRequestSnapshot?
+  ) -> Effect<Action> {
+    .run { [gitClient, prMonitor] send in
+      await send(._prPulseFetchStarted(repositoryID: target.repositoryID))
+      do {
+        // Race the whole fetch against a wall-clock timeout — same hung-
+        // subprocess protection as `_refreshPRStatus` (gh wrappers can
+        // stall indefinitely under proc-table pressure).
+        let snapshot = try await withThrowingTaskGroup(of: RepoPullRequestSnapshot.self) { group in
+          group.addTask {
+            try await Self.fetchPulseSnapshot(
+              target: target,
+              previous: previous,
+              gitClient: gitClient,
+              prMonitor: prMonitor
+            )
+          }
+          group.addTask {
+            try await Task.sleep(for: Self.prPulseTimeout)
+            throw PRRefreshTimeoutError()
+          }
+          defer { group.cancelAll() }
+          guard let result = try await group.next() else {
+            throw PRRefreshTimeoutError()
+          }
+          return result
+        }
+        await send(._prPulseSnapshotLoaded(snapshot: snapshot))
+      } catch {
+        boardLogger.warning("PR Pulse fetch failed for \(target.repositoryID): \(error)")
+        await send(._prPulseFetchFailed(repositoryID: target.repositoryID))
+      }
+    }
+  }
+
+  /// One repo's snapshot: `gh pr list` (single call, checks included),
+  /// then Greptile scores for PRs whose `updatedAt` moved since the
+  /// previous snapshot. Scores are reused on an unchanged `updatedAt` —
+  /// any event that can change the score (push → re-review, new bot
+  /// comment) also bumps the PR's `updatedAt`. Individual score lookups
+  /// fail soft to nil; only the PR list itself failing fails the snapshot.
+  nonisolated private static func fetchPulseSnapshot(
+    target: PRPulseTarget,
+    previous: RepoPullRequestSnapshot?,
+    gitClient: GitClientDependency,
+    prMonitor: PRMonitorClient
+  ) async throws -> RepoPullRequestSnapshot {
+    let rootURL = URL(fileURLWithPath: target.rootPath)
+    guard let remote = await gitClient.remoteInfo(rootURL) else {
+      // No GitHub remote — record an empty snapshot so the badge can
+      // skip this repo instead of treating it as a fetch failure.
+      return RepoPullRequestSnapshot(
+        repositoryID: target.repositoryID,
+        slug: "",
+        pullRequests: [],
+        fetchedAt: .distantPast
+      )
+    }
+    var prs = try await prMonitor.fetchOpenPullRequests(remote.owner, remote.repo)
+    let previousByNumber = Dictionary(
+      (previous?.pullRequests ?? []).map { ($0.number, $0) },
+      uniquingKeysWith: { first, _ in first }
+    )
+    var needsScore: [Int] = []
+    for index in prs.indices {
+      if let cached = previousByNumber[prs[index].number],
+        cached.updatedAt == prs[index].updatedAt
+      {
+        prs[index].greptileScore = cached.greptileScore
+      } else {
+        needsScore.append(index)
+      }
+    }
+    if !needsScore.isEmpty {
+      let owner = remote.owner
+      let repo = remote.repo
+      let numbersByIndex = needsScore.map { ($0, prs[$0].number) }
+      let scores = await withTaskGroup(of: (Int, Int?).self) { group in
+        var iter = numbersByIndex.makeIterator()
+        var active = 0
+        while active < Self.prPulseScoreConcurrencyCap, let (index, number) = iter.next() {
+          group.addTask {
+            (index, (try? await prMonitor.fetchGreptileScore(owner, repo, number)) ?? nil)
+          }
+          active += 1
+        }
+        var collected: [(Int, Int?)] = []
+        while let result = await group.next() {
+          collected.append(result)
+          active -= 1
+          if let (index, number) = iter.next() {
+            group.addTask {
+              (index, (try? await prMonitor.fetchGreptileScore(owner, repo, number)) ?? nil)
+            }
+            active += 1
+          }
+        }
+        return collected
+      }
+      for (index, score) in scores {
+        prs[index].greptileScore = score
+      }
+    }
+    return RepoPullRequestSnapshot(
+      repositoryID: target.repositoryID,
+      slug: "\(remote.owner)/\(remote.repo)",
+      pullRequests: prs,
+      fetchedAt: .distantPast
+    )
+  }
+
+  /// Targets eligible for a snapshot fetch: not in flight, last success
+  /// older than `freshness`, and outside the failure cooldown.
+  nonisolated fileprivate static func pickPRPulseDueTargets(
+    targets: [PRPulseTarget],
+    inFlight: Set<String>,
+    successAt: [String: Date],
+    failureAt: [String: Date],
+    freshness: TimeInterval,
+    now: Date
+  ) -> [PRPulseTarget] {
+    targets.filter { target in
+      let id = target.repositoryID
+      if inFlight.contains(id) { return false }
+      if let success = successAt[id], now.timeIntervalSince(success) < freshness { return false }
+      if let failure = failureAt[id],
+        now.timeIntervalSince(failure) < prPulseFailureCooldown
+      {
+        return false
+      }
+      return true
+    }
+  }
+
   /// Merge two reference lists, deduping by `dedupeKey`. When
   /// `preferNewStates` is true, PR state from the new list wins; otherwise
   /// the first occurrence wins. Used to combine JSONL + prompt scans.
@@ -3813,6 +4106,11 @@ private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
 /// ever one of these per app lifetime; `cancelInFlight: true` on
 /// `_startPRRefresher` makes re-dispatching idempotent.
 private nonisolated struct PRRefresherCancelID: Hashable, Sendable {}
+
+/// Cancellation handle for the PR Pulse periodic ticker (the loop only —
+/// individual snapshot fetches are deliberately not cancellable, see
+/// `prPulseFetchEffect`).
+private nonisolated struct PRPulseTickerCancelID: Hashable, Sendable {}
 
 /// Cancel ID for the in-flight PR-refresh worker effect. Registered so the
 /// batch can be torn down on store teardown, but dispatched with

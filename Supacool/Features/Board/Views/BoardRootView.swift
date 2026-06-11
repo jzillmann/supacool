@@ -132,6 +132,18 @@ struct BoardRootView: View {
     // guards on `prRefreshSchedulerStarted` so any extra dispatches
     // (e.g. view re-creation under SwiftUI's discretion) are no-ops.
     .task { store.send(._startPRRefresher) }
+    // Keep the PR Pulse monitor's repo list current. Re-fires whenever
+    // the registered repositories change; newly added repos are fetched
+    // immediately by the reducer.
+    .task(id: repositories.ids) {
+      store.send(
+        .prPulseRepositoriesChanged(
+          targets: repositories.map {
+            PRPulseTarget(repositoryID: $0.id, rootPath: $0.rootURL.path(percentEncoded: false))
+          }
+        )
+      )
+    }
     .environment(\.sessionFootprintStore, footprintStore)
     // Global shortcuts available in both board and full-screen modes.
     .background(
@@ -752,6 +764,7 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories
         )
+        PRPulseButton(store: store, repositories: repositories)
         if let footprintStore {
           FootprintChip(store: footprintStore)
         }
