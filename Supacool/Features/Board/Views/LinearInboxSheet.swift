@@ -9,15 +9,27 @@ struct LinearInboxSheet: View {
   @Bindable var store: StoreOf<LinearInboxFeature>
 
   var body: some View {
-    TabView(selection: $store.selectedTab) {
-      inboxTab
-        .tabItem { Label("Tickets", systemImage: "tray.full") }
-        .tag(LinearInboxFeature.Tab.inbox)
-
-      if let newTerminalStore = store.scope(state: \.newTerminal, action: \.newTerminal.presented) {
+    // Hand-rolled tab switching instead of `TabView`: the macOS tab style
+    // draws its own content bezel inside the sheet (a double border) and
+    // floats a lone "Tickets" button when only one tab exists. A segmented
+    // picker appears only while the New Terminal tab is alive.
+    VStack(spacing: 0) {
+      if store.hasNewTerminalTab {
+        Picker("Tab", selection: $store.selectedTab) {
+          Text("Tickets").tag(LinearInboxFeature.Tab.inbox)
+          Text("New Terminal").tag(LinearInboxFeature.Tab.newTerminal)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+        .padding(.top, 10)
+      }
+      if store.selectedTab == .newTerminal,
+        let newTerminalStore = store.scope(state: \.newTerminal, action: \.newTerminal.presented)
+      {
         NewTerminalSheet(store: newTerminalStore)
-          .tabItem { Label("New Terminal", systemImage: "plus.square") }
-          .tag(LinearInboxFeature.Tab.newTerminal)
+      } else {
+        inboxTab
       }
     }
     .frame(width: 660, height: 580)
@@ -242,6 +254,18 @@ private struct LinearTicketRow: View {
           .padding(.horizontal, 6)
           .padding(.vertical, 2)
           .background(.quaternary, in: Capsule())
+      }
+      if isAssigning {
+        ProgressView().controlSize(.small)
+      } else if !ticket.assignedToMe {
+        Button {
+          onAssignToMe()
+        } label: {
+          Image(systemName: "person.crop.circle.badge.checkmark")
+            .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Assign this ticket to you in Linear")
       }
       assigneeBadge
     }
