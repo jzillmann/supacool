@@ -16,6 +16,12 @@ struct PRPulseButton: View {
 
   @State private var isPresented: Bool = false
 
+  /// Rows whose per-check breakdown is expanded, keyed by
+  /// "repositoryID#prNumber" so numbers can't collide across repos.
+  /// View-local: collapses again when the popover closes and the view
+  /// is torn down.
+  @State private var expandedCheckKeys: Set<String> = []
+
   var body: some View {
     if !visibleSnapshots.isEmpty {
       Button {
@@ -118,7 +124,11 @@ struct PRPulseButton: View {
                 repoHeader(entry.repository, snapshot: entry.snapshot)
               }
               ForEach(entry.snapshot.pullRequests) { pullRequest in
-                pullRequestRow(pullRequest)
+                let expansionKey = "\(entry.snapshot.repositoryID)#\(pullRequest.number)"
+                pullRequestRow(pullRequest, expansionKey: expansionKey)
+                if expandedCheckKeys.contains(expansionKey) {
+                  checkDetailRows(pullRequest)
+                }
               }
             }
           }
@@ -146,49 +156,79 @@ struct PRPulseButton: View {
     .padding(.bottom, 2)
   }
 
-  private func pullRequestRow(_ pullRequest: MonitoredPullRequest) -> some View {
-    Button {
-      if let url = URL(string: pullRequest.url) {
-        NSWorkspace.shared.open(url)
-      }
-    } label: {
-      HStack(spacing: 8) {
-        Circle()
-          .fill(healthColor(pullRequest.health))
-          .frame(width: 8, height: 8)
-        Text("#\(pullRequest.number)")
-          .monospacedDigit()
-          .foregroundStyle(.secondary)
-        if pullRequest.isDraft {
-          Image(systemName: "pencil.circle")
-            .foregroundStyle(.secondary)
-            .help("Draft")
+  private func pullRequestRow(_ pullRequest: MonitoredPullRequest, expansionKey: String) -> some View {
+    HStack(spacing: 8) {
+      Button {
+        if let url = URL(string: pullRequest.url) {
+          NSWorkspace.shared.open(url)
         }
-        Text(pullRequest.title)
-          .lineLimit(1)
-          .truncationMode(.tail)
-        Spacer(minLength: 12)
-        checksDetail(pullRequest)
-        reviewDecisionIcon(pullRequest)
-        scoreChip(pullRequest.greptileScore)
+      } label: {
+        HStack(spacing: 8) {
+          Circle()
+            .fill(healthColor(pullRequest.health))
+            .frame(width: 8, height: 8)
+          Text("#\(pullRequest.number)")
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+          if pullRequest.isDraft {
+            Image(systemName: "pencil.circle")
+              .foregroundStyle(.secondary)
+              .help("Draft")
+          }
+          Text(pullRequest.title)
+            .lineLimit(1)
+            .truncationMode(.tail)
+          Spacer(minLength: 12)
+          reviewDecisionIcon(pullRequest)
+          scoreChip(pullRequest.greptileScore)
+        }
+        .contentShape(Rectangle())
       }
-      .contentShape(Rectangle())
-      .padding(.horizontal, 6)
-      .padding(.vertical, 4)
-    }
-    .buttonStyle(.plain)
-    .onHover { hovering in
-      if hovering {
-        NSCursor.pointingHand.push()
-      } else {
-        NSCursor.pop()
+      .buttonStyle(.plain)
+      .onHover { hovering in
+        if hovering {
+          NSCursor.pointingHand.push()
+        } else {
+          NSCursor.pop()
+        }
       }
+      .help(rowHelp(pullRequest))
+      checksToggle(pullRequest, expansionKey: expansionKey)
     }
-    .help(rowHelp(pullRequest))
+    .padding(.horizontal, 6)
+    .padding(.vertical, 4)
+  }
+
+  /// Trailing checks summary doubling as the expand/collapse toggle for
+  /// the per-check breakdown. Hidden when the PR reports no checks.
+  @ViewBuilder
+  private func checksToggle(_ pullRequest: MonitoredPullRequest, expansionKey: String) -> some View {
+    if !pullRequest.statusChecks.isEmpty {
+      let isExpanded = expandedCheckKeys.contains(expansionKey)
+      Button {
+        withAnimation(.snappy(duration: 0.15)) {
+          if isExpanded {
+            expandedCheckKeys.remove(expansionKey)
+          } else {
+            expandedCheckKeys.insert(expansionKey)
+          }
+        }
+      } label: {
+        HStack(spacing: 3) {
+          checksSummaryText(pullRequest)
+          Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(isExpanded ? "Hide check details" : "Show check details")
+    }
   }
 
   @ViewBuilder
-  private func checksDetail(_ pullRequest: MonitoredPullRequest) -> some View {
+  private func checksSummaryText(_ pullRequest: MonitoredPullRequest) -> some View {
     if pullRequest.checks.failed > 0 {
       Text("\(pullRequest.checks.failed) failed")
         .font(.caption)
@@ -197,6 +237,85 @@ struct PRPulseButton: View {
       Text("\(pullRequest.checks.inProgress + pullRequest.checks.expected) running")
         .font(.caption)
         .foregroundStyle(.orange)
+    } else {
+      Text("\(pullRequest.checks.total) checks")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  /// Expanded per-check breakdown: failures first, then running, then the
+  /// rest. Checks with a details URL open their CI run on click.
+  private func checkDetailRows(_ pullRequest: MonitoredPullRequest) -> some View {
+    VStack(alignment: .leading, spacing: 1) {
+      ForEach(
+        Array(pullRequest.statusChecksForDisplay.enumerated()),
+        id: \.offset
+      ) { _, check in
+        checkRow(check)
+      }
+    }
+    .padding(.leading, 28)
+    .padding(.trailing, 6)
+    .padding(.bottom, 4)
+  }
+
+  @ViewBuilder
+  private func checkRow(_ check: GithubPullRequestStatusCheck) -> some View {
+    let label = HStack(spacing: 6) {
+      Image(systemName: checkStateSymbol(check.checkState))
+        .font(.caption)
+        .foregroundStyle(checkStateColor(check.checkState))
+      Text(check.displayName)
+        .font(.caption)
+        .lineLimit(1)
+        .truncationMode(.middle)
+      Spacer(minLength: 8)
+      if check.detailsUrl != nil {
+        Image(systemName: "arrow.up.right")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+    }
+    .contentShape(Rectangle())
+    .padding(.vertical, 1)
+
+    if let detailsUrl = check.detailsUrl, let url = URL(string: detailsUrl) {
+      Button {
+        NSWorkspace.shared.open(url)
+      } label: {
+        label
+      }
+      .buttonStyle(.plain)
+      .onHover { hovering in
+        if hovering {
+          NSCursor.pointingHand.push()
+        } else {
+          NSCursor.pop()
+        }
+      }
+      .help("Open this check's run")
+    } else {
+      label
+    }
+  }
+
+  private func checkStateSymbol(_ state: GithubPullRequestCheckState) -> String {
+    switch state {
+    case .success: "checkmark.circle.fill"
+    case .failure: "xmark.circle.fill"
+    case .inProgress: "clock.fill"
+    case .expected: "clock"
+    case .skipped: "minus.circle"
+    }
+  }
+
+  private func checkStateColor(_ state: GithubPullRequestCheckState) -> Color {
+    switch state {
+    case .success: .green
+    case .failure: .red
+    case .inProgress, .expected: .orange
+    case .skipped: Color(nsColor: .tertiaryLabelColor)
     }
   }
 

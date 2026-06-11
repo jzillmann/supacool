@@ -111,9 +111,22 @@ struct PRMonitorDecodingTests {
 }
 
 struct MonitoredPullRequestHealthTests {
+  private static let passingCheck = GithubPullRequestStatusCheck(
+    name: "build", status: "COMPLETED", conclusion: "SUCCESS"
+  )
+  private static let failingCheck = GithubPullRequestStatusCheck(
+    name: "test", status: "COMPLETED", conclusion: "FAILURE"
+  )
+  private static let runningCheck = GithubPullRequestStatusCheck(
+    name: "deploy", status: "IN_PROGRESS"
+  )
+  private static let skippedCheck = GithubPullRequestStatusCheck(
+    name: "docs", status: "COMPLETED", conclusion: "SKIPPED"
+  )
+
   private func pullRequest(
     isDraft: Bool = false,
-    ciOutcome: BoardPullRequestChecks.ChecksOutcome,
+    statusChecks: [GithubPullRequestStatusCheck],
     greptileScore: Int? = nil
   ) -> MonitoredPullRequest {
     MonitoredPullRequest(
@@ -125,42 +138,49 @@ struct MonitoredPullRequestHealthTests {
       headRefName: "branch",
       updatedAt: Date(timeIntervalSince1970: 0),
       reviewDecision: nil,
-      checks: PullRequestCheckBreakdown(checks: []),
-      ciOutcome: ciOutcome,
+      statusChecks: statusChecks,
       greptileScore: greptileScore
     )
   }
 
   @Test func failingChecksAreRed() {
-    #expect(pullRequest(ciOutcome: .completed(allPassed: false), greptileScore: 5).health == .red)
+    let sut = pullRequest(statusChecks: [Self.failingCheck, Self.passingCheck], greptileScore: 5)
+    #expect(sut.health == .red)
   }
 
   @Test func lowScoreIsRedEvenWhileChecksPend() {
-    #expect(pullRequest(ciOutcome: .pending, greptileScore: 3).health == .red)
+    #expect(pullRequest(statusChecks: [Self.runningCheck], greptileScore: 3).health == .red)
   }
 
   @Test func passingWithPerfectScoreIsGreen() {
-    #expect(pullRequest(ciOutcome: .completed(allPassed: true), greptileScore: 5).health == .green)
+    #expect(pullRequest(statusChecks: [Self.passingCheck], greptileScore: 5).health == .green)
   }
 
   @Test func passingWithoutGreptileIsGreen() {
-    #expect(pullRequest(ciOutcome: .completed(allPassed: true)).health == .green)
+    #expect(pullRequest(statusChecks: [Self.passingCheck]).health == .green)
   }
 
   @Test func pendingChecksArePending() {
-    #expect(pullRequest(ciOutcome: .pending).health == .pending)
+    #expect(pullRequest(statusChecks: [Self.passingCheck, Self.runningCheck]).health == .pending)
   }
 
   @Test func draftWithPassingChecksIsNeutral() {
-    #expect(pullRequest(isDraft: true, ciOutcome: .completed(allPassed: true)).health == .neutral)
+    #expect(pullRequest(isDraft: true, statusChecks: [Self.passingCheck]).health == .neutral)
   }
 
   @Test func noSignalIsNeutral() {
-    #expect(pullRequest(ciOutcome: .unknown).health == .neutral)
+    #expect(pullRequest(statusChecks: []).health == .neutral)
   }
 
   @Test func perfectScoreWithoutChecksIsGreen() {
-    #expect(pullRequest(ciOutcome: .unknown, greptileScore: 5).health == .green)
+    #expect(pullRequest(statusChecks: [], greptileScore: 5).health == .green)
+  }
+
+  @Test func displayOrderPutsFailuresFirstThenRunning() {
+    let sut = pullRequest(
+      statusChecks: [Self.passingCheck, Self.skippedCheck, Self.runningCheck, Self.failingCheck]
+    )
+    #expect(sut.statusChecksForDisplay.map(\.displayName) == ["test", "deploy", "build", "docs"])
   }
 }
 
@@ -180,8 +200,7 @@ struct PRPulseFeatureTests {
       headRefName: "fix-flux",
       updatedAt: updatedAt,
       reviewDecision: "",
-      checks: PullRequestCheckBreakdown(checks: []),
-      ciOutcome: .unknown,
+      statusChecks: [],
       greptileScore: nil
     )
   }

@@ -28,13 +28,36 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   let updatedAt: Date
   /// Raw gh value: "", "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED".
   let reviewDecision: String?
-  let checks: PullRequestCheckBreakdown
-  let ciOutcome: BoardPullRequestChecks.ChecksOutcome
+  /// Individual status checks as reported by `gh pr list`. Kept raw so the
+  /// popover can expand a per-check breakdown with links to each CI run.
+  let statusChecks: [GithubPullRequestStatusCheck]
   /// Greptile bot confidence score (1...5), nil when the PR has no
   /// Greptile review (bot not installed, or review still running).
   var greptileScore: Int?
 
   var id: Int { number }
+
+  var checks: PullRequestCheckBreakdown { PullRequestCheckBreakdown(checks: statusChecks) }
+  var ciOutcome: BoardPullRequestChecks.ChecksOutcome {
+    BoardPullRequestChecks.outcome(checks: statusChecks)
+  }
+
+  /// Checks ordered for display: failures first, then running, then the
+  /// rest — the popover truncates nothing, but the interesting rows
+  /// should not hide below 18 green ones.
+  var statusChecksForDisplay: [GithubPullRequestStatusCheck] {
+    func rank(_ check: GithubPullRequestStatusCheck) -> Int {
+      switch check.checkState {
+      case .failure: 0
+      case .inProgress, .expected: 1
+      case .success: 2
+      case .skipped: 3
+      }
+    }
+    return statusChecks.enumerated()
+      .sorted { (rank($0.element), $0.offset) < (rank($1.element), $1.offset) }
+      .map(\.element)
+  }
 
   /// Traffic-light classification driving the badge counts and row dots.
   enum Health: Equatable, Sendable {

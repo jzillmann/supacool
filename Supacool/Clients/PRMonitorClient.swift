@@ -99,8 +99,7 @@ nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPull
   decoder.dateDecodingStrategy = .iso8601
   let entries = try decoder.decode([PRListEntry].self, from: Data(stdout.utf8))
   return entries.map { entry in
-    let checks = entry.statusCheckRollup ?? []
-    return MonitoredPullRequest(
+    MonitoredPullRequest(
       number: entry.number,
       title: entry.title,
       url: entry.url,
@@ -109,8 +108,7 @@ nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPull
       headRefName: entry.headRefName,
       updatedAt: entry.updatedAt,
       reviewDecision: entry.reviewDecision,
-      checks: PullRequestCheckBreakdown(checks: checks),
-      ciOutcome: BoardPullRequestChecks.outcome(checks: checks),
+      statusChecks: entry.statusCheckRollup ?? [],
       greptileScore: nil
     )
   }
