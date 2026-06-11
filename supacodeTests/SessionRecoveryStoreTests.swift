@@ -39,12 +39,12 @@ import Testing
 
   @Test func noSnapshotWhenNothingRemoved() {
     let storage = SettingsFileStorage.inMemory()
-    let a = makeSession(worktree: "/wt/a")
-    let b = makeSession(worktree: "/wt/b")
+    let first = makeSession(worktree: "/wt/a")
+    let second = makeSession(worktree: "/wt/b")
 
     // Same set, and a superset (a session added) — neither drops anything.
-    SessionRecoveryStore.recordRemovals(previous: [a], next: [a], storage: storage)
-    SessionRecoveryStore.recordRemovals(previous: [a], next: [a, b], storage: storage)
+    SessionRecoveryStore.recordRemovals(previous: [first], next: [first], storage: storage)
+    SessionRecoveryStore.recordRemovals(previous: [first], next: [first, second], storage: storage)
 
     #expect(SessionRecoveryStore.loadSnapshots(storage: storage).isEmpty)
   }

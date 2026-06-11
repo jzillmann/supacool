@@ -64,16 +64,16 @@ struct PRMonitorDecodingTests {
       ]
       """
     let prs = try decodeOpenPullRequests(stdout: json)
-    let pr = try #require(prs.first)
-    #expect(pr.number == 3807)
-    #expect(pr.author == "jo")
-    #expect(pr.headRefName == "cen-2462-pagination")
-    #expect(pr.checks.passed == 1)
-    #expect(pr.checks.failed == 1)
-    #expect(pr.checks.inProgress == 1)
+    let pullRequest = try #require(prs.first)
+    #expect(pullRequest.number == 3807)
+    #expect(pullRequest.author == "jo")
+    #expect(pullRequest.headRefName == "cen-2462-pagination")
+    #expect(pullRequest.checks.passed == 1)
+    #expect(pullRequest.checks.failed == 1)
+    #expect(pullRequest.checks.inProgress == 1)
     // One check still pending → rollup is pending, not failed.
-    #expect(pr.ciOutcome == .pending)
-    #expect(pr.greptileScore == nil)
+    #expect(pullRequest.ciOutcome == .pending)
+    #expect(pullRequest.greptileScore == nil)
   }
 
   @Test func decodesEmptyRollup() throws {
@@ -93,10 +93,10 @@ struct PRMonitorDecodingTests {
       ]
       """
     let prs = try decodeOpenPullRequests(stdout: json)
-    let pr = try #require(prs.first)
-    #expect(pr.ciOutcome == .unknown)
-    #expect(pr.isDraft)
-    #expect(pr.author.isEmpty)
+    let pullRequest = try #require(prs.first)
+    #expect(pullRequest.ciOutcome == .unknown)
+    #expect(pullRequest.isDraft)
+    #expect(pullRequest.author.isEmpty)
   }
 
   @Test func decodesGreptileScoreFromComments() throws {
@@ -187,7 +187,7 @@ struct PRPulseFeatureTests {
   }
 
   @Test(.dependencies) func repositoriesChangedFetchesAndStoresSnapshot() async {
-    let pr = Self.samplePR()
+    let pullRequest = Self.samplePR()
     let store = TestStore(initialState: BoardFeature.State()) {
       BoardFeature()
     } withDependencies: {
@@ -195,7 +195,7 @@ struct PRPulseFeatureTests {
       $0[GitClientDependency.self].remoteInfo = { _ in
         GithubRemoteInfo(host: "github.com", owner: "acme", repo: "rocket")
       }
-      $0[PRMonitorClient.self].fetchOpenPullRequests = { _, _ in [pr] }
+      $0[PRMonitorClient.self].fetchOpenPullRequests = { _, _ in [pullRequest] }
       $0[PRMonitorClient.self].fetchGreptileScore = { _, _, _ in 4 }
     }
     let target = PRPulseTarget(repositoryID: "repo-1", rootPath: "/tmp/repo-1")
@@ -206,7 +206,7 @@ struct PRPulseFeatureTests {
     await store.receive(\._prPulseFetchStarted) {
       $0.prPulseInFlight = ["repo-1"]
     }
-    var scored = pr
+    var scored = pullRequest
     scored.greptileScore = 4
     await store.receive(\._prPulseSnapshotLoaded) {
       $0.prPulseInFlight = []
