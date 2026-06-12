@@ -3639,12 +3639,12 @@ struct BoardFeature {
     }
   }
 
-  /// One repo's snapshot: `gh pr list` (single call, checks included),
-  /// then Greptile scores for PRs whose `updatedAt` moved since the
-  /// previous snapshot. Scores are reused on an unchanged `updatedAt` —
-  /// any event that can change the score (push → re-review, new bot
-  /// comment) also bumps the PR's `updatedAt`. Individual score lookups
-  /// fail soft to nil; only the PR list itself failing fails the snapshot.
+  /// One repo's snapshot: assigned `gh pr list` (single call, checks
+  /// included), then Greptile scores for PRs whose `updatedAt` moved since
+  /// the previous snapshot. Scores are reused on an unchanged `updatedAt` —
+  /// any event that can change the score (push → re-review, new bot comment)
+  /// also bumps the PR's `updatedAt`. Individual score lookups fail soft to
+  /// nil; only the PR list itself failing fails the snapshot.
   nonisolated private static func fetchPulseSnapshot(
     target: PRPulseTarget,
     previous: RepoPullRequestSnapshot?,

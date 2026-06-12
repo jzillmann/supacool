@@ -43,6 +43,32 @@ struct GreptileScoreParserTests {
 }
 
 struct PRMonitorDecodingTests {
+  @Test func liveFetchOpenPullRequestsFiltersToAssigneeMe() async throws {
+    let probe = PRMonitorShellProbe()
+    let shell = ShellClient(
+      run: { _, _, _ in ShellOutput(stdout: "", stderr: "", exitCode: 0) },
+      runLoginImpl: { _, arguments, _, _ in
+        await probe.record(arguments)
+        return ShellOutput(stdout: "[]", stderr: "", exitCode: 0)
+      }
+    )
+    let client = PRMonitorClient.live(shell: shell)
+
+    _ = try await client.fetchOpenPullRequests("acme", "rocket")
+
+    let arguments = try #require(await probe.arguments.first)
+    #expect(
+      arguments == [
+        "gh", "pr", "list",
+        "--repo", "acme/rocket",
+        "--state", "open",
+        "--assignee", "@me",
+        "--limit", "50",
+        "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
+      ]
+    )
+  }
+
   @Test func decodesGhPrListOutput() throws {
     let json = """
       [
@@ -107,6 +133,14 @@ struct PRMonitorDecodingTests {
       ]
       """
     #expect(try decodeGreptileScore(stdout: json) == 4)
+  }
+}
+
+private actor PRMonitorShellProbe {
+  private(set) var arguments: [[String]] = []
+
+  func record(_ arguments: [String]) {
+    self.arguments.append(arguments)
   }
 }
 

@@ -2,10 +2,11 @@ import AppKit
 import ComposableArchitecture
 import SwiftUI
 
-/// Toolbar badge summarizing every open PR across the board's (filtered)
-/// repositories: total count plus green / red / pending breakdown. Expands
-/// into a popover listing each PR with its CI state, review decision, and
-/// Greptile confidence score; clicking a row opens the PR on GitHub.
+/// Toolbar badge summarizing open PRs assigned to the authenticated GitHub
+/// user across the board's (filtered) repositories: total count plus green /
+/// red / pending breakdown. Expands into a popover listing each PR with its
+/// CI state, review decision, and Greptile confidence score; clicking a row
+/// opens the PR on GitHub.
 ///
 /// Data comes from `BoardFeature`'s PR Pulse snapshots (`gh pr list` per
 /// repo on a 3-minute tick). Hidden until at least one filtered repo has a
@@ -30,7 +31,7 @@ struct PRPulseButton: View {
         badgeLabel
       }
       .help(
-        "Open pull requests across board repos — green: CI passed & Greptile 5/5, "
+        "Open pull requests assigned to you across board repos — green: CI passed & Greptile 5/5, "
           + "red: failing checks or score below 5/5. Click for details."
       )
       .popover(isPresented: $isPresented, arrowEdge: .bottom) {
@@ -63,7 +64,8 @@ struct PRPulseButton: View {
 
   private var badgeLabel: some View {
     HStack(spacing: 6) {
-      Image(systemName: "arrow.triangle.merge")
+      Image(systemName: "person.crop.circle.badge.checkmark")
+        .accessibilityHidden(true)
       Text("\(totalCount)")
         .monospacedDigit()
       if greenCount > 0 {
@@ -94,7 +96,7 @@ struct PRPulseButton: View {
   private var popoverContent: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
-        Text("Open Pull Requests")
+        Text("Pull Requests Assigned to Me")
           .font(.headline)
         Spacer()
         if !store.prPulseInFlight.isEmpty {
@@ -105,6 +107,7 @@ struct PRPulseButton: View {
           store.send(.prPulseRefreshRequested)
         } label: {
           Image(systemName: "arrow.clockwise")
+            .accessibilityLabel("Refresh pull request status now")
         }
         .buttonStyle(.borderless)
         .help("Refresh pull request status now")
@@ -112,7 +115,7 @@ struct PRPulseButton: View {
       .padding(12)
       Divider()
       if totalCount == 0 {
-        Text("No open pull requests 🎉")
+        Text("No open pull requests assigned to you")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
           .padding(24)
@@ -173,6 +176,7 @@ struct PRPulseButton: View {
           if pullRequest.isDraft {
             Image(systemName: "pencil.circle")
               .foregroundStyle(.secondary)
+              .accessibilityLabel("Draft")
               .help("Draft")
           }
           Text(pullRequest.title)
@@ -219,6 +223,7 @@ struct PRPulseButton: View {
           Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
       }
@@ -266,6 +271,7 @@ struct PRPulseButton: View {
       Image(systemName: checkStateSymbol(check.checkState))
         .font(.caption)
         .foregroundStyle(checkStateColor(check.checkState))
+        .accessibilityHidden(true)
       Text(check.displayName)
         .font(.caption)
         .lineLimit(1)
@@ -275,6 +281,7 @@ struct PRPulseButton: View {
         Image(systemName: "arrow.up.right")
           .font(.caption2)
           .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
       }
     }
     .contentShape(Rectangle())
@@ -325,10 +332,12 @@ struct PRPulseButton: View {
     case "APPROVED":
       Image(systemName: "checkmark.seal.fill")
         .foregroundStyle(.green)
+        .accessibilityLabel("Approved")
         .help("Approved")
     case "CHANGES_REQUESTED":
       Image(systemName: "exclamationmark.bubble.fill")
         .foregroundStyle(.orange)
+        .accessibilityLabel("Changes requested")
         .help("Changes requested")
     default:
       EmptyView()

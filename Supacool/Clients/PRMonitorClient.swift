@@ -4,9 +4,9 @@ import Foundation
 private nonisolated let prMonitorLogger = SupaLogger("Supacool.PRMonitor")
 
 /// Repo-wide PR monitoring for the board's PR Pulse badge. Two thin calls:
-/// the open-PR list (one `gh pr list` round-trip, checks included) and the
-/// Greptile confidence score (one `gh api …/comments` round-trip per PR —
-/// the score lives in a bot comment, not in any PR field).
+/// the assigned open-PR list (one `gh pr list` round-trip, checks included)
+/// and the Greptile confidence score (one `gh api …/comments` round-trip per
+/// PR — the score lives in a bot comment, not in any PR field).
 ///
 /// Follows `SupacoolGithubPRClient`'s shape: shell out to `gh` via a login
 /// shell so PATH/auth just work; errors surface to the reducer which owns
@@ -30,6 +30,7 @@ extension PRMonitorClient: DependencyKey {
             "pr", "list",
             "--repo", "\(owner)/\(repo)",
             "--state", "open",
+            "--assignee", "@me",
             "--limit", "50",
             "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
           ]
