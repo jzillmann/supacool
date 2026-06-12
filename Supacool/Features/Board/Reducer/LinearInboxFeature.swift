@@ -305,29 +305,6 @@ struct LinearInboxFeature {
         pruneExpiredDoneTickets(&state)
         return .none
 
-      case let ._recentIssuesFetched(issues):
-        state.isFetchingRecent = false
-        guard !issues.isEmpty else {
-          state.errorMessage = "No recently created tickets found in Linear."
-          return .none
-        }
-        // Upsert: new ids are appended (already carrying full metadata,
-        // no follow-up fetch needed); ids already in the inbox just get
-        // their cached display fields refreshed.
-        let now = date.now
-        state.$tickets.withLock { tickets in
-          for issue in issues {
-            if let index = tickets.firstIndex(where: { $0.identifier == issue.identifier }) {
-              tickets[index].apply(issue, fetchedAt: now)
-            } else {
-              var ticket = LinearTicket(identifier: issue.identifier, addedAt: now)
-              ticket.apply(issue, fetchedAt: now)
-              tickets.append(ticket)
-            }
-          }
-        }
-        return .none
-
       case let ._fetchFailed(message):
         state.fetchingTicketIDs = []
         state.isFetchingRecent = false
