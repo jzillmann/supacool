@@ -754,6 +754,9 @@ struct BoardView: View {
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
+        prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
+          of: session
+        ),
         showsRepoLabelAbove: showsRepoLabelAbove
       )
       .frame(width: boardCardWidth)
@@ -1018,6 +1021,8 @@ private struct SessionCardContainer: View {
   let onAppear: (() -> Void)?
   let onReferencesPopoverOpened: (() -> Void)?
   let onRemoveReference: ((SessionReference) -> Void)?
+  /// Latest checks/Greptile snapshot per PR reference of this session.
+  let prReferenceSnapshots: [String: PullRequestSnapshot]
   /// When true, render a small repo caption above the card (outside the
   /// card border, top-left). The board flips this on for every card when
   /// it sees ≥2 distinct repos in the currently visible session set,
@@ -1084,7 +1089,8 @@ private struct SessionCardContainer: View {
       onDebug: onDebug,
       onAppear: onAppear,
       onReferencesPopoverOpened: onReferencesPopoverOpened,
-      onRemoveReference: onRemoveReference
+      onRemoveReference: onRemoveReference,
+      prReferenceSnapshots: prReferenceSnapshots
     )
     .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)
     .overlay {

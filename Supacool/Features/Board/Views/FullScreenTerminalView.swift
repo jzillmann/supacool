@@ -98,6 +98,9 @@ struct FullScreenTerminalView: View {
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)? = nil
 
+  /// Latest checks/Greptile snapshot per PR reference of this session.
+  var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+
   /// Which terminal in `session.terminals` is currently rendered. Pass
   /// `session.primaryTerminalID` for single-terminal sessions.
   let activeTerminalID: UUID
@@ -406,7 +409,8 @@ struct FullScreenTerminalView: View {
       SessionReferenceSummaryChips(
         references: session.references,
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
-        onRemoveReference: onRemoveReference
+        onRemoveReference: onRemoveReference,
+        prReferenceSnapshots: prReferenceSnapshots
       )
     }
   }

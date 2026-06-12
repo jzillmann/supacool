@@ -318,11 +318,32 @@ nonisolated private func markPullRequestReadyFetcher(
   }
 }
 
-/// State + title of a PR, fetched together — the title rides along on the
-/// same `gh pr view` round-trip the chip refresh already pays for.
+/// Everything one `gh pr view` round-trip tells us about a PR: state and
+/// title (persisted onto the session reference) plus the status-check
+/// rollup and `updatedAt` (kept in memory on `BoardFeature.State` so the
+/// reference chips/popovers can show CI health). `greptileScore` is not a
+/// `gh pr view` field — the refresh worker resolves it from the PR's bot
+/// comments and stamps it on before the snapshot reaches the reducer.
 nonisolated struct PullRequestSnapshot: Equatable, Sendable {
   let state: PRState
   let title: String
+  var statusChecks: [GithubPullRequestStatusCheck]
+  var updatedAt: Date?
+  var greptileScore: Int?
+
+  init(
+    state: PRState,
+    title: String,
+    statusChecks: [GithubPullRequestStatusCheck] = [],
+    updatedAt: Date? = nil,
+    greptileScore: Int? = nil
+  ) {
+    self.state = state
+    self.title = title
+    self.statusChecks = statusChecks
+    self.updatedAt = updatedAt
+    self.greptileScore = greptileScore
+  }
 }
 
 nonisolated private func viewPullRequestFetcher(
@@ -340,26 +361,43 @@ nonisolated private func viewPullRequestFetcher(
         "--repo",
         "\(owner)/\(repo)",
         "--json",
-        "state,isDraft,title",
+        "state,isDraft,title,statusCheckRollup,updatedAt",
       ],
       repoRoot: nil
     )
-    struct PRViewResponse: Decodable {
-      let state: String  // "OPEN", "MERGED", "CLOSED"
-      let isDraft: Bool
-      let title: String
-    }
-    let data = Data(stdout.utf8)
-    let response = try JSONDecoder().decode(PRViewResponse.self, from: data)
-    let state: PRState =
-      switch response.state.uppercased() {
-      case "MERGED": .merged
-      case "CLOSED": .closed
-      case "OPEN": response.isDraft ? .draft : .open
-      default: .open
-      }
-    return PullRequestSnapshot(state: state, title: response.title)
+    return try decodePullRequestSnapshot(stdout: stdout)
   }
+}
+
+/// Decodes the `gh pr view --json` payload for `viewPullRequest`. Pulled
+/// out of the fetcher closure so tests can exercise the decoding without
+/// a shell.
+nonisolated func decodePullRequestSnapshot(stdout: String) throws -> PullRequestSnapshot {
+  struct PRViewResponse: Decodable {
+    let state: String  // "OPEN", "MERGED", "CLOSED"
+    let isDraft: Bool
+    let title: String
+    // Flat array in `gh pr view` CLI output, same element shape as
+    // `gh pr list` (PRMonitorClient decodes it identically).
+    let statusCheckRollup: [GithubPullRequestStatusCheck]?
+    let updatedAt: Date?
+  }
+  let decoder = JSONDecoder()
+  decoder.dateDecodingStrategy = .iso8601
+  let response = try decoder.decode(PRViewResponse.self, from: Data(stdout.utf8))
+  let state: PRState =
+    switch response.state.uppercased() {
+    case "MERGED": .merged
+    case "CLOSED": .closed
+    case "OPEN": response.isDraft ? .draft : .open
+    default: .open
+    }
+  return PullRequestSnapshot(
+    state: state,
+    title: response.title,
+    statusChecks: response.statusCheckRollup ?? [],
+    updatedAt: response.updatedAt
+  )
 }
 
 nonisolated private func rerunFailedJobsFetcher(

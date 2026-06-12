@@ -393,6 +393,7 @@ struct BoardRootView: View {
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
+        prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(of: session),
         activeTerminalID: store.activeTerminalBySession[session.id] ?? session.primaryTerminalID,
         onSelectTerminal: { terminalID in
           store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))

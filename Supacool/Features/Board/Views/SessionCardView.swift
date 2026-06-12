@@ -54,6 +54,11 @@ struct SessionCardView: View {
   var onReferencesPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
+  /// Latest checks/Greptile snapshot per PR reference (dedupeKey), from
+  /// `BoardFeature.State.prReferenceSnapshots`. Callers pass the subset
+  /// for this session's references so unrelated PR updates don't re-render
+  /// every card.
+  var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
 
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
@@ -496,7 +501,8 @@ struct SessionCardView: View {
     SessionReferenceSummaryChips(
       references: session.references,
       onPullRequestsPopoverOpened: onReferencesPopoverOpened,
-      onRemoveReference: onRemoveReference
+      onRemoveReference: onRemoveReference,
+      prReferenceSnapshots: prReferenceSnapshots
     )
   }
 
@@ -643,6 +649,9 @@ struct ReferenceChip: View {
   var onTap: (() -> Void)? = nil
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemove: (() -> Void)? = nil
+  /// Latest checks/Greptile snapshot for a PR reference. Nil (and ignored
+  /// for tickets) hides the CI glyph and score badge.
+  var prSnapshot: PullRequestSnapshot? = nil
 
   var body: some View {
     Button {
@@ -660,6 +669,10 @@ struct ReferenceChip: View {
         Text(reference.chipLabel)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
+        if case .pullRequest = reference, let prSnapshot {
+          PRChecksGlyph(checks: prSnapshot.statusChecks)
+          GreptileScoreBadge(score: prSnapshot.greptileScore)
+        }
       }
       .foregroundStyle(.primary.opacity(0.85))
       .padding(.horizontal, 6)
@@ -705,8 +718,9 @@ struct ReferenceChip: View {
         : "Open \(id) in Linear"
     case .pullRequest(let owner, let repo, let number, let state, let title):
       let stateLabel = state?.rawValue ?? "loading…"
+      let statusSuffix = prSnapshot?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel))\(titleSuffix) on GitHub"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
     }
   }
 }
@@ -719,6 +733,9 @@ struct SessionReferenceSummaryChips: View {
   var onPullRequestsPopoverOpened: (() -> Void)? = nil
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)? = nil
+  /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
+  /// hides the CI/score indicators on chips and popover rows.
+  var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
 
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
 
@@ -758,7 +775,8 @@ struct SessionReferenceSummaryChips: View {
           reference: pullRequest,
           linearOrgSlug: linearOrgSlug,
           onTap: onPullRequestsPopoverOpened,
-          onRemove: onRemoveReference.map { remove in { remove(pullRequest) } }
+          onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
+          prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey]
         )
       } else if pullRequests.count > 1 {
         ReferenceStackChip(
@@ -766,7 +784,8 @@ struct SessionReferenceSummaryChips: View {
           references: pullRequests,
           linearOrgSlug: linearOrgSlug,
           onPopoverOpened: onPullRequestsPopoverOpened,
-          onRemoveReference: onRemoveReference
+          onRemoveReference: onRemoveReference,
+          prReferenceSnapshots: prReferenceSnapshots
         )
       }
     }
@@ -848,6 +867,9 @@ private struct ReferenceStackChip: View {
   var onPopoverOpened: (() -> Void)? = nil
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)? = nil
+  /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
+  /// hides the CI/score indicators on the popover rows.
+  var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
@@ -1044,6 +1066,12 @@ private struct ReferenceStackChip: View {
             .truncationMode(.middle)
         }
         Spacer(minLength: 12)
+        if case .pullRequest = reference,
+          let snapshot = prReferenceSnapshots[reference.dedupeKey]
+        {
+          PRChecksSummaryText(checks: snapshot.statusChecks)
+          GreptileScoreBadge(score: snapshot.greptileScore)
+        }
         Image(systemName: "arrow.up.forward")
           .font(.caption2)
           .foregroundStyle(.tertiary)
@@ -1122,8 +1150,9 @@ private struct ReferenceStackChip: View {
         : "Open \(id) in Linear"
     case .pullRequest(let owner, let repo, let number, let state, let title):
       let stateLabel = state?.rawValue ?? "loading…"
+      let statusSuffix = prReferenceSnapshots[reference.dedupeKey]?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel))\(titleSuffix) on GitHub"
+      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
     }
   }
 
@@ -1160,7 +1189,18 @@ private struct ReferenceStackChip: View {
       status: .inProgress,
       onTap: {},
       onRemove: {},
-      onTogglePriority: {}
+      onTogglePriority: {},
+      prReferenceSnapshots: [
+        "pr:foo/bar#42": PullRequestSnapshot(
+          state: .open,
+          title: "Refactor the auth module to use async/await",
+          statusChecks: [
+            GithubPullRequestStatusCheck(name: "Unit Tests", status: "COMPLETED", conclusion: "FAILURE"),
+            GithubPullRequestStatusCheck(name: "Lint", status: "COMPLETED", conclusion: "SUCCESS"),
+          ],
+          greptileScore: 4
+        ),
+      ]
     )
     SessionCardView(
       session: session,
