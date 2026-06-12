@@ -35,6 +35,8 @@ struct LinearInboxFeature {
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
     var fetchingTicketIDs: Set<String> = []
+    /// True while the "last N created" import is in flight.
+    var isFetchingRecent: Bool = false
     /// Ids with an in-flight assign-to-me mutation.
     var assigningTicketIDs: Set<String> = []
     var errorMessage: String?
@@ -54,9 +56,13 @@ struct LinearInboxFeature {
     /// Number of tickets Linear reports as done (completed/canceled).
     var doneCount: Int { tickets.filter(\.isDone).count }
 
-    /// Tickets shown in the list, honoring the show/hide-done toggle.
+    /// Number of tickets the user hid from the worklist.
+    var hiddenCount: Int { tickets.filter(\.isHidden).count }
+
+    /// Tickets shown in the list. The show-done toggle doubles as the
+    /// reveal for user-hidden rows, so nothing is ever unreachable.
     var visibleTickets: [LinearTicket] {
-      showDone ? Array(tickets) : tickets.filter { !$0.isDone }
+      showDone ? Array(tickets) : tickets.filter { !$0.isDone && !$0.isHidden }
     }
 
     /// The ticket's started session id, but only while that session still
@@ -79,6 +85,9 @@ struct LinearInboxFeature {
     /// Import the pasted text. `replace: true` rebuilds the list (keeping
     /// metadata for surviving ids); `false` appends new ids only.
     case importTapped(replace: Bool)
+    /// Pull the most recently created tickets straight from Linear —
+    /// the no-paste alternative to the import field.
+    case fetchRecentTapped
     case refreshAllTapped
     case toggleExpanded(ticketID: String)
     case assignToMeTapped(ticketID: String)
@@ -86,11 +95,15 @@ struct LinearInboxFeature {
     /// Jump to the session already spawned from this ticket.
     case openSessionTapped(ticketID: String)
     case removeTicketTapped(ticketID: String)
+    /// Hide (or unhide) a single ticket from the worklist without
+    /// removing it from the inbox.
+    case toggleHideTapped(ticketID: String)
     case toggleShowDone
     case clearError
     case closeTapped
 
     case _issuesFetched([LinearIssue])
+    case _recentIssuesFetched([LinearIssue])
     case _fetchFailed(message: String)
     case _assignCompleted(ticketID: String, LinearIssue?)
     case _assignFailed(ticketID: String, message: String)
@@ -108,6 +121,13 @@ struct LinearInboxFeature {
     }
   }
 
+  /// How many recently created tickets the one-tap import pulls.
+  static let recentFetchLimit = 25
+
+  /// Done tickets linger this long (measured from Linear's own
+  /// completed/canceled timestamp) before they auto-drop from the inbox.
+  static let doneRetention: TimeInterval = 3 * 24 * 60 * 60
+
   @Dependency(LinearClient.self) var linearClient
   @Dependency(\.date) var date
   @Dependency(\.dismiss) var dismiss
@@ -120,6 +140,7 @@ struct LinearInboxFeature {
         return .none
 
       case .task:
+        pruneExpiredDoneTickets(&state)
         let ids = state.tickets.map(\.identifier)
         guard !ids.isEmpty else { return .none }
         state.fetchingTicketIDs = Set(ids)
@@ -148,6 +169,18 @@ struct LinearInboxFeature {
         state.errorMessage = nil
         state.fetchingTicketIDs = Set(ids)
         return fetchIssues(ids: ids)
+
+      case .fetchRecentTapped:
+        state.isFetchingRecent = true
+        state.errorMessage = nil
+        return .run { send in
+          do {
+            let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit)
+            await send(._recentIssuesFetched(issues))
+          } catch {
+            await send(._fetchFailed(message: error.localizedDescription))
+          }
+        }
 
       case .refreshAllTapped:
         let ids = state.tickets.map(\.identifier)
@@ -214,6 +247,13 @@ struct LinearInboxFeature {
         state.expandedTicketIDs.remove(ticketID)
         return .none
 
+      case let .toggleHideTapped(ticketID):
+        state.$tickets.withLock { tickets in
+          guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
+          tickets[index].isHidden.toggle()
+        }
+        return .none
+
       case .toggleShowDone:
         state.showDone.toggle()
         return .none
@@ -237,10 +277,37 @@ struct LinearInboxFeature {
         }
         // One batch fetch resolves the whole in-flight set.
         state.fetchingTicketIDs = []
+        // Fresh `doneAt` stamps may have pushed tickets past retention.
+        pruneExpiredDoneTickets(&state)
+        return .none
+
+      case let ._recentIssuesFetched(issues):
+        state.isFetchingRecent = false
+        guard !issues.isEmpty else {
+          state.errorMessage = "No recently created tickets found in Linear."
+          return .none
+        }
+        // Upsert: new ids are appended (already carrying full metadata,
+        // no follow-up fetch needed); ids already in the inbox just get
+        // their cached display fields refreshed.
+        let now = date.now
+        state.$tickets.withLock { tickets in
+          for issue in issues {
+            if let index = tickets.firstIndex(where: { $0.identifier == issue.identifier }) {
+              tickets[index].apply(issue, fetchedAt: now)
+            } else {
+              var ticket = LinearTicket(identifier: issue.identifier, addedAt: now)
+              ticket.apply(issue, fetchedAt: now)
+              tickets.append(ticket)
+            }
+          }
+        }
+        pruneExpiredDoneTickets(&state)
         return .none
 
       case let ._fetchFailed(message):
         state.fetchingTicketIDs = []
+        state.isFetchingRecent = false
         state.errorMessage = message
         return .none
 
@@ -311,6 +378,19 @@ struct LinearInboxFeature {
     }
     .ifLet(\.$newTerminal, action: \.newTerminal) {
       NewTerminalFeature()
+    }
+  }
+
+  /// Drops tickets that Linear finished more than `doneRetention` ago.
+  /// Tickets done with an unknown timestamp are kept — the next fetch
+  /// stamps `doneAt` and they age out from there.
+  private func pruneExpiredDoneTickets(_ state: inout State) {
+    let cutoff = date.now.addingTimeInterval(-Self.doneRetention)
+    state.$tickets.withLock { tickets in
+      tickets.removeAll { ticket in
+        guard ticket.isDone, let doneAt = ticket.doneAt else { return false }
+        return doneAt < cutoff
+      }
     }
   }
 

@@ -26,6 +26,10 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var assignedToMe: Bool
   /// Canonical web URL for the issue.
   var url: String?
+  /// When Linear marked the issue completed / canceled. Drives the
+  /// inbox's auto-drop of stale done tickets.
+  var completedAt: Date? = nil
+  var canceledAt: Date? = nil
 }
 
 /// Minimal Linear API client. Originally just fetched a single issue title
@@ -52,6 +56,12 @@ struct LinearClient: Sendable {
   /// Assigns the issue (by Linear UUID) to the current API-key holder and
   /// returns the updated record. Throws `.missingAPIKey` when unconfigured.
   var assignToMe: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
+
+  /// Fetches the most recently created issues, newest first. Scoped to the
+  /// `supacool.references.ticketPrefixes` team keys when that allowlist is
+  /// set, so a multi-team workspace doesn't flood the inbox. Throws
+  /// `.missingAPIKey` when no key is configured so the inbox can prompt.
+  var fetchRecentIssues: @Sendable (_ limit: Int) async throws -> [LinearIssue]
 }
 
 nonisolated enum LinearClientError: LocalizedError {
@@ -100,13 +110,18 @@ extension LinearClient: DependencyKey {
       guard !trimmed.isEmpty else { return nil }
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
       return try await LinearLive.assignToMe(issueUUID: trimmed, apiKey: key)
+    },
+    fetchRecentIssues: { limit in
+      guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
+      return try await LinearLive.fetchRecentIssues(limit: max(1, limit), apiKey: key)
     }
   )
 
   static let testValue = Self(
     fetchIssueTitle: { _ in nil },
     fetchIssues: { _ in [] },
-    assignToMe: { _ in nil }
+    assignToMe: { _ in nil },
+    fetchRecentIssues: { _ in [] }
   )
 }
 
@@ -123,7 +138,8 @@ private nonisolated enum LinearLive {
   /// GraphQL selection set shared by the batch query and the assign
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
-    "id identifier title description url state { name type } assignee { displayName isMe }"
+    "id identifier title description url completedAt canceledAt "
+    + "state { name type } assignee { displayName isMe }"
 
   static func currentAPIKey() -> String? {
     let key = UserDefaults.standard.string(forKey: "supacool.linear.apiKey") ?? ""
@@ -170,6 +186,33 @@ private nonisolated enum LinearLive {
       result.append(issue)
     }
     return result
+  }
+
+  static func fetchRecentIssues(limit: Int, apiKey: String) async throws -> [LinearIssue] {
+    // `orderBy: createdAt` returns newest-first. The ticket-prefix
+    // allowlist doubles as a team-key filter (prefixes ARE team keys,
+    // e.g. `CEN`), applied server-side when configured.
+    let teamKeys = loadTicketPrefixAllowlistForLinear().sorted()
+    var varDefs = ["$first: Int!"]
+    var variables: [String: Any] = ["first": limit]
+    var filterArg = ""
+    if !teamKeys.isEmpty {
+      varDefs.append("$teamKeys: [String!]")
+      variables["teamKeys"] = teamKeys
+      filterArg = ", filter: { team: { key: { in: $teamKeys } } }"
+    }
+    let query =
+      "query RecentIssues(\(varDefs.joined(separator: ", "))) { "
+      + "issues(first: $first, orderBy: createdAt\(filterArg)) { nodes { \(issueFields) } } }"
+
+    let data = try await post(query: query, variables: variables, apiKey: apiKey)
+    guard
+      let issues = data["issues"] as? [String: Any],
+      let nodes = issues["nodes"] as? [[String: Any]]
+    else {
+      throw LinearClientError.invalidResponse
+    }
+    return nodes.compactMap(parseIssue)
   }
 
   static func assignToMe(issueUUID: String, apiKey: String) async throws -> LinearIssue? {
@@ -258,8 +301,20 @@ private nonisolated enum LinearLive {
       stateType: state?["type"] as? String,
       assigneeName: assignee?["displayName"] as? String,
       assignedToMe: (assignee?["isMe"] as? Bool) ?? false,
-      url: dict["url"] as? String
+      url: dict["url"] as? String,
+      completedAt: parseISODate(dict["completedAt"]),
+      canceledAt: parseISODate(dict["canceledAt"])
     )
+  }
+
+  /// Linear timestamps arrive as ISO-8601 with fractional seconds
+  /// (`2026-06-09T18:00:00.000Z`); accept the plain form too.
+  static func parseISODate(_ raw: Any?) -> Date? {
+    guard let string = raw as? String else { return nil }
+    if let date = try? Date(string, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)) {
+      return date
+    }
+    return try? Date(string, strategy: .iso8601)
   }
 }
 

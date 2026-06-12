@@ -108,6 +108,92 @@ struct LinearInboxFeatureTests {
     #expect(store.state.fetchingTicketIDs.isEmpty)
   }
 
+  @Test(.dependencies) func fetchRecentUpsertsTicketsWithMetadata() async {
+    let started = Date(timeIntervalSince1970: 10)
+    resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", startedAt: started)])
+    let now = Date(timeIntervalSince1970: 2_000)
+    let existing = LinearIssue(
+      id: "u1",
+      identifier: "CEN-1",
+      title: "Fresh title",
+      description: "Body",
+      stateName: "In Progress",
+      stateType: "started",
+      assigneeName: "me",
+      assignedToMe: true,
+      url: nil
+    )
+    let new = LinearIssue(
+      id: "u2",
+      identifier: "CEN-2",
+      title: "Brand new",
+      description: nil,
+      stateName: "Todo",
+      stateType: "unstarted",
+      assigneeName: nil,
+      assignedToMe: false,
+      url: nil
+    )
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchRecentIssues = { limit in
+        #expect(limit == LinearInboxFeature.recentFetchLimit)
+        return [existing, new]
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    #expect(store.state.isFetchingRecent)
+
+    await store.receive(\._recentIssuesFetched)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+    // The existing ticket refreshes its cache but keeps inbox-local state.
+    #expect(store.state.tickets[0].title == "Fresh title")
+    #expect(store.state.tickets[0].startedAt == started)
+    // The new ticket arrives fully hydrated — no follow-up fetch needed.
+    #expect(store.state.tickets[1].title == "Brand new")
+    #expect(store.state.tickets[1].linearID == "u2")
+    #expect(store.state.tickets[1].fetchedAt == now)
+  }
+
+  @Test(.dependencies) func fetchRecentFailureSurfacesTheError() async {
+    resetInbox([])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.linearClient.fetchRecentIssues = { _ in throw LinearClientError.missingAPIKey }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._fetchFailed)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.errorMessage?.contains("API key") == true)
+    #expect(store.state.tickets.isEmpty)
+  }
+
+  @Test(.dependencies) func fetchRecentWithNoResultsExplainsItself() async {
+    resetInbox([])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.linearClient.fetchRecentIssues = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._recentIssuesFetched)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.errorMessage == "No recently created tickets found in Linear.")
+  }
+
   @Test(.dependencies) func taskRefreshesExistingTicketsOnOpen() async {
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", stateType: "started")])
     let now = Date(timeIntervalSince1970: 9_000)
@@ -311,6 +397,92 @@ struct LinearInboxFeatureTests {
 
     await store.send(.toggleShowDone)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+  }
+
+  @Test(.dependencies) func openingTheInboxDropsTicketsDoneLongerThanRetention() async {
+    let now = Date(timeIntervalSince1970: 1_000_000)
+    let fourDaysAgo = now.addingTimeInterval(-4 * 24 * 60 * 60)
+    let oneDayAgo = now.addingTimeInterval(-1 * 24 * 60 * 60)
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", stateType: "completed", doneAt: fourDaysAgo),
+      LinearTicket(identifier: "CEN-2", stateType: "completed", doneAt: oneDayAgo),
+      // Done but with no known timestamp yet — kept until a fetch stamps it.
+      LinearTicket(identifier: "CEN-3", stateType: "canceled"),
+      LinearTicket(identifier: "CEN-4", stateType: "started", doneAt: fourDaysAgo),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchIssues = { ids in
+        // The expired ticket is gone before the refresh fires.
+        #expect(ids == ["CEN-2", "CEN-3", "CEN-4"])
+        return []
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-2", "CEN-3", "CEN-4"])
+  }
+
+  @Test(.dependencies) func fetchStampsDoneAtAndAgesOutOldDoneTickets() async {
+    resetInbox([LinearTicket(identifier: "CEN-1", title: "Old", stateType: "started")])
+    let now = Date(timeIntervalSince1970: 2_000_000)
+    let completedFiveDaysAgo = LinearIssue(
+      id: "u1",
+      identifier: "CEN-1",
+      title: "Old",
+      description: nil,
+      stateName: "Done",
+      stateType: "completed",
+      assigneeName: nil,
+      assignedToMe: false,
+      url: nil,
+      completedAt: now.addingTimeInterval(-5 * 24 * 60 * 60)
+    )
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchIssues = { _ in [completedFiveDaysAgo] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.task)
+    await store.receive(\._issuesFetched)
+    // Linear says it was finished five days ago — gone immediately.
+    #expect(store.state.tickets.isEmpty)
+  }
+
+  @Test(.dependencies) func toggleHideHidesTheTicketWithoutRemovingIt() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Keep"),
+      LinearTicket(identifier: "CEN-2", title: "Hide me"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.toggleHideTapped(ticketID: "CEN-2"))
+    // Still in the inbox, just not on the worklist.
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+    #expect(store.state.hiddenCount == 1)
+
+    // The show-done toggle reveals hidden rows too…
+    await store.send(.toggleShowDone)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+
+    // …and a hidden ticket can be brought back.
+    await store.send(.toggleHideTapped(ticketID: "CEN-2"))
+    await store.send(.toggleShowDone)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+    #expect(store.state.hiddenCount == 0)
   }
 
   @Test(.dependencies) func removeTicketDropsItFromTheInbox() async {

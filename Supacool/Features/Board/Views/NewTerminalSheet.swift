@@ -98,7 +98,11 @@ struct NewTerminalSheet: View {
           .disabled(store.isCreating)
       }
       .padding(.horizontal, 20)
+      .padding(.top, 12)
       .padding(.bottom, 20)
+      // Opaque footer so scrolled form content (launch-option chips) never
+      // shows through behind the action buttons.
+      .background(Color(nsColor: .windowBackgroundColor))
     }
     .background {
       agentShortcuts

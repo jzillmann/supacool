@@ -161,6 +161,15 @@ struct BoardFeature {
     /// ref if a long-running fetch hasn't returned by the next tick.
     var prRefreshInFlight: Set<String> = []
 
+    /// Latest full snapshot per PR ref (dedupeKey): status checks,
+    /// `updatedAt`, and the Greptile confidence score. Only state + title
+    /// persist on the `SessionReference` itself; this map carries the
+    /// ephemeral CI/review detail the reference chips and popovers render.
+    /// In-memory only — refetched within one tick after relaunch. Also the
+    /// score cache: the refresh worker reuses the previous score while a
+    /// ref's `updatedAt` hasn't moved (any score-changing event bumps it).
+    var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+
     /// True after the periodic PR-refresh scheduler has been started.
     /// Started once per app launch from `BoardRootView`'s `.task`
     /// modifier — subsequent dispatches are no-ops.
@@ -2355,7 +2364,7 @@ struct BoardFeature {
           now: date.now
         )
         guard !batch.isEmpty else { return .none }
-        return prRefreshEffect(batch: batch)
+        return prRefreshEffect(batch: batch, previousSnapshots: state.prReferenceSnapshots)
 
       case ._refreshPRStatus(let id, let ref):
         guard case .pullRequest(let owner, let repo, let number, _, _) = ref else {
@@ -2461,7 +2470,7 @@ struct BoardFeature {
           now: date.now
         )
         guard !batch.isEmpty else { return .none }
-        return prRefreshEffect(batch: batch)
+        return prRefreshEffect(batch: batch, previousSnapshots: state.prReferenceSnapshots)
 
       case ._prRefreshStarted(let refKey):
         state.prRefreshInFlight.insert(refKey)
@@ -2479,6 +2488,7 @@ struct BoardFeature {
             }
           }
         }
+        state.prReferenceSnapshots[refKey] = snapshot
         state.prRefreshFailureAt.removeValue(forKey: refKey)
         state.prRefreshFailureJitter.removeValue(forKey: refKey)
         state.prRefreshSuccessAt[refKey] = date.now
@@ -2564,6 +2574,7 @@ struct BoardFeature {
               : existing
           }
         }
+        state.prReferenceSnapshots[ref.dedupeKey] = snapshot
         state.prRefreshFailureAt.removeValue(forKey: ref.dedupeKey)
         state.prRefreshFailureJitter.removeValue(forKey: ref.dedupeKey)
         state.prRefreshSuccessAt[ref.dedupeKey] = date.now
@@ -3523,9 +3534,10 @@ struct BoardFeature {
   /// not by cancellation — see the `cancelInFlight: false` note below for
   /// why tearing a batch down mid-flight would strand in-flight keys.
   private func prRefreshEffect(
-    batch: [(refKey: String, owner: String, repo: String, number: Int)]
+    batch: [(refKey: String, owner: String, repo: String, number: Int)],
+    previousSnapshots: [String: PullRequestSnapshot]
   ) -> Effect<Action> {
-    .run { [githubCLI, clock] send in
+    .run { [githubCLI, prMonitor, clock] send in
       await withTaskGroup(of: Void.self) { group in
         var iter = batch.makeIterator()
         var active = 0
@@ -3537,7 +3549,9 @@ struct BoardFeature {
               owner: next.owner,
               repo: next.repo,
               number: next.number,
+              previous: previousSnapshots[next.refKey],
               githubCLI: githubCLI,
+              prMonitor: prMonitor,
               clock: clock,
               send: send
             )
@@ -3554,7 +3568,9 @@ struct BoardFeature {
                 owner: next.owner,
                 repo: next.repo,
                 number: next.number,
+                previous: previousSnapshots[next.refKey],
                 githubCLI: githubCLI,
+                prMonitor: prMonitor,
                 clock: clock,
                 send: send
               )
@@ -3854,7 +3870,8 @@ struct BoardFeature {
   }
 
   /// Worker for the bounded-concurrency PR-refresh tick. Races the
-  /// `gh pr view` call against `prRefreshTimeout` and dispatches the
+  /// `gh pr view` call (plus the Greptile-score lookup when the PR's
+  /// `updatedAt` moved) against `prRefreshTimeout` and dispatches the
   /// appropriate action (`_prStateFanout` on success,
   /// `_prRefreshFailed` on failure or timeout). Pulled out as a
   /// `nonisolated static` so the `TaskGroup` workers in
@@ -3865,14 +3882,27 @@ struct BoardFeature {
     owner: String,
     repo: String,
     number: Int,
+    previous: PullRequestSnapshot?,
     githubCLI: GithubCLIClient,
+    prMonitor: PRMonitorClient,
     clock: any Clock<Duration>,
     send: Send<Action>
   ) async {
     do {
       let snapshot = try await withThrowingTaskGroup(of: PullRequestSnapshot.self) { group in
         group.addTask {
-          try await githubCLI.viewPullRequest(owner, repo, number)
+          var snapshot = try await githubCLI.viewPullRequest(owner, repo, number)
+          // Same score-reuse policy as PR Pulse: any event that can
+          // change the score (push → re-review, new bot comment) also
+          // bumps `updatedAt`. The score lookup fails soft to nil —
+          // only the PR fetch itself failing fails the refresh.
+          if Self.canReuseGreptileScore(previous: previous, updatedAt: snapshot.updatedAt) {
+            snapshot.greptileScore = previous?.greptileScore
+          } else {
+            snapshot.greptileScore =
+              (try? await prMonitor.fetchGreptileScore(owner, repo, number)) ?? nil
+          }
+          return snapshot
         }
         group.addTask {
           try await clock.sleep(for: Self.prRefreshTimeout)
@@ -3891,6 +3921,17 @@ struct BoardFeature {
       )
       await send(._prRefreshFailed(refKey: refKey))
     }
+  }
+
+  /// The previous snapshot's Greptile score is still valid iff the PR's
+  /// `updatedAt` hasn't moved. Missing timestamps (older `gh`, first
+  /// fetch) always refetch. Internal (not fileprivate) for the tests.
+  nonisolated static func canReuseGreptileScore(
+    previous: PullRequestSnapshot?,
+    updatedAt: Date?
+  ) -> Bool {
+    guard let previousUpdatedAt = previous?.updatedAt, let updatedAt else { return false }
+    return previousUpdatedAt == updatedAt
   }
 
   // MARK: - Remote helpers
