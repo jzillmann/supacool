@@ -35,6 +35,8 @@ struct LinearInboxFeature {
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
     var fetchingTicketIDs: Set<String> = []
+    /// True while the "last N created" import is in flight.
+    var isFetchingRecent: Bool = false
     /// Ids with an in-flight assign-to-me mutation.
     var assigningTicketIDs: Set<String> = []
     var errorMessage: String?
@@ -79,6 +81,9 @@ struct LinearInboxFeature {
     /// Import the pasted text. `replace: true` rebuilds the list (keeping
     /// metadata for surviving ids); `false` appends new ids only.
     case importTapped(replace: Bool)
+    /// Pull the most recently created tickets straight from Linear —
+    /// the no-paste alternative to the import field.
+    case fetchRecentTapped
     case refreshAllTapped
     case toggleExpanded(ticketID: String)
     case assignToMeTapped(ticketID: String)
@@ -91,6 +96,7 @@ struct LinearInboxFeature {
     case closeTapped
 
     case _issuesFetched([LinearIssue])
+    case _recentIssuesFetched([LinearIssue])
     case _fetchFailed(message: String)
     case _assignCompleted(ticketID: String, LinearIssue?)
     case _assignFailed(ticketID: String, message: String)
@@ -107,6 +113,9 @@ struct LinearInboxFeature {
       case openSession(sessionID: UUID)
     }
   }
+
+  /// How many recently created tickets the one-tap import pulls.
+  static let recentFetchLimit = 25
 
   @Dependency(LinearClient.self) var linearClient
   @Dependency(\.date) var date
@@ -148,6 +157,18 @@ struct LinearInboxFeature {
         state.errorMessage = nil
         state.fetchingTicketIDs = Set(ids)
         return fetchIssues(ids: ids)
+
+      case .fetchRecentTapped:
+        state.isFetchingRecent = true
+        state.errorMessage = nil
+        return .run { send in
+          do {
+            let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit)
+            await send(._recentIssuesFetched(issues))
+          } catch {
+            await send(._fetchFailed(message: error.localizedDescription))
+          }
+        }
 
       case .refreshAllTapped:
         let ids = state.tickets.map(\.identifier)
@@ -239,8 +260,32 @@ struct LinearInboxFeature {
         state.fetchingTicketIDs = []
         return .none
 
+      case let ._recentIssuesFetched(issues):
+        state.isFetchingRecent = false
+        guard !issues.isEmpty else {
+          state.errorMessage = "No recently created tickets found in Linear."
+          return .none
+        }
+        // Upsert: new ids are appended (already carrying full metadata,
+        // no follow-up fetch needed); ids already in the inbox just get
+        // their cached display fields refreshed.
+        let now = date.now
+        state.$tickets.withLock { tickets in
+          for issue in issues {
+            if let index = tickets.firstIndex(where: { $0.identifier == issue.identifier }) {
+              tickets[index].apply(issue, fetchedAt: now)
+            } else {
+              var ticket = LinearTicket(identifier: issue.identifier, addedAt: now)
+              ticket.apply(issue, fetchedAt: now)
+              tickets.append(ticket)
+            }
+          }
+        }
+        return .none
+
       case let ._fetchFailed(message):
         state.fetchingTicketIDs = []
+        state.isFetchingRecent = false
         state.errorMessage = message
         return .none
 

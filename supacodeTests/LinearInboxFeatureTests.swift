@@ -108,6 +108,92 @@ struct LinearInboxFeatureTests {
     #expect(store.state.fetchingTicketIDs.isEmpty)
   }
 
+  @Test(.dependencies) func fetchRecentUpsertsTicketsWithMetadata() async {
+    let started = Date(timeIntervalSince1970: 10)
+    resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", startedAt: started)])
+    let now = Date(timeIntervalSince1970: 2_000)
+    let existing = LinearIssue(
+      id: "u1",
+      identifier: "CEN-1",
+      title: "Fresh title",
+      description: "Body",
+      stateName: "In Progress",
+      stateType: "started",
+      assigneeName: "me",
+      assignedToMe: true,
+      url: nil
+    )
+    let new = LinearIssue(
+      id: "u2",
+      identifier: "CEN-2",
+      title: "Brand new",
+      description: nil,
+      stateName: "Todo",
+      stateType: "unstarted",
+      assigneeName: nil,
+      assignedToMe: false,
+      url: nil
+    )
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchRecentIssues = { limit in
+        #expect(limit == LinearInboxFeature.recentFetchLimit)
+        return [existing, new]
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    #expect(store.state.isFetchingRecent)
+
+    await store.receive(\._recentIssuesFetched)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+    // The existing ticket refreshes its cache but keeps inbox-local state.
+    #expect(store.state.tickets[0].title == "Fresh title")
+    #expect(store.state.tickets[0].startedAt == started)
+    // The new ticket arrives fully hydrated — no follow-up fetch needed.
+    #expect(store.state.tickets[1].title == "Brand new")
+    #expect(store.state.tickets[1].linearID == "u2")
+    #expect(store.state.tickets[1].fetchedAt == now)
+  }
+
+  @Test(.dependencies) func fetchRecentFailureSurfacesTheError() async {
+    resetInbox([])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.linearClient.fetchRecentIssues = { _ in throw LinearClientError.missingAPIKey }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._fetchFailed)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.errorMessage?.contains("API key") == true)
+    #expect(store.state.tickets.isEmpty)
+  }
+
+  @Test(.dependencies) func fetchRecentWithNoResultsExplainsItself() async {
+    resetInbox([])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.linearClient.fetchRecentIssues = { _ in [] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._recentIssuesFetched)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.errorMessage == "No recently created tickets found in Linear.")
+  }
+
   @Test(.dependencies) func taskRefreshesExistingTicketsOnOpen() async {
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", stateType: "started")])
     let now = Date(timeIntervalSince1970: 9_000)

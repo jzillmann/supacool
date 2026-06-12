@@ -52,6 +52,12 @@ struct LinearClient: Sendable {
   /// Assigns the issue (by Linear UUID) to the current API-key holder and
   /// returns the updated record. Throws `.missingAPIKey` when unconfigured.
   var assignToMe: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
+
+  /// Fetches the most recently created issues, newest first. Scoped to the
+  /// `supacool.references.ticketPrefixes` team keys when that allowlist is
+  /// set, so a multi-team workspace doesn't flood the inbox. Throws
+  /// `.missingAPIKey` when no key is configured so the inbox can prompt.
+  var fetchRecentIssues: @Sendable (_ limit: Int) async throws -> [LinearIssue]
 }
 
 nonisolated enum LinearClientError: LocalizedError {
@@ -100,13 +106,18 @@ extension LinearClient: DependencyKey {
       guard !trimmed.isEmpty else { return nil }
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
       return try await LinearLive.assignToMe(issueUUID: trimmed, apiKey: key)
+    },
+    fetchRecentIssues: { limit in
+      guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
+      return try await LinearLive.fetchRecentIssues(limit: max(1, limit), apiKey: key)
     }
   )
 
   static let testValue = Self(
     fetchIssueTitle: { _ in nil },
     fetchIssues: { _ in [] },
-    assignToMe: { _ in nil }
+    assignToMe: { _ in nil },
+    fetchRecentIssues: { _ in [] }
   )
 }
 
@@ -170,6 +181,33 @@ private nonisolated enum LinearLive {
       result.append(issue)
     }
     return result
+  }
+
+  static func fetchRecentIssues(limit: Int, apiKey: String) async throws -> [LinearIssue] {
+    // `orderBy: createdAt` returns newest-first. The ticket-prefix
+    // allowlist doubles as a team-key filter (prefixes ARE team keys,
+    // e.g. `CEN`), applied server-side when configured.
+    let teamKeys = loadTicketPrefixAllowlistForLinear().sorted()
+    var varDefs = ["$first: Int!"]
+    var variables: [String: Any] = ["first": limit]
+    var filterArg = ""
+    if !teamKeys.isEmpty {
+      varDefs.append("$teamKeys: [String!]")
+      variables["teamKeys"] = teamKeys
+      filterArg = ", filter: { team: { key: { in: $teamKeys } } }"
+    }
+    let query =
+      "query RecentIssues(\(varDefs.joined(separator: ", "))) { "
+      + "issues(first: $first, orderBy: createdAt\(filterArg)) { nodes { \(issueFields) } } }"
+
+    let data = try await post(query: query, variables: variables, apiKey: apiKey)
+    guard
+      let issues = data["issues"] as? [String: Any],
+      let nodes = issues["nodes"] as? [[String: Any]]
+    else {
+      throw LinearClientError.invalidResponse
+    }
+    return nodes.compactMap(parseIssue)
   }
 
   static func assignToMe(issueUUID: String, apiKey: String) async throws -> LinearIssue? {

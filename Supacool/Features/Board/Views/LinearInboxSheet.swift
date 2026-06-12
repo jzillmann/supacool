@@ -117,6 +117,22 @@ struct LinearInboxSheet: View {
             .stroke(.separator)
         )
       HStack {
+        Button {
+          store.send(.fetchRecentTapped)
+        } label: {
+          if store.isFetchingRecent {
+            ProgressView()
+              .controlSize(.small)
+          } else {
+            Label(
+              "Last \(LinearInboxFeature.recentFetchLimit) created",
+              systemImage: "clock.arrow.circlepath"
+            )
+          }
+        }
+        .help("Fetch the \(LinearInboxFeature.recentFetchLimit) most recently created Linear tickets and add them to the inbox")
+        .disabled(store.isFetchingRecent)
+
         Spacer()
         Button("Replace list") {
           store.send(.importTapped(replace: true))
@@ -163,7 +179,10 @@ struct LinearInboxSheet: View {
       ContentUnavailableView(
         "No tickets yet",
         systemImage: "tray",
-        description: Text("Paste one or more Linear issue links above to get started.")
+        description: Text(
+          "Paste one or more Linear issue links above, or fetch the last "
+            + "\(LinearInboxFeature.recentFetchLimit) created tickets."
+        )
       )
       .frame(maxHeight: .infinity)
     } else if store.visibleTickets.isEmpty {
