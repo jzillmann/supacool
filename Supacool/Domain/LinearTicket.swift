@@ -29,6 +29,13 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   var assigneeName: String?
   var assignedToMe: Bool
   var url: String?
+  /// When Linear marked the ticket completed/canceled (its own
+  /// `completedAt`/`canceledAt`, not when we noticed). Tickets done for
+  /// more than `LinearInboxFeature.doneRetention` are auto-dropped.
+  var doneAt: Date?
+  /// User chose to hide this row from the worklist without removing it.
+  /// Hidden tickets reappear via the show-done toggle and can be unhidden.
+  var isHidden: Bool
 
   /// When the cached display fields were last refreshed from the API.
   var fetchedAt: Date?
@@ -53,6 +60,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
     url: String? = nil,
+    doneAt: Date? = nil,
+    isHidden: Bool = false,
     fetchedAt: Date? = nil,
     addedAt: Date = Date(),
     startedAt: Date? = nil,
@@ -67,6 +76,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
     self.url = url
+    self.doneAt = doneAt
+    self.isHidden = isHidden
     self.fetchedAt = fetchedAt
     self.addedAt = addedAt
     self.startedAt = startedAt
@@ -77,7 +88,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, url, fetchedAt, addedAt, startedAt, startedSessionID
+    case assignedToMe, url, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -91,6 +102,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
     url = try c.decodeIfPresent(String.self, forKey: .url)
+    doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
+    isHidden = try c.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
     fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
     addedAt = try c.decodeIfPresent(Date.self, forKey: .addedAt) ?? Date()
     startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
@@ -110,6 +123,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = issue.assigneeName
     assignedToMe = issue.assignedToMe
     url = issue.url
+    doneAt = issue.completedAt ?? issue.canceledAt
     self.fetchedAt = fetchedAt
   }
 

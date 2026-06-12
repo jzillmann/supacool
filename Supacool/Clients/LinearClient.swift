@@ -26,6 +26,10 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var assignedToMe: Bool
   /// Canonical web URL for the issue.
   var url: String?
+  /// When Linear marked the issue completed / canceled. Drives the
+  /// inbox's auto-drop of stale done tickets.
+  var completedAt: Date? = nil
+  var canceledAt: Date? = nil
 }
 
 /// Minimal Linear API client. Originally just fetched a single issue title
@@ -134,7 +138,8 @@ private nonisolated enum LinearLive {
   /// GraphQL selection set shared by the batch query and the assign
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
-    "id identifier title description url state { name type } assignee { displayName isMe }"
+    "id identifier title description url completedAt canceledAt "
+    + "state { name type } assignee { displayName isMe }"
 
   static func currentAPIKey() -> String? {
     let key = UserDefaults.standard.string(forKey: "supacool.linear.apiKey") ?? ""
@@ -296,8 +301,20 @@ private nonisolated enum LinearLive {
       stateType: state?["type"] as? String,
       assigneeName: assignee?["displayName"] as? String,
       assignedToMe: (assignee?["isMe"] as? Bool) ?? false,
-      url: dict["url"] as? String
+      url: dict["url"] as? String,
+      completedAt: parseISODate(dict["completedAt"]),
+      canceledAt: parseISODate(dict["canceledAt"])
     )
+  }
+
+  /// Linear timestamps arrive as ISO-8601 with fractional seconds
+  /// (`2026-06-09T18:00:00.000Z`); accept the plain form too.
+  static func parseISODate(_ raw: Any?) -> Date? {
+    guard let string = raw as? String else { return nil }
+    if let date = try? Date(string, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)) {
+      return date
+    }
+    return try? Date(string, strategy: .iso8601)
   }
 }
 

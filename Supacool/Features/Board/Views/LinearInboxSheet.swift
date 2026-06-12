@@ -63,20 +63,25 @@ struct LinearInboxSheet: View {
       Button {
         store.send(.toggleShowDone)
       } label: {
-        Label(
-          "\(store.doneCount)/\(store.tickets.count) done",
-          systemImage: store.showDone ? "eye" : "eye.slash"
-        )
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        Label(doneFilterLabel, systemImage: store.showDone ? "eye" : "eye.slash")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
       .buttonStyle(.plain)
-      .disabled(store.doneCount == 0)
-      .help(store.showDone ? "Hide done tickets" : "Show done tickets")
+      .disabled(store.doneCount == 0 && store.hiddenCount == 0)
+      .help(store.showDone ? "Hide done and hidden tickets" : "Show done and hidden tickets")
       Spacer()
     }
     .padding(.horizontal)
     .padding(.vertical, 6)
+  }
+
+  private var doneFilterLabel: String {
+    var label = "\(store.doneCount)/\(store.tickets.count) done"
+    if store.hiddenCount > 0 {
+      label += ", \(store.hiddenCount) hidden"
+    }
+    return label
   }
 
   private var header: some View {
@@ -189,7 +194,7 @@ struct LinearInboxSheet: View {
       ContentUnavailableView(
         "All done",
         systemImage: "checkmark.circle",
-        description: Text("Every ticket is completed. Tap “\(store.doneCount)/\(store.tickets.count) done” to show them.")
+        description: Text("Every ticket is done or hidden. Tap “\(doneFilterLabel)” to show them.")
       )
       .frame(maxHeight: .infinity)
     } else {
@@ -202,6 +207,7 @@ struct LinearInboxSheet: View {
             isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
             hasLiveSession: store.state.liveStartedSessionID(for: ticket) != nil,
             onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
+            onToggleHidden: { store.send(.toggleHideTapped(ticketID: ticket.identifier)) },
             onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
             onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
             onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
@@ -225,10 +231,13 @@ private struct LinearTicketRow: View {
   /// board — swaps "Start session" for "Open session".
   let hasLiveSession: Bool
   let onToggleExpanded: () -> Void
+  let onToggleHidden: () -> Void
   let onAssignToMe: () -> Void
   let onStartSession: () -> Void
   let onOpenSession: () -> Void
   let onRemove: () -> Void
+
+  @State private var isHovering = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -240,6 +249,7 @@ private struct LinearTicketRow: View {
     .padding(.vertical, 4)
     .contentShape(Rectangle())
     .onTapGesture(perform: onToggleExpanded)
+    .onHover { isHovering = $0 }
   }
 
   private var summaryRow: some View {
@@ -251,11 +261,13 @@ private struct LinearTicketRow: View {
       Text(ticket.identifier)
         .font(.system(.body, design: .monospaced))
         .fontWeight(.semibold)
+        .opacity(ticket.isHidden ? 0.5 : 1)
 
       Text(ticket.title ?? "Loading…")
         .lineLimit(1)
         .strikethrough(ticket.isDone, color: .secondary)
         .foregroundStyle(ticket.isDone || ticket.title == nil ? .secondary : .primary)
+        .opacity(ticket.isHidden ? 0.5 : 1)
 
       Spacer(minLength: 8)
 
@@ -287,7 +299,35 @@ private struct LinearTicketRow: View {
         .help("Assign this ticket to you in Linear")
       }
       assigneeBadge
+      hoverControls
     }
+  }
+
+  /// Hide and remove, reachable without expanding the row. Revealed on
+  /// hover; the unhide eye stays visible so a hidden row (shown via the
+  /// done filter) is never stuck.
+  private var hoverControls: some View {
+    HStack(spacing: 4) {
+      Button {
+        onToggleHidden()
+      } label: {
+        Image(systemName: ticket.isHidden ? "eye" : "eye.slash")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.borderless)
+      .help(ticket.isHidden ? "Unhide this ticket" : "Hide this ticket from the list (kept in the inbox)")
+
+      Button(role: .destructive) {
+        onRemove()
+      } label: {
+        Image(systemName: "xmark")
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.borderless)
+      .help("Remove this ticket from the inbox")
+    }
+    .opacity(isHovering || ticket.isHidden ? 1 : 0)
+    .allowsHitTesting(isHovering || ticket.isHidden)
   }
 
   @ViewBuilder
