@@ -350,11 +350,19 @@ private struct LinearTicketRow: View {
 
   private var expandedContent: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(descriptionText)
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .textSelection(.enabled)
-        .frame(maxWidth: .infinity, alignment: .leading)
+      Group {
+        if let summary = ticket.summary, !summary.isEmpty {
+          // Linear descriptions are markdown; render the structure instead
+          // of showing raw `**`/`[…](…)` markup.
+          MarkdownText(source: summary)
+        } else {
+          Text(ticket.fetchedAt == nil ? "Loading description…" : "No description.")
+        }
+      }
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
 
       HStack(spacing: 8) {
         if hasLiveSession {
@@ -410,13 +418,6 @@ private struct LinearTicketRow: View {
       .onTapGesture {}
     }
     .padding(.leading, 22)
-  }
-
-  private var descriptionText: String {
-    if let summary = ticket.summary, !summary.isEmpty {
-      return summary
-    }
-    return ticket.fetchedAt == nil ? "Loading description…" : "No description."
   }
 
   /// Linear's desktop app registers the `linear://` scheme; any
