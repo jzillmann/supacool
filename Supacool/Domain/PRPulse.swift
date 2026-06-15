@@ -2,10 +2,10 @@ import Foundation
 
 /// Repo-wide pull request monitoring ("PR Pulse"). Unlike
 /// `SessionReference.pullRequest` — which tracks PRs a *session* mentioned —
-/// these types describe open PRs assigned to the authenticated GitHub user,
-/// fetched via `gh pr list`, so the toolbar badge can answer "how many PRs
-/// need my attention, and how many are actually green?" without a trip to
-/// github.com.
+/// these types describe open PRs that need the authenticated GitHub user's
+/// attention — ones they authored or are assigned to — fetched via `gh pr
+/// list`, so the toolbar badge can answer "how many PRs need my attention,
+/// and how many are actually green?" without a trip to github.com.
 
 /// A board repository the pulse scheduler should monitor. Captured from the
 /// view layer (which owns the `Repository` list) and stored on
@@ -106,8 +106,9 @@ nonisolated enum PRPulseIgnoreKey {
   }
 }
 
-/// Assigned open PRs of one repository plus the coordinates they were fetched
-/// with. Kept in memory only — a relaunch refetches within one tick.
+/// My open PRs of one repository (authored or assigned) plus the coordinates
+/// they were fetched with. Kept in memory only — a relaunch refetches within
+/// one tick.
 nonisolated struct RepoPullRequestSnapshot: Equatable, Sendable {
   let repositoryID: String
   /// "owner/repo", empty when the repository has no GitHub remote.

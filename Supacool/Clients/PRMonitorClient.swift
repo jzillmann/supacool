@@ -3,10 +3,14 @@ import Foundation
 
 private nonisolated let prMonitorLogger = SupaLogger("Supacool.PRMonitor")
 
-/// Repo-wide PR monitoring for the board's PR Pulse badge. Two thin calls:
-/// the assigned open-PR list (one `gh pr list` round-trip, checks included)
-/// and the Greptile confidence score (one `gh api …/comments` round-trip per
-/// PR — the score lives in a bot comment, not in any PR field).
+/// Repo-wide PR monitoring for the board's PR Pulse badge. The open-PR list
+/// is a *union* of two `gh pr list` round-trips — PRs you authored and PRs
+/// assigned to you — because `gh pr list` ANDs its filters, so a single
+/// `--author --assignee` query would return only PRs that are both. Most PRs
+/// you open are never self-assigned, so filtering on assignee alone silently
+/// dropped them from the badge. The Greptile confidence score is a further
+/// `gh api …/comments` round-trip per PR (the score lives in a bot comment,
+/// not in any PR field).
 ///
 /// Follows `SupacoolGithubPRClient`'s shape: shell out to `gh` via a login
 /// shell so PATH/auth just work; errors surface to the reducer which owns
@@ -24,18 +28,12 @@ extension PRMonitorClient: DependencyKey {
   static func live(shell: ShellClient = .liveValue) -> PRMonitorClient {
     PRMonitorClient(
       fetchOpenPullRequests: { owner, repo in
-        let stdout = try await runGh(
-          shell: shell,
-          arguments: [
-            "pr", "list",
-            "--repo", "\(owner)/\(repo)",
-            "--state", "open",
-            "--assignee", "@me",
-            "--limit", "50",
-            "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
-          ]
-        )
-        return try decodeOpenPullRequests(stdout: stdout)
+        // Union of "authored by me" and "assigned to me". `gh pr list` ANDs
+        // its filters, so we can't ask for both in one call — we run two and
+        // merge by PR number (a PR you authored *and* are assigned shows once).
+        async let authored = fetchOpenList(shell: shell, owner: owner, repo: repo, filter: "--author")
+        async let assigned = fetchOpenList(shell: shell, owner: owner, repo: repo, filter: "--assignee")
+        return try await mergeByNumber(authored, assigned)
       },
       fetchGreptileScore: { owner, repo, number in
         let stdout = try await runGh(
@@ -59,6 +57,44 @@ extension PRMonitorClient: DependencyKey {
       throw UnimplementedFetchGreptileScore()
     }
   )
+}
+
+// MARK: - Open-PR list (union of author + assignee)
+
+/// One `gh pr list` round-trip filtered to the current user via `filter`
+/// (`--author` or `--assignee`), value always `@me`.
+private nonisolated func fetchOpenList(
+  shell: ShellClient,
+  owner: String,
+  repo: String,
+  filter: String
+) async throws -> [MonitoredPullRequest] {
+  let stdout = try await runGh(
+    shell: shell,
+    arguments: [
+      "pr", "list",
+      "--repo", "\(owner)/\(repo)",
+      "--state", "open",
+      filter, "@me",
+      "--limit", "50",
+      "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
+    ]
+  )
+  return try decodeOpenPullRequests(stdout: stdout)
+}
+
+/// Merge two PR lists, deduping by number while preserving first-seen order
+/// (authored PRs lead, then any assigned-only PRs).
+nonisolated func mergeByNumber(
+  _ first: [MonitoredPullRequest],
+  _ second: [MonitoredPullRequest]
+) -> [MonitoredPullRequest] {
+  var seen = Set<Int>()
+  var merged: [MonitoredPullRequest] = []
+  for pr in first + second where seen.insert(pr.number).inserted {
+    merged.append(pr)
+  }
+  return merged
 }
 
 // MARK: - Shelling out

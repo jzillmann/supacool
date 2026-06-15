@@ -43,7 +43,7 @@ struct GreptileScoreParserTests {
 }
 
 struct PRMonitorDecodingTests {
-  @Test func liveFetchOpenPullRequestsFiltersToAssigneeMe() async throws {
+  @Test func liveFetchOpenPullRequestsUnionsAuthorAndAssignee() async throws {
     let probe = PRMonitorShellProbe()
     let shell = ShellClient(
       run: { _, _, _ in ShellOutput(stdout: "", stderr: "", exitCode: 0) },
@@ -56,17 +56,47 @@ struct PRMonitorDecodingTests {
 
     _ = try await client.fetchOpenPullRequests("acme", "rocket")
 
-    let arguments = try #require(await probe.arguments.first)
-    #expect(
-      arguments == [
+    // Two round-trips — one per filter — run concurrently, so order isn't
+    // guaranteed. Assert both queries were issued with the expected shape.
+    let calls = await probe.arguments
+    #expect(calls.count == 2)
+    let json = "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup"
+    func expectedCall(filter: String) -> [String] {
+      [
         "gh", "pr", "list",
         "--repo", "acme/rocket",
         "--state", "open",
-        "--assignee", "@me",
+        filter, "@me",
         "--limit", "50",
-        "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
+        "--json", json,
       ]
-    )
+    }
+    #expect(calls.contains(expectedCall(filter: "--author")))
+    #expect(calls.contains(expectedCall(filter: "--assignee")))
+  }
+
+  @Test func mergeByNumberDedupesPreservingAuthoredFirst() {
+    func pr(_ number: Int, author: String) -> MonitoredPullRequest {
+      MonitoredPullRequest(
+        number: number,
+        title: "PR \(number)",
+        url: "https://github.com/acme/rocket/pull/\(number)",
+        author: author,
+        isDraft: false,
+        headRefName: "branch-\(number)",
+        updatedAt: .distantPast,
+        reviewDecision: nil,
+        statusChecks: [],
+        greptileScore: nil
+      )
+    }
+    // #7 appears in both lists; the authored copy wins and shows once.
+    let authored = [pr(7, author: "me"), pr(9, author: "me")]
+    let assigned = [pr(7, author: "me"), pr(12, author: "someone")]
+
+    let merged = mergeByNumber(authored, assigned)
+
+    #expect(merged.map(\.number) == [7, 9, 12])
   }
 
   @Test func decodesGhPrListOutput() throws {

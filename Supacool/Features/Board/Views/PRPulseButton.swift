@@ -2,9 +2,10 @@ import AppKit
 import ComposableArchitecture
 import SwiftUI
 
-/// Toolbar badge summarizing open PRs assigned to the authenticated GitHub
-/// user across the board's (filtered) repositories: total count plus green /
-/// red / pending breakdown. Expands into a popover listing each PR with its
+/// Toolbar badge summarizing open PRs that need the authenticated GitHub
+/// user's attention — ones they authored or are assigned to — across the
+/// board's (filtered) repositories: total count plus green / red / pending
+/// breakdown. Expands into a popover listing each PR with its
 /// CI state, review decision, and Greptile confidence score; clicking a row
 /// opens the PR on GitHub.
 ///
@@ -35,8 +36,8 @@ struct PRPulseButton: View {
         badgeLabel
       }
       .help(
-        "Open pull requests assigned to you across board repos — green: CI passed & Greptile 5/5, "
-          + "red: failing checks or score below 5/5. Click for details."
+        "Your open pull requests across board repos — authored by or assigned to you. "
+          + "Green: CI passed & Greptile 5/5, red: failing checks or score below 5/5. Click for details."
       )
       .popover(isPresented: $isPresented, arrowEdge: .bottom) {
         popoverContent
@@ -127,7 +128,7 @@ struct PRPulseButton: View {
   private var popoverContent: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack {
-        Text("Pull Requests Assigned to Me")
+        Text("My Pull Requests")
           .font(.headline)
         Spacer()
         if !store.prPulseInFlight.isEmpty {
@@ -146,7 +147,7 @@ struct PRPulseButton: View {
       .padding(12)
       Divider()
       if totalCount == 0 && ignoredEntries.isEmpty {
-        Text("No open pull requests assigned to you")
+        Text("No open pull requests authored by or assigned to you")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
           .padding(24)
