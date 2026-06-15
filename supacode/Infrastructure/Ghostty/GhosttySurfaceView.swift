@@ -367,6 +367,11 @@ final class GhosttySurfaceView: NSView, Identifiable {
       // SwiftUI can temporarily detach a pane while rebuilding split/zoom layout.
       // If we keep the stale local focus bit, detached panes still intercept bindings.
       focusDidChange(false)
+    } else {
+      // Board↔session navigation reuses the same surface view; when it returns
+      // to a window it must repaint immediately. Resuming the renderer via
+      // occlusion alone can otherwise leave it on a stale frame.
+      requestRedraw()
     }
     updateScreenObservers()
     updateContentScale()
@@ -953,6 +958,27 @@ final class GhosttySurfaceView: NSView, Identifiable {
     }
     lastOcclusion = visible
     ghostty_surface_set_occlusion(surface, visible)
+    guard visible else { return }
+    // Supacool toggles occlusion to pause/resume a surface's renderer when
+    // navigating between the board and a session (see SingleSessionTerminalView).
+    // `set_occlusion(_, true)` only un-pauses the render thread — it does not
+    // guarantee a frame for the now-visible surface, and it races with SwiftUI
+    // re-attaching the host view. Without an explicit refresh the surface can
+    // stay on a stale frame: keystrokes reach the PTY and run, but the user
+    // sees nothing until a later dirty event repaints it (e.g. leaving and
+    // re-entering the session). Force a redraw now and again on the next
+    // runloop tick so the repaint lands whether or not the view is attached yet.
+    requestRedraw()
+    Task { @MainActor [weak self] in
+      self?.requestRedraw()
+    }
+  }
+
+  /// Ask libghostty to repaint the surface on its next render tick. Safe to
+  /// call repeatedly; it only marks the surface as needing display.
+  func requestRedraw() {
+    guard let surface else { return }
+    ghostty_surface_refresh(surface)
   }
 
   private func setSurfaceFocus(_ focused: Bool) {
