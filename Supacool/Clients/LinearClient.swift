@@ -57,16 +57,18 @@ struct LinearClient: Sendable {
   /// returns the updated record. Throws `.missingAPIKey` when unconfigured.
   var assignToMe: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
 
-  /// Fetches the most recently created issues, newest first. Scoped to the
-  /// `supacool.references.ticketPrefixes` team keys when that allowlist is
-  /// set, so a multi-team workspace doesn't flood the inbox. Throws
-  /// `.missingAPIKey` when no key is configured so the inbox can prompt.
+  /// Fetches the most recently created issues, newest first. Always scoped
+  /// to the `supacool.references.ticketPrefixes` team keys so a multi-team
+  /// workspace can't flood the inbox — throws `.missingTeamScope` when the
+  /// allowlist is empty rather than falling back to an org-wide query.
+  /// Throws `.missingAPIKey` when no key is configured so the inbox can prompt.
   var fetchRecentIssues: @Sendable (_ limit: Int) async throws -> [LinearIssue]
 }
 
 nonisolated enum LinearClientError: LocalizedError {
   case invalidResponse
   case missingAPIKey
+  case missingTeamScope
   case unauthorized
   case notFound(String)
   case requestFailed(status: Int, body: String)
@@ -77,6 +79,9 @@ nonisolated enum LinearClientError: LocalizedError {
       return "Unexpected response from the Linear API."
     case .missingAPIKey:
       return "No Linear API key configured. Add one in Settings → Linear."
+    case .missingTeamScope:
+      return "No ticket prefix configured. Add your team key (e.g. CEN) under "
+        + "Settings → Linear → Ticket prefix allowlist so the import only pulls your team's tickets."
     case .unauthorized:
       return "Linear API key is invalid or missing required scopes."
     case .notFound(let id):
@@ -191,19 +196,16 @@ private nonisolated enum LinearLive {
   static func fetchRecentIssues(limit: Int, apiKey: String) async throws -> [LinearIssue] {
     // `orderBy: createdAt` returns newest-first. The ticket-prefix
     // allowlist doubles as a team-key filter (prefixes ARE team keys,
-    // e.g. `CEN`), applied server-side when configured.
+    // e.g. `CEN`), applied server-side. An empty allowlist would mean an
+    // org-wide query, which floods the inbox in a multi-team workspace —
+    // refuse instead so the inbox can prompt for configuration.
     let teamKeys = loadTicketPrefixAllowlistForLinear().sorted()
-    var varDefs = ["$first: Int!"]
-    var variables: [String: Any] = ["first": limit]
-    var filterArg = ""
-    if !teamKeys.isEmpty {
-      varDefs.append("$teamKeys: [String!]")
-      variables["teamKeys"] = teamKeys
-      filterArg = ", filter: { team: { key: { in: $teamKeys } } }"
-    }
+    guard !teamKeys.isEmpty else { throw LinearClientError.missingTeamScope }
     let query =
-      "query RecentIssues(\(varDefs.joined(separator: ", "))) { "
-      + "issues(first: $first, orderBy: createdAt\(filterArg)) { nodes { \(issueFields) } } }"
+      "query RecentIssues($first: Int!, $teamKeys: [String!]) { "
+      + "issues(first: $first, orderBy: createdAt, filter: { team: { key: { in: $teamKeys } } }) "
+      + "{ nodes { \(issueFields) } } }"
+    let variables: [String: Any] = ["first": limit, "teamKeys": teamKeys]
 
     let data = try await post(query: query, variables: variables, apiKey: apiKey)
     guard

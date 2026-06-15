@@ -178,6 +178,23 @@ struct LinearInboxFeatureTests {
     #expect(store.state.tickets.isEmpty)
   }
 
+  @Test(.dependencies) func fetchRecentWithoutTeamScopePromptsForConfiguration() async {
+    resetInbox([])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.linearClient.fetchRecentIssues = { _ in throw LinearClientError.missingTeamScope }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._fetchFailed)
+    #expect(!store.state.isFetchingRecent)
+    #expect(store.state.errorMessage?.contains("Ticket prefix allowlist") == true)
+    #expect(store.state.tickets.isEmpty)
+  }
+
   @Test(.dependencies) func fetchRecentWithNoResultsExplainsItself() async {
     resetInbox([])
 

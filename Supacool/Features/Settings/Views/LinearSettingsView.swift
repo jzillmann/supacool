@@ -58,8 +58,9 @@ struct LinearSettingsView: View {
         } label: {
           Text("Ticket prefix allowlist")
           Text(
-            "Comma-separated list of team keys (e.g. `CEN`). Empty = any uppercase prefix matches, "
-              + "which can pick up noise like `HTTP-200`."
+            "Comma-separated list of team keys (e.g. `CEN`). For reference chips, empty = any uppercase "
+              + "prefix matches, which can pick up noise like `HTTP-200`. The Linear Inbox's recent-ticket "
+              + "import requires at least one key so it never pulls the whole org."
           )
         }
       } header: {
