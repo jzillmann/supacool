@@ -380,4 +380,76 @@ struct PRPulseFeatureTests {
       $0.prPulseSuccessAt = ["keep": Self.fixedDate]
     }
   }
+
+  // MARK: - Ignore
+
+  @Test(.dependencies) func ignoreToggleAddsThenRemovesKey() async {
+    Self.clearIgnoreStorage()
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.fixedDate)
+    }
+
+    await store.send(.prPulseIgnoreToggled(repositoryID: "repo-1", number: 7)) {
+      $0.$prPulseIgnoredPRKeys.withLock { $0 = ["repo-1#7"] }
+    }
+    await store.send(.prPulseIgnoreToggled(repositoryID: "repo-1", number: 7)) {
+      $0.$prPulseIgnoredPRKeys.withLock { $0 = [] }
+    }
+  }
+
+  @Test(.dependencies) func snapshotLoadPrunesIgnoreKeysForClosedPRs() async {
+    Self.clearIgnoreStorage()
+    var state = BoardFeature.State()
+    let target = PRPulseTarget(repositoryID: "repo-1", rootPath: "/tmp/repo-1")
+    state.prPulseTargets = [target]
+    state.prPulseInFlight = ["repo-1"]
+    // #7 still open, #9 since merged, #3 belongs to another repo.
+    state.$prPulseIgnoredPRKeys.withLock { $0 = ["repo-1#7", "repo-1#9", "repo-2#3"] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.fixedDate)
+    }
+    let snapshot = RepoPullRequestSnapshot(
+      repositoryID: "repo-1",
+      slug: "acme/rocket",
+      pullRequests: [Self.samplePR()],
+      fetchedAt: Self.fixedDate
+    )
+
+    await store.send(._prPulseSnapshotLoaded(snapshot: snapshot)) {
+      $0.prPulseInFlight = []
+      $0.prPulseSuccessAt = ["repo-1": Self.fixedDate]
+      $0.prPulseSnapshots = ["repo-1": snapshot]
+      // #9 pruned (gone from snapshot); #7 kept (still open); #3 untouched (other repo).
+      $0.$prPulseIgnoredPRKeys.withLock { $0 = ["repo-1#7", "repo-2#3"] }
+    }
+  }
+
+  @Test(.dependencies) func removingRepositoryDropsItsIgnoreKeys() async {
+    Self.clearIgnoreStorage()
+    var state = BoardFeature.State()
+    let keep = PRPulseTarget(repositoryID: "keep", rootPath: "/tmp/keep")
+    let drop = PRPulseTarget(repositoryID: "drop", rootPath: "/tmp/drop")
+    state.prPulseTargets = [keep, drop]
+    state.prPulseSuccessAt = ["keep": Self.fixedDate, "drop": Self.fixedDate]
+    state.$prPulseIgnoredPRKeys.withLock { $0 = ["keep#1", "drop#2"] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.fixedDate)
+    }
+
+    await store.send(.prPulseRepositoriesChanged(targets: [keep])) {
+      $0.prPulseTargets = [keep]
+      $0.prPulseSuccessAt = ["keep": Self.fixedDate]
+      $0.$prPulseIgnoredPRKeys.withLock { $0 = ["keep#1"] }
+    }
+  }
+
+  private static func clearIgnoreStorage() {
+    UserDefaults.standard.removeObject(forKey: "prPulseIgnoredPRKeys")
+  }
 }

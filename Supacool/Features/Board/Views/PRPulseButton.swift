@@ -23,6 +23,10 @@ struct PRPulseButton: View {
   /// is torn down.
   @State private var expandedCheckKeys: Set<String> = []
 
+  /// Whether the "N ignored" section at the foot of the popover is
+  /// expanded. View-local: collapses again when the popover closes.
+  @State private var showIgnored: Bool = false
+
   var body: some View {
     if !visibleSnapshots.isEmpty {
       Button {
@@ -55,16 +59,43 @@ struct PRPulseButton: View {
     }
   }
 
-  private var totalCount: Int { visibleSnapshots.reduce(0) { $0 + $1.snapshot.pullRequests.count } }
-  private var greenCount: Int { visibleSnapshots.reduce(0) { $0 + $1.snapshot.greenCount } }
-  private var redCount: Int { visibleSnapshots.reduce(0) { $0 + $1.snapshot.redCount } }
-  private var pendingCount: Int { visibleSnapshots.reduce(0) { $0 + $1.snapshot.pendingCount } }
+  /// Keys of PRs the user has ignored, hidden from the list and counts.
+  private var ignoredKeys: Set<String> { Set(store.prPulseIgnoredPRKeys) }
+
+  private func isIgnored(_ repositoryID: String, _ number: Int) -> Bool {
+    ignoredKeys.contains(PRPulseIgnoreKey.make(repositoryID: repositoryID, number: number))
+  }
+
+  /// A snapshot's PRs minus the ones the user ignored.
+  private func activePullRequests(_ snapshot: RepoPullRequestSnapshot) -> [MonitoredPullRequest] {
+    snapshot.pullRequests.filter { !isIgnored(snapshot.repositoryID, $0.number) }
+  }
+
+  /// All non-ignored PRs across visible repos — the basis for every count.
+  private var activePullRequests: [MonitoredPullRequest] {
+    visibleSnapshots.flatMap { activePullRequests($0.snapshot) }
+  }
+
+  /// Ignored PRs still present in a snapshot, paired with their repo so the
+  /// "N ignored" section can label and restore them.
+  private var ignoredEntries: [(repositoryID: String, repository: Repository, pullRequest: MonitoredPullRequest)] {
+    visibleSnapshots.flatMap { entry in
+      entry.snapshot.pullRequests
+        .filter { isIgnored(entry.snapshot.repositoryID, $0.number) }
+        .map { (entry.snapshot.repositoryID, entry.repository, $0) }
+    }
+  }
+
+  private var totalCount: Int { activePullRequests.count }
+  private var greenCount: Int { activePullRequests.count(where: { $0.health == .green }) }
+  private var redCount: Int { activePullRequests.count(where: { $0.health == .red }) }
+  private var pendingCount: Int { activePullRequests.count(where: { $0.health == .pending }) }
 
   // MARK: - Badge
 
   private var badgeLabel: some View {
     HStack(spacing: 6) {
-      Image(systemName: "person.crop.circle.badge.checkmark")
+      Image(systemName: "list.bullet.clipboard")
         .accessibilityHidden(true)
       Text("\(totalCount)")
         .monospacedDigit()
@@ -114,7 +145,7 @@ struct PRPulseButton: View {
       }
       .padding(12)
       Divider()
-      if totalCount == 0 {
+      if totalCount == 0 && ignoredEntries.isEmpty {
         Text("No open pull requests assigned to you")
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
@@ -123,16 +154,29 @@ struct PRPulseButton: View {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 2) {
             ForEach(visibleSnapshots, id: \.repository.id) { entry in
-              if visibleSnapshots.count > 1 {
-                repoHeader(entry.repository, snapshot: entry.snapshot)
-              }
-              ForEach(entry.snapshot.pullRequests) { pullRequest in
-                let expansionKey = "\(entry.snapshot.repositoryID)#\(pullRequest.number)"
-                pullRequestRow(pullRequest, expansionKey: expansionKey)
-                if expandedCheckKeys.contains(expansionKey) {
-                  checkDetailRows(pullRequest)
+              let active = activePullRequests(entry.snapshot)
+              if !active.isEmpty {
+                if visibleSnapshots.count > 1 {
+                  repoHeader(entry.repository, count: active.count)
+                }
+                ForEach(active) { pullRequest in
+                  let expansionKey = PRPulseIgnoreKey.make(
+                    repositoryID: entry.snapshot.repositoryID,
+                    number: pullRequest.number
+                  )
+                  pullRequestRow(
+                    pullRequest,
+                    repositoryID: entry.snapshot.repositoryID,
+                    expansionKey: expansionKey
+                  )
+                  if expandedCheckKeys.contains(expansionKey) {
+                    checkDetailRows(pullRequest)
+                  }
                 }
               }
+            }
+            if !ignoredEntries.isEmpty {
+              ignoredSection
             }
           }
           .padding(8)
@@ -143,12 +187,86 @@ struct PRPulseButton: View {
     .frame(width: 480)
   }
 
-  private func repoHeader(_ repository: Repository, snapshot: RepoPullRequestSnapshot) -> some View {
+  // MARK: - Ignored section
+
+  @ViewBuilder
+  private var ignoredSection: some View {
+    Divider()
+      .padding(.vertical, 4)
+    Button {
+      withAnimation(.snappy(duration: 0.15)) {
+        showIgnored.toggle()
+      }
+    } label: {
+      HStack(spacing: 6) {
+        Image(systemName: showIgnored ? "chevron.down" : "chevron.right")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.secondary)
+          .accessibilityHidden(true)
+        Text("^[\(ignoredEntries.count) PR](inflect: true) ignored")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Spacer()
+      }
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .padding(.horizontal, 6)
+    .padding(.vertical, 4)
+    .help(showIgnored ? "Hide ignored pull requests" : "Show ignored pull requests")
+
+    if showIgnored {
+      ForEach(Array(ignoredEntries.enumerated()), id: \.offset) { _, entry in
+        ignoredRow(entry.repositoryID, entry.repository, entry.pullRequest)
+      }
+    }
+  }
+
+  private func ignoredRow(
+    _ repositoryID: String,
+    _ repository: Repository,
+    _ pullRequest: MonitoredPullRequest
+  ) -> some View {
+    HStack(spacing: 8) {
+      Circle()
+        .fill(healthColor(pullRequest.health))
+        .frame(width: 8, height: 8)
+        .opacity(0.5)
+      Text("#\(pullRequest.number)")
+        .monospacedDigit()
+        .foregroundStyle(.tertiary)
+      Text(pullRequest.title)
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .foregroundStyle(.secondary)
+      Spacer(minLength: 12)
+      if visibleSnapshots.count > 1 {
+        Text(repository.name)
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+      }
+      Button {
+        store.send(.prPulseIgnoreToggled(repositoryID: repositoryID, number: pullRequest.number))
+      } label: {
+        Image(systemName: "arrow.uturn.backward")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Restore pull request")
+      }
+      .buttonStyle(.plain)
+      .help("Restore — bring this PR back into the pulse")
+    }
+    .padding(.horizontal, 6)
+    .padding(.vertical, 4)
+    .opacity(0.8)
+  }
+
+  private func repoHeader(_ repository: Repository, count: Int) -> some View {
     HStack(spacing: 6) {
       Text(repository.name)
         .font(.caption.weight(.semibold))
         .foregroundStyle(.secondary)
-      Text("\(snapshot.pullRequests.count)")
+      Text("\(count)")
         .font(.caption)
         .monospacedDigit()
         .foregroundStyle(.tertiary)
@@ -159,7 +277,11 @@ struct PRPulseButton: View {
     .padding(.bottom, 2)
   }
 
-  private func pullRequestRow(_ pullRequest: MonitoredPullRequest, expansionKey: String) -> some View {
+  private func pullRequestRow(
+    _ pullRequest: MonitoredPullRequest,
+    repositoryID: String,
+    expansionKey: String
+  ) -> some View {
     HStack(spacing: 8) {
       Button {
         if let url = URL(string: pullRequest.url) {
@@ -198,6 +320,16 @@ struct PRPulseButton: View {
       }
       .help(rowHelp(pullRequest))
       checksToggle(pullRequest, expansionKey: expansionKey)
+      Button {
+        store.send(.prPulseIgnoreToggled(repositoryID: repositoryID, number: pullRequest.number))
+      } label: {
+        Image(systemName: "eye.slash")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .accessibilityLabel("Ignore this pull request")
+      }
+      .buttonStyle(.plain)
+      .help("Ignore — hide this PR from the pulse and exclude it from the counts")
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 4)

@@ -89,6 +89,23 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   }
 }
 
+/// Stable identifier for "this user ignored this PR", used to hide a PR from
+/// the pulse badge/popover and exclude it from the counts. Keyed by repository
+/// plus PR number — GitHub never reuses a PR number within a repo, so a stale
+/// key (PR since merged/closed) can never accidentally re-ignore a different
+/// PR; it simply matches nothing.
+nonisolated enum PRPulseIgnoreKey {
+  static func make(repositoryID: String, number: Int) -> String {
+    "\(repositoryID)#\(number)"
+  }
+
+  /// True when `key` belongs to `repositoryID`. The `#` delimiter keeps the
+  /// prefix test unambiguous even when one repo id is a prefix of another.
+  static func belongs(_ key: String, to repositoryID: String) -> Bool {
+    key.hasPrefix("\(repositoryID)#")
+  }
+}
+
 /// Assigned open PRs of one repository plus the coordinates they were fetched
 /// with. Kept in memory only — a relaunch refetches within one tick.
 nonisolated struct RepoPullRequestSnapshot: Equatable, Sendable {

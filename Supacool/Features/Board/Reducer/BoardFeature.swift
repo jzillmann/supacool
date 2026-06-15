@@ -198,6 +198,17 @@ struct BoardFeature {
     /// inside `prPulseFailureCooldown` (rate limits, offline, no `gh`).
     var prPulseFailureAt: [String: Date] = [:]
 
+    /// PRs the user explicitly ignored from the pulse, as
+    /// `PRPulseIgnoreKey` strings ("repositoryID#number"). Ignored PRs are
+    /// hidden from the badge/popover and excluded from its counts, but can
+    /// be restored from the popover's "N ignored" section. Persisted so a
+    /// dismissal survives relaunches; pruned automatically once a PR leaves
+    /// its repo's snapshot (merged/closed) or the repo leaves the board.
+    /// Stored as `[String]` because `@Shared(.appStorage(...))` plays nicer
+    /// with arrays than sets — the reducer treats it as a set via conversion.
+    @Shared(.appStorage("prPulseIgnoredPRKeys"))
+    var prPulseIgnoredPRKeys: [String] = []
+
     /// First-launch Getting Started carousel state. `isPresented` is
     /// session-only; it flips true the first time app-launch evaluation
     /// finds any incomplete, non-skipped tasks, and flips false as soon
@@ -738,6 +749,9 @@ struct BoardFeature {
     case _prPulseFetchStarted(repositoryID: String)
     case _prPulseSnapshotLoaded(snapshot: RepoPullRequestSnapshot)
     case _prPulseFetchFailed(repositoryID: String)
+    /// Toggles whether a PR is ignored by the pulse. Sent from the popover's
+    /// per-row ignore button and from the "ignored" section's restore button.
+    case prPulseIgnoreToggled(repositoryID: String, number: Int)
 
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
@@ -2505,6 +2519,11 @@ struct BoardFeature {
         state.prPulseSnapshots = state.prPulseSnapshots.filter { current.contains($0.key) }
         state.prPulseSuccessAt = state.prPulseSuccessAt.filter { current.contains($0.key) }
         state.prPulseFailureAt = state.prPulseFailureAt.filter { current.contains($0.key) }
+        state.$prPulseIgnoredPRKeys.withLock { keys in
+          keys.removeAll { key in
+            !current.contains { PRPulseIgnoreKey.belongs(key, to: $0) }
+          }
+        }
         // Fetch newly registered repos right away instead of waiting up
         // to a full tick for the badge to populate.
         let fresh = targets.filter {
@@ -2557,12 +2576,35 @@ struct BoardFeature {
         if state.prPulseTargets.contains(where: { $0.repositoryID == snapshot.repositoryID }) {
           snapshot.fetchedAt = date.now
           state.prPulseSnapshots[snapshot.repositoryID] = snapshot
+          // Drop ignore keys for this repo's PRs that are no longer open
+          // (merged/closed) so the "N ignored" count stays truthful.
+          let live = Set(
+            snapshot.pullRequests.map {
+              PRPulseIgnoreKey.make(repositoryID: snapshot.repositoryID, number: $0.number)
+            }
+          )
+          state.$prPulseIgnoredPRKeys.withLock { keys in
+            keys.removeAll {
+              PRPulseIgnoreKey.belongs($0, to: snapshot.repositoryID) && !live.contains($0)
+            }
+          }
         }
         return .none
 
       case ._prPulseFetchFailed(let repositoryID):
         state.prPulseInFlight.remove(repositoryID)
         state.prPulseFailureAt[repositoryID] = date.now
+        return .none
+
+      case .prPulseIgnoreToggled(let repositoryID, let number):
+        let key = PRPulseIgnoreKey.make(repositoryID: repositoryID, number: number)
+        state.$prPulseIgnoredPRKeys.withLock { keys in
+          if let index = keys.firstIndex(of: key) {
+            keys.remove(at: index)
+          } else {
+            keys.append(key)
+          }
+        }
         return .none
 
       case ._prStatusUpdated(let id, let ref, let snapshot):
