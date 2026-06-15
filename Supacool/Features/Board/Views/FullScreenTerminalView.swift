@@ -120,10 +120,20 @@ struct FullScreenTerminalView: View {
 
   @Dependency(GitClientDependency.self) private var gitClient
 
+  /// Cached Linear inbox records, used to hover-preview a session's ticket
+  /// chip (title + markdown description) without leaving the terminal. Only
+  /// the open full-screen view subscribes — board cards don't, to keep the
+  /// inbox out of every card's update path.
+  @Shared(.linearInbox) private var inboxTickets: [LinearTicket] = []
+
   /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
   @State private var isEditingGitGuiApp: Bool = false
   @State private var gitGuiAppDraft: String = ""
   @State private var isInfoPopoverShown: Bool = false
+  /// Debounce token for the hover-to-open-title-panel affordance. Cancelled
+  /// on hover-out (or when the ⓘ button toggles the panel directly) so a
+  /// quick cursor pass over the title doesn't pop the panel open.
+  @State private var titleHoverTask: Task<Void, Never>?
   @State private var isAutoObserverPopoverShown: Bool = false
   @State private var isQuickDiffPresented: Bool = false
   @State private var isConfirmingRemove: Bool = false
@@ -244,10 +254,19 @@ struct FullScreenTerminalView: View {
         .lineLimit(1)
         .contentShape(Rectangle())
         .onTapGesture(count: 2, perform: onRename)
+        .onHover(perform: handleTitleHover)
         .contextMenu {
           Button("Rename…", systemImage: "pencil", action: onRename)
         }
-        .help("Double-click to rename")
+        .help("Hover for full title + description · double-click to rename")
+        .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
+          SessionInfoPopover(
+            session: session,
+            repositoryName: repositories[id: session.repositoryID]?.name,
+            worktreeLabel: worktreeLabel,
+            onRerun: resolveWorktree() == nil ? onRerun : nil
+          )
+        }
       priorityButton
       infoButton
       revealInFinderButton
@@ -410,7 +429,8 @@ struct FullScreenTerminalView: View {
         references: session.references,
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
         onRemoveReference: onRemoveReference,
-        prReferenceSnapshots: prReferenceSnapshots
+        prReferenceSnapshots: prReferenceSnapshots,
+        ticketPreviewSource: inboxTickets
       )
     }
   }
@@ -658,10 +678,13 @@ struct FullScreenTerminalView: View {
   }
 
   /// Small ⓘ button in the header that surfaces the session's initial
-  /// config (prompt, agent, repo, worktree, captured resume id). Shares
-  /// the same `SessionInfoPopover` view used by the board card.
+  /// config (prompt, agent, repo, worktree, captured resume id). Toggles
+  /// the same `isInfoPopoverShown` state the hover-on-title affordance
+  /// drives; the popover itself is anchored on the title (its conceptual
+  /// owner) so the panel always points at the title + description.
   private var infoButton: some View {
     Button {
+      titleHoverTask?.cancel()
       isInfoPopoverShown.toggle()
     } label: {
       Image(systemName: "info.circle")
@@ -670,13 +693,20 @@ struct FullScreenTerminalView: View {
     }
     .buttonStyle(.plain)
     .help("Show session details")
-    .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
-      SessionInfoPopover(
-        session: session,
-        repositoryName: repositories[id: session.repositoryID]?.name,
-        worktreeLabel: worktreeLabel,
-        onRerun: resolveWorktree() == nil ? onRerun : nil
-      )
+  }
+
+  /// Open the info panel after a short dwell so brushing the cursor across
+  /// the title doesn't flicker it open. Cancel the pending open on hover-out;
+  /// once shown the popover handles its own (click-outside) dismissal, so we
+  /// never force-close it from here — that would yank it away the instant the
+  /// user moves toward the panel to copy the prompt.
+  private func handleTitleHover(_ hovering: Bool) {
+    titleHoverTask?.cancel()
+    guard hovering, !isInfoPopoverShown else { return }
+    titleHoverTask = Task { @MainActor in
+      try? await Task.sleep(for: .milliseconds(350))
+      guard !Task.isCancelled else { return }
+      isInfoPopoverShown = true
     }
   }
 

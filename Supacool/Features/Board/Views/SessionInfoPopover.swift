@@ -50,7 +50,8 @@ struct SessionInfoPopover: View {
         .foregroundStyle(.secondary)
       Text(session.displayName)
         .font(.headline)
-        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
     }
   }
 

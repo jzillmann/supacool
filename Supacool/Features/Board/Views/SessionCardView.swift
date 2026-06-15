@@ -653,6 +653,20 @@ struct ReferenceChip: View {
   /// for tickets) hides the CI glyph and score badge.
   var prSnapshot: PullRequestSnapshot? = nil
 
+  /// When set (ticket chips only), hovering the chip reveals a preview
+  /// popover with the ticket's title + markdown description. Click still
+  /// deep-links to Linear, so the preview is purely additive.
+  var ticketPreview: LinearTicket? = nil
+
+  /// Hover state machine. The preview shows while the pointer is over the
+  /// chip *or* the popover, with a short reveal delay and an even shorter
+  /// hide grace period so sliding the pointer from chip into the popover
+  /// (to scroll/select) doesn't flicker it shut.
+  @State private var isChipHovered = false
+  @State private var isPreviewHovered = false
+  @State private var isPreviewShown = false
+  @State private var hoverTask: Task<Void, Never>?
+
   var body: some View {
     Button {
       onTap?()
@@ -682,12 +696,41 @@ struct ReferenceChip: View {
     }
     .buttonStyle(.plain)
     .help(tooltip)
+    .onHover { hovering in
+      guard ticketPreview != nil else { return }
+      isChipHovered = hovering
+      schedulePreviewUpdate()
+    }
+    .popover(isPresented: $isPreviewShown, arrowEdge: .bottom) {
+      if let ticketPreview {
+        TicketPreviewCard(ticket: ticketPreview, linearOrgSlug: linearOrgSlug)
+          .onHover { hovering in
+            isPreviewHovered = hovering
+            schedulePreviewUpdate()
+          }
+      }
+    }
     .contextMenu {
       if let onRemove {
         Button(role: .destructive, action: onRemove) {
           Label("Remove link", systemImage: "link.badge.minus")
         }
       }
+    }
+  }
+
+  /// Re-evaluate whether the preview should be visible after a hover change.
+  /// Reveal is delayed so quick fly-overs don't pop it; hide is delayed a
+  /// little so the chip→popover hand-off survives the brief moment when
+  /// neither reports hover.
+  private func schedulePreviewUpdate() {
+    hoverTask?.cancel()
+    let shouldShow = isChipHovered || isPreviewHovered
+    hoverTask = Task { @MainActor in
+      let delay: Duration = shouldShow ? (isPreviewShown ? .zero : .milliseconds(450)) : .milliseconds(180)
+      try? await Task.sleep(for: delay)
+      guard !Task.isCancelled else { return }
+      isPreviewShown = shouldShow
     }
   }
 
@@ -725,6 +768,70 @@ struct ReferenceChip: View {
   }
 }
 
+/// Hover preview shown beside a ticket chip: the ticket's title plus its
+/// markdown description, pulled from the cached `@Shared(.linearInbox)`
+/// record. Reuses `MarkdownText` so it renders the same way as the inbox's
+/// expanded row instead of dumping raw `**`/`[…](…)` markup.
+private struct TicketPreviewCard: View {
+  let ticket: LinearTicket
+  let linearOrgSlug: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 6) {
+        Image(systemName: "tag.fill")
+          .font(.caption)
+          .foregroundStyle(.blue)
+        Text(ticket.identifier)
+          .font(.caption.monospaced().weight(.semibold))
+        if let state = ticket.stateName {
+          Text(state)
+            .font(.caption2)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(.quaternary, in: Capsule())
+        }
+        Spacer(minLength: 12)
+      }
+
+      if let title = ticket.title, !title.isEmpty {
+        Text(title)
+          .font(.headline)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Divider()
+
+      Group {
+        if let summary = ticket.summary, !summary.isEmpty {
+          ScrollView {
+            MarkdownText(source: summary)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(maxHeight: 280)
+        } else {
+          Text(ticket.fetchedAt == nil ? "Loading description…" : "No description.")
+        }
+      }
+      .font(.callout)
+      .foregroundStyle(.secondary)
+      .textSelection(.enabled)
+      .frame(maxWidth: .infinity, alignment: .leading)
+
+      Label(
+        linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          ? "Click the chip to open in the Linear app"
+          : "Click the chip to open in Linear",
+        systemImage: "arrow.up.right.square"
+      )
+      .font(.caption2)
+      .foregroundStyle(.tertiary)
+    }
+    .padding(14)
+    .frame(width: 360)
+  }
+}
+
 /// Compact reference summary used on board cards and the terminal header.
 /// Linear tickets stay visible; multiple PRs collapse into one stacked chip
 /// with a dropdown list so PR-heavy sessions do not flood the layout.
@@ -736,6 +843,11 @@ struct SessionReferenceSummaryChips: View {
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on chips and popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+
+  /// Cached Linear inbox records used to hover-preview the primary ticket
+  /// chip's title + description. Empty (the default) disables the preview —
+  /// only the full-screen header passes its `@Shared(.linearInbox)` through.
+  var ticketPreviewSource: [LinearTicket] = []
 
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
 
@@ -753,13 +865,22 @@ struct SessionReferenceSummaryChips: View {
     }
   }
 
+  /// Matching cached inbox record for a ticket reference, if any. Returns
+  /// nil when no preview source was supplied or the ticket isn't in the
+  /// inbox — the chip then behaves as a plain deep-link.
+  private func ticketPreview(for reference: SessionReference) -> LinearTicket? {
+    guard case .ticket(let id) = reference, !ticketPreviewSource.isEmpty else { return nil }
+    return ticketPreviewSource.first { $0.identifier.caseInsensitiveCompare(id) == .orderedSame }
+  }
+
   var body: some View {
     HStack(spacing: 4) {
       if let ticket = tickets.first {
         ReferenceChip(
           reference: ticket,
           linearOrgSlug: linearOrgSlug,
-          onRemove: onRemoveReference.map { remove in { remove(ticket) } }
+          onRemove: onRemoveReference.map { remove in { remove(ticket) } },
+          ticketPreview: ticketPreview(for: ticket)
         )
       }
       if tickets.count > 1 {
