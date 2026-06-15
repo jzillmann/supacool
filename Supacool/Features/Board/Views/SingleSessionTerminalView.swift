@@ -66,6 +66,18 @@ struct SingleSessionTerminalView: View {
       Task { @MainActor in
         try? await Task.sleep(for: .milliseconds(50))
         state.focusSelectedTab()
+        // Re-evaluate window activity once the board→session transition
+        // has settled. The synchronous syncFocus above reads
+        // NSApp.keyWindow, which can be briefly nil mid-transition and
+        // resolve to `.inactive` — pausing the surface's Ghostty renderer
+        // via setOcclusion(false). Because the window's real key/occlusion
+        // state never changes during in-app navigation, WindowFocusObserver
+        // never re-fires, so nothing un-pauses the renderer: keystrokes
+        // reach the PTY but the screen never repaints until the user
+        // leaves and returns (a manual second evaluation). Re-syncing here
+        // is that second evaluation, automatically.
+        let settled = resolvedWindowActivity
+        state.syncFocus(windowIsKey: settled.isKeyWindow, windowIsVisible: settled.isVisible)
       }
     }
     .onDisappear {
