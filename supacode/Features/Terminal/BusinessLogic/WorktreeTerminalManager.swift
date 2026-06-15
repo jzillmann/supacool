@@ -309,7 +309,21 @@ final class WorktreeTerminalManager {
       } else if let duration = self?.deferredWorkLeaseDuration(for: notification) {
         self?.markDeferredWork(worktreeID: decoded, tabID: tabID, duration: duration)
       } else if notification.event == "Stop" {
+        // A Stop hook is the agent's authoritative end-of-turn edge: it
+        // forwarded its final message and yielded back to the user, so it
+        // is — by definition — no longer busy. Clear the busy latch (and
+        // any optimistic busy) here instead of relying on the *separate*
+        // busy=0 progress hook firing on the same Stop event. When that
+        // second hook races, is dropped, or (post supacode→supacool rename)
+        // carries a stale `SUPACODE_*` env guard that never passes, the
+        // latch stays stuck on and the card is pinned to "Working" forever.
+        // Observed in a codex trace: 83 busy=1 edges plus a Stop
+        // notification, but no busy=0. This mirrors the `awaiting` branch
+        // above and `onBusy`'s busy=false path. Self-correcting: if the
+        // agent resumes, its next busy=1 hook re-sets busy within seconds.
         self?.clearDeferredWork(tabID: tabID)
+        self?.clearOptimisticBusy(tabID: tabID)
+        state.clearAgentBusy(tabID: wrappedTabID)
       }
     }
   }

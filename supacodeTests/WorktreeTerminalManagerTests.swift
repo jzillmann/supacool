@@ -750,6 +750,70 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression for the codex card stuck in "In Progress" (trace
+  /// 0073F07A…): codex latches busy via UserPromptSubmit/PreToolUse
+  /// hooks, then ends its turn with a `Stop` notification. The matching
+  /// busy=0 progress hook fires on the *same* Stop event, but when it
+  /// races, is dropped, or carries a stale `SUPACODE_*` env guard, only
+  /// the Stop notification lands — and the busy latch stays stuck on,
+  /// pinning the card green forever. A `Stop` notification must release
+  /// the busy latch on its own. Unlike an awaiting-input hook, Stop is
+  /// "turn finished" (not "blocked on user"), so the card falls through
+  /// to "Waiting" rather than presenting a "Wants Input" chip.
+  @Test func codexStopHookClearsStuckBusyLatch() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stop-clears-busy")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        // Agent working: busy latched on by a PreToolUse-style hook.
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 7964)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Codex ends its turn with a Stop notification — no preceding
+        // busy=false edge (the busy=0 progress hook never reached us).
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "codex",
+            event: "Stop",
+            title: "Done",
+            body: "All complete",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+
+        // Stop releases the busy latch immediately…
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        // …without promoting to a "Wants Input" awaiting chip.
+        await clock.advance(by: .seconds(1))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   /// Codex auto-approve round-trip (PermissionRequest → ~400ms →
   /// PreToolUse busyOn) must not produce a visible "Wants Input"
   /// blink. Guarded by the 750ms default on-debounce.
