@@ -87,6 +87,9 @@ struct SessionCardView: View {
         if let serverLifecycle {
           serverLifecycleChip(serverLifecycle)
         }
+        if let prReason, showsReasonChip {
+          reasonChip(prReason)
+        }
         statusChip
       }
 
@@ -432,6 +435,57 @@ struct SessionCardView: View {
     .background(status.color.opacity(0.12))
     .clipShape(Capsule())
     .fixedSize()
+  }
+
+  /// The most urgent "ball is in your court" reason across this session's PR
+  /// references, derived from the cached snapshots. Drives the reason chip so
+  /// the Waiting-on-Me pool self-triages (CI failed / changes requested /
+  /// ready to merge / …) instead of being an undifferentiated pile.
+  private var prReason: PRBallState? {
+    let states: [PRBallState] = session.references.compactMap { reference in
+      guard case .pullRequest = reference,
+        let snapshot = prReferenceSnapshots[reference.dedupeKey]
+      else { return nil }
+      return PRBallState(snapshot: snapshot)
+    }
+    return states.filter { $0.court == .mine }.min { $0.triagePriority < $1.triagePriority }
+  }
+
+  /// Don't annotate cards whose agent is actively working or just starting —
+  /// the PR reason only matters once the ball is back with the user.
+  private var showsReasonChip: Bool {
+    switch status {
+    case .inProgress, .fresh, .parked: false
+    case .waitingOnMe, .awaitingInput, .waitingForChecks, .detached, .interrupted, .disconnected:
+      true
+    }
+  }
+
+  private func reasonColor(_ severity: PRBallState.Severity) -> Color {
+    switch severity {
+    case .attention: .red
+    case .info: .secondary
+    case .positive: .green
+    }
+  }
+
+  private func reasonChip(_ ball: PRBallState) -> some View {
+    HStack(spacing: 3) {
+      Image(systemName: ball.systemImage)
+        .font(.caption2)
+      if let label = ball.reasonLabel {
+        Text(label)
+          .font(.caption2.weight(.semibold))
+          .lineLimit(1)
+      }
+    }
+    .foregroundStyle(reasonColor(ball.severity))
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
+    .background(reasonColor(ball.severity).opacity(0.12))
+    .clipShape(Capsule())
+    .fixedSize()
+    .help(ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status")
   }
 
   private func serverLifecycleChip(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {

@@ -330,19 +330,35 @@ nonisolated struct PullRequestSnapshot: Equatable, Sendable {
   var statusChecks: [GithubPullRequestStatusCheck]
   var updatedAt: Date?
   var greptileScore: Int?
+  /// Raw `gh` review-decision string ("APPROVED" / "CHANGES_REQUESTED" /
+  /// "REVIEW_REQUIRED" / nil). Fed into `PRBallState` to decide whether a
+  /// settled PR is back in the user's court (review feedback, ready to
+  /// merge) or still waiting on a reviewer.
+  var reviewDecision: String?
+  /// Raw `gh` mergeability ("MERGEABLE" / "CONFLICTING" / "UNKNOWN" / nil).
+  var mergeable: String?
+  /// Raw `gh` merge-state status ("CLEAN" / "DIRTY" / "BLOCKED" / …). "DIRTY"
+  /// is the other signal (besides `mergeable == CONFLICTING`) for conflicts.
+  var mergeStateStatus: String?
 
   init(
     state: PRState,
     title: String,
     statusChecks: [GithubPullRequestStatusCheck] = [],
     updatedAt: Date? = nil,
-    greptileScore: Int? = nil
+    greptileScore: Int? = nil,
+    reviewDecision: String? = nil,
+    mergeable: String? = nil,
+    mergeStateStatus: String? = nil
   ) {
     self.state = state
     self.title = title
     self.statusChecks = statusChecks
     self.updatedAt = updatedAt
     self.greptileScore = greptileScore
+    self.reviewDecision = reviewDecision
+    self.mergeable = mergeable
+    self.mergeStateStatus = mergeStateStatus
   }
 }
 
@@ -361,7 +377,7 @@ nonisolated private func viewPullRequestFetcher(
         "--repo",
         "\(owner)/\(repo)",
         "--json",
-        "state,isDraft,title,statusCheckRollup,updatedAt",
+        "state,isDraft,title,statusCheckRollup,updatedAt,reviewDecision,mergeable,mergeStateStatus",
       ],
       repoRoot: nil
     )
@@ -381,6 +397,9 @@ nonisolated func decodePullRequestSnapshot(stdout: String) throws -> PullRequest
     // `gh pr list` (PRMonitorClient decodes it identically).
     let statusCheckRollup: [GithubPullRequestStatusCheck]?
     let updatedAt: Date?
+    let reviewDecision: String?
+    let mergeable: String?
+    let mergeStateStatus: String?
   }
   let decoder = JSONDecoder()
   decoder.dateDecodingStrategy = .iso8601
@@ -396,7 +415,10 @@ nonisolated func decodePullRequestSnapshot(stdout: String) throws -> PullRequest
     state: state,
     title: response.title,
     statusChecks: response.statusCheckRollup ?? [],
-    updatedAt: response.updatedAt
+    updatedAt: response.updatedAt,
+    reviewDecision: response.reviewDecision,
+    mergeable: response.mergeable,
+    mergeStateStatus: response.mergeStateStatus
   )
 }
 
