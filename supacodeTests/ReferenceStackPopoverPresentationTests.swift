@@ -67,6 +67,30 @@ struct ReferenceStackPopoverPresentationTests {
     #expect(presentation.collapsedClosedPullRequests.isEmpty)
   }
 
+  @Test func featuredPullRequestPrefersOpenOverOlderSettledOnes() {
+    let references = [pr(1, state: .merged), pr(2, state: .merged), pr(3, state: .open)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(in: references) == pr(3, state: .open)
+    )
+  }
+
+  @Test func featuredPullRequestFallsBackToDraft() {
+    let references = [pr(1, state: .merged), pr(2, state: .draft), pr(3, state: .closed)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(in: references) == pr(2, state: .draft)
+    )
+  }
+
+  @Test func featuredPullRequestFallsBackToNewestWhenAllSettled() {
+    let references = [pr(1, state: .merged), pr(2, state: .closed), pr(3, state: nil)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(in: references) == pr(3, state: nil)
+    )
+  }
+
   @Test func pullRequestCollapseCanBeDisabled() {
     let references = (1...(ReferenceStackPopoverPresentation.pullRequestCollapseThreshold + 1)).map {
       pr($0, state: .merged)

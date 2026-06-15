@@ -832,6 +832,17 @@ nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
       return true
     }
   }
+
+  /// The PR surfaced in the collapsed stack chip's label. An open PR is the
+  /// work in flight, so it wins over settled ones; drafts come next. With
+  /// only settled PRs the newest mention beats the oldest — `references`
+  /// keeps insertion order, so `first` would pin the chip to a long-merged
+  /// PR forever.
+  nonisolated static func featuredPullRequest(in references: [SessionReference]) -> SessionReference? {
+    references.first { $0.isPullRequest(in: .open) }
+      ?? references.first { $0.isPullRequest(in: .draft) }
+      ?? references.last
+  }
 }
 
 private extension SessionReference {
@@ -920,7 +931,10 @@ private struct ReferenceStackChip: View {
   private var chipText: String {
     switch kind {
     case .pullRequests:
-      guard case .pullRequest(_, _, let number, _, _) = references.first else {
+      guard
+        case .pullRequest(_, _, let number, _, _) = ReferenceStackPopoverPresentation
+          .featuredPullRequest(in: references)
+      else {
         return "\(references.count) PRs"
       }
       return "#\(number) +\(references.count - 1)"
