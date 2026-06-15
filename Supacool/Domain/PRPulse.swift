@@ -106,6 +106,28 @@ nonisolated enum PRPulseIgnoreKey {
   }
 }
 
+/// Helpers for connecting repo-wide PR Pulse entries back to session-level
+/// `SessionReference.pullRequest` values.
+nonisolated enum PRPulseReference {
+  static func coordinates(slug: String) -> (owner: String, repo: String)? {
+    let parts = slug.split(separator: "/", maxSplits: 1).map(String.init)
+    guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+    return (owner: parts[0], repo: parts[1])
+  }
+
+  static func dedupeKey(slug: String, number: Int) -> String? {
+    guard let coordinates = coordinates(slug: slug) else { return nil }
+    return SessionReference.pullRequest(
+      owner: coordinates.owner,
+      repo: coordinates.repo,
+      number: number,
+      state: nil,
+      title: nil
+    )
+    .dedupeKey
+  }
+}
+
 /// My open PRs of one repository (authored or assigned) plus the coordinates
 /// they were fetched with. Kept in memory only — a relaunch refetches within
 /// one tick.

@@ -165,10 +165,15 @@ struct PRPulseButton: View {
                     repositoryID: entry.snapshot.repositoryID,
                     number: pullRequest.number
                   )
+                  let associatedSessionID = associatedSessionID(
+                    snapshot: entry.snapshot,
+                    pullRequest: pullRequest
+                  )
                   pullRequestRow(
                     pullRequest,
                     repositoryID: entry.snapshot.repositoryID,
-                    expansionKey: expansionKey
+                    expansionKey: expansionKey,
+                    associatedSessionID: associatedSessionID
                   )
                   if expandedCheckKeys.contains(expansionKey) {
                     checkDetailRows(pullRequest)
@@ -281,7 +286,8 @@ struct PRPulseButton: View {
   private func pullRequestRow(
     _ pullRequest: MonitoredPullRequest,
     repositoryID: String,
-    expansionKey: String
+    expansionKey: String,
+    associatedSessionID: AgentSession.ID?
   ) -> some View {
     HStack(spacing: 8) {
       Button {
@@ -322,6 +328,27 @@ struct PRPulseButton: View {
       .help(rowHelp(pullRequest))
       checksToggle(pullRequest, expansionKey: expansionKey)
       Button {
+        isPresented = false
+        store.send(
+          .prPulseSessionRequested(
+            repositoryID: repositoryID,
+            number: pullRequest.number,
+            repositories: Array(repositories)
+          )
+        )
+      } label: {
+        Image(systemName: associatedSessionID == nil ? "plus.rectangle" : "terminal")
+          .font(.caption)
+          .foregroundStyle(associatedSessionID == nil ? .secondary : .primary)
+          .accessibilityLabel(associatedSessionID == nil ? "Start associated session" : "Open associated session")
+      }
+      .buttonStyle(.plain)
+      .help(
+        associatedSessionID == nil
+          ? "Start an associated session for this PR"
+          : "Open the associated session for this PR"
+      )
+      Button {
         store.send(.prPulseIgnoreToggled(repositoryID: repositoryID, number: pullRequest.number))
       } label: {
         Image(systemName: "eye.slash")
@@ -334,6 +361,19 @@ struct PRPulseButton: View {
     }
     .padding(.horizontal, 6)
     .padding(.vertical, 4)
+  }
+
+  private func associatedSessionID(
+    snapshot: RepoPullRequestSnapshot,
+    pullRequest: MonitoredPullRequest
+  ) -> AgentSession.ID? {
+    guard let refKey = PRPulseReference.dedupeKey(
+      slug: snapshot.slug,
+      number: pullRequest.number
+    ) else { return nil }
+    return store.sessions.first { session in
+      session.references.contains(where: { $0.dedupeKey == refKey })
+    }?.id
   }
 
   /// Trailing checks summary doubling as the expand/collapse toggle for

@@ -479,7 +479,126 @@ struct PRPulseFeatureTests {
     }
   }
 
+  // MARK: - Associated sessions
+
+  @Test(.dependencies) func sessionRequestFocusesExistingAssociatedSession() async {
+    let pullRequest = Self.samplePR()
+    let ref = SessionReference.pullRequest(
+      owner: "acme",
+      repo: "rocket",
+      number: pullRequest.number,
+      state: nil,
+      title: pullRequest.title
+    )
+    var session = AgentSession(
+      repositoryID: "repo-1",
+      worktreeID: "repo-1",
+      agent: .claude,
+      initialPrompt: "Work on \(pullRequest.url)"
+    )
+    session.references = [ref]
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.prPulseSnapshots = [
+      "repo-1": RepoPullRequestSnapshot(
+        repositoryID: "repo-1",
+        slug: "acme/rocket",
+        pullRequests: [pullRequest],
+        fetchedAt: Self.fixedDate
+      ),
+    ]
+    let repo = Self.sampleRepository()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .prPulseSessionRequested(
+        repositoryID: "repo-1",
+        number: pullRequest.number,
+        repositories: [repo]
+      )
+    )
+    await store.receive(\.focusSession) {
+      $0.focusedSessionID = session.id
+    }
+  }
+
+  @Test(.dependencies) func sessionRequestOpensPrefilledPRSheetWhenNoAssociatedSessionExists() async {
+    let pullRequest = Self.samplePR()
+    var state = BoardFeature.State()
+    state.prPulseSnapshots = [
+      "repo-1": RepoPullRequestSnapshot(
+        repositoryID: "repo-1",
+        slug: "acme/rocket",
+        pullRequests: [pullRequest],
+        fetchedAt: Self.fixedDate
+      ),
+    ]
+    let repo = Self.sampleRepository()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .prPulseSessionRequested(
+        repositoryID: "repo-1",
+        number: pullRequest.number,
+        repositories: [repo]
+      )
+    ) {
+      $0.newTerminalSheet = Self.expectedSheet(for: pullRequest, repository: repo)
+    }
+  }
+
   private static func clearIgnoreStorage() {
     UserDefaults.standard.removeObject(forKey: "prPulseIgnoredPRKeys")
+  }
+
+  private static func sampleRepository() -> Repository {
+    Repository(
+      id: "repo-1",
+      rootURL: URL(fileURLWithPath: "/tmp/repo-1"),
+      name: "rocket",
+      worktrees: []
+    )
+  }
+
+  private static func expectedSheet(
+    for pullRequest: MonitoredPullRequest,
+    repository: Repository
+  ) -> NewTerminalFeature.State {
+    var sheet = NewTerminalFeature.State(
+      availableRepositories: [repository],
+      preferredRepositoryID: repository.id
+    )
+    let parsed = ParsedPullRequestURL(
+      url: pullRequest.url,
+      owner: "acme",
+      repo: "rocket",
+      number: pullRequest.number
+    )
+    let metadata = SupacoolPRMetadata(
+      title: pullRequest.title,
+      headRefName: pullRequest.headRefName,
+      baseRefName: "",
+      headRepositoryOwner: "acme",
+      state: "OPEN",
+      isDraft: pullRequest.isDraft
+    )
+    sheet.prompt = "Work on \(pullRequest.url)"
+    sheet.pullRequestLookup = .resolved(
+      PullRequestContext(
+        parsed: parsed,
+        metadata: metadata,
+        matchedRepositoryID: repository.id,
+        isFork: false
+      )
+    )
+    sheet.selectedWorkspace = .existingBranch(name: pullRequest.headRefName)
+    sheet.workspaceQuery = pullRequest.headRefName
+    return sheet
   }
 }

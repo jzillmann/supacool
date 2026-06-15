@@ -752,6 +752,9 @@ struct BoardFeature {
     /// Toggles whether a PR is ignored by the pulse. Sent from the popover's
     /// per-row ignore button and from the "ignored" section's restore button.
     case prPulseIgnoreToggled(repositoryID: String, number: Int)
+    /// Opens the session associated with this pulse PR, or opens New Terminal
+    /// prefilled to create one when no matching session exists yet.
+    case prPulseSessionRequested(repositoryID: String, number: Int, repositories: [Repository])
 
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
@@ -2605,6 +2608,63 @@ struct BoardFeature {
             keys.append(key)
           }
         }
+        return .none
+
+      case .prPulseSessionRequested(let repositoryID, let number, let repositories):
+        guard let snapshot = state.prPulseSnapshots[repositoryID],
+          let pullRequest = snapshot.pullRequests.first(where: { $0.number == number }),
+          let coordinates = PRPulseReference.coordinates(slug: snapshot.slug),
+          let refKey = PRPulseReference.dedupeKey(slug: snapshot.slug, number: number)
+        else {
+          return .none
+        }
+        if let session = state.sessions.first(where: { session in
+          session.references.contains(where: { $0.dedupeKey == refKey })
+        }) {
+          state.newTerminalSheet = nil
+          return .send(.focusSession(id: session.id))
+        }
+        let available = IdentifiedArray(uniqueElements: repositories)
+        guard available[id: repositoryID] != nil else { return .none }
+        let url = pullRequest.url.isEmpty
+          ? "https://github.com/\(coordinates.owner)/\(coordinates.repo)/pull/\(number)"
+          : pullRequest.url
+        var sheet = NewTerminalFeature.State(
+          availableRepositories: available,
+          preferredRepositoryID: repositoryID
+        )
+        let parsed = ParsedPullRequestURL(
+          url: url,
+          owner: coordinates.owner,
+          repo: coordinates.repo,
+          number: number
+        )
+        let metadata = SupacoolPRMetadata(
+          title: pullRequest.title,
+          headRefName: pullRequest.headRefName,
+          baseRefName: "",
+          headRepositoryOwner: coordinates.owner,
+          state: "OPEN",
+          isDraft: pullRequest.isDraft
+        )
+        sheet.prompt = "Work on \(url)"
+        sheet.pullRequestLookup = .resolved(
+          PullRequestContext(
+            parsed: parsed,
+            metadata: metadata,
+            matchedRepositoryID: repositoryID,
+            isFork: false
+          )
+        )
+        if pullRequest.headRefName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          sheet.selectedWorkspace = .newBranch(name: "")
+          sheet.workspaceQuery = ""
+        } else {
+          sheet.selectedWorkspace = .existingBranch(name: pullRequest.headRefName)
+          sheet.workspaceQuery = pullRequest.headRefName
+        }
+        state.focusedSessionID = nil
+        state.newTerminalSheet = sheet
         return .none
 
       case ._prStatusUpdated(let id, let ref, let snapshot):
