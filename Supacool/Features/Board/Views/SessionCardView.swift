@@ -442,13 +442,7 @@ struct SessionCardView: View {
   /// the Waiting-on-Me pool self-triages (CI failed / changes requested /
   /// ready to merge / …) instead of being an undifferentiated pile.
   private var prReason: PRBallState? {
-    let states: [PRBallState] = session.references.compactMap { reference in
-      guard case .pullRequest = reference,
-        let snapshot = prReferenceSnapshots[reference.dedupeKey]
-      else { return nil }
-      return PRBallState(snapshot: snapshot)
-    }
-    return states.filter { $0.court == .mine }.min { $0.triagePriority < $1.triagePriority }
+    prReferenceSnapshots.actionableReason(for: session)
   }
 
   /// Don't annotate cards whose agent is actively working or just starting —

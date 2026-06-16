@@ -966,12 +966,24 @@ struct BoardRootView: View {
       awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
       busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
       deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID),
-      waitingExternally: BoardPullRequestChecks.isWaitingExternal(matchedPullRequest(for: session))
+      waitingExternally: waitingExternally(for: session)
     )
     if !tabExists, store.reinitializingSessionIDs.contains(session.id) {
       return .inProgress
     }
     return status
+  }
+
+  /// Whether the session sits in "Waiting on External". Prefer the per-session
+  /// PR snapshots (the explicit `pr:#number` link that also drives the card's
+  /// reason chip) so bucket and chip never disagree; fall back to the
+  /// branch-matched PR only when no snapshot has been fetched yet.
+  private func waitingExternally(for session: AgentSession) -> Bool {
+    let states = store.state.prReferenceSnapshots.ballStates(of: session)
+    if !states.isEmpty {
+      return PRBallState.sessionWaitsExternally(states)
+    }
+    return BoardPullRequestChecks.isWaitingExternal(matchedPullRequest(for: session))
   }
 
   private func matchedPullRequest(for session: AgentSession) -> GithubPullRequest? {

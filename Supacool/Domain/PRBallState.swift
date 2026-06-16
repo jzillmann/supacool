@@ -148,9 +148,47 @@ nonisolated enum PRBallState: Equatable, Sendable {
 }
 
 extension PRBallState {
+  /// Whether a session belongs in "Waiting on External" given its PR
+  /// ball-states: at least one PR is in their court (CI running / awaiting
+  /// review) and none have bounced back to the user. An empty list means
+  /// "no PR signal here" — `false`, so the caller can fall back to another
+  /// source.
+  nonisolated static func sessionWaitsExternally(_ states: [PRBallState]) -> Bool {
+    guard !states.isEmpty else { return false }
+    if states.contains(where: { $0.court == .mine }) { return false }
+    return states.contains(where: { $0.court == .theirs })
+  }
+}
+
+extension [String: PullRequestSnapshot] {
+  /// PR ball-states for `session`, one per PR reference that has a cached
+  /// snapshot. Drives both the card's reason chip and the board's
+  /// external-court decision off the same explicitly-linked source, so the
+  /// two never disagree.
+  nonisolated func ballStates(of session: AgentSession, greptileThreshold: Int = 5) -> [PRBallState] {
+    session.references.compactMap { reference in
+      guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
+        return nil
+      }
+      return PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
+    }
+  }
+
+  /// The most urgent "ball is in your court" reason across `session`'s PRs, or
+  /// `nil` when none need the user.
+  nonisolated func actionableReason(for session: AgentSession, greptileThreshold: Int = 5)
+    -> PRBallState?
+  {
+    ballStates(of: session, greptileThreshold: greptileThreshold)
+      .filter { $0.court == .mine }
+      .min { $0.triagePriority < $1.triagePriority }
+  }
+}
+
+extension PRBallState {
   /// Classifies a freshly-fetched PR snapshot. `greptileThreshold` matches the
   /// PR Pulse rows (a score below 5/5 reads as "needs a look").
-  init(snapshot: PullRequestSnapshot, greptileThreshold: Int = 5) {
+  nonisolated init(snapshot: PullRequestSnapshot, greptileThreshold: Int = 5) {
     switch snapshot.state {
     case .merged:
       self = .merged

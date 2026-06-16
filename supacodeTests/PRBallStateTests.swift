@@ -177,6 +177,28 @@ struct PRBallStateTests {
     )
     #expect(ball == .readyToMerge)
   }
+
+  // MARK: session-level external aggregation
+
+  @Test func noPRsIsNotExternal() {
+    #expect(!PRBallState.sessionWaitsExternally([]))
+  }
+
+  @Test func allTheirCourtIsExternal() {
+    #expect(PRBallState.sessionWaitsExternally([.ciRunning, .awaitingReview]))
+  }
+
+  @Test func anyMineCourtKeepsSessionSurfaced() {
+    // A second PR that's back in the user's court must override a sibling
+    // that's still mid-CI — the user has something to do.
+    #expect(!PRBallState.sessionWaitsExternally([.ciRunning, .ciFailed(1)]))
+  }
+
+  @Test func onlyDonePRsIsNotExternal() {
+    // Merged PRs neither block externally nor demand action; fall through to
+    // the normal idle classification.
+    #expect(!PRBallState.sessionWaitsExternally([.merged]))
+  }
 }
 
 extension PullRequestSnapshot {
