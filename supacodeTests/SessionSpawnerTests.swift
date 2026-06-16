@@ -291,7 +291,7 @@ struct SessionSpawnerTests {
     )
 
     let session = try await withDependencies {
-      $0[SessionReferenceScannerClient.self].scanText = { text in
+      $0[SessionReferenceScannerClient.self].scanText = { text, _ in
         text.contains("CEN-123") ? [.ticket(id: "CEN-123")] : []
       }
       $0.terminalClient.send = { _ in }

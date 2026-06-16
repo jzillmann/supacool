@@ -57,12 +57,14 @@ struct LinearClient: Sendable {
   /// returns the updated record. Throws `.missingAPIKey` when unconfigured.
   var assignToMe: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
 
-  /// Fetches the most recently created issues, newest first. Always scoped
-  /// to the `supacool.references.ticketPrefixes` team keys so a multi-team
-  /// workspace can't flood the inbox — throws `.missingTeamScope` when the
-  /// allowlist is empty rather than falling back to an org-wide query.
-  /// Throws `.missingAPIKey` when no key is configured so the inbox can prompt.
-  var fetchRecentIssues: @Sendable (_ limit: Int) async throws -> [LinearIssue]
+  /// Fetches the most recently created issues, newest first, scoped to the
+  /// given Linear team keys (e.g. `["CEN"]`). The keys are sourced per-repo
+  /// (`RepositorySettings.linearTeamKeys`) by the caller — the inbox unions
+  /// them across repos — so a multi-team workspace can't flood the inbox.
+  /// Throws `.missingTeamScope` when `teamKeys` is empty rather than falling
+  /// back to an org-wide query, and `.missingAPIKey` when no key is
+  /// configured so the inbox can prompt.
+  var fetchRecentIssues: @Sendable (_ limit: Int, _ teamKeys: [String]) async throws -> [LinearIssue]
 }
 
 nonisolated enum LinearClientError: LocalizedError {
@@ -80,8 +82,8 @@ nonisolated enum LinearClientError: LocalizedError {
     case .missingAPIKey:
       return "No Linear API key configured. Add one in Settings → Linear."
     case .missingTeamScope:
-      return "No ticket prefix configured. Add your team key (e.g. CEN) under "
-        + "Settings → Linear → Ticket prefix allowlist so the import only pulls your team's tickets."
+      return "No Linear team key configured for any repository. Add your team key (e.g. CEN) under "
+        + "Settings → <repository> → Linear so the import only pulls that repo's tickets."
     case .unauthorized:
       return "Linear API key is invalid or missing required scopes."
     case .notFound(let id):
@@ -116,9 +118,11 @@ extension LinearClient: DependencyKey {
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
       return try await LinearLive.assignToMe(issueUUID: trimmed, apiKey: key)
     },
-    fetchRecentIssues: { limit in
+    fetchRecentIssues: { limit, teamKeys in
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
-      return try await LinearLive.fetchRecentIssues(limit: max(1, limit), apiKey: key)
+      let normalized = parseLinearTeamKeys(teamKeys.joined(separator: ",")).sorted()
+      guard !normalized.isEmpty else { throw LinearClientError.missingTeamScope }
+      return try await LinearLive.fetchRecentIssues(limit: max(1, limit), teamKeys: normalized, apiKey: key)
     }
   )
 
@@ -126,7 +130,7 @@ extension LinearClient: DependencyKey {
     fetchIssueTitle: { _ in nil },
     fetchIssues: { _ in [] },
     assignToMe: { _ in nil },
-    fetchRecentIssues: { _ in [] }
+    fetchRecentIssues: { _, _ in [] }
   )
 }
 
@@ -193,14 +197,11 @@ private nonisolated enum LinearLive {
     return result
   }
 
-  static func fetchRecentIssues(limit: Int, apiKey: String) async throws -> [LinearIssue] {
-    // `orderBy: createdAt` returns newest-first. The ticket-prefix
-    // allowlist doubles as a team-key filter (prefixes ARE team keys,
-    // e.g. `CEN`), applied server-side. An empty allowlist would mean an
-    // org-wide query, which floods the inbox in a multi-team workspace —
-    // refuse instead so the inbox can prompt for configuration.
-    let teamKeys = loadTicketPrefixAllowlistForLinear().sorted()
-    guard !teamKeys.isEmpty else { throw LinearClientError.missingTeamScope }
+  static func fetchRecentIssues(limit: Int, teamKeys: [String], apiKey: String) async throws -> [LinearIssue] {
+    // `orderBy: createdAt` returns newest-first, filtered server-side to the
+    // caller-supplied team keys (e.g. `CEN`). The keys come from per-repo
+    // `RepositorySettings.linearTeamKeys`; the caller refuses an empty set so
+    // a multi-team workspace can't trigger an org-wide query.
     let query =
       "query RecentIssues($first: Int!, $teamKeys: [String!]) { "
       + "issues(first: $first, orderBy: createdAt, filter: { team: { key: { in: $teamKeys } } }) "
@@ -323,29 +324,24 @@ private nonisolated enum LinearLive {
 // MARK: - Ticket id detection
 
 /// Extracts the first Linear-style ticket id (e.g. `CEN-6690`) from a
-/// prompt string, honouring the same `supacool.references.ticketPrefixes`
-/// allowlist as `SessionReferenceScannerLive.scanText`. Returns `nil`
-/// when no allowlisted id is found.
+/// prompt string. Returns `nil` when none is found.
 nonisolated func firstLinearTicketID(in text: String) -> String? {
   linearTicketIDs(in: text).first
 }
 
 /// Extracts ALL Linear-style ticket ids from arbitrary text — pasted
 /// issue URLs (`linear.app/<org>/issue/CEN-7404/slug`) as well as bare
-/// ids — de-duplicated, preserving first-seen order. Honours the
-/// `supacool.references.ticketPrefixes` allowlist when set.
+/// ids — de-duplicated, preserving first-seen order. Detection is
+/// prefix-agnostic: explicit pastes and prompt-driven branch naming accept any
+/// uppercase prefix. Team-key scoping applies only to the recent-ticket import
+/// and to transcript chip parsing.
 nonisolated func linearTicketIDs(in text: String) -> [String] {
   guard !text.isEmpty else { return [] }
   let regex = /\b([A-Z][A-Z0-9]{1,9}-\d+)\b/
-  let allowed = loadTicketPrefixAllowlistForLinear()
   var seen: Set<String> = []
   var result: [String] = []
   for match in text.matches(of: regex) {
     let id = String(match.output.1)
-    if !allowed.isEmpty {
-      let prefix = id.split(separator: "-").first.map(String.init) ?? ""
-      guard allowed.contains(prefix) else { continue }
-    }
     if seen.insert(id).inserted {
       result.append(id)
     }
@@ -353,9 +349,12 @@ nonisolated func linearTicketIDs(in text: String) -> [String] {
   return result
 }
 
-private nonisolated func loadTicketPrefixAllowlistForLinear() -> Set<String> {
-  let raw = UserDefaults.standard.string(forKey: "supacool.references.ticketPrefixes") ?? ""
-  let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+/// Normalizes a comma-separated list of Linear team keys (e.g. `"CEN, foo"`)
+/// into an upper-cased, de-duplicated set. Shared by the recent-ticket import
+/// scope and the per-repo (`RepositorySettings.linearTeamKeys`) chip-parsing
+/// allowlist.
+nonisolated func parseLinearTeamKeys(_ raw: String?) -> Set<String> {
+  let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else { return [] }
   return Set(
     trimmed

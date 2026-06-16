@@ -52,16 +52,18 @@ struct SessionReferenceScannerTests {
   }
 
   @Test func scanTextRespectsTicketPrefixAllowlist() {
-    UserDefaults.standard.set("CEN", forKey: "supacool.references.ticketPrefixes")
-    defer {
-      UserDefaults.standard.removeObject(forKey: "supacool.references.ticketPrefixes")
-    }
-
     let refs = SessionReferenceScannerLive.scanText(
-      "Both CEN-1 and FOO-2 are mentioned; only CEN should match."
+      "Both CEN-1 and FOO-2 are mentioned; only CEN should match.",
+      allowedPrefixes: ["CEN"]
     )
     #expect(refs.count == 1)
     #expect(refs.first == .ticket(id: "CEN-1"))
+  }
+
+  @Test func scanTextEmptyAllowlistMatchesAnyPrefix() {
+    let refs = SessionReferenceScannerLive.scanText("CEN-1 and FOO-2 both count.")
+    #expect(refs.contains(.ticket(id: "CEN-1")))
+    #expect(refs.contains(.ticket(id: "FOO-2")))
   }
 
   @Test func scanTextEmptyReturnsEmpty() {

@@ -1185,8 +1185,10 @@ struct NewTerminalFeature {
       repositoryRootURL: URL(fileURLWithPath: "/")
     )
 
+    @Shared(.repositorySettings(URL(fileURLWithPath: repositoryID))) var repositorySettings
     let seededReferences = initialReferences(
       prompt: trimmedPrompt,
+      allowedPrefixes: parseLinearTeamKeys(repositorySettings.linearTeamKeys),
       pullRequestLookup: state.pullRequestLookup
     )
 
@@ -1225,9 +1227,10 @@ struct NewTerminalFeature {
 
   private func initialReferences(
     prompt: String,
+    allowedPrefixes: Set<String>,
     pullRequestLookup: PullRequestLookupState
   ) -> [SessionReference] {
-    var refs = scannerClient.scanText(prompt)
+    var refs = scannerClient.scanText(prompt, allowedPrefixes)
     if case .resolved(let context) = pullRequestLookup {
       refs.append(
         .pullRequest(

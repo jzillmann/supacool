@@ -279,8 +279,8 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
-      $0.sessionReferenceScannerClient.scanText = { _ in [.ticket(id: "CEN-10")] }
-      $0.sessionReferenceScannerClient.scanTerminalTranscript = { _ in [
+      $0.sessionReferenceScannerClient.scanText = { _, _ in [.ticket(id: "CEN-10")] }
+      $0.sessionReferenceScannerClient.scanTerminalTranscript = { _, _ in [
         .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil, title: nil),
       ] }
     }

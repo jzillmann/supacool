@@ -125,8 +125,10 @@ enum SessionSpawner {
       )
     )
 
+    @Shared(.repositorySettings(request.repository.rootURL)) var repositorySettings
     let seededReferences = initialReferences(
       prompt: request.prompt,
+      allowedPrefixes: parseLinearTeamKeys(repositorySettings.linearTeamKeys),
       pullRequestLookup: request.pullRequestLookup,
       scannerClient: scannerClient
     )
@@ -151,10 +153,11 @@ enum SessionSpawner {
 
   private static func initialReferences(
     prompt: String,
+    allowedPrefixes: Set<String>,
     pullRequestLookup: PullRequestLookupState,
     scannerClient: SessionReferenceScannerClient
   ) -> [SessionReference] {
-    var refs = scannerClient.scanText(prompt)
+    var refs = scannerClient.scanText(prompt, allowedPrefixes)
     if case .resolved(let context) = pullRequestLookup {
       refs.append(
         .pullRequest(

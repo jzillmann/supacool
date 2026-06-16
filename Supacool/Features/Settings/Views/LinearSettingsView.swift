@@ -2,16 +2,18 @@ import ComposableArchitecture
 import SwiftUI
 
 /// Top-level Linear settings tab. Holds the API key (used to resolve
-/// ticket titles in the New Terminal sheet) plus the link-rendering
-/// knobs (org slug, ticket-prefix allowlist) that drive reference
-/// chips on board cards.
+/// ticket titles in the New Terminal sheet) plus the org slug that drives
+/// reference-chip URLs on board cards.
+///
+/// Team keys are configured **per repository** (Settings → <repository> →
+/// Linear): they scope both the recent-ticket import and transcript chip
+/// parsing for that repo. There is no global team-key setting.
 ///
 /// Lives under `Supacool/` because Linear integration is net-new
 /// Supacool functionality, not an upstream-supacode concept.
 struct LinearSettingsView: View {
   @AppStorage("supacool.linear.apiKey") private var linearAPIKey: String = ""
   @AppStorage("supacool.references.linearOrg") private var linearOrg: String = ""
-  @AppStorage("supacool.references.ticketPrefixes") private var ticketPrefixes: String = ""
 
   var body: some View {
     Form {
@@ -51,22 +53,14 @@ struct LinearSettingsView: View {
               + "Set this to build exact URLs like `linear.app/<slug>/issue/<id>`."
           )
         }
-        LabeledContent {
-          TextField("CEN, FOO", text: $ticketPrefixes)
-            .textFieldStyle(.roundedBorder)
-            .frame(maxWidth: 280)
-        } label: {
-          Text("Ticket prefix allowlist")
-          Text(
-            "Comma-separated list of team keys (e.g. `CEN`). For reference chips, empty = any uppercase "
-              + "prefix matches, which can pick up noise like `HTTP-200`. The Linear Inbox's recent-ticket "
-              + "import requires at least one key so it never pulls the whole org."
-          )
-        }
       } header: {
         Label("References", systemImage: "link")
       } footer: {
-        Text("Ticket chips are parsed from Claude Code session transcripts. Codex sessions fall back to scanning just the initial prompt.")
+        Text(
+          "Ticket chips are parsed from Claude Code session transcripts (Codex sessions fall back to the "
+            + "initial prompt). Team keys that scope which tickets become chips — and the Linear Inbox's "
+            + "recent-ticket import — are set per repository under Settings → <repository> → Linear."
+        )
       }
     }
     .formStyle(.grouped)

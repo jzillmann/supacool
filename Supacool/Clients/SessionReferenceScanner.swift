@@ -10,37 +10,41 @@ import Foundation
 /// also scans its own terminal transcript so Codex/raw sessions can surface
 /// references beyond the initial prompt.
 struct SessionReferenceScannerClient: Sendable {
-  /// Read the JSONL and pull out every unique ticket/PR reference from
-  /// user and assistant messages. Returns `[]` if the file doesn't exist.
-  var scan: @Sendable (_ cwdPath: String, _ agentNativeSessionID: String) async -> [SessionReference]
-  /// One-shot regex pass over a plain string (e.g. `session.initialPrompt`).
-  var scanText: @Sendable (_ text: String) -> [SessionReference]
+  /// Read the JSONL and pull out every unique ticket/PR reference from user
+  /// and assistant messages. `allowedPrefixes` scopes ticket matches to a
+  /// repo's Linear team keys (empty = match any uppercase prefix). Returns
+  /// `[]` if the file doesn't exist.
+  var scan: @Sendable (_ cwdPath: String, _ agentNativeSessionID: String, _ allowedPrefixes: Set<String>) async -> [SessionReference]
+  /// One-shot regex pass over a plain string (e.g. `session.initialPrompt`),
+  /// scoped to `allowedPrefixes`.
+  var scanText: @Sendable (_ text: String, _ allowedPrefixes: Set<String>) -> [SessionReference]
   /// Read Supacool's own terminal transcript JSONL and scan user input /
-  /// rendered output deltas. This catches Codex and raw terminal text that
-  /// never lands in Claude Code's native transcript.
-  var scanTerminalTranscript: @Sendable (_ tabID: UUID) async -> [SessionReference]
+  /// rendered output deltas, scoped to `allowedPrefixes`. This catches Codex
+  /// and raw terminal text that never lands in Claude Code's native transcript.
+  var scanTerminalTranscript: @Sendable (_ tabID: UUID, _ allowedPrefixes: Set<String>) async -> [SessionReference]
 }
 
 extension SessionReferenceScannerClient: DependencyKey {
   static let liveValue = Self(
-    scan: { cwdPath, agentNativeSessionID in
+    scan: { cwdPath, agentNativeSessionID, allowedPrefixes in
       SessionReferenceScannerLive.scan(
         cwdPath: cwdPath,
-        agentNativeSessionID: agentNativeSessionID
+        agentNativeSessionID: agentNativeSessionID,
+        allowedPrefixes: allowedPrefixes
       )
     },
-    scanText: { text in
-      SessionReferenceScannerLive.scanText(text)
+    scanText: { text, allowedPrefixes in
+      SessionReferenceScannerLive.scanText(text, allowedPrefixes: allowedPrefixes)
     },
-    scanTerminalTranscript: { tabID in
-      SessionReferenceScannerLive.scanTerminalTranscript(tabID: tabID)
+    scanTerminalTranscript: { tabID, allowedPrefixes in
+      SessionReferenceScannerLive.scanTerminalTranscript(tabID: tabID, allowedPrefixes: allowedPrefixes)
     }
   )
 
   static let testValue = Self(
-    scan: { _, _ in [] },
-    scanText: { _ in [] },
-    scanTerminalTranscript: { _ in [] }
+    scan: { _, _, _ in [] },
+    scanText: { _, _ in [] },
+    scanTerminalTranscript: { _, _ in [] }
   )
 }
 
@@ -111,7 +115,11 @@ nonisolated enum SessionReferenceScannerLive {
     return nil
   }
 
-  static func scan(cwdPath: String, agentNativeSessionID: String) -> [SessionReference] {
+  static func scan(
+    cwdPath: String,
+    agentNativeSessionID: String,
+    allowedPrefixes: Set<String> = []
+  ) -> [SessionReference] {
     guard !agentNativeSessionID.isEmpty else { return [] }
     guard
       let url = locateJSONLURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
@@ -123,7 +131,7 @@ nonisolated enum SessionReferenceScannerLive {
       scannerLogger.warning("JSONL was not UTF-8: \(url.path)")
       return []
     }
-    return scanJSONL(content)
+    return scanJSONL(content, allowedPrefixes: allowedPrefixes)
   }
 
   /// Parse a JSONL blob, extract message text, run reference regexes,
@@ -137,7 +145,7 @@ nonisolated enum SessionReferenceScannerLive {
   /// persist forever. So a ref that only ever appears in tool output must recur
   /// across **≥ 2 messages** to count — a real focus comes back in
   /// conversation; a one-shot in a tool dump does not.
-  static func scanJSONL(_ jsonl: String) -> [SessionReference] {
+  static func scanJSONL(_ jsonl: String, allowedPrefixes: Set<String> = []) -> [SessionReference] {
     var firstSeen: [String: SessionReference] = [:]
     var order: [String] = []
     var highSignalKeys = Set<String>()
@@ -163,12 +171,12 @@ nonisolated enum SessionReferenceScannerLive {
       guard let message = obj["message"] as? [String: Any] else { continue }
       let (highSignal, toolResult) = partitionText(from: message["content"])
 
-      for ref in scanText(highSignal) {
+      for ref in scanText(highSignal, allowedPrefixes: allowedPrefixes) {
         recordFirstSeen(ref)
         highSignalKeys.insert(ref.dedupeKey)
       }
       var seenInMessage = Set<String>()
-      for ref in scanText(toolResult) {
+      for ref in scanText(toolResult, allowedPrefixes: allowedPrefixes) {
         recordFirstSeen(ref)
         if seenInMessage.insert(ref.dedupeKey).inserted {
           toolResultMessageCounts[ref.dedupeKey, default: 0] += 1
@@ -234,8 +242,14 @@ nonisolated enum SessionReferenceScannerLive {
   }
 
   /// Scan Supacool's agent-agnostic terminal transcript for references.
-  static func scanTerminalTranscript(tabID: UUID) -> [SessionReference] {
-    scanTranscriptEntries(TranscriptReader.loadEntries(rawTabID: tabID))
+  static func scanTerminalTranscript(
+    tabID: UUID,
+    allowedPrefixes: Set<String> = []
+  ) -> [SessionReference] {
+    scanTranscriptEntries(
+      TranscriptReader.loadEntries(rawTabID: tabID),
+      allowedPrefixes: allowedPrefixes
+    )
   }
 
   /// Pure transcript-entry scanner so tests can cover terminal-text
@@ -250,7 +264,10 @@ nonisolated enum SessionReferenceScannerLive {
   /// accumulating over a long session. Require **≥ 2 distinct outputTurns**
   /// for an output-only reference: a real focus comes back in conversation;
   /// a one-shot in a tool dump does not.
-  static func scanTranscriptEntries(_ entries: [TranscriptEntry]) -> [SessionReference] {
+  static func scanTranscriptEntries(
+    _ entries: [TranscriptEntry],
+    allowedPrefixes: Set<String> = []
+  ) -> [SessionReference] {
     var firstSeen: [String: SessionReference] = [:]
     var order: [String] = []
     var highSignalKeys = Set<String>()
@@ -264,7 +281,7 @@ nonisolated enum SessionReferenceScannerLive {
     }
 
     func observeHighSignal(_ text: String) {
-      for ref in scanText(text) {
+      for ref in scanText(text, allowedPrefixes: allowedPrefixes) {
         recordFirstSeen(ref)
         highSignalKeys.insert(ref.dedupeKey)
       }
@@ -272,7 +289,7 @@ nonisolated enum SessionReferenceScannerLive {
 
     func observeOutputTurn(_ text: String) {
       var seenInTurn = Set<String>()
-      for ref in scanText(text) {
+      for ref in scanText(text, allowedPrefixes: allowedPrefixes) {
         recordFirstSeen(ref)
         if seenInTurn.insert(ref.dedupeKey).inserted {
           outputTurnCounts[ref.dedupeKey, default: 0] += 1
@@ -302,15 +319,14 @@ nonisolated enum SessionReferenceScannerLive {
     }
   }
 
-  /// Single-pass regex extraction from plain text. Applies the ticket
-  /// prefix allowlist from UserDefaults (`supacool.references.ticketPrefixes`,
-  /// comma-separated). Empty allowlist = match any uppercase prefix.
-  static func scanText(_ text: String) -> [SessionReference] {
+  /// Single-pass regex extraction from plain text. `allowedPrefixes` scopes
+  /// ticket matches to a repo's Linear team keys (sourced from
+  /// `RepositorySettings.linearTeamKeys`); an empty set matches any uppercase
+  /// prefix.
+  static func scanText(_ text: String, allowedPrefixes: Set<String> = []) -> [SessionReference] {
     guard !text.isEmpty else { return [] }
     var seen = Set<String>()
     var results: [SessionReference] = []
-
-    let allowedPrefixes = loadTicketPrefixAllowlist()
 
     // Regex literals (Swift regex builder syntax). `\b` word boundaries
     // prevent matches being picked up inside longer identifiers.
@@ -345,20 +361,6 @@ nonisolated enum SessionReferenceScannerLive {
     }
 
     return results
-  }
-
-  /// Reads `supacool.references.ticketPrefixes` from UserDefaults and
-  /// returns a normalized Set of uppercase prefixes. Empty set = allow any.
-  private static func loadTicketPrefixAllowlist() -> Set<String> {
-    let raw = UserDefaults.standard.string(forKey: "supacool.references.ticketPrefixes") ?? ""
-    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !trimmed.isEmpty else { return [] }
-    return Set(
-      trimmed
-        .split(separator: ",")
-        .map { $0.trimmingCharacters(in: .whitespaces).uppercased() }
-        .filter { !$0.isEmpty }
-    )
   }
 
 }

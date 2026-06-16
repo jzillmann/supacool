@@ -85,6 +85,11 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
   var copyIgnoredOnWorktreeCreate: Bool?
   var copyUntrackedOnWorktreeCreate: Bool?
   var pullRequestMergeStrategy: PullRequestMergeStrategy?
+  /// Comma-separated Linear team keys for this repo (e.g. `CEN, FOO`). Used
+  /// as the server-side scope when the Linear Inbox imports recently created
+  /// tickets — see `LinearInboxFeature`. Nil/empty means this repo
+  /// contributes no scope to the (global) inbox import.
+  var linearTeamKeys: String?
 
   private enum CodingKeys: String, CodingKey {
     case setupScript
@@ -99,6 +104,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     case copyIgnoredOnWorktreeCreate
     case copyUntrackedOnWorktreeCreate
     case pullRequestMergeStrategy
+    case linearTeamKeys
   }
 
   static let `default` = RepositorySettings(
@@ -113,7 +119,8 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     worktreeBaseDirectoryPath: nil,
     copyIgnoredOnWorktreeCreate: nil,
     copyUntrackedOnWorktreeCreate: nil,
-    pullRequestMergeStrategy: nil
+    pullRequestMergeStrategy: nil,
+    linearTeamKeys: nil
   )
 
   init(
@@ -128,7 +135,8 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     worktreeBaseDirectoryPath: String? = nil,
     copyIgnoredOnWorktreeCreate: Bool? = nil,
     copyUntrackedOnWorktreeCreate: Bool? = nil,
-    pullRequestMergeStrategy: PullRequestMergeStrategy? = nil
+    pullRequestMergeStrategy: PullRequestMergeStrategy? = nil,
+    linearTeamKeys: String? = nil
   ) {
     self.setupScript = setupScript
     self.archiveScript = archiveScript
@@ -142,6 +150,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     self.copyIgnoredOnWorktreeCreate = copyIgnoredOnWorktreeCreate
     self.copyUntrackedOnWorktreeCreate = copyUntrackedOnWorktreeCreate
     self.pullRequestMergeStrategy = pullRequestMergeStrategy
+    self.linearTeamKeys = linearTeamKeys
   }
 
   init(from decoder: Decoder) throws {
@@ -180,5 +189,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     pullRequestMergeStrategy =
       try container.decodeIfPresent(PullRequestMergeStrategy.self, forKey: .pullRequestMergeStrategy)
       ?? Self.default.pullRequestMergeStrategy
+    linearTeamKeys =
+      try container.decodeIfPresent(String.self, forKey: .linearTeamKeys)
   }
 }

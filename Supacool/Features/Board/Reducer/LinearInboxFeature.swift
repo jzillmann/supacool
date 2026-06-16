@@ -13,8 +13,10 @@ import Foundation
 struct LinearInboxFeature {
   @ObservableState
   struct State: Equatable {
-    /// Persisted list of pasted tickets. Survives relaunch.
-    @Shared(.linearInbox) var tickets: [LinearTicket] = []
+    /// Persisted pasted tickets, bucketed per repository. Survives relaunch.
+    /// The inbox is repo-scoped: ``tickets`` exposes only the selected repo's
+    /// worklist; the picker swaps which bucket is shown.
+    @Shared(.linearInbox) var inbox: [String: [LinearTicket]] = [:]
 
     /// Live board sessions — read-only here. Lets a started ticket offer
     /// "Open session" instead of spawning a duplicate, and lets the row
@@ -24,6 +26,10 @@ struct LinearInboxFeature {
     /// Live-synced by BoardFeature so the embedded New Terminal tab's
     /// repo picker stays current with repos added/removed while open.
     var availableRepositories: IdentifiedArrayOf<Repository>
+
+    /// The repository whose worklist is on screen. The inbox is per-repo, so
+    /// every ticket mutation and the recent-ticket import scope to this repo.
+    var selectedRepositoryID: Repository.ID?
 
     /// Free-text in the import field (pasted URLs / ids).
     var pasteText: String = ""
@@ -47,11 +53,28 @@ struct LinearInboxFeature {
 
     @Presents var newTerminal: NewTerminalFeature.State?
 
-    init(availableRepositories: IdentifiedArrayOf<Repository>) {
+    init(
+      availableRepositories: IdentifiedArrayOf<Repository>,
+      selectedRepositoryID: Repository.ID? = nil
+    ) {
       self.availableRepositories = availableRepositories
+      self.selectedRepositoryID = selectedRepositoryID ?? availableRepositories.first?.id
     }
 
     var hasNewTerminalTab: Bool { newTerminal != nil }
+
+    /// The repository whose worklist is on screen.
+    var selectedRepository: Repository? {
+      guard let selectedRepositoryID else { return nil }
+      return availableRepositories[id: selectedRepositoryID]
+    }
+
+    /// The selected repo's tickets. Read-only — mutate through the reducer's
+    /// `mutateSelectedTickets` so writes land in the right bucket.
+    var tickets: [LinearTicket] {
+      guard let selectedRepositoryID else { return [] }
+      return inbox[selectedRepositoryID] ?? []
+    }
 
     /// Number of tickets Linear reports as done (completed/canceled).
     var doneCount: Int { tickets.filter(\.isDone).count }
@@ -136,10 +159,21 @@ struct LinearInboxFeature {
     BindingReducer()
     Reduce { state, action in
       switch action {
+      case .binding(\.selectedRepositoryID):
+        // Switching repos swaps the visible bucket — refresh that repo's
+        // ticket metadata so the worklist isn't stale.
+        state.expandedTicketIDs = []
+        pruneExpiredDoneTickets(&state)
+        let ids = state.tickets.map(\.identifier)
+        guard !ids.isEmpty else { return .none }
+        state.fetchingTicketIDs = Set(ids)
+        return fetchIssues(ids: ids)
+
       case .binding:
         return .none
 
       case .task:
+        migrateLegacyInboxIfNeeded(&state)
         pruneExpiredDoneTickets(&state)
         let ids = state.tickets.map(\.identifier)
         guard !ids.isEmpty else { return .none }
@@ -153,7 +187,7 @@ struct LinearInboxFeature {
           return .none
         }
         let now = date.now
-        state.$tickets.withLock { tickets in
+        mutateSelectedTickets(&state) { tickets in
           if replace {
             // Preserve inbox-local metadata for ids that survive the
             // replace so "started" markers don't reset.
@@ -173,9 +207,13 @@ struct LinearInboxFeature {
       case .fetchRecentTapped:
         state.isFetchingRecent = true
         state.errorMessage = nil
+        // Scope the pull to the selected repo's team keys. An empty set means
+        // the client throws `.missingTeamScope`, prompting the user to set a
+        // key under Settings → <repository> → Linear.
+        let scopeKeys = state.selectedRepository.map { teamKeys(for: $0) } ?? []
         return .run { send in
           do {
-            let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit)
+            let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit, scopeKeys)
             await send(._recentIssuesFetched(issues))
           } catch {
             await send(._fetchFailed(message: error.localizedDescription))
@@ -243,12 +281,12 @@ struct LinearInboxFeature {
         return .send(.delegate(.openSession(sessionID: sessionID)))
 
       case let .removeTicketTapped(ticketID):
-        state.$tickets.withLock { $0.removeAll { $0.identifier == ticketID } }
+        mutateSelectedTickets(&state) { $0.removeAll { $0.identifier == ticketID } }
         state.expandedTicketIDs.remove(ticketID)
         return .none
 
       case let .toggleHideTapped(ticketID):
-        state.$tickets.withLock { tickets in
+        mutateSelectedTickets(&state) { tickets in
           guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
           tickets[index].isHidden.toggle()
         }
@@ -268,7 +306,7 @@ struct LinearInboxFeature {
       case let ._issuesFetched(issues):
         let now = date.now
         let byID = Dictionary(issues.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
-        state.$tickets.withLock { tickets in
+        mutateSelectedTickets(&state) { tickets in
           for index in tickets.indices {
             if let issue = byID[tickets[index].identifier] {
               tickets[index].apply(issue, fetchedAt: now)
@@ -291,7 +329,7 @@ struct LinearInboxFeature {
         // no follow-up fetch needed); ids already in the inbox just get
         // their cached display fields refreshed.
         let now = date.now
-        state.$tickets.withLock { tickets in
+        mutateSelectedTickets(&state) { tickets in
           for issue in issues {
             if let index = tickets.firstIndex(where: { $0.identifier == issue.identifier }) {
               tickets[index].apply(issue, fetchedAt: now)
@@ -314,7 +352,7 @@ struct LinearInboxFeature {
       case let ._assignCompleted(ticketID, issue):
         state.assigningTicketIDs.remove(ticketID)
         let now = date.now
-        state.$tickets.withLock { tickets in
+        mutateSelectedTickets(&state) { tickets in
           guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
           if let issue {
             tickets[index].apply(issue, fetchedAt: now)
@@ -350,7 +388,7 @@ struct LinearInboxFeature {
               case .spawnRequested(let request, _, _): request.sessionID
               default: nil
               }
-            state.$tickets.withLock { tickets in
+            mutateSelectedTickets(&state) { tickets in
               if let index = tickets.firstIndex(where: { $0.identifier == ticketID }) {
                 tickets[index].startedAt = now
                 tickets[index].startedSessionID = sessionID
@@ -386,11 +424,59 @@ struct LinearInboxFeature {
   /// stamps `doneAt` and they age out from there.
   private func pruneExpiredDoneTickets(_ state: inout State) {
     let cutoff = date.now.addingTimeInterval(-Self.doneRetention)
-    state.$tickets.withLock { tickets in
+    mutateSelectedTickets(&state) { tickets in
       tickets.removeAll { ticket in
         guard ticket.isDone, let doneAt = ticket.doneAt else { return false }
         return doneAt < cutoff
       }
+    }
+  }
+
+  /// Mutate the selected repository's ticket bucket in place. No-ops when no
+  /// repo is selected (an empty inbox), so callers stay branch-free.
+  private func mutateSelectedTickets(_ state: inout State, _ body: (inout [LinearTicket]) -> Void) {
+    guard let repositoryID = state.selectedRepositoryID else { return }
+    state.$inbox.withLock { inbox in
+      var bucket = inbox[repositoryID] ?? []
+      body(&bucket)
+      inbox[repositoryID] = bucket
+    }
+  }
+
+  /// This repo's configured Linear team keys (e.g. `["CEN"]`), normalized.
+  private func teamKeys(for repository: Repository) -> [String] {
+    @Shared(.repositorySettings(repository.rootURL)) var settings
+    return parseLinearTeamKeys(settings.linearTeamKeys).sorted()
+  }
+
+  /// One-time upgrade: tickets recovered from the pre-repo-scoping flat file
+  /// land under `LinearInboxKey.legacyBucketKey`. Redistribute them into the
+  /// right repo bucket by matching each ticket's prefix to a repo's team keys,
+  /// falling back to the selected repo so nothing is lost, then clear the
+  /// reserved bucket.
+  private func migrateLegacyInboxIfNeeded(_ state: inout State) {
+    guard
+      let legacy = state.inbox[LinearInboxKey.legacyBucketKey],
+      !legacy.isEmpty
+    else { return }
+
+    var prefixToRepo: [String: Repository.ID] = [:]
+    for repository in state.availableRepositories {
+      for key in teamKeys(for: repository) where prefixToRepo[key] == nil {
+        prefixToRepo[key] = repository.id
+      }
+    }
+    let fallback = state.selectedRepositoryID ?? state.availableRepositories.first?.id
+
+    state.$inbox.withLock { inbox in
+      for ticket in legacy {
+        let prefix = ticket.identifier.split(separator: "-").first.map { $0.uppercased() } ?? ""
+        guard let target = prefixToRepo[prefix] ?? fallback else { continue }
+        if !(inbox[target]?.contains(where: { $0.identifier == ticket.identifier }) ?? false) {
+          inbox[target, default: []].append(ticket)
+        }
+      }
+      inbox[LinearInboxKey.legacyBucketKey] = nil
     }
   }
 

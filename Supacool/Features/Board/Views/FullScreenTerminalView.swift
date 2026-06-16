@@ -124,7 +124,7 @@ struct FullScreenTerminalView: View {
   /// chip (title + markdown description) without leaving the terminal. Only
   /// the open full-screen view subscribes — board cards don't, to keep the
   /// inbox out of every card's update path.
-  @Shared(.linearInbox) private var inboxTickets: [LinearTicket] = []
+  @Shared(.linearInbox) private var inboxTickets: [String: [LinearTicket]] = [:]
 
   /// Toggles the "Set Custom…" alert for overriding `gitGuiApp`.
   @State private var isEditingGitGuiApp: Bool = false
@@ -430,7 +430,7 @@ struct FullScreenTerminalView: View {
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
-        ticketPreviewSource: inboxTickets
+        ticketPreviewSource: inboxTickets[session.repositoryID] ?? []
       )
     }
   }

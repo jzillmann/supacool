@@ -1452,8 +1452,14 @@ struct BoardFeature {
         return .none
 
       case .openLinearInbox(let repositories):
+        // Open scoped to the board's current repo focus when there is one, so
+        // the per-repo worklist matches what the user is looking at.
+        let preferredInboxRepository =
+          filteredPreferredRepositoryID(in: repositories, filters: state.filters)
+          ?? repositories.first?.id
         state.linearInbox = LinearInboxFeature.State(
-          availableRepositories: IdentifiedArray(uniqueElements: repositories)
+          availableRepositories: IdentifiedArray(uniqueElements: repositories),
+          selectedRepositoryID: preferredInboxRepository
         )
         return .none
 
@@ -1561,6 +1567,13 @@ struct BoardFeature {
         if state.linearInbox != nil {
           let filtersSnapshot = state.filters
           state.linearInbox?.availableRepositories = updated
+          // Keep the inbox's repo picker pointed at a repo that still exists.
+          let inboxSelection = state.linearInbox?.selectedRepositoryID
+          if inboxSelection == nil || updated[id: inboxSelection!] == nil {
+            state.linearInbox?.selectedRepositoryID =
+              filteredPreferredRepositoryID(in: repositories, filters: filtersSnapshot)
+              ?? updated.first?.id
+          }
           // Keep an open embedded New Terminal tab's picker in sync too.
           if state.linearInbox?.newTerminal != nil {
             let embeddedSelection = state.linearInbox?.newTerminal?.selectedRepositoryID
@@ -2323,16 +2336,22 @@ struct BoardFeature {
         let worktreeID = session.worktreeID
         let agentID = session.agentNativeSessionID
         let initialPrompt = session.initialPrompt
+        // Chip parsing is scoped to this session's repo team keys (e.g.
+        // `CEN`), so a multi-team workspace doesn't surface noise like
+        // `HTTP-200`. An unconfigured repo yields an empty set = match any.
+        @Shared(.repositorySettings(URL(fileURLWithPath: session.repositoryID)))
+        var repositorySettings
+        let allowedPrefixes = parseLinearTeamKeys(repositorySettings.linearTeamKeys)
         return .run { [scannerClient] send in
           var refs: [SessionReference] = []
           if let agentID, !agentID.isEmpty {
-            refs = await scannerClient.scan(worktreeID, agentID)
+            refs = await scannerClient.scan(worktreeID, agentID, allowedPrefixes)
           }
           // Always also scan the initialPrompt and Supacool's own
           // terminal transcript. The transcript pass catches Codex/raw
           // terminal refs that never land in Claude's native JSONL.
-          let promptRefs = scannerClient.scanText(initialPrompt)
-          let terminalRefs = await scannerClient.scanTerminalTranscript(id)
+          let promptRefs = scannerClient.scanText(initialPrompt, allowedPrefixes)
+          let terminalRefs = await scannerClient.scanTerminalTranscript(id, allowedPrefixes)
           let merged = Self.mergeReferences(
             Self.mergeReferences(refs, with: promptRefs),
             with: terminalRefs

@@ -9,14 +9,7 @@ import Testing
 // MARK: - Ticket id parsing (pure)
 
 struct LinearTicketParsingTests {
-  /// The allowlist is read from UserDefaults; pin it empty so parsing is
-  /// deterministic regardless of the host's configured prefixes.
-  private func clearAllowlist() {
-    UserDefaults.standard.set("", forKey: "supacool.references.ticketPrefixes")
-  }
-
   @Test func extractsIDsFromPastedURLsAndBareIDs() {
-    clearAllowlist()
     let text = """
       https://linear.app/centrum-ai/issue/CEN-7404/the-success-and-failed-status-icons
       https://linear.app/centrum-ai/issue/CEN-7405/when-navigating-to-the-notifications
@@ -25,21 +18,19 @@ struct LinearTicketParsingTests {
     #expect(linearTicketIDs(in: text) == ["CEN-7404", "CEN-7405", "ABC-12"])
   }
 
-  @Test func honorsPrefixAllowlist() {
-    UserDefaults.standard.set("CEN", forKey: "supacool.references.ticketPrefixes")
-    defer { UserDefaults.standard.set("", forKey: "supacool.references.ticketPrefixes") }
+  /// Detection is prefix-agnostic now — team-key scoping lives in the import
+  /// and chip-parsing paths, not in raw id extraction.
+  @Test func extractsEveryUppercasePrefix() {
     let text = "CEN-1 and ABC-2 and CEN-3"
-    #expect(linearTicketIDs(in: text) == ["CEN-1", "CEN-3"])
+    #expect(linearTicketIDs(in: text) == ["CEN-1", "ABC-2", "CEN-3"])
   }
 
   @Test func returnsEmptyWhenNoTickets() {
-    clearAllowlist()
     #expect(linearTicketIDs(in: "nothing to see").isEmpty)
     #expect(linearTicketIDs(in: "").isEmpty)
   }
 
   @Test func firstTicketIsTheFirstMatch() {
-    clearAllowlist()
     #expect(firstLinearTicketID(in: "see CEN-9 then CEN-10") == "CEN-9")
   }
 }
@@ -61,10 +52,18 @@ struct LinearTicketDoneTests {
 
 @MainActor
 struct LinearInboxFeatureTests {
+  /// The inbox is per-repo; every reducer test triages this one repo, so the
+  /// State selects it and `resetInbox` seeds its bucket.
+  static let repo = Repository(
+    id: "/tmp/repo",
+    rootURL: URL(fileURLWithPath: "/tmp/repo"),
+    name: "repo",
+    worktrees: []
+  )
+
   private func resetInbox(_ tickets: [LinearTicket]) {
-    @Shared(.linearInbox) var inbox: [LinearTicket]
-    $inbox.withLock { $0 = tickets }
-    UserDefaults.standard.set("", forKey: "supacool.references.ticketPrefixes")
+    @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
+    $inbox.withLock { $0 = [Self.repo.id: tickets] }
   }
 
   @Test(.dependencies) func importParsesPastedTextThenFetchesMetadata() async {
@@ -81,7 +80,7 @@ struct LinearInboxFeatureTests {
       url: "https://linear.app/x/issue/CEN-7404"
     )
 
-    var state = LinearInboxFeature.State(availableRepositories: [])
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
     state.pasteText = "https://linear.app/centrum-ai/issue/CEN-7404/fix-the-thing"
 
     let store = TestStore(initialState: state) {
@@ -135,11 +134,11 @@ struct LinearInboxFeatureTests {
       url: nil
     )
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
       $0.date = .constant(now)
-      $0.linearClient.fetchRecentIssues = { limit in
+      $0.linearClient.fetchRecentIssues = { limit, _ in
         #expect(limit == LinearInboxFeature.recentFetchLimit)
         return [existing, new]
       }
@@ -164,10 +163,10 @@ struct LinearInboxFeatureTests {
   @Test(.dependencies) func fetchRecentFailureSurfacesTheError() async {
     resetInbox([])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
-      $0.linearClient.fetchRecentIssues = { _ in throw LinearClientError.missingAPIKey }
+      $0.linearClient.fetchRecentIssues = { _, _ in throw LinearClientError.missingAPIKey }
     }
     store.exhaustivity = .off
 
@@ -181,27 +180,27 @@ struct LinearInboxFeatureTests {
   @Test(.dependencies) func fetchRecentWithoutTeamScopePromptsForConfiguration() async {
     resetInbox([])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
-      $0.linearClient.fetchRecentIssues = { _ in throw LinearClientError.missingTeamScope }
+      $0.linearClient.fetchRecentIssues = { _, _ in throw LinearClientError.missingTeamScope }
     }
     store.exhaustivity = .off
 
     await store.send(.fetchRecentTapped)
     await store.receive(\._fetchFailed)
     #expect(!store.state.isFetchingRecent)
-    #expect(store.state.errorMessage?.contains("Ticket prefix allowlist") == true)
+    #expect(store.state.errorMessage?.contains("Linear team key") == true)
     #expect(store.state.tickets.isEmpty)
   }
 
   @Test(.dependencies) func fetchRecentWithNoResultsExplainsItself() async {
     resetInbox([])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
-      $0.linearClient.fetchRecentIssues = { _ in [] }
+      $0.linearClient.fetchRecentIssues = { _, _ in [] }
     }
     store.exhaustivity = .off
 
@@ -226,7 +225,7 @@ struct LinearInboxFeatureTests {
       url: nil
     )
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
       $0.date = .constant(now)
@@ -248,7 +247,7 @@ struct LinearInboxFeatureTests {
     let started = Date(timeIntervalSince1970: 10)
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Old", startedAt: started)])
 
-    var state = LinearInboxFeature.State(availableRepositories: [])
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
     state.pasteText = "CEN-1 CEN-2"
 
     let store = TestStore(initialState: state) {
@@ -269,7 +268,7 @@ struct LinearInboxFeatureTests {
   @Test(.dependencies) func startSessionOpensTheNewTerminalTabPrefilled() async {
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Do thing")])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off
@@ -288,7 +287,7 @@ struct LinearInboxFeatureTests {
   @Test(.dependencies) func startSessionWithoutTitleLeavesWorkspaceUntouched() async {
     resetInbox([LinearTicket(identifier: "CEN-2")])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off
@@ -303,7 +302,7 @@ struct LinearInboxFeatureTests {
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Do thing")])
     let now = Date(timeIntervalSince1970: 5_000)
 
-    var state = LinearInboxFeature.State(availableRepositories: [])
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
     state.pendingSessionTicketID = "CEN-1"
     state.selectedTab = .newTerminal
     state.expandedTicketIDs = ["CEN-1"]
@@ -346,7 +345,7 @@ struct LinearInboxFeatureTests {
     @Shared(.agentSessions) var sessions: [AgentSession]
     $sessions.withLock { $0 = [session] }
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off
@@ -362,7 +361,7 @@ struct LinearInboxFeatureTests {
     @Shared(.agentSessions) var sessions: [AgentSession]
     $sessions.withLock { $0 = [] }
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
 
@@ -373,7 +372,7 @@ struct LinearInboxFeatureTests {
   @Test(.dependencies) func cancelDelegateClosesTheTabWithoutForwarding() async {
     resetInbox([LinearTicket(identifier: "CEN-1", title: "Do thing")])
 
-    var state = LinearInboxFeature.State(availableRepositories: [])
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
     state.pendingSessionTicketID = "CEN-1"
     state.selectedTab = .newTerminal
     state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
@@ -398,7 +397,7 @@ struct LinearInboxFeatureTests {
       LinearTicket(identifier: "CEN-3", title: "Dropped", stateType: "canceled"),
     ])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off
@@ -428,7 +427,7 @@ struct LinearInboxFeatureTests {
       LinearTicket(identifier: "CEN-4", stateType: "started", doneAt: fourDaysAgo),
     ])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
       $0.date = .constant(now)
@@ -460,7 +459,7 @@ struct LinearInboxFeatureTests {
       completedAt: now.addingTimeInterval(-5 * 24 * 60 * 60)
     )
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     } withDependencies: {
       $0.date = .constant(now)
@@ -480,7 +479,7 @@ struct LinearInboxFeatureTests {
       LinearTicket(identifier: "CEN-2", title: "Hide me"),
     ])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off
@@ -508,7 +507,7 @@ struct LinearInboxFeatureTests {
       LinearTicket(identifier: "CEN-2"),
     ])
 
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [])) {
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
     }
     store.exhaustivity = .off

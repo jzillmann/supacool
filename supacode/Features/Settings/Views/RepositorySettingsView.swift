@@ -15,6 +15,10 @@ struct RepositorySettingsView: View {
       get: { settings.worktreeBaseDirectoryPath.wrappedValue ?? "" },
       set: { settings.worktreeBaseDirectoryPath.wrappedValue = $0 },
     )
+    let linearTeamKeys = Binding(
+      get: { settings.linearTeamKeys.wrappedValue ?? "" },
+      set: { settings.linearTeamKeys.wrappedValue = $0.isEmpty ? nil : $0 },
+    )
     let exampleWorktreePath = store.exampleWorktreePath
     Form {
       Section {
@@ -168,6 +172,21 @@ struct RepositorySettingsView: View {
           Text("Merge strategy")
           Text("Used when merging PRs from the command palette.")
         }
+      }
+      Section {
+        TextField(text: linearTeamKeys, prompt: Text("CEN, FOO")) {
+          Text("Team keys").monospaced(false)
+          Text("Comma-separated Linear team keys. Scopes the inbox's recent-ticket import to this repo.")
+            .monospaced(false)
+        }
+        .monospaced()
+      } header: {
+        Text("Linear")
+      } footer: {
+        Text(
+          "The Linear Inbox imports the most recently created tickets across every repo's team keys. "
+            + "Leave empty to exclude this repo from the import."
+        )
       }
       Section("Environment Variables") {
         ScriptEnvironmentRow(

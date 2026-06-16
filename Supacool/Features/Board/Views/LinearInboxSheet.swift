@@ -88,6 +88,16 @@ struct LinearInboxSheet: View {
     HStack {
       Label("Linear Inbox", systemImage: "tray.full")
         .font(.headline)
+      if store.availableRepositories.count > 1 {
+        Picker("Repository", selection: $store.selectedRepositoryID) {
+          ForEach(store.availableRepositories) { repository in
+            Text(repository.name).tag(Optional(repository.id))
+          }
+        }
+        .labelsHidden()
+        .fixedSize()
+        .help("Switch which repository's Linear worklist you're triaging")
+      }
       Spacer()
       Button {
         store.send(.refreshAllTapped)
