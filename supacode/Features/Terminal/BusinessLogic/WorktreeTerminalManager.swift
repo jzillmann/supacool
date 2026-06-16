@@ -31,6 +31,16 @@ nonisolated private let deferredWorkLeaseBufferDefault: Duration = .seconds(90)
 /// silent. `optimisticBusyTTL` already keeps the board card honest;
 /// this exists purely to leave post-mortem evidence in the trace.
 private let firstHookDeadmanDelayDefault: Duration = .seconds(10)
+/// Consecutive agent-PID sweeps an alive-but-silent busy agent may go —
+/// no intervening busy hook AND a byte-stable screen — before the stuck-
+/// busy watchdog clears its latch. At the 30s default sweep interval this
+/// is ~90s of confirmed silence. Guards the case where an agent (observed
+/// with codex, trace DF73B24A…) ends its turn but drops *every* end-of-turn
+/// edge — no `busy=0`, no `Stop` notification — while its process stays
+/// alive: the PID-death sweep skips it (alive), the Stop/awaiting paths
+/// never fire (no hook), and hooked tabs are excluded from the screen
+/// fallback, so nothing else recovers the latch. See `reconcileStuckBusy`.
+private let stuckBusyStaleSweepThresholdDefault = 3
 
 private let defaultIsProcessAlive: @Sendable (Int32) -> Bool = { pid in
   // `kill(pid, 0)` returns 0 when the process exists (signal-less ping).
@@ -70,6 +80,17 @@ final class WorktreeTerminalManager {
     let worktreeID: Worktree.ID
     let surfaceID: UUID
     let pid: Int32
+    /// Consecutive liveness sweeps survived with no intervening busy hook
+    /// and an unchanged screen. Resets to 0 every time a busy hook
+    /// re-registers this PID (the registration is recreated wholesale).
+    /// Drives the stuck-busy watchdog in `reconcileStuckBusy`.
+    var staleSweeps = 0
+    /// Screen fingerprint captured at the previous sweep. A change between
+    /// sweeps means the agent is still emitting output (so: not stuck); a
+    /// fingerprint stable across the staleness window is the idle signal
+    /// that lets the watchdog distinguish a dropped end-of-turn edge from a
+    /// legitimately long, quiet tool run.
+    var lastFingerprint: String?
   }
 
   private let runtime: GhosttyRuntime
@@ -84,6 +105,7 @@ final class WorktreeTerminalManager {
   private let deferredWorkFallbackTTL: Duration
   private let deferredWorkLeaseBuffer: Duration
   private let firstHookDeadmanDelay: Duration
+  private let stuckBusyStaleSweepThreshold: Int
   private let isProcessAlive: @Sendable (Int32) -> Bool
   /// Tracker that attributes orphaned (`ppid == 1`) processes whose cwd
   /// is under `~/.supacool/repos/` to their owning worktree. Refresh is
@@ -152,6 +174,7 @@ final class WorktreeTerminalManager {
     deferredWorkFallbackTTL: Duration = deferredWorkFallbackTTLDefault,
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     firstHookDeadmanDelay: Duration = firstHookDeadmanDelayDefault,
+    stuckBusyStaleSweepThreshold: Int = stuckBusyStaleSweepThresholdDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     ownedProcessTracker: WorktreeOwnedProcessTracker? = nil,
     startPromptScreenScanning: Bool = true,
@@ -169,6 +192,7 @@ final class WorktreeTerminalManager {
     self.deferredWorkFallbackTTL = deferredWorkFallbackTTL
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.firstHookDeadmanDelay = firstHookDeadmanDelay
+    self.stuckBusyStaleSweepThreshold = stuckBusyStaleSweepThreshold
     self.isProcessAlive = isProcessAlive
     self.ownedProcessTracker = ownedProcessTracker
     self.sleep = { duration in
@@ -1716,6 +1740,80 @@ final class WorktreeTerminalManager {
         active: false
       )
     }
+
+    // Second pass — the stuck-busy watchdog. Dead PIDs were removed above,
+    // so what remains in `agentPIDByTab` is the still-alive set. Snapshot
+    // the keys before iterating because `reconcileStuckBusy` mutates the
+    // dict (resets counters, or removes a cleared registration).
+    let aliveKeys: [(tabID: UUID, pid: Int32)] = agentPIDByTab.flatMap { tabID, registrations in
+      registrations.keys.map { (tabID, $0) }
+    }
+    for (tabID, pid) in aliveKeys {
+      reconcileStuckBusy(tabID: tabID, pid: pid)
+    }
+  }
+
+  /// Re-validates one still-alive, still-busy-registered agent PID. When it
+  /// has had no busy hook for `stuckBusyStaleSweepThreshold` consecutive
+  /// sweeps *and* the tab's screen has been byte-stable across them, the
+  /// agent has finished its turn but dropped its end-of-turn edge — clear
+  /// the latch for its surface so the card leaves "Working". A still-working
+  /// agent either keeps emitting output (the screen changes, resetting the
+  /// counter) or fires another busy hook (which recreates the registration
+  /// with `staleSweeps == 0`), so neither trips this. Self-correcting: a
+  /// later busy hook re-latches within seconds.
+  ///
+  /// The screen-stability gate is load-bearing: it's what separates a stuck
+  /// latch from a legitimately long, quiet tool run — a plain time/TTL check
+  /// can't tell them apart, which is exactly why the busy latch has never
+  /// carried one. The screen read only happens here (30s sweep cadence, and
+  /// only for tabs with a registered busy PID), not in the 1s prompt scan,
+  /// so it doesn't reintroduce the per-tick main-thread cost that scan
+  /// avoids for hooked tabs.
+  private func reconcileStuckBusy(tabID: UUID, pid: Int32) {
+    guard var registrations = agentPIDByTab[tabID],
+      var registration = registrations[pid]
+    else { return }
+    let wrappedTabID = TerminalTabID(rawValue: tabID)
+    let fingerprint = screenFingerprint(worktreeID: registration.worktreeID, tabID: wrappedTabID)
+
+    // No readable screen, or it changed since last sweep → either still
+    // producing output or no idle evidence yet. Reset and re-seed.
+    guard let fingerprint, fingerprint == registration.lastFingerprint else {
+      registration.staleSweeps = 0
+      registration.lastFingerprint = fingerprint
+      registrations[pid] = registration
+      agentPIDByTab[tabID] = registrations
+      return
+    }
+
+    registration.staleSweeps += 1
+    registrations[pid] = registration
+    agentPIDByTab[tabID] = registrations
+    guard registration.staleSweeps >= stuckBusyStaleSweepThreshold else { return }
+
+    terminalLogger.info(
+      "Stuck-busy watchdog: PID \(pid) alive but idle for \(registration.staleSweeps) "
+        + "sweeps with a stable screen; clearing busy latch on tab \(tabID)"
+    )
+    registrations.removeValue(forKey: pid)
+    // Awaiting / deferred state belongs to the tab as a whole — only clear
+    // it once the last registered agent on the tab is gone, mirroring the
+    // dead-PID path above.
+    if registrations.isEmpty {
+      agentPIDByTab.removeValue(forKey: tabID)
+      clearOptimisticBusy(tabID: tabID)
+      clearAwaitingInput(tabID: tabID, reason: "busy-stale")
+      clearDeferredWork(tabID: tabID)
+    } else {
+      agentPIDByTab[tabID] = registrations
+    }
+    states[registration.worktreeID]?.setAgentBusy(
+      surfaceID: registration.surfaceID,
+      tabID: wrappedTabID,
+      pid: pid,
+      active: false
+    )
   }
 
   /// Whether an agent PID has been registered for this tab (pre-upgrade

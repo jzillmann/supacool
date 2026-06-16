@@ -814,6 +814,152 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression for the codex card stuck "Working" for hours (trace
+  /// DF73B24A…): a split-pane codex agent latched busy via
+  /// UserPromptSubmit/PreToolUse, then dropped *every* end-of-turn edge —
+  /// no `busy=0`, no `Stop` notification at all — while its process stayed
+  /// alive. The Stop/awaiting paths never fire (no hook), the PID-death
+  /// sweep skips it (alive), and hooked tabs are excluded from the
+  /// screen-fallback scan, so nothing recovers the latch. The stuck-busy
+  /// watchdog clears it once the screen has been byte-stable across the
+  /// staleness window.
+  @Test func stuckBusyWatchdogClearsLatchWhenAliveAgentGoesSilentWithStableScreen() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        // A frozen "finished turn" screen — the codex prompt, unchanging.
+        let screenContents = LockIsolated("› \n  (idle)")
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stuck-busy-watchdog")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          // PID never dies — the death sweep must NOT be what saves us.
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        // Agent working: busy latched on by a PreToolUse-style hook.
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Sweep 1 only seeds the baseline fingerprint — still busy.
+        await manager.sweepAgentPIDs()
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Sweep 2: one stable sweep (staleSweeps == 1 < threshold) — busy.
+        await manager.sweepAgentPIDs()
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Sweep 3: staleSweeps reaches the threshold — latch cleared.
+        await manager.sweepAgentPIDs()
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        // Not a "Wants Input" promotion — the agent finished, it isn't blocked.
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
+  /// A legitimately long, quiet tool run (one busy hook, then silence while
+  /// a command churns) must NOT be cleared: its screen keeps changing, so
+  /// the watchdog's stability gate never trips even though the busy hook is
+  /// long stale and the PID is alive. This is the case a plain TTL would
+  /// get wrong — hence the screen-stability gate.
+  @Test func stuckBusyWatchdogKeepsLatchWhileScreenKeepsChanging() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let frame = LockIsolated(0)
+        let screenContents = LockIsolated("build log line 0")
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stuck-busy-changing")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Many sweeps, but the screen advances each time → never stable.
+        for _ in 0..<6 {
+          frame.withValue { $0 += 1 }
+          screenContents.setValue("build log line \(frame.value)")
+          await manager.sweepAgentPIDs()
+          #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        }
+      }
+    }
+  }
+
+  /// A fresh busy hook mid-window recreates the PID registration and resets
+  /// the staleness counter, so the watchdog's clock restarts — an agent
+  /// that keeps signalling work is never spuriously cleared.
+  @Test func stuckBusyWatchdogResetsAfterAFreshBusyHook() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let screenContents = LockIsolated("› \n  (idle)")
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stuck-busy-reset")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+
+        // Seed + one stable sweep — one short of clearing.
+        await manager.sweepAgentPIDs()
+        await manager.sweepAgentPIDs()
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // A fresh busy hook arrives — the agent is still working. This
+        // recreates the registration (staleSweeps back to 0).
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+
+        // The very next sweep would have cleared a stale latch; here it
+        // only re-seeds, so the card stays busy.
+        await manager.sweepAgentPIDs()
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   /// Codex auto-approve round-trip (PermissionRequest → ~400ms →
   /// PreToolUse busyOn) must not produce a visible "Wants Input"
   /// blink. Guarded by the 750ms default on-debounce.
