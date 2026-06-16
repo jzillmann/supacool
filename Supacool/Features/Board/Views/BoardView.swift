@@ -252,6 +252,24 @@ struct BoardView: View {
     highlightedSessionID = order.first
   }
 
+  /// Tapping a bookmark whose session is already running shouldn't spawn a
+  /// duplicate — instead reveal the owning card by highlighting it and
+  /// scrolling it into view. Returns `true` when an existing session was
+  /// found and revealed, `false` when the caller should fall through to the
+  /// normal spawn path. The scroll mirrors the keyboard-highlight scroll
+  /// (`onChange(of: highlightedSessionID)`), so repeated taps re-center even
+  /// when the highlight id doesn't change.
+  private func revealRunningBookmarkSession(_ bookmarkID: Bookmark.ID, proxy: ScrollViewProxy) -> Bool {
+    guard let session = store.sessions.first(where: { $0.sourceBookmarkID == bookmarkID }) else {
+      return false
+    }
+    highlightedSessionID = session.id
+    withAnimation(.easeOut(duration: 0.18)) {
+      proxy.scrollTo(session.id)
+    }
+    return true
+  }
+
   @ViewBuilder
   private var bodyContent: some View {
     let visible = store.visibleSessions
@@ -318,6 +336,12 @@ struct BoardView: View {
                 bookmarks: relevantBookmarks,
                 unavailableBookmarkIDs: unavailableBookmarkIDs,
                 onTap: { bookmark in
+                  // Already-running bookmark → reveal its card instead of
+                  // spawning a duplicate. Falls through to spawn when no
+                  // session owns the bookmark yet.
+                  if revealRunningBookmarkSession(bookmark.id, proxy: boardProxy) {
+                    return
+                  }
                   store.send(
                     .bookmarkTapped(
                       id: bookmark.id,

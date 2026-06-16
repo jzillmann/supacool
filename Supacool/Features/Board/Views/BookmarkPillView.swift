@@ -14,7 +14,6 @@ struct BookmarkPillView: View {
 
   var body: some View {
     Button {
-      guard !isUnavailable else { return }
       onTap()
     } label: {
       HStack(spacing: 6) {
@@ -29,11 +28,13 @@ struct BookmarkPillView: View {
       .background(.background.secondary, in: pillShape)
       .overlay(
         pillShape.strokeBorder(
-          Color.secondary.opacity((isHovered && !isUnavailable) ? 0.5 : 0.2),
-          lineWidth: (isHovered && !isUnavailable) ? 1 : 0.5
+          Color.secondary.opacity(isHovered ? 0.5 : 0.2),
+          lineWidth: isHovered ? 1 : 0.5
         )
       )
-      .opacity(isUnavailable ? 0.5 : 1)
+      // Already-running pills stay dimmed to signal "can't spawn a second",
+      // but remain interactive — a tap reveals the owning session card.
+      .opacity(isUnavailable ? (isHovered ? 0.7 : 0.5) : 1)
       .contentShape(pillShape)
     }
     .buttonStyle(.plain)
@@ -61,6 +62,6 @@ struct BookmarkPillView: View {
     }
     let base = "\(bookmark.prompt.prefix(120))\n(\(AgentType.displayName(for: bookmark.agent)) · \(worktreeNote))"
     guard isUnavailable else { return base }
-    return base + "\nAlready running — remove/trash that session to run again."
+    return base + "\nAlready running — click to reveal the session."
   }
 }
