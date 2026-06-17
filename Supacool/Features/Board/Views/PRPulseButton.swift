@@ -15,6 +15,11 @@ import SwiftUI
 struct PRPulseButton: View {
   let store: StoreOf<BoardFeature>
   let repositories: IdentifiedArrayOf<Repository>
+  /// Live board status (busy / idle / …) for a session, threaded down from
+  /// `BoardRootView` which owns the `WorktreeTerminalManager`. Lets a PR row
+  /// with an associated session mirror the board card's status glyph. Invoked
+  /// inside the popover body so `@Observable` terminal state stays tracked.
+  let sessionStatus: (AgentSession) -> BoardSessionStatus
 
   @State private var isPresented: Bool = false
 
@@ -24,9 +29,14 @@ struct PRPulseButton: View {
   /// is torn down.
   @State private var expandedCheckKeys: Set<String> = []
 
-  /// Whether the "N ignored" section at the foot of the popover is
-  /// expanded. View-local: collapses again when the popover closes.
-  @State private var showIgnored: Bool = false
+  /// Which slice of PRs the popover shows. View-local: resets to `.active`
+  /// when the popover closes and the view is torn down.
+  @State private var filter: PRPulseFilter = .active
+
+  /// Last prompt fired at each associated session's agent terminal, keyed by
+  /// tab and loaded lazily off-main from the transcript. Powers the status
+  /// glyph's hover tooltip.
+  @State private var lastPromptByTab: [TerminalTabID: String] = [:]
 
   var body: some View {
     if !visibleSnapshots.isEmpty {
@@ -72,10 +82,29 @@ struct PRPulseButton: View {
     snapshot.pullRequests.filter { !isIgnored(snapshot.repositoryID, $0.number) }
   }
 
+  /// A snapshot's PRs narrowed to the popover's currently selected filter.
+  private func filteredPullRequests(_ snapshot: RepoPullRequestSnapshot) -> [MonitoredPullRequest] {
+    switch filter {
+    case .active:
+      return activePullRequests(snapshot)
+    case .drafts:
+      return activePullRequests(snapshot).filter(\.isDraft)
+    case .ignored:
+      return snapshot.pullRequests.filter { isIgnored(snapshot.repositoryID, $0.number) }
+    }
+  }
+
+  /// Total PRs shown under the current filter — drives the empty state.
+  private var filteredCount: Int {
+    visibleSnapshots.reduce(0) { $0 + filteredPullRequests($1.snapshot).count }
+  }
+
   /// All non-ignored PRs across visible repos — the basis for every count.
   private var activePullRequests: [MonitoredPullRequest] {
     visibleSnapshots.flatMap { activePullRequests($0.snapshot) }
   }
+
+  private var draftCount: Int { activePullRequests.count(where: \.isDraft) }
 
   /// Ignored PRs still present in a snapshot, paired with their repo so the
   /// "N ignored" section can label and restore them.
@@ -146,8 +175,10 @@ struct PRPulseButton: View {
       }
       .padding(12)
       Divider()
-      if totalCount == 0 && ignoredEntries.isEmpty {
-        Text("No open pull requests authored by or assigned to you")
+      filterPicker
+      Divider()
+      if filteredCount == 0 {
+        Text(emptyStateText)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
           .padding(24)
@@ -155,34 +186,15 @@ struct PRPulseButton: View {
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 2) {
             ForEach(visibleSnapshots, id: \.repository.id) { entry in
-              let active = activePullRequests(entry.snapshot)
-              if !active.isEmpty {
+              let rows = filteredPullRequests(entry.snapshot)
+              if !rows.isEmpty {
                 if visibleSnapshots.count > 1 {
-                  repoHeader(entry.repository, count: active.count)
+                  repoHeader(entry.repository, count: rows.count)
                 }
-                ForEach(active) { pullRequest in
-                  let expansionKey = PRPulseIgnoreKey.make(
-                    repositoryID: entry.snapshot.repositoryID,
-                    number: pullRequest.number
-                  )
-                  let associatedSessionID = associatedSessionID(
-                    snapshot: entry.snapshot,
-                    pullRequest: pullRequest
-                  )
-                  pullRequestRow(
-                    pullRequest,
-                    repositoryID: entry.snapshot.repositoryID,
-                    expansionKey: expansionKey,
-                    associatedSessionID: associatedSessionID
-                  )
-                  if expandedCheckKeys.contains(expansionKey) {
-                    checkDetailRows(pullRequest)
-                  }
+                ForEach(rows) { pullRequest in
+                  row(pullRequest, in: entry)
                 }
               }
-            }
-            if !ignoredEntries.isEmpty {
-              ignoredSection
             }
           }
           .padding(8)
@@ -193,37 +205,50 @@ struct PRPulseButton: View {
     .frame(width: 480)
   }
 
-  // MARK: - Ignored section
-
-  @ViewBuilder
-  private var ignoredSection: some View {
-    Divider()
-      .padding(.vertical, 4)
-    Button {
-      withAnimation(.snappy(duration: 0.15)) {
-        showIgnored.toggle()
-      }
-    } label: {
-      HStack(spacing: 6) {
-        Image(systemName: showIgnored ? "chevron.down" : "chevron.right")
-          .font(.caption2.weight(.semibold))
-          .foregroundStyle(.secondary)
-          .accessibilityHidden(true)
-        Text("^[\(ignoredEntries.count) PR](inflect: true) ignored")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        Spacer()
-      }
-      .contentShape(Rectangle())
+  /// Single-select filter replacing the old buried "N ignored" section:
+  /// ignored PRs are now just another slice surfaced in the main list.
+  private var filterPicker: some View {
+    Picker("Filter", selection: $filter) {
+      Text("Active (\(totalCount))").tag(PRPulseFilter.active)
+      Text("Drafts (\(draftCount))").tag(PRPulseFilter.drafts)
+      Text("Ignored (\(ignoredEntries.count))").tag(PRPulseFilter.ignored)
     }
-    .buttonStyle(.plain)
-    .padding(.horizontal, 6)
-    .padding(.vertical, 4)
-    .help(showIgnored ? "Hide ignored pull requests" : "Show ignored pull requests")
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .padding(.horizontal, 12)
+    .padding(.vertical, 8)
+  }
 
-    if showIgnored {
-      ForEach(Array(ignoredEntries.enumerated()), id: \.offset) { _, entry in
-        ignoredRow(entry.repositoryID, entry.repository, entry.pullRequest)
+  private var emptyStateText: String {
+    switch filter {
+    case .active: "No open pull requests authored by or assigned to you"
+    case .drafts: "No draft pull requests"
+    case .ignored: "No ignored pull requests"
+    }
+  }
+
+  /// Renders one PR under the active/drafts filters as a full interactive row;
+  /// under the ignored filter as a compact restore row.
+  @ViewBuilder
+  private func row(
+    _ pullRequest: MonitoredPullRequest,
+    in entry: (repository: Repository, snapshot: RepoPullRequestSnapshot)
+  ) -> some View {
+    if filter == .ignored {
+      ignoredRow(entry.snapshot.repositoryID, entry.repository, pullRequest)
+    } else {
+      let expansionKey = PRPulseIgnoreKey.make(
+        repositoryID: entry.snapshot.repositoryID,
+        number: pullRequest.number
+      )
+      pullRequestRow(
+        pullRequest,
+        repositoryID: entry.snapshot.repositoryID,
+        expansionKey: expansionKey,
+        associatedSession: associatedSession(snapshot: entry.snapshot, pullRequest: pullRequest)
+      )
+      if expandedCheckKeys.contains(expansionKey) {
+        checkDetailRows(pullRequest)
       }
     }
   }
@@ -287,7 +312,7 @@ struct PRPulseButton: View {
     _ pullRequest: MonitoredPullRequest,
     repositoryID: String,
     expansionKey: String,
-    associatedSessionID: AgentSession.ID?
+    associatedSession: AgentSession?
   ) -> some View {
     HStack(spacing: 8) {
       Button {
@@ -327,6 +352,7 @@ struct PRPulseButton: View {
       }
       .help(rowHelp(pullRequest))
       checksToggle(pullRequest, expansionKey: expansionKey)
+      sessionStatusGlyph(associatedSession)
       Button {
         isPresented = false
         store.send(
@@ -337,14 +363,14 @@ struct PRPulseButton: View {
           )
         )
       } label: {
-        Image(systemName: associatedSessionID == nil ? "plus.rectangle" : "terminal")
+        Image(systemName: associatedSession == nil ? "plus.rectangle" : "terminal")
           .font(.caption)
-          .foregroundStyle(associatedSessionID == nil ? .secondary : .primary)
-          .accessibilityLabel(associatedSessionID == nil ? "Start associated session" : "Open associated session")
+          .foregroundStyle(associatedSession == nil ? .secondary : .primary)
+          .accessibilityLabel(associatedSession == nil ? "Start associated session" : "Open associated session")
       }
       .buttonStyle(.plain)
       .help(
-        associatedSessionID == nil
+        associatedSession == nil
           ? "Start an associated session for this PR"
           : "Open the associated session for this PR"
       )
@@ -363,17 +389,52 @@ struct PRPulseButton: View {
     .padding(.vertical, 4)
   }
 
-  private func associatedSessionID(
+  private func associatedSession(
     snapshot: RepoPullRequestSnapshot,
     pullRequest: MonitoredPullRequest
-  ) -> AgentSession.ID? {
+  ) -> AgentSession? {
     guard let refKey = PRPulseReference.dedupeKey(
       slug: snapshot.slug,
       number: pullRequest.number
     ) else { return nil }
     return store.sessions.first { session in
       session.references.contains(where: { $0.dedupeKey == refKey })
-    }?.id
+    }
+  }
+
+  /// Busy/idle glyph for a PR's associated session, mirroring the board
+  /// card's status indicator. Hover reveals the last prompt fired at the
+  /// session's agent terminal (loaded lazily from the transcript). Nothing
+  /// renders for PRs without a session — the "+" button already signals that.
+  @ViewBuilder
+  private func sessionStatusGlyph(_ session: AgentSession?) -> some View {
+    if let session {
+      let status = sessionStatus(session)
+      let tabID = TerminalTabID(rawValue: session.id)
+      Image(systemName: status.systemImage)
+        .font(.caption)
+        .foregroundStyle(status.color)
+        .accessibilityLabel("Session status: \(status.label)")
+        .help(statusHelp(status, tabID: tabID))
+        .task(id: tabID) { await loadLastPrompt(tabID) }
+    }
+  }
+
+  /// Reconstructs the most recent prompt for `tabID` off the main thread and
+  /// caches it. Cheap to re-enter: skips work once a prompt is cached.
+  private func loadLastPrompt(_ tabID: TerminalTabID) async {
+    guard lastPromptByTab[tabID] == nil else { return }
+    let loaded = await Task.detached(priority: .utility) {
+      TranscriptReader.aggregatePrompts(from: TranscriptReader.loadEntries(tabID: tabID)).first?.text
+    }.value
+    guard let loaded else { return }
+    lastPromptByTab[tabID] = loaded.trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
+  private func statusHelp(_ status: BoardSessionStatus, tabID: TerminalTabID) -> String {
+    guard let prompt = lastPromptByTab[tabID], !prompt.isEmpty else { return status.label }
+    let capped = prompt.count > 100 ? "\(prompt.prefix(100))…" : prompt
+    return "\(status.label) · last prompt: \(capped)"
   }
 
   /// Trailing checks summary doubling as the expand/collapse toggle for
@@ -561,4 +622,15 @@ struct PRPulseButton: View {
     parts.append("Click to open on GitHub")
     return parts.joined(separator: " · ")
   }
+}
+
+/// Which slice of monitored PRs the pulse popover shows. `nonisolated` so its
+/// synthesized `Equatable`/`Hashable` satisfies `Picker(selection:)` under
+/// Swift 6 global `@MainActor` isolation.
+nonisolated private enum PRPulseFilter: String, CaseIterable, Identifiable {
+  case active
+  case drafts
+  case ignored
+
+  var id: String { rawValue }
 }

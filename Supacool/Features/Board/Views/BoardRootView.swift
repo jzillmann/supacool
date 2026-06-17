@@ -770,7 +770,7 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories
         )
-        PRPulseButton(store: store, repositories: repositories)
+        PRPulseButton(store: store, repositories: repositories, sessionStatus: classify)
         if let footprintStore {
           FootprintChip(store: footprintStore)
         }
