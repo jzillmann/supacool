@@ -311,6 +311,15 @@ struct AppFeature {
           await systemNotificationClient.send(title, body)
         }
 
+      // Unlike a priority termination, fire even when the app is foreground:
+      // the user is often heads-down in another session's terminal, and the
+      // whole point is to pull attention to a PR that just needs them.
+      case .board(.delegate(.pullRequestReturnedToCourt(let title, let body))):
+        guard state.settings.systemNotificationsEnabled else { return .none }
+        return .run { _ in
+          await systemNotificationClient.send(title, body)
+        }
+
       case .board(.delegate(.openSettingsRequested(let section))):
         return .send(.settings(.setSelection(section)))
 

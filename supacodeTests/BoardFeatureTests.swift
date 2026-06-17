@@ -418,6 +418,41 @@ struct BoardFeatureTests {
     )
   }
 
+  /// When a PR fanout flips a session's PR from their court (CI running) to
+  /// the user's (CI failed), the reducer emits a one-shot
+  /// `pullRequestReturnedToCourt` delegate so AppFeature can notify.
+  @Test(.dependencies) func prFanoutBackToCourtEmitsNotificationDelegate() async {
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 42, state: .open, title: "Fix it"
+    )
+    var session = Self.sampleSession(displayName: "Proper Waiting")
+    session.references = [ref]
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    // Prior snapshot: CI still running → their court.
+    state.prReferenceSnapshots[ref.dedupeKey] = PullRequestSnapshot(
+      state: .open,
+      title: "Fix it",
+      statusChecks: [GithubPullRequestStatusCheck(name: "CI", status: "IN_PROGRESS")]
+    )
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date())
+    }
+    store.exhaustivity = .off
+
+    // CI just failed → ball is back in the user's court.
+    let failed = PullRequestSnapshot(
+      state: .open,
+      title: "Fix it",
+      statusChecks: [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "FAILURE")]
+    )
+    await store.send(._prStateFanout(refKey: ref.dedupeKey, snapshot: failed))
+    await store.receive(\.delegate.pullRequestReturnedToCourt)
+  }
+
   @Test(.dependencies) func renameSessionUpdatesDisplayName() async {
     let session = Self.sampleSession(displayName: "Old Name")
     let state = BoardFeature.State()

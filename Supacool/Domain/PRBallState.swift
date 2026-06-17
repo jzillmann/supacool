@@ -158,6 +158,19 @@ extension PRBallState {
     if states.contains(where: { $0.court == .mine }) { return false }
     return states.contains(where: { $0.court == .theirs })
   }
+
+  /// True when a PR just bounced back into the user's court — the trigger for
+  /// a one-shot notification on the transition, not on every poll tick. A nil
+  /// `previous` (first time this PR is seen, e.g. right after launch) is never
+  /// a transition, so a relaunch doesn't notify about every already-actionable
+  /// PR. Mine→mine reason changes (e.g. CI failed → changes requested) also
+  /// don't re-fire; the user already knows the ball is theirs.
+  nonisolated static func didReturnToCourt(from previous: PRBallState?, to current: PRBallState)
+    -> Bool
+  {
+    guard let previous else { return false }
+    return previous.court != .mine && current.court == .mine
+  }
 }
 
 extension [String: PullRequestSnapshot] {
