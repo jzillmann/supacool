@@ -854,6 +854,10 @@ struct BoardFeature {
   @CasePathable
   enum Delegate: Equatable {
     case prioritySessionTerminated(title: String, body: String)
+    /// A PR-backed session's pull request just bounced back into the user's
+    /// court (CI failed, review came in, merge-ready, …). AppFeature fires a
+    /// system notification so the user doesn't have to watch the board.
+    case pullRequestReturnedToCourt(title: String, body: String)
     /// Emitted when a tray card asks to open the Settings window on a
     /// specific section (e.g. the stale-hooks card routes to Coding Agents).
     /// AppFeature listens and forwards to SettingsFeature.
@@ -2515,6 +2519,12 @@ struct BoardFeature {
       case ._prStateFanout(let refKey, let snapshot):
         // Apply the fetched state to every session that references this
         // PR. Single network result, all sessions updated.
+        let notification = Self.pullRequestReturnNotification(
+          refKey: refKey,
+          previous: state.prReferenceSnapshots[refKey],
+          next: snapshot,
+          sessions: state.sessions
+        )
         state.$sessions.withLock { sessions in
           for index in sessions.indices {
             sessions[index].references = sessions[index].references.map { ref in
@@ -2529,7 +2539,7 @@ struct BoardFeature {
         state.prRefreshFailureJitter.removeValue(forKey: refKey)
         state.prRefreshSuccessAt[refKey] = date.now
         state.prRefreshInFlight.remove(refKey)
-        return .none
+        return notification.map { .send(.delegate($0)) } ?? .none
 
       // MARK: - PR Pulse (repo-wide open-PR monitoring)
 
@@ -2687,6 +2697,12 @@ struct BoardFeature {
         return .none
 
       case ._prStatusUpdated(let id, let ref, let snapshot):
+        let notification = Self.pullRequestReturnNotification(
+          refKey: ref.dedupeKey,
+          previous: state.prReferenceSnapshots[ref.dedupeKey],
+          next: snapshot,
+          sessions: state.sessions
+        )
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].references = sessions[index].references.map { existing in
@@ -2699,7 +2715,7 @@ struct BoardFeature {
         state.prRefreshFailureAt.removeValue(forKey: ref.dedupeKey)
         state.prRefreshFailureJitter.removeValue(forKey: ref.dedupeKey)
         state.prRefreshSuccessAt[ref.dedupeKey] = date.now
-        return .none
+        return notification.map { .send(.delegate($0)) } ?? .none
 
       case ._autoDisplayNameSuggested(let id, let suggested):
         state.$sessions.withLock { sessions in
@@ -3972,6 +3988,32 @@ struct BoardFeature {
       )
     }
     return ref
+  }
+
+  /// Builds the "ball bounced back to you" notification for a PR snapshot
+  /// update, or `nil` when this isn't a their-court→your-court transition.
+  /// `previous` is the snapshot being replaced (nil on first sight, which is
+  /// never a transition — see `PRBallState.didReturnToCourt`).
+  nonisolated fileprivate static func pullRequestReturnNotification(
+    refKey: String,
+    previous: PullRequestSnapshot?,
+    next: PullRequestSnapshot,
+    sessions: [AgentSession]
+  ) -> Delegate? {
+    let after = PRBallState(snapshot: next)
+    guard
+      PRBallState.didReturnToCourt(from: previous.map { PRBallState(snapshot: $0) }, to: after),
+      let reason = after.reasonLabel
+    else { return nil }
+
+    // refKey is "pr:owner/repo#number" — surface the number to the user.
+    let prLabel = refKey.split(separator: "#").last.map { "PR #\($0)" } ?? "Pull request"
+    let sessionName = sessions.first {
+      $0.references.contains { $0.dedupeKey == refKey }
+    }?.displayName
+    let title = sessionName ?? prLabel
+    let body = sessionName == nil ? reason : "\(prLabel): \(reason)"
+    return .pullRequestReturnedToCourt(title: title, body: body)
   }
 
   /// True iff `ref` is a PR reference that hasn't failed within the

@@ -199,6 +199,28 @@ struct PRBallStateTests {
     // the normal idle classification.
     #expect(!PRBallState.sessionWaitsExternally([.merged]))
   }
+
+  // MARK: return-to-court transition (notification trigger)
+
+  @Test func theirCourtToMineIsAReturn() {
+    #expect(PRBallState.didReturnToCourt(from: .ciRunning, to: .ciFailed(1)))
+    #expect(PRBallState.didReturnToCourt(from: .awaitingReview, to: .readyToMerge))
+  }
+
+  @Test func firstSightIsNeverAReturn() {
+    // nil previous (e.g. right after launch) must not notify, or every
+    // already-actionable PR would fire a banner on startup.
+    #expect(!PRBallState.didReturnToCourt(from: nil, to: .ciFailed(1)))
+  }
+
+  @Test func mineToMineDoesNotReFire() {
+    // Reason change within the user's court isn't a fresh bounce.
+    #expect(!PRBallState.didReturnToCourt(from: .ciFailed(1), to: .changesRequested))
+  }
+
+  @Test func stayingInTheirCourtIsNotAReturn() {
+    #expect(!PRBallState.didReturnToCourt(from: .ciRunning, to: .awaitingReview))
+  }
 }
 
 extension PullRequestSnapshot {
