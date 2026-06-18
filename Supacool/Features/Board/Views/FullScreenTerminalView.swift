@@ -752,29 +752,38 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Park control beside delete. Default click parks and tears down the
-  /// tab; the context menu offers Standby to hide the card without
-  /// interrupting the running terminal. When viewing a standby session,
-  /// the same slot becomes Unpark.
+  /// Park control beside delete. When the session is live, a primary-action
+  /// menu makes both options first-class: clicking the label parks and tears
+  /// down the tab, while the disclosure chevron reveals Standby (hide the
+  /// card without interrupting the running terminal). When no live terminal
+  /// backs the session, Standby is meaningless so it falls back to a plain
+  /// one-click Park button. When viewing a standby session, the same slot
+  /// becomes Unpark.
   @ViewBuilder
   private var parkControl: some View {
     if let onPark {
-      Button(action: onPark) {
-        Image(systemName: "pause.fill")
-          .font(.system(size: 13, weight: .medium))
-          .modifier(HeaderIconStyle())
-      }
-      .buttonStyle(.plain)
-      .help(
-        onParkActive == nil
-          ? "Park session"
-          : "Park and stop terminal. Right-click for Standby."
-      )
-      .contextMenu {
-        Button("Park", systemImage: "parkingsign", action: onPark)
-        if let onParkActive {
+      if let onParkActive {
+        Menu {
+          Button("Park", systemImage: "parkingsign", action: onPark)
           Button("Standby", systemImage: "bolt.circle", action: onParkActive)
+        } label: {
+          Image(systemName: "pause.fill")
+            .font(.system(size: 13, weight: .medium))
+            .modifier(HeaderIconStyle())
+        } primaryAction: {
+          onPark()
         }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Park and stop the terminal. Open the menu for Standby (park but keep the terminal running).")
+      } else {
+        Button(action: onPark) {
+          Image(systemName: "pause.fill")
+            .font(.system(size: 13, weight: .medium))
+            .modifier(HeaderIconStyle())
+        }
+        .buttonStyle(.plain)
+        .help("Park session")
       }
     } else if let onUnpark {
       Button(action: onUnpark) {
