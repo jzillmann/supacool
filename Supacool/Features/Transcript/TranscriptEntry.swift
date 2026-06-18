@@ -47,10 +47,16 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
   /// `delta`; a reader that wants grep-able archive uses `fullText`.
   case outputTurn(fullText: String, delta: String, at: Date)
 
-  /// Raw `onBusy` hook payload. One entry per socket message — both the
-  /// active=true edge (agent started) and active=false edge (agent idle).
-  /// `pid` is nil for pre-upgrade hook clients that don't report it.
-  case hookBusy(active: Bool, pid: Int32?, surfaceID: UUID, at: Date)
+  /// Busy-state edge for a surface. Usually a raw `onBusy` hook payload —
+  /// one entry per socket message, both the active=true edge (agent
+  /// started) and active=false edge (agent idle), with `source == nil`.
+  /// The manager also *synthesizes* active=false edges when it force-clears
+  /// a latch the agent never cleared itself; `source` then carries the
+  /// reason (`"busy-stale"` for the stuck-busy watchdog, `"pid-gone"` for
+  /// the dead-process sweep) so the trace shows the true→false edge instead
+  /// of going silent. `pid` is nil for pre-upgrade hook clients that don't
+  /// report it.
+  case hookBusy(active: Bool, pid: Int32?, source: String?, surfaceID: UUID, at: Date)
 
   /// Raw `onNotification` hook payload. Emitted for every notification
   /// regardless of classifier verdict — informational pings, idle
@@ -113,7 +119,7 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
   enum DiscriminantKeys: String, CodingKey { case kind }
   private enum InputKeys: String, CodingKey { case text, at }
   private enum OutputKeys: String, CodingKey { case fullText, delta, at }
-  private enum HookBusyKeys: String, CodingKey { case active, pid, surfaceID, at }
+  private enum HookBusyKeys: String, CodingKey { case active, pid, source, surfaceID, at }
   private enum HookEventKeys: String, CodingKey {
     case agent, event, title, body, sessionID, awaitingClassifierVerdict, surfaceID, at
   }
@@ -148,6 +154,7 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
       self = .hookBusy(
         active: try c.decodeIfPresent(Bool.self, forKey: .active) ?? false,
         pid: try c.decodeIfPresent(Int32.self, forKey: .pid),
+        source: try c.decodeIfPresent(String.self, forKey: .source),
         surfaceID: try c.decodeIfPresent(UUID.self, forKey: .surfaceID) ?? UUID(),
         at: try c.decodeIfPresent(Date.self, forKey: .at) ?? Date()
       )
@@ -225,12 +232,13 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
       try c.encode(fullText, forKey: .fullText)
       try c.encode(delta, forKey: .delta)
       try c.encode(at, forKey: .at)
-    case .hookBusy(let active, let pid, let surfaceID, let at):
+    case .hookBusy(let active, let pid, let source, let surfaceID, let at):
       var d = encoder.container(keyedBy: DiscriminantKeys.self)
       try d.encode("hookBusy", forKey: .kind)
       var c = encoder.container(keyedBy: HookBusyKeys.self)
       try c.encode(active, forKey: .active)
       try c.encodeIfPresent(pid, forKey: .pid)
+      try c.encodeIfPresent(source, forKey: .source)
       try c.encode(surfaceID, forKey: .surfaceID)
       try c.encode(at, forKey: .at)
     case .hookEvent(
@@ -297,7 +305,7 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
     switch self {
     case .input(_, let at): return at
     case .outputTurn(_, _, let at): return at
-    case .hookBusy(_, _, _, let at): return at
+    case .hookBusy(_, _, _, _, let at): return at
     case .hookEvent(_, _, _, _, _, _, _, let at): return at
     case .awaitingInputChanged(_, _, _, let at): return at
     case .sessionLifecycle(_, _, let at): return at
