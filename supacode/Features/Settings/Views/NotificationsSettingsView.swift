@@ -4,6 +4,11 @@ import SwiftUI
 struct NotificationsSettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
 
+  /// Opt-in for Phase-3 PR auto-resume. Board-local behaviour, so it lives in
+  /// UserDefaults (read by `BoardFeature.readAutoResumeEnabled`) rather than
+  /// the persisted GlobalSettings file. Off by default.
+  @AppStorage("supacool.autoResumeOnPRReturn") private var autoResumeOnPRReturn: Bool = false
+
   var body: some View {
     Form {
       Section {
@@ -22,6 +27,21 @@ struct NotificationsSettingsView: View {
               + " according to your settings."
           )
         }.disabled(store.systemNotificationsEnabled)
+      }
+      Section("Pull requests") {
+        Toggle(
+          isOn: $autoResumeOnPRReturn
+        ) {
+          Text("Auto-resume on CI failure / low Greptile score")
+          Text(
+            "When a PR-backed session's checks fail or Greptile flags it, hand the fix back to the"
+              + " idle agent automatically (capped, then it resurfaces). Otherwise just notify."
+          )
+        }
+        .help(
+          "Only CI-failure and low-Greptile reasons are auto-resumed, and only while the agent is"
+            + " idle. If its tab is gone, it resurfaces (via notification) instead."
+        )
       }
       Section("Worktrees") {
         Toggle(

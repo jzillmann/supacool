@@ -105,6 +105,39 @@ nonisolated enum PRBallState: Equatable, Sendable {
     }
   }
 
+  /// Reasons safe to hand back to the agent unattended: mechanical fix-ups
+  /// where "investigate and push" is the obvious next move. Human-judgment
+  /// reasons (changes requested, conflicts, ready to merge) are never
+  /// auto-resumed — they always resurface for the user.
+  var isAutoResumable: Bool {
+    switch self {
+    case .ciFailed, .greptileLow:
+      return true
+    case .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+      .ciRunning, .awaitingReview, .merged:
+      return false
+    }
+  }
+
+  /// The instruction injected into the agent when auto-resume is armed for
+  /// this reason. `nil` for non-auto-resumable states.
+  var autoResumePrompt: String? {
+    switch self {
+    case .ciFailed(let count):
+      let checks = count == 1 ? "check" : "checks"
+      return
+        "CI failed on this pull request (\(count) \(checks)). Run `gh pr checks` to see which, "
+        + "investigate the failure, fix it, and push."
+    case .greptileLow(let score):
+      return
+        "Greptile flagged this pull request with a low confidence score (\(score)/5). Review the "
+        + "Greptile review comments on the PR, address the concerns, and push."
+    case .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+      .ciRunning, .awaitingReview, .merged:
+      return nil
+    }
+  }
+
   /// Ordering for "which reason wins" when a session has several PRs in the
   /// user's court — lower is more urgent. Their-court / done states sort last
   /// so they're never surfaced as the card's reason chip.

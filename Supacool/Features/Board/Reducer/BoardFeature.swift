@@ -95,6 +95,15 @@ struct BoardFeature {
     /// Guards against re-entrant triggers on the same session.
     var autoObserverInFlight: Set<AgentSession.ID> = []
 
+    /// How many times auto-resume has handed a given PR (keyed by ref dedupe
+    /// key) back to its agent without the PR recovering. The loop guard:
+    /// CI fail → fix → push → CI fail → … is capped so a flaky/unfixable
+    /// check can't burn tokens forever. In-memory on purpose — a relaunch
+    /// resets it, but Phase-2's nil-previous guard means the first post-launch
+    /// snapshot is never a transition, so no auto-resume re-fires immediately.
+    /// Cleared when the PR reaches a good state (ready to merge / merged).
+    var autoResumeAttempts: [String: Int] = [:]
+
     /// The session a Rerun is replacing — kept around until the new
     /// session is successfully created so that a failed/cancelled
     /// rerun doesn't lose the original card. Cleared on successful
@@ -684,6 +693,15 @@ struct BoardFeature {
     /// and has `autoObserver == true`. Starts a read → decide → respond effect.
     case autoObserverTriggered(id: AgentSession.ID)
     case _autoObserverDecided(id: AgentSession.ID, response: String?)
+    /// A PR bounced back into the user's court on an armed auto-resume reason
+    /// (CI failed / Greptile low) while the agent was idle. Injects the
+    /// fix-it prompt into the live tab; if the tab is gone, falls back to the
+    /// `fallback` notification so the bounce is never silently dropped.
+    case _autoResumePRReturn(
+      id: AgentSession.ID,
+      prompt: String,
+      fallback: Delegate
+    )
 
     // MARK: References (ticket ids, PR URLs)
     /// Fired when a board card or focused terminal appears/updates. Triggers
@@ -2105,6 +2123,26 @@ struct BoardFeature {
           await terminalClient.send(.sendText(worktreeID: worktreeID, tabID: tabID, text: text))
         }
 
+      case ._autoResumePRReturn(let id, let prompt, let fallback):
+        guard let session = state.sessions.first(where: { $0.id == id }) else {
+          return .send(.delegate(fallback))
+        }
+        let worktreeID = session.worktreeID
+        let tabID = TerminalTabID(rawValue: id)
+        let text = prompt.hasSuffix("\n") ? prompt : prompt + "\n"
+        return .run { send in
+          // A live, non-empty screen means the agent's tab is still up and
+          // sitting at its prompt — inject the fix-it instruction. If the tab
+          // is gone (detached), `readScreenContents` is nil; fall back to the
+          // notification so the bounce is never silently dropped.
+          let screen = await terminalClient.readScreenContents(worktreeID, tabID)
+          if let screen, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await terminalClient.send(.sendText(worktreeID: worktreeID, tabID: tabID, text: text))
+          } else {
+            await send(.delegate(fallback))
+          }
+        }
+
       case .newTerminalSheet(.presented(.delegate(.created(let session)))):
         state.newTerminalSheet = nil
         return finalizeCreatedSession(session, state: &state)
@@ -2519,11 +2557,14 @@ struct BoardFeature {
       case ._prStateFanout(let refKey, let snapshot):
         // Apply the fetched state to every session that references this
         // PR. Single network result, all sessions updated.
-        let notification = Self.pullRequestReturnNotification(
+        let outcome = Self.pullRequestReturnOutcome(
           refKey: refKey,
           previous: state.prReferenceSnapshots[refKey],
           next: snapshot,
-          sessions: state.sessions
+          sessions: state.sessions,
+          autoResumeEnabled: Self.readAutoResumeEnabled(),
+          priorAttempts: state.autoResumeAttempts[refKey] ?? 0,
+          maxAttempts: Self.autoResumeMaxAttempts
         )
         state.$sessions.withLock { sessions in
           for index in sessions.indices {
@@ -2539,7 +2580,7 @@ struct BoardFeature {
         state.prRefreshFailureJitter.removeValue(forKey: refKey)
         state.prRefreshSuccessAt[refKey] = date.now
         state.prRefreshInFlight.remove(refKey)
-        return notification.map { .send(.delegate($0)) } ?? .none
+        return Self.applyPRReturnOutcome(outcome, refKey: refKey, next: snapshot, into: &state)
 
       // MARK: - PR Pulse (repo-wide open-PR monitoring)
 
@@ -2697,11 +2738,14 @@ struct BoardFeature {
         return .none
 
       case ._prStatusUpdated(let id, let ref, let snapshot):
-        let notification = Self.pullRequestReturnNotification(
+        let outcome = Self.pullRequestReturnOutcome(
           refKey: ref.dedupeKey,
           previous: state.prReferenceSnapshots[ref.dedupeKey],
           next: snapshot,
-          sessions: state.sessions
+          sessions: state.sessions,
+          autoResumeEnabled: Self.readAutoResumeEnabled(),
+          priorAttempts: state.autoResumeAttempts[ref.dedupeKey] ?? 0,
+          maxAttempts: Self.autoResumeMaxAttempts
         )
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
@@ -2715,7 +2759,7 @@ struct BoardFeature {
         state.prRefreshFailureAt.removeValue(forKey: ref.dedupeKey)
         state.prRefreshFailureJitter.removeValue(forKey: ref.dedupeKey)
         state.prRefreshSuccessAt[ref.dedupeKey] = date.now
-        return notification.map { .send(.delegate($0)) } ?? .none
+        return Self.applyPRReturnOutcome(outcome, refKey: ref.dedupeKey, next: snapshot, into: &state)
 
       case ._autoDisplayNameSuggested(let id, let suggested):
         state.$sessions.withLock { sessions in
@@ -3990,30 +4034,93 @@ struct BoardFeature {
     return ref
   }
 
-  /// Builds the "ball bounced back to you" notification for a PR snapshot
-  /// update, or `nil` when this isn't a their-court→your-court transition.
-  /// `previous` is the snapshot being replaced (nil on first sight, which is
-  /// never a transition — see `PRBallState.didReturnToCourt`).
-  nonisolated fileprivate static func pullRequestReturnNotification(
+  /// Loop guard: how many times auto-resume hands the same PR back to its
+  /// agent before giving up and resurfacing it for the user.
+  static let autoResumeMaxAttempts = 3
+
+  /// What to do when a PR snapshot update lands. `.none` for a non-transition;
+  /// `.notify` to fire the Phase-2 bounce notification; `.autoResume` to inject
+  /// the fix-it prompt into the idle agent (Phase 3, opt-in).
+  nonisolated enum PRReturnOutcome {
+    case none
+    case notify(Delegate)
+    case autoResume(id: AgentSession.ID, prompt: String, fallback: Delegate)
+  }
+
+  /// Decides the outcome of a their-court→your-court PR transition. Pure so the
+  /// gating (armed reason, agent idle, retry budget) is fully testable; the
+  /// reducer feeds in the live opt-in flag and prior attempt count and applies
+  /// the resulting state mutation + effect.
+  nonisolated static func pullRequestReturnOutcome(
     refKey: String,
     previous: PullRequestSnapshot?,
     next: PullRequestSnapshot,
-    sessions: [AgentSession]
-  ) -> Delegate? {
+    sessions: [AgentSession],
+    autoResumeEnabled: Bool,
+    priorAttempts: Int,
+    maxAttempts: Int
+  ) -> PRReturnOutcome {
     let after = PRBallState(snapshot: next)
     guard
       PRBallState.didReturnToCourt(from: previous.map { PRBallState(snapshot: $0) }, to: after),
       let reason = after.reasonLabel
-    else { return nil }
+    else { return .none }
 
     // refKey is "pr:owner/repo#number" — surface the number to the user.
     let prLabel = refKey.split(separator: "#").last.map { "PR #\($0)" } ?? "Pull request"
-    let sessionName = sessions.first {
-      $0.references.contains { $0.dedupeKey == refKey }
-    }?.displayName
-    let title = sessionName ?? prLabel
-    let body = sessionName == nil ? reason : "\(prLabel): \(reason)"
-    return .pullRequestReturnedToCourt(title: title, body: body)
+    let session = sessions.first { $0.references.contains { $0.dedupeKey == refKey } }
+
+    func notification(suffix: String = "") -> Delegate {
+      let title = session?.displayName ?? prLabel
+      let body = (session?.displayName == nil ? reason : "\(prLabel): \(reason)") + suffix
+      return .pullRequestReturnedToCourt(title: title, body: body)
+    }
+
+    // Auto-resume only mechanical reasons, only when armed, only for a session
+    // that exists and is idle (never interrupt a working agent), and only
+    // while the per-PR retry budget holds.
+    guard autoResumeEnabled, after.isAutoResumable, let prompt = after.autoResumePrompt,
+      let session, !session.lastKnownBusy
+    else {
+      return .notify(notification())
+    }
+    if priorAttempts >= maxAttempts {
+      return .notify(notification(suffix: " · auto-resumed \(maxAttempts)×, over to you"))
+    }
+    return .autoResume(id: session.id, prompt: prompt, fallback: notification())
+  }
+
+  /// Applies the retry-budget bookkeeping for a PR return outcome and returns
+  /// the effect. Resets the budget once the PR recovers (ready to merge /
+  /// merged); bumps it when we hand the PR back to its agent.
+  fileprivate static func applyPRReturnOutcome(
+    _ outcome: PRReturnOutcome,
+    refKey: String,
+    next: PullRequestSnapshot,
+    into state: inout State
+  ) -> Effect<Action> {
+    switch PRBallState(snapshot: next) {
+    case .readyToMerge, .merged:
+      state.autoResumeAttempts[refKey] = nil
+    default:
+      break
+    }
+    switch outcome {
+    case .none:
+      return .none
+    case .notify(let delegate):
+      return .send(.delegate(delegate))
+    case .autoResume(let id, let prompt, let fallback):
+      state.autoResumeAttempts[refKey, default: 0] += 1
+      return .send(._autoResumePRReturn(id: id, prompt: prompt, fallback: fallback))
+    }
+  }
+
+  /// Opt-in flag for Phase-3 auto-resume. Read straight from UserDefaults
+  /// (mirrors `readBypassPermissions`); the Settings toggle writes the same
+  /// key via `@AppStorage`. Defaults to off.
+  nonisolated fileprivate static func readAutoResumeEnabled() -> Bool {
+    UserDefaults.standard.bool(forKey: "supacool.autoResumeOnPRReturn")
   }
 
   /// True iff `ref` is a PR reference that hasn't failed within the

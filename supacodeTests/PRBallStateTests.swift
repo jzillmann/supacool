@@ -221,6 +221,22 @@ struct PRBallStateTests {
   @Test func stayingInTheirCourtIsNotAReturn() {
     #expect(!PRBallState.didReturnToCourt(from: .ciRunning, to: .awaitingReview))
   }
+
+  // MARK: auto-resume classification
+
+  @Test func mechanicalReasonsAreAutoResumable() {
+    #expect(PRBallState.ciFailed(1).isAutoResumable)
+    #expect(PRBallState.greptileLow(2).isAutoResumable)
+    #expect(PRBallState.ciFailed(1).autoResumePrompt != nil)
+    #expect(PRBallState.greptileLow(2).autoResumePrompt != nil)
+  }
+
+  @Test func judgmentReasonsAreNotAutoResumable() {
+    for ball: PRBallState in [.changesRequested, .mergeConflict, .readyToMerge, .closedUnmerged, .draft] {
+      #expect(!ball.isAutoResumable)
+      #expect(ball.autoResumePrompt == nil)
+    }
+  }
 }
 
 extension PullRequestSnapshot {
