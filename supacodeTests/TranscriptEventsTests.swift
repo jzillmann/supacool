@@ -28,15 +28,50 @@ struct TranscriptEventsTests {
   // MARK: - Round-trip per case
 
   @Test func hookBusyRoundTrips() throws {
-    let entry = TranscriptEntry.hookBusy(active: true, pid: 4242, surfaceID: surfaceID, at: fixedDate)
+    let entry = TranscriptEntry.hookBusy(
+      active: true, pid: 4242, source: nil, surfaceID: surfaceID, at: fixedDate
+    )
     let decoded = try decoder.decode(TranscriptEntry.self, from: encoder.encode(entry))
     #expect(decoded == entry)
   }
 
   @Test func hookBusyWithoutPIDRoundTrips() throws {
-    let entry = TranscriptEntry.hookBusy(active: false, pid: nil, surfaceID: surfaceID, at: fixedDate)
+    let entry = TranscriptEntry.hookBusy(
+      active: false, pid: nil, source: nil, surfaceID: surfaceID, at: fixedDate
+    )
     let decoded = try decoder.decode(TranscriptEntry.self, from: encoder.encode(entry))
     #expect(decoded == entry)
+  }
+
+  /// App-synthesized busy clears (stuck-busy watchdog, dead-process sweep)
+  /// carry a `source` reason so the trace explains the true→false edge.
+  @Test func hookBusyWithSourceRoundTrips() throws {
+    let entry = TranscriptEntry.hookBusy(
+      active: false, pid: 4242, source: "busy-stale", surfaceID: surfaceID, at: fixedDate
+    )
+    let decoded = try decoder.decode(TranscriptEntry.self, from: encoder.encode(entry))
+    #expect(decoded == entry)
+    if case .hookBusy(_, _, let source, _, _) = decoded {
+      #expect(source == "busy-stale")
+    } else {
+      Issue.record("Expected .hookBusy")
+    }
+  }
+
+  /// Forward-compat: a pre-`source` trace file (no `source` key) must still
+  /// decode, with `source == nil`.
+  @Test func hookBusyMissingSourceDecodesNil() throws {
+    let json = #"""
+      {"kind":"hookBusy","active":false,"surfaceID":"11111111-1111-1111-1111-111111111111","at":"2023-11-14T22:13:20Z"}
+      """#
+    let decoded = try decoder.decode(TranscriptEntry.self, from: Data(json.utf8))
+    guard case .hookBusy(let active, let pid, let source, _, _) = decoded else {
+      Issue.record("Expected .hookBusy")
+      return
+    }
+    #expect(active == false)
+    #expect(pid == nil)
+    #expect(source == nil)
   }
 
   @Test func hookEventRoundTrips() throws {

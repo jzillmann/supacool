@@ -221,7 +221,7 @@ final class WorktreeTerminalManager {
           + "active=\(active) pid=\(pid.map(String.init) ?? "nil")"
       )
       TranscriptRecorder.shared.append(
-        event: .hookBusy(active: active, pid: pid, surfaceID: surfaceID, at: Date()),
+        event: .hookBusy(active: active, pid: pid, source: nil, surfaceID: surfaceID, at: Date()),
         tabID: wrappedTabID
       )
       self?.markInitialAgentEventObserved(tabID: tabID)
@@ -1733,6 +1733,15 @@ final class WorktreeTerminalManager {
         clearDeferredWork(tabID: tabID)
       }
       guard let state = states[registration.worktreeID] else { continue }
+      // Trace the synthesized clear so the session JSONL shows the
+      // true→false edge with a reason instead of going silent.
+      TranscriptRecorder.shared.append(
+        event: .hookBusy(
+          active: false, pid: registration.pid, source: "pid-gone",
+          surfaceID: registration.surfaceID, at: Date()
+        ),
+        tabID: TerminalTabID(rawValue: tabID)
+      )
       state.setAgentBusy(
         surfaceID: registration.surfaceID,
         tabID: TerminalTabID(rawValue: tabID),
@@ -1808,6 +1817,15 @@ final class WorktreeTerminalManager {
     } else {
       agentPIDByTab[tabID] = registrations
     }
+    // Trace the synthesized clear so the session JSONL shows the true→false
+    // edge with a reason instead of going silent (the symptom in DF73B24A).
+    TranscriptRecorder.shared.append(
+      event: .hookBusy(
+        active: false, pid: pid, source: "busy-stale",
+        surfaceID: registration.surfaceID, at: Date()
+      ),
+      tabID: wrappedTabID
+    )
     states[registration.worktreeID]?.setAgentBusy(
       surfaceID: registration.surfaceID,
       tabID: wrappedTabID,
