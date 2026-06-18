@@ -53,6 +53,8 @@ struct LinearInboxFeature {
     /// When true, tickets already in progress / in review are hidden, so the
     /// worklist surfaces only work that hasn't been picked up yet.
     var hideInProgress: Bool = false
+    /// When true, tickets that already have a live board session are hidden.
+    var hideLinked: Bool = false
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
@@ -115,24 +117,32 @@ struct LinearInboxFeature {
     /// Number of tickets actively in progress / in review.
     var inProgressCount: Int { tickets.filter(\.isInProgress).count }
 
-    /// Tickets shown in the list, after the quick filters. Done and ignored
-    /// tickets are hidden unless their filter is on; "assigned to me" narrows
-    /// to your own tickets.
+    /// Number of tickets linked to a live board session.
+    var linkedCount: Int { tickets.filter { liveLinkedSessionID(for: $0) != nil }.count }
+
+    /// Tickets shown in the list, after the quick filters. Done, ignored and
+    /// linked tickets are hidden unless their filter says otherwise;
+    /// "assigned to me" and "hide in progress" narrow further.
     var visibleTickets: [LinearTicket] {
       tickets.filter { ticket in
         if assignedToMeOnly, !ticket.assignedToMe { return false }
         if hideInProgress, ticket.isInProgress { return false }
+        if hideLinked, liveLinkedSessionID(for: ticket) != nil { return false }
         if !showDone, ticket.isDone { return false }
         if !showIgnored, ticket.isHidden { return false }
         return true
       }
     }
 
-    /// The ticket's started session id, but only while that session still
-    /// exists on the board. Nil means the row should offer "Start session".
-    func liveStartedSessionID(for ticket: LinearTicket) -> UUID? {
-      guard let sessionID = ticket.startedSessionID else { return nil }
-      return sessions.contains(where: { $0.id == sessionID }) ? sessionID : nil
+    /// The live board session linked to this ticket, or nil if none. Prefers
+    /// the explicit link stamped when the session was started from the inbox,
+    /// then falls back to discovering any live session whose primary ticket is
+    /// this one — so sessions started outside the inbox link up too.
+    func liveLinkedSessionID(for ticket: LinearTicket) -> UUID? {
+      if let sessionID = ticket.startedSessionID, sessions.contains(where: { $0.id == sessionID }) {
+        return sessionID
+      }
+      return sessions.first(where: { $0.primaryTicketID == ticket.identifier })?.id
     }
   }
 
@@ -166,6 +176,7 @@ struct LinearInboxFeature {
     case toggleShowIgnored
     case toggleAssignedToMe
     case toggleHideInProgress
+    case toggleHideLinked
     case clearError
     case closeTapped
 
@@ -188,8 +199,9 @@ struct LinearInboxFeature {
     }
   }
 
-  /// How many recently created tickets the one-tap import pulls.
-  static let recentFetchLimit = 25
+  /// How many recently created tickets the recent feed pulls. Linear caps a
+  /// single page at 250; 100 keeps the feed broad without paging.
+  static let recentFetchLimit = 100
 
   /// Done tickets linger this long (measured from Linear's own
   /// completed/canceled timestamp) before they auto-drop from the inbox.
@@ -311,7 +323,7 @@ struct LinearInboxFeature {
 
       case let .openSessionTapped(ticketID):
         guard let ticket = state.tickets.first(where: { $0.identifier == ticketID }),
-          let sessionID = state.liveStartedSessionID(for: ticket)
+          let sessionID = state.liveLinkedSessionID(for: ticket)
         else { return .none }
         return .send(.delegate(.openSession(sessionID: sessionID)))
 
@@ -341,6 +353,10 @@ struct LinearInboxFeature {
 
       case .toggleHideInProgress:
         state.hideInProgress.toggle()
+        return .none
+
+      case .toggleHideLinked:
+        state.hideLinked.toggle()
         return .none
 
       case .clearError:
@@ -573,5 +589,18 @@ struct LinearInboxFeature {
         await send(._fetchFailed(message: error.localizedDescription))
       }
     }
+  }
+}
+
+extension AgentSession {
+  /// The Linear ticket this session is primarily about: its first ticket
+  /// reference, falling back to the first ticket id in its launch prompt.
+  /// Used by the inbox to link a ticket to a session that wasn't started
+  /// from the inbox itself.
+  nonisolated var primaryTicketID: String? {
+    for reference in references {
+      if case let .ticket(id) = reference { return id }
+    }
+    return firstLinearTicketID(in: initialPrompt)
   }
 }

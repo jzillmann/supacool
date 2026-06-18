@@ -80,6 +80,30 @@ struct LinearTicketApplyTests {
     #expect(!LinearTicket(identifier: "A-3", stateType: "completed").isInProgress)
     #expect(!LinearTicket(identifier: "A-4").isInProgress)
   }
+
+  @Test func sessionPrimaryTicketPrefersReferenceThenPrompt() {
+    func session(prompt: String, references: [SessionReference]) -> AgentSession {
+      AgentSession(
+        repositoryID: "/tmp/repo",
+        worktreeID: "/tmp/repo",
+        agent: .claude,
+        initialPrompt: prompt,
+        references: references
+      )
+    }
+    // A parsed ticket reference wins.
+    #expect(session(prompt: "anything", references: [.ticket(id: "CEN-9")]).primaryTicketID == "CEN-9")
+    // No references → fall back to the first ticket id in the launch prompt.
+    #expect(session(prompt: "Fix CEN-3: do it", references: []).primaryTicketID == "CEN-3")
+    // PR reference first, ticket second → the ticket is still primary.
+    let mixed = session(
+      prompt: "p",
+      references: [.pullRequest(owner: "o", repo: "r", number: 1, state: nil, title: nil), .ticket(id: "CEN-7")]
+    )
+    #expect(mixed.primaryTicketID == "CEN-7")
+    // Nothing to link.
+    #expect(session(prompt: "no ticket here", references: []).primaryTicketID == nil)
+  }
 }
 
 // MARK: - Reducer
@@ -337,6 +361,61 @@ struct LinearInboxFeatureTests {
     await store.send(.toggleAssignedToMe)
     #expect(store.state.assignedToMeOnly)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+  }
+
+  @Test(.dependencies) func linksAndOpensSessionDiscoveredByTicketReference() async {
+    // The ticket was never started from the inbox (no startedSessionID), but a
+    // live board session references it — the inbox should link them up.
+    resetInbox([LinearTicket(identifier: "CEN-1", title: "Do thing")])
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1: Do thing",
+      references: [.ticket(id: "CEN-1")]
+    )
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.tickets[0].startedSessionID == nil)
+    #expect(store.state.liveLinkedSessionID(for: store.state.tickets[0]) == session.id)
+    #expect(store.state.linkedCount == 1)
+
+    await store.send(.openSessionTapped(ticketID: "CEN-1"))
+    await store.receive(\.delegate.openSession)
+  }
+
+  @Test(.dependencies) func hideLinkedFilterDropsTicketsWithASession() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Linked"),
+      LinearTicket(identifier: "CEN-2", title: "Unlinked"),
+    ])
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1",
+      references: [.ticket(id: "CEN-1")]
+    )
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.linkedCount == 1)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+
+    await store.send(.toggleHideLinked)
+    #expect(store.state.hideLinked)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-2"])
   }
 
   @Test(.dependencies) func hideInProgressFilterDropsStartedTickets() async {
