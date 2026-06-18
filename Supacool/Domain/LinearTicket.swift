@@ -39,6 +39,9 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   var stateType: String?
   var assigneeName: String?
   var assignedToMe: Bool
+  /// Who filed the issue in Linear. Shown in the row so you can see who's
+  /// asking, distinct from who it's assigned to.
+  var creatorName: String?
   var url: String?
   /// When the issue was created in Linear. Drives the row's age badge so you
   /// can tell how fresh or stale a ticket is at a glance.
@@ -78,6 +81,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     stateType: String? = nil,
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
+    creatorName: String? = nil,
     url: String? = nil,
     createdAt: Date? = nil,
     source: LinearTicketSource = .pasted,
@@ -96,6 +100,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.stateType = stateType
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
+    self.creatorName = creatorName
     self.url = url
     self.createdAt = createdAt
     self.source = source
@@ -111,7 +116,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, url, createdAt, source, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
+    case assignedToMe, creatorName, url, createdAt, source, doneAt, isHidden
+    case fetchedAt, addedAt, startedAt, startedSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -124,6 +130,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     stateType = try c.decodeIfPresent(String.self, forKey: .stateType)
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
+    creatorName = try c.decodeIfPresent(String.self, forKey: .creatorName)
     url = try c.decodeIfPresent(String.self, forKey: .url)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     // Pre-source builds persisted only hand-curated tickets — default to
@@ -149,6 +156,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     stateType = issue.stateType
     assigneeName = issue.assigneeName
     assignedToMe = issue.assignedToMe
+    creatorName = issue.creatorName
     url = issue.url
     createdAt = issue.createdAt
     doneAt = issue.completedAt ?? issue.canceledAt
@@ -162,6 +170,13 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   /// "done" count and show/hide filter.
   var isDone: Bool {
     stateType == "completed" || stateType == "canceled"
+  }
+
+  /// True while the ticket is actively being worked — Linear's `started` state
+  /// category, which covers both "In Progress" and "In Review". Drives the
+  /// optional filter that hides work already underway.
+  var isInProgress: Bool {
+    stateType == "started"
   }
 
   /// Prompt seed for a coding session, e.g. `Fix CEN-7404: <title>`.

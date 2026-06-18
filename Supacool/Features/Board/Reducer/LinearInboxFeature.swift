@@ -50,6 +50,9 @@ struct LinearInboxFeature {
     var showIgnored: Bool = false
     /// When true, only tickets assigned to the API-key holder are shown.
     var assignedToMeOnly: Bool = false
+    /// When true, tickets already in progress / in review are hidden, so the
+    /// worklist surfaces only work that hasn't been picked up yet.
+    var hideInProgress: Bool = false
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
@@ -109,12 +112,16 @@ struct LinearInboxFeature {
     /// Number of tickets assigned to the API-key holder.
     var assignedToMeCount: Int { tickets.filter(\.assignedToMe).count }
 
+    /// Number of tickets actively in progress / in review.
+    var inProgressCount: Int { tickets.filter(\.isInProgress).count }
+
     /// Tickets shown in the list, after the quick filters. Done and ignored
     /// tickets are hidden unless their filter is on; "assigned to me" narrows
     /// to your own tickets.
     var visibleTickets: [LinearTicket] {
       tickets.filter { ticket in
         if assignedToMeOnly, !ticket.assignedToMe { return false }
+        if hideInProgress, ticket.isInProgress { return false }
         if !showDone, ticket.isDone { return false }
         if !showIgnored, ticket.isHidden { return false }
         return true
@@ -158,6 +165,7 @@ struct LinearInboxFeature {
     case toggleShowDone
     case toggleShowIgnored
     case toggleAssignedToMe
+    case toggleHideInProgress
     case clearError
     case closeTapped
 
@@ -329,6 +337,10 @@ struct LinearInboxFeature {
 
       case .toggleAssignedToMe:
         state.assignedToMeOnly.toggle()
+        return .none
+
+      case .toggleHideInProgress:
+        state.hideInProgress.toggle()
         return .none
 
       case .clearError:

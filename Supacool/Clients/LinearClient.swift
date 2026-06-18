@@ -24,6 +24,8 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var assigneeName: String?
   /// True when the current API-key holder is the assignee.
   var assignedToMe: Bool
+  /// Display name of whoever filed the issue, or nil when unknown.
+  var creatorName: String? = nil
   /// Canonical web URL for the issue.
   var url: String?
   /// When the issue was created in Linear. Drives the inbox's per-row age.
@@ -150,7 +152,7 @@ private nonisolated enum LinearLive {
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
     "id identifier title description url createdAt completedAt canceledAt "
-    + "state { name type } assignee { displayName isMe }"
+    + "state { name type } assignee { displayName isMe } creator { displayName }"
 
   static func currentAPIKey() -> String? {
     let key = UserDefaults.standard.string(forKey: "supacool.linear.apiKey") ?? ""
@@ -297,6 +299,7 @@ private nonisolated enum LinearLive {
     }
     let state = dict["state"] as? [String: Any]
     let assignee = dict["assignee"] as? [String: Any]
+    let creator = dict["creator"] as? [String: Any]
     return LinearIssue(
       id: id,
       identifier: identifier,
@@ -306,6 +309,7 @@ private nonisolated enum LinearLive {
       stateType: state?["type"] as? String,
       assigneeName: assignee?["displayName"] as? String,
       assignedToMe: (assignee?["isMe"] as? Bool) ?? false,
+      creatorName: creator?["displayName"] as? String,
       url: dict["url"] as? String,
       createdAt: parseISODate(dict["createdAt"]),
       completedAt: parseISODate(dict["completedAt"]),

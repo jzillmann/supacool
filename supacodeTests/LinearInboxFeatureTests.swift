@@ -51,10 +51,11 @@ struct LinearTicketDoneTests {
 // MARK: - Metadata application (pure)
 
 struct LinearTicketApplyTests {
-  @Test func applyCarriesCreatedAtForTheAgeBadge() {
+  @Test func applyCarriesCreatedAtAndCreatorForTheRow() {
     let created = Date(timeIntervalSince1970: 1_700_000_000)
     var ticket = LinearTicket(identifier: "CEN-1")
     #expect(ticket.createdAt == nil)
+    #expect(ticket.creatorName == nil)
     ticket.apply(
       LinearIssue(
         id: "u1",
@@ -63,12 +64,21 @@ struct LinearTicketApplyTests {
         description: nil,
         assigneeName: nil,
         assignedToMe: false,
+        creatorName: "Ada Lovelace",
         url: nil,
         createdAt: created
       ),
       fetchedAt: Date(timeIntervalSince1970: 1_700_100_000)
     )
     #expect(ticket.createdAt == created)
+    #expect(ticket.creatorName == "Ada Lovelace")
+  }
+
+  @Test func isInProgressReflectsStartedStateType() {
+    #expect(LinearTicket(identifier: "A-1", stateType: "started").isInProgress)
+    #expect(!LinearTicket(identifier: "A-2", stateType: "unstarted").isInProgress)
+    #expect(!LinearTicket(identifier: "A-3", stateType: "completed").isInProgress)
+    #expect(!LinearTicket(identifier: "A-4").isInProgress)
   }
 }
 
@@ -326,6 +336,27 @@ struct LinearInboxFeatureTests {
 
     await store.send(.toggleAssignedToMe)
     #expect(store.state.assignedToMeOnly)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+  }
+
+  @Test(.dependencies) func hideInProgressFilterDropsStartedTickets() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Todo", stateType: "unstarted"),
+      LinearTicket(identifier: "CEN-2", title: "Working", stateType: "started"),
+      LinearTicket(identifier: "CEN-3", title: "Reviewing", stateType: "started"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.inProgressCount == 2)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2", "CEN-3"])
+
+    await store.send(.toggleHideInProgress)
+    #expect(store.state.hideInProgress)
+    // Both the in-progress and in-review tickets drop out.
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
