@@ -92,6 +92,14 @@ struct LinearInboxSheet: View {
         onToggle: { store.send(.toggleAssignedToMe) }
       )
       filterToggle(
+        "Hide in progress",
+        systemImage: "hammer",
+        isOn: store.hideInProgress,
+        count: store.inProgressCount,
+        help: "Hide tickets already in progress or in review",
+        onToggle: { store.send(.toggleHideInProgress) }
+      )
+      filterToggle(
         "Done",
         systemImage: "checkmark.circle",
         isOn: store.showDone,
@@ -353,6 +361,14 @@ private struct LinearTicketRow: View {
         Image(systemName: "checkmark.seal.fill")
           .foregroundStyle(.green)
           .help("You started a session on this ticket")
+      }
+      if let creator = ticket.creatorName, !creator.isEmpty {
+        Label(creator, systemImage: "square.and.pencil")
+          .labelStyle(.titleAndIcon)
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .lineLimit(1)
+          .help("Created by \(creator)")
       }
       if let createdAt = ticket.createdAt {
         Text(compactAge(since: createdAt))
