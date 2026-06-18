@@ -2,9 +2,11 @@ import ComposableArchitecture
 import SwiftUI
 
 /// The Linear Inbox sheet. A two-tab dialog: the **Tickets** tab holds the
-/// pasted-ticket overview; the **New Terminal** tab appears only while a
-/// session is being configured (the embedded `NewTerminalSheet`), so the
-/// user never juggles two stacked dialogs.
+/// worklist — a **Recent** source (Linear's latest-created feed, auto-loaded
+/// on open) and a **Pasted** source (hand-curated links), toggled by a
+/// segmented control and narrowed by quick filters. The **New Terminal** tab
+/// appears only while a session is being configured (the embedded
+/// `NewTerminalSheet`), so the user never juggles two stacked dialogs.
 struct LinearInboxSheet: View {
   @Bindable var store: StoreOf<LinearInboxFeature>
 
@@ -44,44 +46,98 @@ struct LinearInboxSheet: View {
     VStack(spacing: 0) {
       header
       Divider()
-      importField
+      sourcePicker
+      // The paste field is the "Pasted" source's editor — only shown there.
+      if store.source == .pasted {
+        importField
+      }
       if let message = store.errorMessage {
         errorBanner(message)
       }
       Divider()
-      if !store.tickets.isEmpty {
-        doneFilterBar
-      }
+      filterBar
       ticketList
     }
   }
 
-  /// "N/M done" progress link — toggles whether completed/canceled tickets
-  /// are shown, so the list can read as a worklist of what's left.
-  private var doneFilterBar: some View {
-    HStack {
-      Button {
-        store.send(.toggleShowDone)
-      } label: {
-        Label(doneFilterLabel, systemImage: store.showDone ? "eye" : "eye.slash")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      .buttonStyle(.plain)
-      .disabled(store.doneCount == 0 && store.hiddenCount == 0)
-      .help(store.showDone ? "Hide done and hidden tickets" : "Show done and hidden tickets")
+  /// Recent vs Pasted. Recent auto-loads Linear's latest-created feed on open;
+  /// Pasted shows the hand-curated worklist. The choice persists across opens.
+  private var sourcePicker: some View {
+    Picker(
+      "Source",
+      selection: Binding(
+        get: { store.source },
+        set: { store.send(.sourceChanged($0)) }
+      )
+    ) {
+      Text("Recent").tag(LinearTicketSource.recent)
+      Text("Pasted").tag(LinearTicketSource.pasted)
+    }
+    .pickerStyle(.segmented)
+    .labelsHidden()
+    .fixedSize()
+    .padding(.vertical, 8)
+    .help("Switch between Linear's most-recently-created tickets and your pasted worklist")
+  }
+
+  /// Quick filters: narrow to your own tickets, and reveal done / ignored rows.
+  private var filterBar: some View {
+    HStack(spacing: 8) {
+      filterToggle(
+        "Assigned to me",
+        systemImage: "person.fill",
+        isOn: store.assignedToMeOnly,
+        count: store.assignedToMeCount,
+        help: "Show only tickets assigned to you",
+        onToggle: { store.send(.toggleAssignedToMe) }
+      )
+      filterToggle(
+        "Done",
+        systemImage: "checkmark.circle",
+        isOn: store.showDone,
+        count: store.doneCount,
+        help: "Reveal completed and canceled tickets",
+        onToggle: { store.send(.toggleShowDone) }
+      )
+      filterToggle(
+        "Ignored",
+        systemImage: "eye.slash",
+        isOn: store.showIgnored,
+        count: store.ignoredCount,
+        help: "Reveal tickets you've ignored",
+        onToggle: { store.send(.toggleShowIgnored) }
+      )
       Spacer()
+      if store.isFetchingRecent {
+        ProgressView().controlSize(.small)
+      }
     }
     .padding(.horizontal)
     .padding(.vertical, 6)
   }
 
-  private var doneFilterLabel: String {
-    var label = "\(store.doneCount)/\(store.tickets.count) done"
-    if store.hiddenCount > 0 {
-      label += ", \(store.hiddenCount) hidden"
+  private func filterToggle(
+    _ title: String,
+    systemImage: String,
+    isOn: Bool,
+    count: Int,
+    help: String,
+    onToggle: @escaping () -> Void
+  ) -> some View {
+    Toggle(isOn: Binding(get: { isOn }, set: { _ in onToggle() })) {
+      HStack(spacing: 4) {
+        Image(systemName: systemImage)
+        Text(title)
+        if count > 0 {
+          Text("\(count)")
+            .foregroundStyle(.secondary)
+        }
+      }
+      .font(.caption)
     }
-    return label
+    .toggleStyle(.button)
+    .controlSize(.small)
+    .help(help)
   }
 
   private var header: some View {
@@ -104,8 +160,16 @@ struct LinearInboxSheet: View {
       } label: {
         Label("Refresh", systemImage: "arrow.clockwise")
       }
-      .help("Re-fetch state, assignee and titles for every ticket")
-      .disabled(store.tickets.isEmpty || !store.fetchingTicketIDs.isEmpty)
+      .help(
+        store.source == .recent
+          ? "Re-pull Linear's most-recently-created tickets"
+          : "Re-fetch state, assignee and titles for every ticket"
+      )
+      .disabled(
+        store.isFetchingRecent
+          || !store.fetchingTicketIDs.isEmpty
+          || (store.source == .pasted && store.tickets.isEmpty)
+      )
 
       Button {
         store.send(.closeTapped)
@@ -132,33 +196,17 @@ struct LinearInboxSheet: View {
             .stroke(.separator)
         )
       HStack {
-        Button {
-          store.send(.fetchRecentTapped)
-        } label: {
-          if store.isFetchingRecent {
-            ProgressView()
-              .controlSize(.small)
-          } else {
-            Label(
-              "Last \(LinearInboxFeature.recentFetchLimit) created",
-              systemImage: "clock.arrow.circlepath"
-            )
-          }
-        }
-        .help("Fetch the \(LinearInboxFeature.recentFetchLimit) most recently created Linear tickets and add them to the inbox")
-        .disabled(store.isFetchingRecent)
-
         Spacer()
         Button("Replace list") {
           store.send(.importTapped(replace: true))
         }
-        .help("Replace the inbox with the pasted tickets (keeps progress on surviving ones)")
+        .help("Replace the pasted worklist with these tickets (keeps progress on surviving ones)")
         .disabled(store.pasteText.isEmpty)
 
-        Button("Add to inbox") {
+        Button("Add to list") {
           store.send(.importTapped(replace: false))
         }
-        .help("Add the pasted tickets to the inbox without removing existing ones")
+        .help("Add these tickets to the pasted worklist without removing existing ones")
         .keyboardShortcut(.defaultAction)
         .disabled(store.pasteText.isEmpty)
       }
@@ -191,20 +239,37 @@ struct LinearInboxSheet: View {
   @ViewBuilder
   private var ticketList: some View {
     if store.tickets.isEmpty {
-      ContentUnavailableView(
-        "No tickets yet",
-        systemImage: "tray",
-        description: Text(
-          "Paste one or more Linear issue links above, or fetch the last "
-            + "\(LinearInboxFeature.recentFetchLimit) created tickets."
+      if store.isFetchingRecent {
+        VStack(spacing: 8) {
+          ProgressView()
+          Text("Loading recent tickets…")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else if store.source == .recent {
+        ContentUnavailableView(
+          "No recent tickets",
+          systemImage: "clock",
+          description: Text(
+            "Nothing recently created for this repository's Linear team, "
+              + "or no team key is set under Settings → repository → Linear."
+          )
         )
-      )
-      .frame(maxHeight: .infinity)
+        .frame(maxHeight: .infinity)
+      } else {
+        ContentUnavailableView(
+          "No pasted tickets",
+          systemImage: "tray",
+          description: Text("Paste one or more Linear issue links above to build your worklist.")
+        )
+        .frame(maxHeight: .infinity)
+      }
     } else if store.visibleTickets.isEmpty {
       ContentUnavailableView(
-        "All done",
-        systemImage: "checkmark.circle",
-        description: Text("Every ticket is done or hidden. Tap “\(doneFilterLabel)” to show them.")
+        "Nothing to show",
+        systemImage: "line.3.horizontal.decrease.circle",
+        description: Text("Every ticket is filtered out — toggle the quick filters above to reveal them.")
       )
       .frame(maxHeight: .infinity)
     } else {
@@ -217,7 +282,7 @@ struct LinearInboxSheet: View {
             isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
             hasLiveSession: store.state.liveStartedSessionID(for: ticket) != nil,
             onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
-            onToggleHidden: { store.send(.toggleHideTapped(ticketID: ticket.identifier)) },
+            onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
             onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
             onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
             onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
@@ -241,7 +306,7 @@ private struct LinearTicketRow: View {
   /// board — swaps "Start session" for "Open session".
   let hasLiveSession: Bool
   let onToggleExpanded: () -> Void
-  let onToggleHidden: () -> Void
+  let onToggleIgnored: () -> Void
   let onAssignToMe: () -> Void
   let onStartSession: () -> Void
   let onOpenSession: () -> Void
@@ -313,19 +378,19 @@ private struct LinearTicketRow: View {
     }
   }
 
-  /// Hide and remove, reachable without expanding the row. Revealed on
-  /// hover; the unhide eye stays visible so a hidden row (shown via the
-  /// done filter) is never stuck.
+  /// Ignore and remove, reachable without expanding the row. Revealed on
+  /// hover; the un-ignore eye stays visible so an ignored row (shown via the
+  /// "Ignored" filter) is never stuck.
   private var hoverControls: some View {
     HStack(spacing: 4) {
       Button {
-        onToggleHidden()
+        onToggleIgnored()
       } label: {
         Image(systemName: ticket.isHidden ? "eye" : "eye.slash")
           .foregroundStyle(.secondary)
       }
       .buttonStyle(.borderless)
-      .help(ticket.isHidden ? "Unhide this ticket" : "Hide this ticket from the list (kept in the inbox)")
+      .help(ticket.isHidden ? "Un-ignore this ticket" : "Ignore this ticket (kept in the inbox)")
 
       Button(role: .destructive) {
         onRemove()

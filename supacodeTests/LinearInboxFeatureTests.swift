@@ -61,9 +61,14 @@ struct LinearInboxFeatureTests {
     worktrees: []
   )
 
-  private func resetInbox(_ tickets: [LinearTicket]) {
+  /// Seeds the repo's bucket and pins the persisted source view. The source is
+  /// global `appStorage`, so every test must set it for determinism. Defaults
+  /// to `.pasted`, matching the hand-curated tickets most tests seed.
+  private func resetInbox(_ tickets: [LinearTicket], source: LinearTicketSource = .pasted) {
     @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
     $inbox.withLock { $0 = [Self.repo.id: tickets] }
+    @Shared(.appStorage("linearInboxSource")) var inboxSourceRaw: String = ""
+    $inboxSourceRaw.withLock { $0 = source.rawValue }
   }
 
   @Test(.dependencies) func importParsesPastedTextThenFetchesMetadata() async {
@@ -107,9 +112,17 @@ struct LinearInboxFeatureTests {
     #expect(store.state.fetchingTicketIDs.isEmpty)
   }
 
-  @Test(.dependencies) func fetchRecentUpsertsTicketsWithMetadata() async {
+  @Test(.dependencies) func openingInRecentModeAutoFetchesAndRebuildsTheFeed() async {
     let started = Date(timeIntervalSince1970: 10)
-    resetInbox([LinearTicket(identifier: "CEN-1", title: "Stale", startedAt: started)])
+    // A pre-existing recent ticket (started) plus a stale recent ticket that
+    // has since fallen out of Linear's latest feed.
+    resetInbox(
+      [
+        LinearTicket(identifier: "CEN-1", title: "Stale", source: .recent, startedAt: started),
+        LinearTicket(identifier: "CEN-9", title: "Dropped out", source: .recent),
+      ],
+      source: .recent
+    )
     let now = Date(timeIntervalSince1970: 2_000)
     let existing = LinearIssue(
       id: "u1",
@@ -145,23 +158,58 @@ struct LinearInboxFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.fetchRecentTapped)
+    // Opening in recent mode pulls the feed with no button press.
+    await store.send(.task)
     #expect(store.state.isFetchingRecent)
 
     await store.receive(\._recentIssuesFetched)
     #expect(!store.state.isFetchingRecent)
+    // Rebuilt to the feed: CEN-1 survives (keeps started), CEN-2 added,
+    // CEN-9 dropped because it's no longer in the latest feed.
     #expect(store.state.tickets.map(\.identifier) == ["CEN-1", "CEN-2"])
-    // The existing ticket refreshes its cache but keeps inbox-local state.
     #expect(store.state.tickets[0].title == "Fresh title")
     #expect(store.state.tickets[0].startedAt == started)
-    // The new ticket arrives fully hydrated — no follow-up fetch needed.
     #expect(store.state.tickets[1].title == "Brand new")
     #expect(store.state.tickets[1].linearID == "u2")
     #expect(store.state.tickets[1].fetchedAt == now)
   }
 
+  @Test(.dependencies) func recentFetchLeavesThePastedSetUntouched() async {
+    // A pasted ticket and a recent ticket sharing the bucket. The recent feed
+    // returns the pasted id too, but it must stay pasted (no duplicate).
+    resetInbox(
+      [
+        LinearTicket(identifier: "CEN-1", title: "Curated", source: .pasted),
+        LinearTicket(identifier: "CEN-2", title: "Old recent", source: .recent),
+      ],
+      source: .recent
+    )
+    let now = Date(timeIntervalSince1970: 3_000)
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.fetchRecentIssues = { _, _ in
+        [
+          LinearIssue(id: "u1", identifier: "CEN-1", title: "Curated", description: nil, assigneeName: nil, assignedToMe: false, url: nil),
+          LinearIssue(id: "u3", identifier: "CEN-3", title: "New recent", description: nil, assigneeName: nil, assignedToMe: false, url: nil),
+        ]
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.fetchRecentTapped)
+    await store.receive(\._recentIssuesFetched)
+    // Recent view shows only the feed minus the curated id: CEN-3 (CEN-1 stays
+    // pasted, CEN-2 fell out).
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-3"])
+    // The pasted ticket is still in the bucket under the Pasted source.
+    #expect(store.state.bucket.contains { $0.identifier == "CEN-1" && $0.source == .pasted })
+  }
+
   @Test(.dependencies) func fetchRecentFailureSurfacesTheError() async {
-    resetInbox([])
+    resetInbox([], source: .recent)
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
@@ -178,7 +226,7 @@ struct LinearInboxFeatureTests {
   }
 
   @Test(.dependencies) func fetchRecentWithoutTeamScopePromptsForConfiguration() async {
-    resetInbox([])
+    resetInbox([], source: .recent)
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
@@ -195,7 +243,7 @@ struct LinearInboxFeatureTests {
   }
 
   @Test(.dependencies) func fetchRecentWithNoResultsExplainsItself() async {
-    resetInbox([])
+    resetInbox([], source: .recent)
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
@@ -208,6 +256,53 @@ struct LinearInboxFeatureTests {
     await store.receive(\._recentIssuesFetched)
     #expect(!store.state.isFetchingRecent)
     #expect(store.state.errorMessage == "No recently created tickets found in Linear.")
+  }
+
+  @Test(.dependencies) func switchingToPastedShowsTheCuratedSetAndRefreshesIt() async {
+    resetInbox(
+      [
+        LinearTicket(identifier: "CEN-1", title: "Recent one", source: .recent),
+        LinearTicket(identifier: "CEN-5", title: "Curated", source: .pasted),
+      ],
+      source: .recent
+    )
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1))
+      $0.linearClient.fetchIssues = { ids in
+        // Switching to pasted refreshes only the pasted ids.
+        #expect(ids == ["CEN-5"])
+        return []
+      }
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-1"])
+    await store.send(.sourceChanged(.pasted))
+    #expect(store.state.source == .pasted)
+    #expect(store.state.tickets.map(\.identifier) == ["CEN-5"])
+    await store.receive(\._issuesFetched)
+  }
+
+  @Test(.dependencies) func assignedToMeFilterNarrowsToYourTickets() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Mine", assignedToMe: true),
+      LinearTicket(identifier: "CEN-2", title: "Theirs", assigneeName: "Someone"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.assignedToMeCount == 1)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+
+    await store.send(.toggleAssignedToMe)
+    #expect(store.state.assignedToMeOnly)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
   @Test(.dependencies) func taskRefreshesExistingTicketsOnOpen() async {
@@ -473,10 +568,10 @@ struct LinearInboxFeatureTests {
     #expect(store.state.tickets.isEmpty)
   }
 
-  @Test(.dependencies) func toggleHideHidesTheTicketWithoutRemovingIt() async {
+  @Test(.dependencies) func toggleIgnoreHidesTheTicketWithoutRemovingIt() async {
     resetInbox([
       LinearTicket(identifier: "CEN-1", title: "Keep"),
-      LinearTicket(identifier: "CEN-2", title: "Hide me"),
+      LinearTicket(identifier: "CEN-2", title: "Ignore me"),
     ])
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
@@ -484,21 +579,21 @@ struct LinearInboxFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.toggleHideTapped(ticketID: "CEN-2"))
+    await store.send(.toggleIgnoreTapped(ticketID: "CEN-2"))
     // Still in the inbox, just not on the worklist.
     #expect(store.state.tickets.map(\.identifier) == ["CEN-1", "CEN-2"])
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
-    #expect(store.state.hiddenCount == 1)
+    #expect(store.state.ignoredCount == 1)
 
-    // The show-done toggle reveals hidden rows too…
-    await store.send(.toggleShowDone)
+    // The "Ignored" filter reveals ignored rows…
+    await store.send(.toggleShowIgnored)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
 
-    // …and a hidden ticket can be brought back.
-    await store.send(.toggleHideTapped(ticketID: "CEN-2"))
-    await store.send(.toggleShowDone)
+    // …and an ignored ticket can be brought back.
+    await store.send(.toggleIgnoreTapped(ticketID: "CEN-2"))
+    await store.send(.toggleShowIgnored)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
-    #expect(store.state.hiddenCount == 0)
+    #expect(store.state.ignoredCount == 0)
   }
 
   @Test(.dependencies) func removeTicketDropsItFromTheInbox() async {

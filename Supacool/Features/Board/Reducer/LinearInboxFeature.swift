@@ -13,10 +13,19 @@ import Foundation
 struct LinearInboxFeature {
   @ObservableState
   struct State: Equatable {
-    /// Persisted pasted tickets, bucketed per repository. Survives relaunch.
-    /// The inbox is repo-scoped: ``tickets`` exposes only the selected repo's
-    /// worklist; the picker swaps which bucket is shown.
+    /// Persisted tickets, bucketed per repository. Survives relaunch. Each
+    /// bucket holds both the auto-fetched **recent** set and the hand-curated
+    /// **pasted** set, tagged by `LinearTicket.source`; ``tickets`` exposes
+    /// only the selected repo + selected source.
     @Shared(.linearInbox) var inbox: [String: [LinearTicket]] = [:]
+
+    /// The selected source view (recent vs pasted), persisted so reopening the
+    /// inbox restores the same view. Stored as a raw string because
+    /// `@Shared(.appStorage(...))` bridges scalars more reliably than enums.
+    // Dot-free key: dotted keys break efficient cross-process KVO (matters for
+    // the isolated preview instance), matching `prPulseIgnoredPRKeys` etc.
+    @Shared(.appStorage("linearInboxSource"))
+    var inboxSourceRaw: String = LinearTicketSource.recent.rawValue
 
     /// Live board sessions — read-only here. Lets a started ticket offer
     /// "Open session" instead of spawning a duplicate, and lets the row
@@ -37,6 +46,10 @@ struct LinearInboxFeature {
     /// When false (the default), tickets in a completed/canceled Linear
     /// state are hidden so the inbox reads as a worklist of what's left.
     var showDone: Bool = false
+    /// When false (the default), ignored tickets are hidden from the worklist.
+    var showIgnored: Bool = false
+    /// When true, only tickets assigned to the API-key holder are shown.
+    var assignedToMeOnly: Bool = false
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
@@ -63,29 +76,49 @@ struct LinearInboxFeature {
 
     var hasNewTerminalTab: Bool { newTerminal != nil }
 
+    /// The selected source view (recent vs pasted).
+    var source: LinearTicketSource {
+      LinearTicketSource(rawValue: inboxSourceRaw) ?? .recent
+    }
+
     /// The repository whose worklist is on screen.
     var selectedRepository: Repository? {
       guard let selectedRepositoryID else { return nil }
       return availableRepositories[id: selectedRepositoryID]
     }
 
-    /// The selected repo's tickets. Read-only — mutate through the reducer's
-    /// `mutateSelectedTickets` so writes land in the right bucket.
-    var tickets: [LinearTicket] {
+    /// The selected repo's full bucket (both sources). Internal — the reducer
+    /// mutates this via `mutateSelectedTickets`.
+    var bucket: [LinearTicket] {
       guard let selectedRepositoryID else { return [] }
       return inbox[selectedRepositoryID] ?? []
+    }
+
+    /// The selected repo's tickets for the **selected source**. Read-only —
+    /// mutate through `mutateSelectedTickets`.
+    var tickets: [LinearTicket] {
+      bucket.filter { $0.source == source }
     }
 
     /// Number of tickets Linear reports as done (completed/canceled).
     var doneCount: Int { tickets.filter(\.isDone).count }
 
-    /// Number of tickets the user hid from the worklist.
-    var hiddenCount: Int { tickets.filter(\.isHidden).count }
+    /// Number of tickets the user ignored.
+    var ignoredCount: Int { tickets.filter(\.isHidden).count }
 
-    /// Tickets shown in the list. The show-done toggle doubles as the
-    /// reveal for user-hidden rows, so nothing is ever unreachable.
+    /// Number of tickets assigned to the API-key holder.
+    var assignedToMeCount: Int { tickets.filter(\.assignedToMe).count }
+
+    /// Tickets shown in the list, after the quick filters. Done and ignored
+    /// tickets are hidden unless their filter is on; "assigned to me" narrows
+    /// to your own tickets.
     var visibleTickets: [LinearTicket] {
-      showDone ? Array(tickets) : tickets.filter { !$0.isDone && !$0.isHidden }
+      tickets.filter { ticket in
+        if assignedToMeOnly, !ticket.assignedToMe { return false }
+        if !showDone, ticket.isDone { return false }
+        if !showIgnored, ticket.isHidden { return false }
+        return true
+      }
     }
 
     /// The ticket's started session id, but only while that session still
@@ -105,11 +138,12 @@ struct LinearInboxFeature {
     case binding(BindingAction<State>)
     /// Sheet appeared — refresh any tickets we already have.
     case task
-    /// Import the pasted text. `replace: true` rebuilds the list (keeping
-    /// metadata for surviving ids); `false` appends new ids only.
+    /// Switch the visible source (recent vs pasted) and refresh it.
+    case sourceChanged(LinearTicketSource)
+    /// Import the pasted text. `replace: true` rebuilds the pasted list
+    /// (keeping metadata for surviving ids); `false` appends new ids only.
     case importTapped(replace: Bool)
-    /// Pull the most recently created tickets straight from Linear —
-    /// the no-paste alternative to the import field.
+    /// Re-pull the most recently created tickets straight from Linear.
     case fetchRecentTapped
     case refreshAllTapped
     case toggleExpanded(ticketID: String)
@@ -118,10 +152,12 @@ struct LinearInboxFeature {
     /// Jump to the session already spawned from this ticket.
     case openSessionTapped(ticketID: String)
     case removeTicketTapped(ticketID: String)
-    /// Hide (or unhide) a single ticket from the worklist without
-    /// removing it from the inbox.
-    case toggleHideTapped(ticketID: String)
+    /// Ignore (or un-ignore) a single ticket — kept in the inbox but off the
+    /// worklist until the "Ignored" filter reveals it.
+    case toggleIgnoreTapped(ticketID: String)
     case toggleShowDone
+    case toggleShowIgnored
+    case toggleAssignedToMe
     case clearError
     case closeTapped
 
@@ -161,13 +197,10 @@ struct LinearInboxFeature {
       switch action {
       case .binding(\.selectedRepositoryID):
         // Switching repos swaps the visible bucket — refresh that repo's
-        // ticket metadata so the worklist isn't stale.
+        // current source so the worklist isn't stale.
         state.expandedTicketIDs = []
         pruneExpiredDoneTickets(&state)
-        let ids = state.tickets.map(\.identifier)
-        guard !ids.isEmpty else { return .none }
-        state.fetchingTicketIDs = Set(ids)
-        return fetchIssues(ids: ids)
+        return refreshCurrentSource(&state)
 
       case .binding:
         return .none
@@ -175,10 +208,16 @@ struct LinearInboxFeature {
       case .task:
         migrateLegacyInboxIfNeeded(&state)
         pruneExpiredDoneTickets(&state)
-        let ids = state.tickets.map(\.identifier)
-        guard !ids.isEmpty else { return .none }
-        state.fetchingTicketIDs = Set(ids)
-        return fetchIssues(ids: ids)
+        // Recent mode auto-loads on open (no button); pasted mode refreshes
+        // the curated set's metadata.
+        return refreshCurrentSource(&state)
+
+      case let .sourceChanged(newSource):
+        guard newSource != state.source else { return .none }
+        state.$inboxSourceRaw.withLock { $0 = newSource.rawValue }
+        state.expandedTicketIDs = []
+        state.errorMessage = nil
+        return refreshCurrentSource(&state)
 
       case let .importTapped(replace):
         let ids = linearTicketIDs(in: state.pasteText)
@@ -186,18 +225,22 @@ struct LinearInboxFeature {
           state.errorMessage = "No Linear ticket links found in the pasted text."
           return .none
         }
+        // Pasting curates the pasted set, so jump there to show the result.
+        state.$inboxSourceRaw.withLock { $0 = LinearTicketSource.pasted.rawValue }
         let now = date.now
-        mutateSelectedTickets(&state) { tickets in
+        mutateSelectedTickets(&state) { bucket in
+          var pasted = bucket.filter { $0.source == .pasted }
           if replace {
             // Preserve inbox-local metadata for ids that survive the
             // replace so "started" markers don't reset.
-            let existing = Dictionary(tickets.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
-            tickets = ids.map { existing[$0] ?? LinearTicket(identifier: $0, addedAt: now) }
+            let existing = Dictionary(pasted.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+            pasted = ids.map { existing[$0] ?? LinearTicket(identifier: $0, source: .pasted, addedAt: now) }
           } else {
-            for id in ids where !tickets.contains(where: { $0.identifier == id }) {
-              tickets.append(LinearTicket(identifier: id, addedAt: now))
+            for id in ids where !pasted.contains(where: { $0.identifier == id }) {
+              pasted.append(LinearTicket(identifier: id, source: .pasted, addedAt: now))
             }
           }
+          bucket = bucket.filter { $0.source != .pasted } + pasted
         }
         state.pasteText = ""
         state.errorMessage = nil
@@ -205,27 +248,11 @@ struct LinearInboxFeature {
         return fetchIssues(ids: ids)
 
       case .fetchRecentTapped:
-        state.isFetchingRecent = true
-        state.errorMessage = nil
-        // Scope the pull to the selected repo's team keys. An empty set means
-        // the client throws `.missingTeamScope`, prompting the user to set a
-        // key under Settings → <repository> → Linear.
-        let scopeKeys = state.selectedRepository.map { teamKeys(for: $0) } ?? []
-        return .run { send in
-          do {
-            let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit, scopeKeys)
-            await send(._recentIssuesFetched(issues))
-          } catch {
-            await send(._fetchFailed(message: error.localizedDescription))
-          }
-        }
+        return startRecentFetch(&state)
 
       case .refreshAllTapped:
-        let ids = state.tickets.map(\.identifier)
-        guard !ids.isEmpty else { return .none }
-        state.fetchingTicketIDs = Set(ids)
         state.errorMessage = nil
-        return fetchIssues(ids: ids)
+        return refreshCurrentSource(&state)
 
       case let .toggleExpanded(ticketID):
         if state.expandedTicketIDs.contains(ticketID) {
@@ -285,7 +312,7 @@ struct LinearInboxFeature {
         state.expandedTicketIDs.remove(ticketID)
         return .none
 
-      case let .toggleHideTapped(ticketID):
+      case let .toggleIgnoreTapped(ticketID):
         mutateSelectedTickets(&state) { tickets in
           guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
           tickets[index].isHidden.toggle()
@@ -294,6 +321,14 @@ struct LinearInboxFeature {
 
       case .toggleShowDone:
         state.showDone.toggle()
+        return .none
+
+      case .toggleShowIgnored:
+        state.showIgnored.toggle()
+        return .none
+
+      case .toggleAssignedToMe:
+        state.assignedToMeOnly.toggle()
         return .none
 
       case .clearError:
@@ -325,20 +360,26 @@ struct LinearInboxFeature {
           state.errorMessage = "No recently created tickets found in Linear."
           return .none
         }
-        // Upsert: new ids are appended (already carrying full metadata,
-        // no follow-up fetch needed); ids already in the inbox just get
-        // their cached display fields refreshed.
+        // The recent set is a live mirror of Linear's latest-created feed, so
+        // rebuild it wholesale: carry forward inbox-local metadata (started,
+        // ignored) for surviving ids, drop ids that fell out of the feed, and
+        // leave the pasted set untouched. Ids already curated under Pasted are
+        // skipped so the bucket keeps unique identifiers.
         let now = date.now
-        mutateSelectedTickets(&state) { tickets in
-          for issue in issues {
-            if let index = tickets.firstIndex(where: { $0.identifier == issue.identifier }) {
-              tickets[index].apply(issue, fetchedAt: now)
-            } else {
-              var ticket = LinearTicket(identifier: issue.identifier, addedAt: now)
-              ticket.apply(issue, fetchedAt: now)
-              tickets.append(ticket)
-            }
+        mutateSelectedTickets(&state) { bucket in
+          let survivingRecent = Dictionary(
+            bucket.filter { $0.source == .recent }.map { ($0.identifier, $0) },
+            uniquingKeysWith: { first, _ in first }
+          )
+          let pastedIDs = Set(bucket.filter { $0.source == .pasted }.map(\.identifier))
+          var rebuilt = bucket.filter { $0.source == .pasted }
+          for issue in issues where !pastedIDs.contains(issue.identifier) {
+            var ticket = survivingRecent[issue.identifier]
+              ?? LinearTicket(identifier: issue.identifier, source: .recent, addedAt: now)
+            ticket.apply(issue, fetchedAt: now)
+            rebuilt.append(ticket)
           }
+          bucket = rebuilt
         }
         pruneExpiredDoneTickets(&state)
         return .none
@@ -477,6 +518,37 @@ struct LinearInboxFeature {
         }
       }
       inbox[LinearInboxKey.legacyBucketKey] = nil
+    }
+  }
+
+  /// Refresh whichever source is on screen: recent re-pulls Linear's latest
+  /// feed; pasted re-fetches metadata for the curated ids.
+  private func refreshCurrentSource(_ state: inout State) -> Effect<Action> {
+    switch state.source {
+    case .recent:
+      return startRecentFetch(&state)
+    case .pasted:
+      let ids = state.tickets.map(\.identifier)
+      guard !ids.isEmpty else { return .none }
+      state.fetchingTicketIDs = Set(ids)
+      return fetchIssues(ids: ids)
+    }
+  }
+
+  /// Kick off the recent-feed pull, scoped to the selected repo's team keys.
+  /// An empty scope makes the client throw `.missingTeamScope`, prompting the
+  /// user to set a key under Settings → <repository> → Linear.
+  private func startRecentFetch(_ state: inout State) -> Effect<Action> {
+    state.isFetchingRecent = true
+    state.errorMessage = nil
+    let scopeKeys = state.selectedRepository.map { teamKeys(for: $0) } ?? []
+    return .run { send in
+      do {
+        let issues = try await linearClient.fetchRecentIssues(Self.recentFetchLimit, scopeKeys)
+        await send(._recentIssuesFetched(issues))
+      } catch {
+        await send(._fetchFailed(message: error.localizedDescription))
+      }
     }
   }
 

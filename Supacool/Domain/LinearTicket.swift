@@ -1,5 +1,16 @@
 import Foundation
 
+/// Where a ticket in the inbox came from. The inbox shows one source at a
+/// time (the user toggles between them); ``LinearInboxFeature`` persists the
+/// selected source so reopening restores the same view. Doubles as the
+/// per-ticket provenance tag so both sets can live in one persisted bucket.
+nonisolated enum LinearTicketSource: String, Codable, Sendable, CaseIterable, Equatable {
+  /// Pulled from Linear's most-recently-created feed (auto-fetched on open).
+  case recent
+  /// Hand-pasted (or typed) ticket links the user curated themselves.
+  case pasted
+}
+
 /// A Linear ticket the user dropped into the Inbox to work through. Sits in
 /// `@Shared(.linearInbox)` so the list survives relaunch — the user can
 /// close the dialog and come back to pick the next one.
@@ -33,8 +44,13 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   /// `completedAt`/`canceledAt`, not when we noticed). Tickets done for
   /// more than `LinearInboxFeature.doneRetention` are auto-dropped.
   var doneAt: Date?
-  /// User chose to hide this row from the worklist without removing it.
-  /// Hidden tickets reappear via the show-done toggle and can be unhidden.
+  /// Which inbox view this ticket belongs to. Recent-fetched tickets are
+  /// replaced wholesale on every refresh; pasted tickets are durable.
+  var source: LinearTicketSource
+
+  /// User chose to ignore this row — kept in the inbox but off the worklist
+  /// until the "Ignored" quick filter reveals it. (Field name predates the
+  /// "ignore" framing; left as-is to preserve persisted data.)
   var isHidden: Bool
 
   /// When the cached display fields were last refreshed from the API.
@@ -60,6 +76,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
     url: String? = nil,
+    source: LinearTicketSource = .pasted,
     doneAt: Date? = nil,
     isHidden: Bool = false,
     fetchedAt: Date? = nil,
@@ -76,6 +93,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
     self.url = url
+    self.source = source
     self.doneAt = doneAt
     self.isHidden = isHidden
     self.fetchedAt = fetchedAt
@@ -88,7 +106,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, url, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
+    case assignedToMe, url, source, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -102,6 +120,9 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
     url = try c.decodeIfPresent(String.self, forKey: .url)
+    // Pre-source builds persisted only hand-curated tickets — default to
+    // `.pasted` so they keep showing under the Pasted view after upgrade.
+    source = try c.decodeIfPresent(LinearTicketSource.self, forKey: .source) ?? .pasted
     doneAt = try c.decodeIfPresent(Date.self, forKey: .doneAt)
     isHidden = try c.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
     fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
