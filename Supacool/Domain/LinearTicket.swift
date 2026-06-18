@@ -40,6 +40,9 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   var assigneeName: String?
   var assignedToMe: Bool
   var url: String?
+  /// When the issue was created in Linear. Drives the row's age badge so you
+  /// can tell how fresh or stale a ticket is at a glance.
+  var createdAt: Date?
   /// When Linear marked the ticket completed/canceled (its own
   /// `completedAt`/`canceledAt`, not when we noticed). Tickets done for
   /// more than `LinearInboxFeature.doneRetention` are auto-dropped.
@@ -76,6 +79,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
     url: String? = nil,
+    createdAt: Date? = nil,
     source: LinearTicketSource = .pasted,
     doneAt: Date? = nil,
     isHidden: Bool = false,
@@ -93,6 +97,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
     self.url = url
+    self.createdAt = createdAt
     self.source = source
     self.doneAt = doneAt
     self.isHidden = isHidden
@@ -106,7 +111,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, url, source, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
+    case assignedToMe, url, createdAt, source, doneAt, isHidden, fetchedAt, addedAt, startedAt, startedSessionID
   }
 
   init(from decoder: Decoder) throws {
@@ -120,6 +125,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
     url = try c.decodeIfPresent(String.self, forKey: .url)
+    createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     // Pre-source builds persisted only hand-curated tickets — default to
     // `.pasted` so they keep showing under the Pasted view after upgrade.
     source = try c.decodeIfPresent(LinearTicketSource.self, forKey: .source) ?? .pasted
@@ -144,6 +150,7 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = issue.assigneeName
     assignedToMe = issue.assignedToMe
     url = issue.url
+    createdAt = issue.createdAt
     doneAt = issue.completedAt ?? issue.canceledAt
     self.fetchedAt = fetchedAt
   }

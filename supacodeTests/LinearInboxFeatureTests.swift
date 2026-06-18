@@ -48,6 +48,30 @@ struct LinearTicketDoneTests {
   }
 }
 
+// MARK: - Metadata application (pure)
+
+struct LinearTicketApplyTests {
+  @Test func applyCarriesCreatedAtForTheAgeBadge() {
+    let created = Date(timeIntervalSince1970: 1_700_000_000)
+    var ticket = LinearTicket(identifier: "CEN-1")
+    #expect(ticket.createdAt == nil)
+    ticket.apply(
+      LinearIssue(
+        id: "u1",
+        identifier: "CEN-1",
+        title: "T",
+        description: nil,
+        assigneeName: nil,
+        assignedToMe: false,
+        url: nil,
+        createdAt: created
+      ),
+      fetchedAt: Date(timeIntervalSince1970: 1_700_100_000)
+    )
+    #expect(ticket.createdAt == created)
+  }
+}
+
 // MARK: - Reducer
 
 @MainActor

@@ -354,6 +354,12 @@ private struct LinearTicketRow: View {
           .foregroundStyle(.green)
           .help("You started a session on this ticket")
       }
+      if let createdAt = ticket.createdAt {
+        Text(compactAge(since: createdAt))
+          .font(.caption.monospacedDigit())
+          .foregroundStyle(.tertiary)
+          .help("Created \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+      }
       if let state = ticket.stateName {
         Text(state)
           .font(.caption)
@@ -403,6 +409,23 @@ private struct LinearTicketRow: View {
     }
     .opacity(isHovering || ticket.isHidden ? 1 : 0)
     .allowsHitTesting(isHovering || ticket.isHidden)
+  }
+
+  /// Compact "time since created" badge — `5m`, `3h`, `2d`, `4w`, `6mo`, `1y`.
+  /// Coarse on purpose: the overview only needs a glance at how fresh a ticket
+  /// is, with the exact timestamp available on hover.
+  private func compactAge(since created: Date) -> String {
+    let seconds = max(0, Date().timeIntervalSince(created))
+    let minute = 60.0, hour = 3_600.0, day = 86_400.0, week = 7 * day, month = 30 * day, year = 365 * day
+    switch seconds {
+    case ..<minute: return "now"
+    case ..<hour: return "\(Int(seconds / minute))m"
+    case ..<day: return "\(Int(seconds / hour))h"
+    case ..<week: return "\(Int(seconds / day))d"
+    case ..<month: return "\(Int(seconds / week))w"
+    case ..<year: return "\(Int(seconds / month))mo"
+    default: return "\(Int(seconds / year))y"
+    }
   }
 
   @ViewBuilder

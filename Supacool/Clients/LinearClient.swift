@@ -26,6 +26,8 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var assignedToMe: Bool
   /// Canonical web URL for the issue.
   var url: String?
+  /// When the issue was created in Linear. Drives the inbox's per-row age.
+  var createdAt: Date? = nil
   /// When Linear marked the issue completed / canceled. Drives the
   /// inbox's auto-drop of stale done tickets.
   var completedAt: Date? = nil
@@ -147,7 +149,7 @@ private nonisolated enum LinearLive {
   /// GraphQL selection set shared by the batch query and the assign
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
-    "id identifier title description url completedAt canceledAt "
+    "id identifier title description url createdAt completedAt canceledAt "
     + "state { name type } assignee { displayName isMe }"
 
   static func currentAPIKey() -> String? {
@@ -305,6 +307,7 @@ private nonisolated enum LinearLive {
       assigneeName: assignee?["displayName"] as? String,
       assignedToMe: (assignee?["isMe"] as? Bool) ?? false,
       url: dict["url"] as? String,
+      createdAt: parseISODate(dict["createdAt"]),
       completedAt: parseISODate(dict["completedAt"]),
       canceledAt: parseISODate(dict["canceledAt"])
     )
