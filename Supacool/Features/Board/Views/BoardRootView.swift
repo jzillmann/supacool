@@ -341,7 +341,14 @@ struct BoardRootView: View {
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
           : nil,
-        onRemove: { store.send(.requestRemoveSession(id: session.id)) },
+        onRemove: {
+          store.send(
+            .requestRemoveFocusedSession(
+              id: session.id,
+              advanceTo: removalAdvanceTarget(removing: session.id)
+            )
+          )
+        },
         onReconnect: session.isRemote
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
@@ -670,6 +677,31 @@ struct BoardRootView: View {
   private enum StateNavigationDirection {
     case forward
     case backward
+  }
+
+  /// Where focus should land after removing the focused card `id`. Mirrors
+  /// ⌘/ "next in current state" so deleting an unwanted terminal keeps you
+  /// stepping through the same bucket instead of dropping to the board.
+  /// Prefers the next card in the bucket; falls back to the previous one
+  /// when removing the bucket's last card; `nil` (→ board) when it was the
+  /// only card in its bucket.
+  private func removalAdvanceTarget(removing id: AgentSession.ID) -> AgentSession.ID? {
+    let statusOverride = nextInStateAnchor?.sessionID == id ? nextInStateAnchor?.status : nil
+    let visible = store.visibleSessions
+    if let next = BoardNavOrder.nextInSameState(
+      after: id,
+      visibleSessions: visible,
+      currentStatusOverride: statusOverride,
+      classify: classify
+    ) {
+      return next
+    }
+    return BoardNavOrder.previousInSameState(
+      before: id,
+      visibleSessions: visible,
+      currentStatusOverride: statusOverride,
+      classify: classify
+    )
   }
 
   /// Status chip shown in the window toolbar. On the board it summarizes

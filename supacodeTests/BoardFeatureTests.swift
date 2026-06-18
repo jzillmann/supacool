@@ -1375,6 +1375,88 @@ struct BoardFeatureTests {
     )
   }
 
+  @Test(.dependencies) func requestRemoveFocusedSessionAdvancesToNextCard() async {
+    // Removing the focused card while stepping through a bucket should land
+    // on the recorded advance target instead of bouncing back to the board.
+    let worktreeID = "/tmp/repo/wt-advance"
+    let removed = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!,
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      displayName: "Removed",
+      removeBackingWorktreeOnDelete: true
+    )
+    let next = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A2")!,
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      displayName: "Next",
+      removeBackingWorktreeOnDelete: true
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [removed, next] }
+    state.focusedSessionID = removed.id
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+    }
+    // The wrapper re-dispatches `.requestRemoveSession`, which fans out to
+    // the trash/delegate effects already covered elsewhere. Focus on the
+    // advance behaviour rather than every downstream mutation.
+    store.exhaustivity = .off
+
+    await store.send(.requestRemoveFocusedSession(id: removed.id, advanceTo: next.id))
+    await store.receive(.requestRemoveSession(id: removed.id))
+    await store.skipReceivedActions()
+
+    #expect(store.state.sessions.map(\.id) == [next.id])
+    #expect(store.state.focusedSessionID == next.id)
+    #expect(store.state.pendingRemovalAdvanceTarget == nil)
+  }
+
+  @Test(.dependencies) func requestRemoveFocusedSessionFallsBackToBoardWhenTargetGone() async {
+    // A nil/stale advance target keeps the old behaviour: drop to the board.
+    let worktreeID = "/tmp/repo/wt-fallback"
+    let removed = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000B1")!,
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      displayName: "Removed",
+      removeBackingWorktreeOnDelete: true
+    )
+    let sibling = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000B2")!,
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      displayName: "Sibling",
+      removeBackingWorktreeOnDelete: true
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [removed, sibling] }
+    state.focusedSessionID = removed.id
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+    }
+    store.exhaustivity = .off
+
+    // Advance target points at a session that does not exist → board.
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000BF")!
+    await store.send(.requestRemoveFocusedSession(id: removed.id, advanceTo: ghost))
+    await store.receive(.requestRemoveSession(id: removed.id))
+    await store.skipReceivedActions()
+
+    #expect(store.state.sessions.map(\.id) == [sibling.id])
+    #expect(store.state.focusedSessionID == nil)
+    #expect(store.state.pendingRemovalAdvanceTarget == nil)
+  }
+
   @Test(.dependencies) func removeSessionDeletesConvertedWorktreeImmediately() async {
     // A repo-root session that used the "convert to worktree" popover
     // has `worktreeID == repositoryID` but a divergent

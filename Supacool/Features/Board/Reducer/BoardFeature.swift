@@ -56,6 +56,14 @@ struct BoardFeature {
     /// the board.
     var focusedSessionID: AgentSession.ID?
 
+    /// Where to land when the *focused* session is removed. Set by the
+    /// full-screen "Remove" affordance so deleting an unwanted card while
+    /// stepping through a bucket (⌘/) advances to the next card instead of
+    /// dropping back to the board. Computed by the view (it owns the live
+    /// `classify`/`BoardNavOrder` cursor) and consumed once on removal.
+    /// Not persisted; transient navigation intent only.
+    var pendingRemovalAdvanceTarget: AgentSession.ID?
+
     /// Per-session: which terminal in the composition is currently
     /// rendered by the full-screen view's session tab strip. Defaults to
     /// the session's `primaryTerminalID` when the user enters a session
@@ -458,6 +466,11 @@ struct BoardFeature {
     /// User-facing removal entrypoint. If the session owns worktree files,
     /// checks for uncommitted changes before dispatching `removeSession`.
     case requestRemoveSession(id: AgentSession.ID)
+    /// Removal from the full-screen terminal. Records `advanceTo` so that
+    /// once the (focused) session is gone, focus lands on the next card in
+    /// the same bucket instead of bouncing to the board. Falls through to
+    /// the normal `requestRemoveSession` dirty-check flow.
+    case requestRemoveFocusedSession(id: AgentSession.ID, advanceTo: AgentSession.ID?)
     case _sessionRemovalDirtyCheckResponse(
       id: AgentSession.ID,
       dirtyWorkspaces: [DirtyRemovalWorkspace],
@@ -1065,6 +1078,10 @@ struct BoardFeature {
         }
         return .none
 
+      case .requestRemoveFocusedSession(let id, let advanceTo):
+        state.pendingRemovalAdvanceTarget = advanceTo
+        return .send(.requestRemoveSession(id: id))
+
       case .requestRemoveSession(let id):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -1124,6 +1141,9 @@ struct BoardFeature {
 
       case .dismissDirtySessionRemovalConfirmation:
         state.dirtySessionRemovalConfirmation = nil
+        // Cancelling keeps the card; drop the queued advance so a later
+        // unrelated removal doesn't inherit a stale focus target.
+        state.pendingRemovalAdvanceTarget = nil
         return .none
 
       case .serverLifecycleStatusRequested(let sessionID):
@@ -3515,8 +3535,21 @@ struct BoardFeature {
     }
     state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
     state.reinitializingSessionIDs.remove(id)
+    // Consume any one-shot advance target recorded by the full-screen
+    // "Remove" affordance. If the removed card was focused, hand focus to
+    // the next card in the same bucket (so ⌘/-style stepping survives a
+    // delete) — but only if that target still exists after the removal.
+    let advanceTarget = state.pendingRemovalAdvanceTarget
+    state.pendingRemovalAdvanceTarget = nil
     if state.focusedSessionID == id {
-      state.focusedSessionID = nil
+      if let advanceTarget,
+        advanceTarget != id,
+        state.sessions.contains(where: { $0.id == advanceTarget })
+      {
+        state.focusedSessionID = advanceTarget
+      } else {
+        state.focusedSessionID = nil
+      }
     }
     state.trayCards.removeAll { card in
       if case .sessionCreating(let sessionID, _) = card.kind {
