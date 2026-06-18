@@ -40,6 +40,13 @@ struct BoardView: View {
   @State private var standbyBucketExpanded: Bool = false
   @State private var parkedBucketExpanded: Bool = false
 
+  /// Visible width of each bucket's carousel rail, keyed by section title.
+  /// Populated via `onScrollGeometryChange`. Used to suppress the
+  /// reveal-highlighted-card scroll when every card already fits — that
+  /// scroll otherwise nudges the rail off its zero rest position and clips
+  /// the leftmost card's left edge.
+  @State private var carouselViewportWidth: [String: CGFloat] = [:]
+
   /// Bucket layout mode, shared with the toolbar toggle in BoardRootView
   /// via the same UserDefaults key (⇧⌘M). Carousel (default) renders each
   /// bucket as one horizontally scrolling rail; matrix wraps the cards
@@ -597,11 +604,22 @@ struct BoardView: View {
               .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
               .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
               .contentMargins(.trailing, boardCardWidth / 2, for: .scrollContent)
+              .onScrollGeometryChange(for: CGFloat.self) { $0.containerSize.width } action: { _, width in
+                carouselViewportWidth[title] = width
+                // Once we know the rail fits every card, pin it to the
+                // first card so it rests at zero — this heals a rail that
+                // an earlier reveal scroll already nudged off-screen.
+                if carouselCardsWidth(count: sessions.count) <= width, let first = sessions.first {
+                  proxy.scrollTo(first.id, anchor: .leading)
+                }
+              }
               .onAppear {
-                scrollHighlightedCard(in: sessions, proxy: proxy, animated: false)
+                scrollHighlightedCard(
+                  in: sessions, proxy: proxy, viewportWidth: carouselViewportWidth[title], animated: false
+                )
               }
               .onChange(of: highlightedSessionID) { _, _ in
-                scrollHighlightedCard(in: sessions, proxy: proxy)
+                scrollHighlightedCard(in: sessions, proxy: proxy, viewportWidth: carouselViewportWidth[title])
               }
             }
           }
@@ -800,21 +818,44 @@ struct BoardView: View {
     }
   }
 
+  /// Total width the bucket's cards occupy on the rail, ignoring the
+  /// trailing content-margin slack. Used to decide whether a carousel
+  /// actually overflows its viewport.
+  private func carouselCardsWidth(count: Int) -> CGFloat {
+    guard count > 0 else { return 0 }
+    return CGFloat(count) * boardCardWidth + CGFloat(count - 1) * boardCarouselSpacing
+  }
+
   private func scrollHighlightedCard(
     in sessions: [AgentSession],
     proxy: ScrollViewProxy,
+    viewportWidth: CGFloat?,
     animated: Bool = true
   ) {
     guard let highlightedSessionID,
       sessions.contains(where: { $0.id == highlightedSessionID })
     else { return }
 
+    // When every card already fits the rail there is nothing to reveal.
+    // Scrolling here would only nudge the rail off its zero rest position
+    // and clip the leftmost card's left edge, so leave it alone — the
+    // `onScrollGeometryChange` pin keeps it anchored to the first card.
+    if let viewportWidth, carouselCardsWidth(count: sessions.count) <= viewportWidth {
+      return
+    }
+
+    // Nil anchor scrolls the *minimal* amount needed to make the card
+    // visible — so an already-visible highlight (e.g. card 2 on appear)
+    // doesn't scroll at all. A `.center` anchor here re-centered the
+    // highlighted card unconditionally, which pushed the leftmost card
+    // half off the rail's left edge whenever a non-first card was
+    // highlighted.
     if animated {
       withAnimation(.easeOut(duration: 0.18)) {
-        proxy.scrollTo(highlightedSessionID, anchor: .center)
+        proxy.scrollTo(highlightedSessionID)
       }
     } else {
-      proxy.scrollTo(highlightedSessionID, anchor: .center)
+      proxy.scrollTo(highlightedSessionID)
     }
   }
 
