@@ -124,6 +124,14 @@ struct SupacoolApp: App {
   @State private var imageDropCoordinator: ImageDropCoordinator
 
   @MainActor init() {
+    // Refuse to start a second non-isolated instance against the same
+    // ~/.supacool — two instances racing the shared board files silently
+    // corrupt state (open sessions vanish). Must run before the @Shared
+    // board access below. Isolated previews redirect $HOME, so they lock a
+    // different file and are never blocked.
+    if !SingleInstanceGuard.acquire() {
+      SingleInstanceGuard.presentAlreadyRunningAndExit()
+    }
     NSWindow.allowsAutomaticWindowTabbing = false
     UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay")
     @Shared(.settingsFile) var settingsFile
