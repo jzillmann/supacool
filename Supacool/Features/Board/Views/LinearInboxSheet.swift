@@ -100,6 +100,14 @@ struct LinearInboxSheet: View {
         onToggle: { store.send(.toggleHideInProgress) }
       )
       filterToggle(
+        "Hide linked",
+        systemImage: "link",
+        isOn: store.hideLinked,
+        count: store.linkedCount,
+        help: "Hide tickets that already have a running session",
+        onToggle: { store.send(.toggleHideLinked) }
+      )
+      filterToggle(
         "Done",
         systemImage: "checkmark.circle",
         isOn: store.showDone,
@@ -288,7 +296,7 @@ struct LinearInboxSheet: View {
             isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
             isFetching: store.fetchingTicketIDs.contains(ticket.identifier),
             isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
-            hasLiveSession: store.state.liveStartedSessionID(for: ticket) != nil,
+            hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
             onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
             onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
             onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
@@ -357,10 +365,10 @@ private struct LinearTicketRow: View {
       if isFetching {
         ProgressView().controlSize(.small)
       }
-      if ticket.startedAt != nil {
+      if hasLiveSession {
         Image(systemName: "checkmark.seal.fill")
           .foregroundStyle(.green)
-          .help("You started a session on this ticket")
+          .help("A session for this ticket is running on the board")
       }
       if let creator = ticket.creatorName, !creator.isEmpty {
         Label(creator, systemImage: "square.and.pencil")
