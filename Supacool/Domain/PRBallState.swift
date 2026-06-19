@@ -107,13 +107,13 @@ nonisolated enum PRBallState: Equatable, Sendable {
 
   /// Reasons safe to hand back to the agent unattended: mechanical fix-ups
   /// where "investigate and push" is the obvious next move. Human-judgment
-  /// reasons (changes requested, conflicts, ready to merge) are never
-  /// auto-resumed — they always resurface for the user.
+  /// reasons (changes requested, ready to merge) are never auto-resumed —
+  /// they always resurface for the user.
   var isAutoResumable: Bool {
     switch self {
-    case .ciFailed, .greptileLow:
+    case .ciFailed, .mergeConflict, .greptileLow:
       return true
-    case .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+    case .changesRequested, .draft, .readyToMerge, .closedUnmerged,
       .ciRunning, .awaitingReview, .merged:
       return false
     }
@@ -132,7 +132,11 @@ nonisolated enum PRBallState: Equatable, Sendable {
       return
         "Greptile flagged this pull request with a low confidence score (\(score)/5). Review the "
         + "Greptile review comments on the PR, address the concerns, and push."
-    case .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+    case .mergeConflict:
+      return
+        "This pull request has merge conflicts. Update the branch against its base, resolve the "
+        + "conflicts locally, run the relevant checks, and push the resolution."
+    case .changesRequested, .draft, .readyToMerge, .closedUnmerged,
       .ciRunning, .awaitingReview, .merged:
       return nil
     }

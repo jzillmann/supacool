@@ -600,6 +600,17 @@ struct BoardView: View {
                 .scrollTargetLayout()
                 .padding(.vertical, 2)
                 .padding(.bottom, 14)
+                // The board-wide reorder spring (`.animation(boardReorderAnimation, …)`
+                // further down) must not reach this carousel's LazyHStack: SwiftUI
+                // mis-reconciles lazy child frames under an inherited implicit
+                // animation and paints cards stacked on top of one another — the
+                // overlap originally fixed in 95075a2 (matchedGeometryEffect) that
+                // creeps back via any reorder that shifts a rail's cards. Clearing
+                // the transaction here keeps the rail's reflow instantaneous and
+                // overlap-free; the matrix LazyVGrid reflows fine and keeps the
+                // spring. Per-card hover/highlight uses scoped `.animation(_:value:)`
+                // and is unaffected.
+                .transaction { $0.animation = nil }
               }
               .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
               .scrollBounceBehavior(.basedOnSize, axes: .horizontal)

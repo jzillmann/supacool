@@ -34,7 +34,7 @@ struct LinearInboxSheet: View {
         inboxTab
       }
     }
-    .frame(width: 660, height: 580)
+    .frame(width: 820, height: 580)
     // Refresh state/assignee/title (and the done count) on open so the
     // inbox never shows stale cache.
     .task { await store.send(.task).finish() }

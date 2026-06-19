@@ -60,7 +60,9 @@ struct PRMonitorDecodingTests {
     // guaranteed. Assert both queries were issued with the expected shape.
     let calls = await probe.arguments
     #expect(calls.count == 2)
-    let json = "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup"
+    let json =
+      "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,"
+        + "mergeable,mergeStateStatus,statusCheckRollup"
     func expectedCall(filter: String) -> [String] {
       [
         "gh", "pr", "list",
@@ -86,6 +88,8 @@ struct PRMonitorDecodingTests {
         headRefName: "branch-\(number)",
         updatedAt: .distantPast,
         reviewDecision: nil,
+        mergeable: nil,
+        mergeStateStatus: nil,
         statusChecks: [],
         greptileScore: nil
       )
@@ -111,6 +115,8 @@ struct PRMonitorDecodingTests {
           "headRefName": "cen-2462-pagination",
           "updatedAt": "2026-06-10T07:55:18Z",
           "reviewDecision": "",
+          "mergeable": "MERGEABLE",
+          "mergeStateStatus": "CLEAN",
           "statusCheckRollup": [
             { "__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS", "name": "build" },
             { "__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE", "name": "test" },
@@ -124,6 +130,8 @@ struct PRMonitorDecodingTests {
     #expect(pullRequest.number == 3807)
     #expect(pullRequest.author == "jo")
     #expect(pullRequest.headRefName == "cen-2462-pagination")
+    #expect(pullRequest.mergeable == "MERGEABLE")
+    #expect(pullRequest.mergeStateStatus == "CLEAN")
     #expect(pullRequest.checks.passed == 1)
     #expect(pullRequest.checks.failed == 1)
     #expect(pullRequest.checks.inProgress == 1)
@@ -190,6 +198,8 @@ struct MonitoredPullRequestHealthTests {
 
   private func pullRequest(
     isDraft: Bool = false,
+    mergeable: String? = nil,
+    mergeStateStatus: String? = nil,
     statusChecks: [GithubPullRequestStatusCheck],
     greptileScore: Int? = nil
   ) -> MonitoredPullRequest {
@@ -202,9 +212,21 @@ struct MonitoredPullRequestHealthTests {
       headRefName: "branch",
       updatedAt: Date(timeIntervalSince1970: 0),
       reviewDecision: nil,
+      mergeable: mergeable,
+      mergeStateStatus: mergeStateStatus,
       statusChecks: statusChecks,
       greptileScore: greptileScore
     )
+  }
+
+  @Test func mergeConflictIsRedEvenWithoutFailingChecks() {
+    let sut = pullRequest(
+      mergeable: "CONFLICTING",
+      statusChecks: [Self.passingCheck],
+      greptileScore: 5
+    )
+    #expect(sut.hasMergeConflict)
+    #expect(sut.health == .red)
   }
 
   @Test func failingChecksAreRed() {
@@ -254,7 +276,11 @@ struct MonitoredPullRequestHealthTests {
 struct PRPulseFeatureTests {
   private static let fixedDate = Date(timeIntervalSince1970: 1_750_000_000)
 
-  private static func samplePR(updatedAt: Date = fixedDate) -> MonitoredPullRequest {
+  private static func samplePR(
+    updatedAt: Date = fixedDate,
+    mergeable: String? = nil,
+    mergeStateStatus: String? = nil
+  ) -> MonitoredPullRequest {
     MonitoredPullRequest(
       number: 7,
       title: "Fix the flux capacitor",
@@ -264,6 +290,8 @@ struct PRPulseFeatureTests {
       headRefName: "fix-flux",
       updatedAt: updatedAt,
       reviewDecision: "",
+      mergeable: mergeable,
+      mergeStateStatus: mergeStateStatus,
       statusChecks: [],
       greptileScore: nil
     )
@@ -553,6 +581,35 @@ struct PRPulseFeatureTests {
     }
   }
 
+  @Test(.dependencies) func sessionRequestUsesConflictPromptWhenPRHasMergeConflicts() async {
+    let pullRequest = Self.samplePR(mergeable: "CONFLICTING")
+    var state = BoardFeature.State()
+    state.prPulseSnapshots = [
+      "repo-1": RepoPullRequestSnapshot(
+        repositoryID: "repo-1",
+        slug: "acme/rocket",
+        pullRequests: [pullRequest],
+        fetchedAt: Self.fixedDate
+      ),
+    ]
+    let repo = Self.sampleRepository()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .prPulseSessionRequested(
+        repositoryID: "repo-1",
+        number: pullRequest.number,
+        repositories: [repo]
+      )
+    ) {
+      $0.newTerminalSheet = Self.expectedSheet(for: pullRequest, repository: repo)
+    }
+    #expect(store.state.newTerminalSheet?.prompt.contains("Fix the merge conflicts") == true)
+  }
+
   private static func clearIgnoreStorage() {
     UserDefaults.standard.removeObject(forKey: "prPulseIgnoredPRKeys")
   }
@@ -588,7 +645,7 @@ struct PRPulseFeatureTests {
       state: "OPEN",
       isDraft: pullRequest.isDraft
     )
-    sheet.prompt = "Work on \(pullRequest.url)"
+    sheet.prompt = BoardFeature.prPulseSessionPrompt(url: pullRequest.url, pullRequest: pullRequest)
     sheet.pullRequestLookup = .resolved(
       PullRequestContext(
         parsed: parsed,

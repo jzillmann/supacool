@@ -47,7 +47,8 @@ struct PRPulseButton: View {
       }
       .help(
         "Your open pull requests across board repos — authored by or assigned to you. "
-          + "Green: CI passed & Greptile 5/5, red: failing checks or score below 5/5. Click for details."
+          + "Green: CI passed & Greptile 5/5, red: conflicts, failing checks, or score below 5/5. "
+          + "Click for details."
       )
       .popover(isPresented: $isPresented, arrowEdge: .bottom) {
         popoverContent
@@ -202,7 +203,7 @@ struct PRPulseButton: View {
         .frame(maxHeight: 440)
       }
     }
-    .frame(width: 480)
+    .frame(width: 640)
   }
 
   /// Single-select filter replacing the old buried "N ignored" section:
@@ -337,6 +338,7 @@ struct PRPulseButton: View {
             .lineLimit(1)
             .truncationMode(.tail)
           Spacer(minLength: 12)
+          conflictChip(pullRequest)
           reviewDecisionIcon(pullRequest)
           scoreChip(pullRequest.greptileScore)
         }
@@ -579,6 +581,24 @@ struct PRPulseButton: View {
   }
 
   @ViewBuilder
+  private func conflictChip(_ pullRequest: MonitoredPullRequest) -> some View {
+    if pullRequest.hasMergeConflict {
+      HStack(spacing: 3) {
+        Image(systemName: "arrow.triangle.branch")
+          .font(.caption2.weight(.semibold))
+          .accessibilityHidden(true)
+        Text("Conflicts")
+          .font(.caption)
+      }
+      .foregroundStyle(.red)
+      .padding(.horizontal, 5)
+      .padding(.vertical, 1)
+      .background(Color.red.opacity(0.15), in: Capsule())
+      .help("Merge conflicts must be resolved before this PR can merge")
+    }
+  }
+
+  @ViewBuilder
   private func scoreChip(_ score: Int?) -> some View {
     if let score {
       Text("\(score)/5")
@@ -618,6 +638,9 @@ struct PRPulseButton: View {
     let checksSummary = pullRequest.checks.summaryText
     if !checksSummary.isEmpty {
       parts.append(checksSummary)
+    }
+    if pullRequest.hasMergeConflict {
+      parts.append("merge conflicts")
     }
     parts.append("Click to open on GitHub")
     return parts.joined(separator: " · ")

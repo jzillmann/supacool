@@ -226,13 +226,15 @@ struct PRBallStateTests {
 
   @Test func mechanicalReasonsAreAutoResumable() {
     #expect(PRBallState.ciFailed(1).isAutoResumable)
+    #expect(PRBallState.mergeConflict.isAutoResumable)
     #expect(PRBallState.greptileLow(2).isAutoResumable)
     #expect(PRBallState.ciFailed(1).autoResumePrompt != nil)
+    #expect(PRBallState.mergeConflict.autoResumePrompt?.contains("merge conflicts") == true)
     #expect(PRBallState.greptileLow(2).autoResumePrompt != nil)
   }
 
   @Test func judgmentReasonsAreNotAutoResumable() {
-    for ball: PRBallState in [.changesRequested, .mergeConflict, .readyToMerge, .closedUnmerged, .draft] {
+    for ball: PRBallState in [.changesRequested, .readyToMerge, .closedUnmerged, .draft] {
       #expect(!ball.isAutoResumable)
       #expect(ball.autoResumePrompt == nil)
     }
