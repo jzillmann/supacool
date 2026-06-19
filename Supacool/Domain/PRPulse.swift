@@ -46,6 +46,25 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   var ciOutcome: BoardPullRequestChecks.ChecksOutcome {
     BoardPullRequestChecks.outcome(checks: statusChecks)
   }
+
+  /// Project this monitored PR into the per-reference snapshot shape so PR
+  /// Pulse data can backfill a session's reference chips while the slower
+  /// per-PR `gh pr view` pipeline (`prReferenceSnapshots`) hasn't fetched it
+  /// yet. Both pipelines surface the same CI/Greptile/review fields; this lets
+  /// a referenced PR show its checks + score the moment *either* has the data.
+  /// PR Pulse only lists open PRs, so the state is open (or draft).
+  var referenceSnapshot: PullRequestSnapshot {
+    PullRequestSnapshot(
+      state: isDraft ? .draft : .open,
+      title: title,
+      statusChecks: statusChecks,
+      updatedAt: updatedAt,
+      greptileScore: greptileScore,
+      reviewDecision: reviewDecision,
+      mergeable: mergeable,
+      mergeStateStatus: mergeStateStatus
+    )
+  }
   var hasMergeConflict: Bool {
     mergeable?.uppercased() == "CONFLICTING" || mergeStateStatus?.uppercased() == "DIRTY"
   }

@@ -808,7 +808,8 @@ struct BoardView: View {
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
         prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
-          of: session
+          of: session,
+          pulseFallback: store.state.prPulseSnapshots
         ),
         showsRepoLabelAbove: showsRepoLabelAbove
       )
