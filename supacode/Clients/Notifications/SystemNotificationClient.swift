@@ -11,6 +11,29 @@ private final class ForegroundSystemNotificationDelegate: NSObject, UNUserNotifi
     await Task.yield()
     return [.badge, .sound, .banner]
   }
+
+  /// Clicking a notification should focus the app's existing main window, not
+  /// let macOS's default activation spin up a fresh one. The app keeps running
+  /// after its last window closes (`applicationShouldTerminateAfterLastWindowClosed`
+  /// is false) and uses a single `Window` scene, so without this the default
+  /// reopen path recreates a blank window instead of raising the live one.
+  /// Mirrors `SupacoolAppDelegate.showMainWindow`.
+  func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse
+  ) async {
+    await Task.yield()
+    let app = NSApplication.shared
+    let window =
+      app.windows.first { $0.identifier?.rawValue == WindowID.main }
+      ?? app.windows.first { $0.identifier?.rawValue != WindowID.settings }
+      ?? app.windows.first
+    app.activate(ignoringOtherApps: true)
+    if let window {
+      if window.isMiniaturized { window.deminiaturize(nil) }
+      window.makeKeyAndOrderFront(nil)
+    }
+  }
 }
 
 @MainActor
