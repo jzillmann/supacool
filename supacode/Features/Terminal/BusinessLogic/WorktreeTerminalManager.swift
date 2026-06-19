@@ -1464,6 +1464,7 @@ final class WorktreeTerminalManager {
       if Self.isAwaitingInputPromptScreen(newFingerprint) {
         tracker.lastScreenFingerprint = newFingerprint
         awaitingInputByTab[tabID] = tracker
+        scheduleAwaitingInputExpiry(for: tabID)
         return
       }
       tracker.lastScreenFingerprint = newFingerprint
@@ -1472,6 +1473,22 @@ final class WorktreeTerminalManager {
       return
     }
 
+    // Screen confirms we're still awaiting (unchanged fingerprint, or the
+    // first readable sample after a nil one). Re-arm the TTL so it means
+    // "8s without any screen confirmation we're still waiting" rather than
+    // an absolute "8s since the hook fired". Without this, a hooked agent
+    // (Claude / Codex) that fires a single "waiting for input" hook and then
+    // goes genuinely quiet — blocked on the user or a background process —
+    // has its latch killed by `ttl-expired` after 8s and the card silently
+    // drops from "Waiting on Me" to idle, even though the prompt is still up.
+    // The hookless screen-fallback path already keeps awaiting alive by
+    // re-marking every second; hooked tabs are skipped there (`sampleAwaiting
+    // InputPromptScreens`), so this poll is their only keep-alive. Gated on a
+    // non-nil fingerprint: when the surface is unreadable we let the original
+    // deadline ride, preserving the TTL as a backstop.
+    if newFingerprint != nil {
+      scheduleAwaitingInputExpiry(for: tabID)
+    }
     tracker.lastScreenFingerprint = newFingerprint
     awaitingInputByTab[tabID] = tracker
   }

@@ -413,6 +413,78 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression: a hooked agent (Claude/Codex) that fires a single
+  /// "waiting for input" hook and then goes genuinely quiet — blocked on
+  /// the user or a background process — must stay in the waiting bucket.
+  /// Previously the 8s `awaitingInputTTL` was an absolute deadline that
+  /// killed the latch even while the prompt was still on screen, silently
+  /// dropping the card to idle (observed in trace BDDDC59F…, where three
+  /// genuine "waiting for input" hooks each died `ttl-expired` +8s later).
+  /// The per-tab activity poll now re-arms the TTL on every screen-confirmed
+  /// poll, so the latch only expires once the surface stops confirming it.
+  @Test func awaitingInputSurvivesPastTTLWhileScreenStaysQuiet() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        // A genuinely-idle prompt the agent yielded at — NOT a structured
+        // approval prompt, so `isAwaitingInputPromptScreen` is false and the
+        // keep-alive comes purely from the unchanged-fingerprint path.
+        let screenContents = LockIsolated("❯\n  (waiting on background watch)")
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-awaiting-input-quiet")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude is waiting for your input",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // Hold the quiet prompt for well past the 8s TTL. Each 1s poll sees
+        // an unchanged screen and re-arms the expiry, so the latch survives.
+        for _ in 0..<12 {
+          await clock.advance(by: .seconds(1))
+          #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        }
+
+        // Once the surface visibly moves past the prompt, the activity poll
+        // clears it via `activity-resumed` (not the TTL).
+        screenContents.setValue("Resumed: building images\nStep 3/12")
+        await clock.advance(by: .seconds(1))
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   @Test func awaitingInputPromptScreenRecognizesCodexPermissionPrompt() {
     // Codex's PermissionRequest UI — the `activity-resumed` heuristic
     // uses `isAwaitingInputPromptScreen` to tell "prompt just finished
