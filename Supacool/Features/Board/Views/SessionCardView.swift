@@ -1068,6 +1068,15 @@ private struct ReferenceStackChip: View {
         Text(chipText)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
+        // Surface the featured PR's CI + Greptile state right on the
+        // collapsed label so the stack chip reads as richly as the
+        // single-PR `ReferenceChip` — a red glyph for failures, an
+        // "N/5" capsule for the score. Both hide themselves when nothing
+        // is known, so non-PR stacks stay clean.
+        if let featuredSnapshot {
+          PRChecksGlyph(checks: featuredSnapshot.statusChecks)
+          GreptileScoreBadge(score: featuredSnapshot.greptileScore)
+        }
       }
       .foregroundStyle(.primary.opacity(0.85))
       .padding(.horizontal, 6)
@@ -1098,13 +1107,24 @@ private struct ReferenceStackChip: View {
     .frame(width: 16, height: 11)
   }
 
+  /// The PR whose number + status the collapsed label represents. Nil for
+  /// ticket stacks, where no per-item CI/score vocabulary applies.
+  private var featuredPullRequest: SessionReference? {
+    guard kind == .pullRequests else { return nil }
+    return ReferenceStackPopoverPresentation.featuredPullRequest(in: references)
+  }
+
+  /// Latest checks/Greptile snapshot for the featured PR, used to draw the
+  /// inline glyph + score on the chip. Nil hides both indicators.
+  private var featuredSnapshot: PullRequestSnapshot? {
+    guard let featuredPullRequest else { return nil }
+    return prReferenceSnapshots[featuredPullRequest.dedupeKey]
+  }
+
   private var chipText: String {
     switch kind {
     case .pullRequests:
-      guard
-        case .pullRequest(_, _, let number, _, _) = ReferenceStackPopoverPresentation
-          .featuredPullRequest(in: references)
-      else {
+      guard case .pullRequest(_, _, let number, _, _) = featuredPullRequest else {
         return "\(references.count) PRs"
       }
       return "#\(number) +\(references.count - 1)"
@@ -1116,7 +1136,8 @@ private struct ReferenceStackChip: View {
   private var helpText: String {
     switch kind {
     case .pullRequests:
-      return "Show \(references.count) pull requests"
+      let statusSuffix = featuredSnapshot?.statusHelpSuffix ?? ""
+      return "Show \(references.count) pull requests\(statusSuffix)"
     case .tickets:
       let noun = references.count == 1 ? "ticket" : "tickets"
       return "Show \(references.count) more \(noun)"
