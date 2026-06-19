@@ -136,25 +136,7 @@ struct SupacoolApp: App {
     UserDefaults.standard.set(200, forKey: "NSInitialToolTipDelay")
     @Shared(.settingsFile) var settingsFile
     let initialSettings = settingsFile.global
-    #if !DEBUG
-      if initialSettings.crashReportsEnabled {
-        SentrySDK.start { options in
-          options.dsn = "__SENTRY_DSN__"
-          options.tracesSampleRate = 1.0
-          options.enableAppHangTracking = false
-        }
-      }
-      if initialSettings.analyticsEnabled {
-        let posthogAPIKey = "__POSTHOG_API_KEY__"
-        let posthogHost = "__POSTHOG_HOST__"
-        let config = PostHogConfig(apiKey: posthogAPIKey, host: posthogHost)
-        config.enableSwizzling = false
-        PostHogSDK.shared.setup(config)
-        if let hardwareUUID = HardwareInfo.uuid {
-          PostHogSDK.shared.identify(hardwareUUID)
-        }
-      }
-    #endif
+    Self.bootstrapObservability(settings: initialSettings)
     if let resourceURL = Bundle.main.resourceURL?.appendingPathComponent("ghostty") {
       setenv("GHOSTTY_RESOURCES_DIR", resourceURL.path, 1)
     }
@@ -240,6 +222,31 @@ struct SupacoolApp: App {
 
     appDelegate.appStore = appStore
     appDelegate.terminalManager = terminalManager
+  }
+
+  /// Production-only crash-reporting + analytics bootstrap. Extracted from
+  /// `init` to keep the initializer under SwiftLint's body-length limit;
+  /// compiled out entirely in DEBUG.
+  @MainActor private static func bootstrapObservability(settings: GlobalSettings) {
+    #if !DEBUG
+      if settings.crashReportsEnabled {
+        SentrySDK.start { options in
+          options.dsn = "__SENTRY_DSN__"
+          options.tracesSampleRate = 1.0
+          options.enableAppHangTracking = false
+        }
+      }
+      if settings.analyticsEnabled {
+        let posthogAPIKey = "__POSTHOG_API_KEY__"
+        let posthogHost = "__POSTHOG_HOST__"
+        let config = PostHogConfig(apiKey: posthogAPIKey, host: posthogHost)
+        config.enableSwizzling = false
+        PostHogSDK.shared.setup(config)
+        if let hardwareUUID = HardwareInfo.uuid {
+          PostHogSDK.shared.identify(hardwareUUID)
+        }
+      }
+    #endif
   }
 
   private static func configureLayoutPersistence(for terminalManager: WorktreeTerminalManager) {

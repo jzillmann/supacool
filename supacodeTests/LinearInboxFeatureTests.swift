@@ -250,8 +250,14 @@ struct LinearInboxFeatureTests {
       $0.date = .constant(now)
       $0.linearClient.fetchRecentIssues = { _, _ in
         [
-          LinearIssue(id: "u1", identifier: "CEN-1", title: "Curated", description: nil, assigneeName: nil, assignedToMe: false, url: nil),
-          LinearIssue(id: "u3", identifier: "CEN-3", title: "New recent", description: nil, assigneeName: nil, assignedToMe: false, url: nil),
+          LinearIssue(
+            id: "u1", identifier: "CEN-1", title: "Curated", description: nil,
+            assigneeName: nil, assignedToMe: false, url: nil
+          ),
+          LinearIssue(
+            id: "u3", identifier: "CEN-3", title: "New recent", description: nil,
+            assigneeName: nil, assignedToMe: false, url: nil
+          ),
         ]
       }
     }
