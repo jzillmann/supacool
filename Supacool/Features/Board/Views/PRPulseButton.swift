@@ -203,7 +203,7 @@ struct PRPulseButton: View {
         .frame(maxHeight: 440)
       }
     }
-    .frame(width: 480)
+    .frame(width: 640)
   }
 
   /// Single-select filter replacing the old buried "N ignored" section:
