@@ -90,6 +90,46 @@ extension [String: PullRequestSnapshot] {
     }
     return subset
   }
+
+  /// The per-session subset (see `forReferences(of:)`) backfilled from PR
+  /// Pulse snapshots for any referenced PR the per-`gh pr view` pipeline
+  /// hasn't fetched yet. The reference pipeline is gated by cooldowns,
+  /// failure-caching, and an in-flight cap, so a PR can show on the PR Pulse
+  /// popover (richer `gh pr list` data) while its reference chip stays blank.
+  /// This guarantees a chip shows its CI glyph + Greptile score the moment
+  /// *either* pipeline has the data; the per-PR snapshot still wins when both
+  /// do, since it's fetched specifically for that PR.
+  nonisolated func forReferences(
+    of session: AgentSession,
+    pulseFallback: [String: RepoPullRequestSnapshot]
+  ) -> [String: PullRequestSnapshot] {
+    var subset = forReferences(of: session)
+    guard !pulseFallback.isEmpty else { return subset }
+    let pulseByKey = Self.referenceSnapshots(fromPulse: pulseFallback)
+    for reference in session.references {
+      guard case .pullRequest = reference, subset[reference.dedupeKey] == nil else { continue }
+      if let snapshot = pulseByKey[reference.dedupeKey] {
+        subset[reference.dedupeKey] = snapshot
+      }
+    }
+    return subset
+  }
+
+  /// Flatten PR Pulse's per-repo snapshots into a `dedupeKey`-keyed map of
+  /// reference snapshots, matching `SessionReference.dedupeKey`'s scheme.
+  private nonisolated static func referenceSnapshots(
+    fromPulse pulse: [String: RepoPullRequestSnapshot]
+  ) -> [String: PullRequestSnapshot] {
+    var map: [String: PullRequestSnapshot] = [:]
+    for repo in pulse.values {
+      for pullRequest in repo.pullRequests {
+        guard let key = PRPulseReference.dedupeKey(slug: repo.slug, number: pullRequest.number)
+        else { continue }
+        map[key] = pullRequest.referenceSnapshot
+      }
+    }
+    return map
+  }
 }
 
 extension PullRequestSnapshot {
