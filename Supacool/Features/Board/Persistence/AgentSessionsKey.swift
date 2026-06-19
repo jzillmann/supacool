@@ -7,6 +7,48 @@ import Sharing
 /// to JSON alongside supacode's other settings files.
 nonisolated struct AgentSessionsKeyID: Hashable, Sendable {}
 
+/// On-disk locations the board's per-session store reads and writes. Injected
+/// as a dependency so tests run against an isolated temp directory instead of
+/// the real `~/.supacool`. Without this seam every test sharing
+/// `@Shared(.agentSessions)` reads and writes the *same* real directory, so
+/// sessions written by one test leak into the next (and persist across runs) —
+/// the cross-test pollution that turned the board/bookmark/PR-pulse suites red.
+/// Mirrors how `settingsFileStorage` swaps to an in-memory store under test.
+nonisolated struct SessionStorageLocations: Sendable {
+  /// `<root>/sessions` — one folder per session. See `SessionDirectoryStore`.
+  var directory: URL
+  /// Legacy single-file board, one-time-migrated into `directory`.
+  var legacyFile: URL
+}
+
+nonisolated enum SessionStorageLocationsKey: DependencyKey {
+  static var liveValue: SessionStorageLocations {
+    SessionStorageLocations(
+      directory: SupacoolPaths.sessionsDirectory,
+      legacyFile: SupacoolPaths.legacyAgentSessionsFile
+    )
+  }
+  static var previewValue: SessionStorageLocations { liveValue }
+  /// A fresh, empty temp root per dependency context. The `.dependencies`
+  /// test trait resets the context per test, so each test resolves a new
+  /// unique directory — isolating both load (starts empty) and save.
+  static var testValue: SessionStorageLocations {
+    let root = FileManager.default.temporaryDirectory
+      .appending(path: "supacool-sessions-\(UUID().uuidString)", directoryHint: .isDirectory)
+    return SessionStorageLocations(
+      directory: root.appending(path: "sessions", directoryHint: .isDirectory),
+      legacyFile: root.appending(path: "agent-sessions.json", directoryHint: .notDirectory)
+    )
+  }
+}
+
+extension DependencyValues {
+  nonisolated var sessionStorageLocations: SessionStorageLocations {
+    get { self[SessionStorageLocationsKey.self] }
+    set { self[SessionStorageLocationsKey.self] = newValue }
+  }
+}
+
 nonisolated struct AgentSessionsKey: SharedKey {
   private static let logger = SupaLogger("AgentSessions")
   /// Diagnostic logger that goes through unified logging in **all** build
@@ -137,12 +179,13 @@ nonisolated struct AgentSessionsKey: SharedKey {
     // One-time import of the legacy single-file board, then derive the board
     // by scanning the per-session directory (priority, then most-recently-
     // updated first). An undecodable session file is skipped, never fatal.
+    @Dependency(\.sessionStorageLocations) var locations
     SessionDirectoryStore.migrateLegacyFileIfNeeded(
-      from: SupacoolPaths.legacyAgentSessionsFile,
-      to: SupacoolPaths.sessionsDirectory
+      from: locations.legacyFile,
+      to: locations.directory
     )
     continuation.resume(
-      returning: SessionDirectoryStore.load(from: SupacoolPaths.sessionsDirectory)
+      returning: SessionDirectoryStore.load(from: locations.directory)
     )
   }
 
@@ -159,9 +202,11 @@ nonisolated struct AgentSessionsKey: SharedKey {
     continuation: SaveContinuation
   ) {
     @Dependency(\.settingsFileStorage) var storage
-    // Resolve the dependency on the calling thread — the DispatchQueue
+    @Dependency(\.sessionStorageLocations) var locations
+    // Resolve the dependencies on the calling thread — the DispatchQueue
     // block runs outside the dependency graph's TaskLocal scope.
     let resolvedStorage = storage
+    let directory = locations.directory
     Task { await Self.telemetry.recordSubmission() }
     let shouldDrain = Self.coalescer.submit(value, continuation: continuation)
     guard shouldDrain else { return }
@@ -173,7 +218,7 @@ nonisolated struct AgentSessionsKey: SharedKey {
         // deleted, so a buggy/racing shrink can never silently lose data.
         SessionDirectoryStore.save(
           batch.value,
-          to: SupacoolPaths.sessionsDirectory,
+          to: directory,
           recordRemovals: { removed in
             SessionRecoveryStore.recordRemovals(
               previous: removed,

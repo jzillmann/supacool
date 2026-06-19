@@ -34,13 +34,13 @@ import Testing
 
   @Test func roundTripsThroughPerSessionFiles() {
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
-    let a = makeSession("a"); let b = makeSession("b")
+    let sessionA = makeSession("a"); let sessionB = makeSession("b")
 
-    SessionDirectoryStore.save([a, b], to: dir)
+    SessionDirectoryStore.save([sessionA, sessionB], to: dir)
     let loaded = SessionDirectoryStore.load(from: dir)
-    #expect(Set(loaded.map(\.id)) == Set([a.id, b.id]))
+    #expect(Set(loaded.map(\.id)) == Set([sessionA.id, sessionB.id]))
     // One folder per session.
-    #expect(FileManager.default.fileExists(atPath: sessionFile(a, in: dir).path(percentEncoded: false)))
+    #expect(FileManager.default.fileExists(atPath: sessionFile(sessionA, in: dir).path(percentEncoded: false)))
   }
 
   @Test func ordersByPriorityThenRecency() {
@@ -61,27 +61,27 @@ import Testing
 
   @Test func removesDroppedSessionsAndRecordsThemFirst() {
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
-    let a = makeSession("a"); let b = makeSession("b")
-    SessionDirectoryStore.save([a, b], to: dir)
+    let sessionA = makeSession("a"); let sessionB = makeSession("b")
+    SessionDirectoryStore.save([sessionA, sessionB], to: dir)
 
     var recorded: [AgentSession] = []
-    SessionDirectoryStore.save([a], to: dir, recordRemovals: { recorded.append(contentsOf: $0) })
+    SessionDirectoryStore.save([sessionA], to: dir, recordRemovals: { recorded.append(contentsOf: $0) })
 
-    #expect(recorded.map(\.id) == [b.id])
-    #expect(SessionDirectoryStore.load(from: dir).map(\.id) == [a.id])
-    #expect(!FileManager.default.fileExists(atPath: sessionFile(b, in: dir).path(percentEncoded: false)))
+    #expect(recorded.map(\.id) == [sessionB.id])
+    #expect(SessionDirectoryStore.load(from: dir).map(\.id) == [sessionA.id])
+    #expect(!FileManager.default.fileExists(atPath: sessionFile(sessionB, in: dir).path(percentEncoded: false)))
   }
 
   @Test func unchangedSessionKeepsItsModificationTime() throws {
     let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
-    let a = makeSession("a")
-    SessionDirectoryStore.save([a], to: dir)
+    let sessionA = makeSession("a")
+    SessionDirectoryStore.save([sessionA], to: dir)
     let pinnedTime = Date(timeIntervalSince1970: 1_000_000)
-    setMtime(pinnedTime, a, in: dir)
+    setMtime(pinnedTime, sessionA, in: dir)
 
     // Saving the identical session must not rewrite the file (so its order is stable).
-    SessionDirectoryStore.save([a], to: dir)
-    let mtime = try sessionFile(a, in: dir)
+    SessionDirectoryStore.save([sessionA], to: dir)
+    let mtime = try sessionFile(sessionA, in: dir)
       .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     #expect(mtime == pinnedTime)
   }
@@ -104,16 +104,20 @@ import Testing
     let legacy = base.appending(path: "legacy-\(UUID().uuidString).json", directoryHint: .notDirectory)
     defer { try? FileManager.default.removeItem(at: legacy) }
 
-    let a = makeSession("a"); let b = makeSession("b")
+    let sessionA = makeSession("a"); let sessionB = makeSession("b")
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
-    try encoder.encode([a, b]).write(to: legacy)
+    try encoder.encode([sessionA, sessionB]).write(to: legacy)
 
     SessionDirectoryStore.migrateLegacyFileIfNeeded(from: legacy, to: dir)
 
-    #expect(Set(SessionDirectoryStore.load(from: dir).map(\.id)) == Set([a.id, b.id]))
+    #expect(Set(SessionDirectoryStore.load(from: dir).map(\.id)) == Set([sessionA.id, sessionB.id]))
     #expect(!FileManager.default.fileExists(atPath: legacy.path(percentEncoded: false)))
-    #expect(FileManager.default.fileExists(atPath: legacy.appendingPathExtension("migrated").path(percentEncoded: false)))
+    #expect(
+      FileManager.default.fileExists(
+        atPath: legacy.appendingPathExtension("migrated").path(percentEncoded: false)
+      )
+    )
     try? FileManager.default.removeItem(at: legacy.appendingPathExtension("migrated"))
   }
 }
