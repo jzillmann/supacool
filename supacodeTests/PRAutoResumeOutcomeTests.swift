@@ -62,6 +62,21 @@ struct PRAutoResumeOutcomeTests {
     #expect(prompt.contains("CI failed"))
   }
 
+  @Test func mergeConflictAutoResumesWhenArmedAndIdle() {
+    let conflicting = PullRequestSnapshot(
+      state: .open,
+      title: "Fix it",
+      statusChecks: [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")],
+      mergeable: "CONFLICTING"
+    )
+    let result = outcome(previous: running, next: conflicting, enabled: true)
+    guard case .autoResume(_, let prompt, _) = result else {
+      Issue.record("expected autoResume for merge conflict, got \(result)")
+      return
+    }
+    #expect(prompt.contains("merge conflicts"))
+  }
+
   @Test func busyAgentNeverAutoResumed() {
     // Never interrupt a working agent — fall back to notifying.
     let result = outcome(previous: running, next: failed, enabled: true, busy: true)

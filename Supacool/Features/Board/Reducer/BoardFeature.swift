@@ -2737,7 +2737,7 @@ struct BoardFeature {
           state: "OPEN",
           isDraft: pullRequest.isDraft
         )
-        sheet.prompt = "Work on \(url)"
+        sheet.prompt = Self.prPulseSessionPrompt(url: url, pullRequest: pullRequest)
         sheet.pullRequestLookup = .resolved(
           PullRequestContext(
             parsed: parsed,
@@ -3950,6 +3950,18 @@ struct BoardFeature {
       }
       return true
     }
+  }
+
+  nonisolated static func prPulseSessionPrompt(
+    url: String,
+    pullRequest: MonitoredPullRequest
+  ) -> String {
+    if pullRequest.hasMergeConflict {
+      return
+        "Fix the merge conflicts on \(url). Update the branch against its base, resolve the "
+        + "conflicts locally, run the relevant checks, and push the resolution."
+    }
+    return "Work on \(url)"
   }
 
   /// Merge two reference lists, deduping by `dedupeKey`. When

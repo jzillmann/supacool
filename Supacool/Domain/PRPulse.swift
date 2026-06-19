@@ -29,6 +29,10 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   let updatedAt: Date
   /// Raw gh value: "", "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED".
   let reviewDecision: String?
+  /// Raw `gh` mergeability ("MERGEABLE" / "CONFLICTING" / "UNKNOWN" / nil).
+  let mergeable: String?
+  /// Raw `gh` merge-state status ("CLEAN" / "DIRTY" / "BLOCKED" / ...).
+  let mergeStateStatus: String?
   /// Individual status checks as reported by `gh pr list`. Kept raw so the
   /// popover can expand a per-check breakdown with links to each CI run.
   let statusChecks: [GithubPullRequestStatusCheck]
@@ -41,6 +45,9 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   var checks: PullRequestCheckBreakdown { PullRequestCheckBreakdown(checks: statusChecks) }
   var ciOutcome: BoardPullRequestChecks.ChecksOutcome {
     BoardPullRequestChecks.outcome(checks: statusChecks)
+  }
+  var hasMergeConflict: Bool {
+    mergeable?.uppercased() == "CONFLICTING" || mergeStateStatus?.uppercased() == "DIRTY"
   }
 
   /// Checks ordered for display: failures first, then running, then the
@@ -73,6 +80,7 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   }
 
   var health: Health {
+    if hasMergeConflict { return .red }
     if case .completed(allPassed: false) = ciOutcome { return .red }
     if let greptileScore, greptileScore < 5 { return .red }
     switch ciOutcome {

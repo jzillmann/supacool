@@ -77,7 +77,9 @@ private nonisolated func fetchOpenList(
       "--state", "open",
       filter, "@me",
       "--limit", "50",
-      "--json", "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,statusCheckRollup",
+      "--json",
+      "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,"
+        + "mergeable,mergeStateStatus,statusCheckRollup",
     ]
   )
   return try decodeOpenPullRequests(stdout: stdout)
@@ -128,6 +130,8 @@ private nonisolated struct PRListEntry: Decodable {
   let headRefName: String
   let updatedAt: Date
   let reviewDecision: String?
+  let mergeable: String?
+  let mergeStateStatus: String?
   let statusCheckRollup: [GithubPullRequestStatusCheck]?
 }
 
@@ -145,6 +149,8 @@ nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPull
       headRefName: entry.headRefName,
       updatedAt: entry.updatedAt,
       reviewDecision: entry.reviewDecision,
+      mergeable: entry.mergeable,
+      mergeStateStatus: entry.mergeStateStatus,
       statusChecks: entry.statusCheckRollup ?? [],
       greptileScore: nil
     )
