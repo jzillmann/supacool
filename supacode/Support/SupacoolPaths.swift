@@ -10,6 +10,20 @@ nonisolated enum SupacoolPaths {
     baseDirectory.appending(path: "repos", directoryHint: .isDirectory)
   }
 
+  /// One folder per board session: `~/.supacool/sessions/<id>/session.json`.
+  /// Replaces the single global `agent-sessions.json` so a bad write or a
+  /// decode failure damages one session instead of wiping the whole board.
+  /// See `SessionDirectoryStore`.
+  static var sessionsDirectory: URL {
+    baseDirectory.appending(path: "sessions", directoryHint: .isDirectory)
+  }
+
+  /// Legacy single-file board store, kept only so `SessionDirectoryStore` can
+  /// one-time-migrate it into `sessionsDirectory`.
+  static var legacyAgentSessionsFile: URL {
+    baseDirectory.appending(path: "agent-sessions.json", directoryHint: .notDirectory)
+  }
+
   /// Local directory ssh's `ControlMaster` binds its multiplex socket
   /// inside (`-o ControlPath=~/.supacool/ssh/%r@%h:%p`). ssh expands the
   /// tilde locally but does NOT create the parent — first spawn on a

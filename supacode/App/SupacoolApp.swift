@@ -129,7 +129,9 @@ struct SupacoolApp: App {
     // corrupt state (open sessions vanish). Must run before the @Shared
     // board access below. Isolated previews redirect $HOME, so they lock a
     // different file and are never blocked.
-    if !SingleInstanceGuard.acquire() {
+    // Skipped under a test host (the runner launches the app as its host
+    // process; enforcing the guard there would quit it and hang the runner).
+    if !SingleInstanceGuard.isRunningInTests, !SingleInstanceGuard.acquire() {
       SingleInstanceGuard.presentAlreadyRunningAndExit()
     }
     NSWindow.allowsAutomaticWindowTabbing = false

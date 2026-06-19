@@ -128,54 +128,22 @@ nonisolated struct AgentSessionsKey: SharedKey {
   }
   private static let coalescer = SaveCoalescer()
 
-  /// Snapshot of the most recently persisted set, used by the crash-safety
-  /// backstop to detect sessions that disappear between writes. Touched only
-  /// on `saveQueue` (serial), but guarded so the type stays `Sendable`.
-  /// Seeded lazily from disk on the first save so a session dropped by the
-  /// very first post-launch mutation (the 2026-06-04 crash scenario) is still
-  /// caught.
-  private static let lastPersisted = LockIsolated<[AgentSession]?>(nil)
-
-  private static func previouslyPersisted(storage: SettingsFileStorage) -> [AgentSession]? {
-    if let cached = lastPersisted.value { return cached }
-    guard let data = try? storage.load(Self.fileURL) else { return nil }
-    let decoder = JSONDecoder()
-    decoder.dateDecodingStrategy = .iso8601
-    return try? decoder.decode([AgentSession].self, from: data)
-  }
-
   var id: AgentSessionsKeyID { AgentSessionsKeyID() }
-
-  static var fileURL: URL {
-    SupacoolPaths.baseDirectory.appending(
-      path: "agent-sessions.json",
-      directoryHint: .notDirectory
-    )
-  }
 
   func load(
     context _: LoadContext<[AgentSession]>,
     continuation: LoadContinuation<[AgentSession]>
   ) {
-    @Dependency(\.settingsFileStorage) var storage
-    let data: Data
-    do {
-      data = try storage.load(Self.fileURL)
-    } catch {
-      continuation.resumeReturningInitialValue()
-      return
-    }
-    do {
-      let decoder = JSONDecoder()
-      decoder.dateDecodingStrategy = .iso8601
-      let sessions = try decoder.decode([AgentSession].self, from: data)
-      continuation.resume(returning: sessions)
-    } catch {
-      Self.logger.warning(
-        "Failed to decode agent sessions from \(Self.fileURL.path(percentEncoded: false)): \(error)"
-      )
-      continuation.resumeReturningInitialValue()
-    }
+    // One-time import of the legacy single-file board, then derive the board
+    // by scanning the per-session directory (priority, then most-recently-
+    // updated first). An undecodable session file is skipped, never fatal.
+    SessionDirectoryStore.migrateLegacyFileIfNeeded(
+      from: SupacoolPaths.legacyAgentSessionsFile,
+      to: SupacoolPaths.sessionsDirectory
+    )
+    continuation.resume(
+      returning: SessionDirectoryStore.load(from: SupacoolPaths.sessionsDirectory)
+    )
   }
 
   func subscribe(
@@ -199,38 +167,29 @@ nonisolated struct AgentSessionsKey: SharedKey {
     guard shouldDrain else { return }
     Self.saveQueue.async {
       while let batch = Self.coalescer.takeBatch() {
-        do {
-          let encoder = JSONEncoder()
-          encoder.dateEncodingStrategy = .iso8601
-          encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-          let data = try encoder.encode(batch.value)
-          let payloadHash = data.hashValue
-          let sessionCount = batch.value.count
-          // Crash-safety backstop: before overwriting the file with a
-          // smaller set, record any dropped sessions to the recovery store
-          // FIRST. A crash between this and the main write leaves the old
-          // (atomic) file intact; a crash after leaves the dropped sessions
-          // recoverable. Either way nothing is silently lost. Never throws.
-          if let previous = Self.previouslyPersisted(storage: resolvedStorage) {
+        // Per-session atomic writes: only changed session files are rewritten,
+        // dropped sessions' folders are removed. Removed sessions are recorded
+        // to the crash-safety recovery store *before* their folders are
+        // deleted, so a buggy/racing shrink can never silently lose data.
+        SessionDirectoryStore.save(
+          batch.value,
+          to: SupacoolPaths.sessionsDirectory,
+          recordRemovals: { removed in
             SessionRecoveryStore.recordRemovals(
-              previous: previous,
-              next: batch.value,
+              previous: removed,
+              next: [],
               storage: resolvedStorage
             )
           }
-          try resolvedStorage.save(data, Self.fileURL)
-          Self.lastPersisted.setValue(batch.value)
-          for c in batch.continuations { c.resume() }
-          Task {
-            if let summary = await Self.telemetry.recordEncode(
-              payloadHash: payloadHash,
-              sessionCount: sessionCount
-            ) {
-              Self.telemetryLogger.notice("\(summary, privacy: .public)")
-            }
+        )
+        for c in batch.continuations { c.resume() }
+        Task {
+          if let summary = await Self.telemetry.recordEncode(
+            payloadHash: batch.value.map(\.id).hashValue,
+            sessionCount: batch.value.count
+          ) {
+            Self.telemetryLogger.notice("\(summary, privacy: .public)")
           }
-        } catch {
-          for c in batch.continuations { c.resume(throwing: error) }
         }
       }
     }

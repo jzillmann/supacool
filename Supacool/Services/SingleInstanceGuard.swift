@@ -20,6 +20,16 @@ enum SingleInstanceGuard {
   /// Held for the process lifetime once acquired; intentionally never closed.
   private static var lockDescriptor: Int32 = -1
 
+  /// True when the process is an XCTest/Swift-Testing host. The test runner
+  /// launches the app *as* the host process, so enforcing the guard there
+  /// would quit the host (and hang the runner) whenever a real Supacool — or
+  /// a previous test host — already holds the lock. App startup skips the
+  /// guard in this case; the pure `acquire(for:)` below stays testable.
+  static var isRunningInTests: Bool {
+    ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+      || NSClassFromString("XCTestCase") != nil
+  }
+
   /// Attempts to become the sole instance for `directory`. Returns `true` if
   /// this process now holds the lock — or if the lock file couldn't be created
   /// at all, in which case we deliberately fail *open* rather than block a
