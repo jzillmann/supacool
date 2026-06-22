@@ -6,6 +6,20 @@
 	<string>Supacool</string>
 	<key>CFBundleName</key>
 	<string>Supacool</string>
+	<!--
+		Single-instance at the LaunchServices level. Without this, clicking a
+		Supacool notification (or a Dock/Finder/`open` re-launch) cold-launches
+		a SECOND io.morethan.supacool process to "deliver" the click; that
+		process trips SingleInstanceGuard's flock and shows the "already
+		running / Quit" alert before the notification delegate can run. With it,
+		LaunchServices reactivates the live instance instead — routing the
+		reopen through `applicationShouldHandleReopen` / the notification
+		delegate, which focus the existing window. Keyed by bundle id, so the
+		preview instance (io.morethan.supacool.preview) still runs alongside;
+		the flock guard remains a backstop for genuinely-distinct launches.
+	-->
+	<key>LSMultipleInstancesProhibited</key>
+	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>A program running within Supacool would like to use AppleScript.</string>
 	<key>NSAudioCaptureUsageDescription</key>
