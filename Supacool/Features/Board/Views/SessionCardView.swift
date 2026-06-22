@@ -434,7 +434,14 @@ struct SessionCardView: View {
     .padding(.vertical, 2)
     .background(status.color.opacity(0.12))
     .clipShape(Capsule())
-    .fixedSize()
+    // Height stays intrinsic, but the label can truncate horizontally when the
+    // header is crowded. A hard `.fixedSize()` here let the status + reason
+    // chips sum past the card's 280pt width; the card then overflowed its grid
+    // column and ate the gap to its neighbor (cards visibly touching). The
+    // higher layout priority keeps the primary status whole so the reason chip
+    // yields first.
+    .fixedSize(horizontal: false, vertical: true)
+    .layoutPriority(1)
   }
 
   /// The most urgent "ball is in your court" reason across this session's PR
@@ -478,7 +485,10 @@ struct SessionCardView: View {
     .padding(.vertical, 2)
     .background(reasonColor(ball.severity).opacity(0.12))
     .clipShape(Capsule())
-    .fixedSize()
+    // Truncatable so a long reason ("Ready to merge") can't push the card past
+    // its 280pt column and collapse the gap to its neighbor. Full text stays
+    // on hover via the help below.
+    .fixedSize(horizontal: false, vertical: true)
     .help(ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status")
   }
 
@@ -511,7 +521,9 @@ struct SessionCardView: View {
     .buttonStyle(.plain)
     .disabled(lifecycle.status.isBusy)
     .help(serverLifecycleHelp(lifecycle))
-    .fixedSize()
+    // Truncatable for the same reason as the status/reason chips: a wide label
+    // must not push the card past its column and collapse the neighbor gap.
+    .fixedSize(horizontal: false, vertical: true)
   }
 
   private func serverLifecycleHelp(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> String {
