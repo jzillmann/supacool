@@ -100,6 +100,16 @@ enum SessionSpawner {
       }
     }
 
+    @Shared(.repositorySettings(request.repository.rootURL)) var repositorySettings
+    @Shared(.settingsFile) var settingsFile
+
+    let additionalDirectories = crossWorktreeAdditionalDirectories(
+      enabled: repositorySettings.allowCrossWorktreeAccess,
+      repositoryRootURL: request.repository.rootURL,
+      globalDefaultPath: settingsFile.global.defaultWorktreeBaseDirectoryPath,
+      repositoryOverridePath: repositorySettings.worktreeBaseDirectoryPath
+    )
+
     let input = buildInput(
       agent: request.agent,
       prompt: request.prompt,
@@ -107,7 +117,8 @@ enum SessionSpawner {
       planMode: request.planMode,
       remoteControl: request.remoteControl,
       remoteControlName: request.remoteControlName,
-      model: request.model
+      model: request.model,
+      additionalDirectories: additionalDirectories
     )
     await terminalClient.send(
       .createTabWithInput(
@@ -125,7 +136,6 @@ enum SessionSpawner {
       )
     )
 
-    @Shared(.repositorySettings(request.repository.rootURL)) var repositorySettings
     let seededReferences = initialReferences(
       prompt: request.prompt,
       allowedPrefixes: parseLinearTeamKeys(repositorySettings.linearTeamKeys),
@@ -417,7 +427,8 @@ enum SessionSpawner {
     planMode: Bool,
     remoteControl: Bool,
     remoteControlName: String?,
-    model: String?
+    model: String?,
+    additionalDirectories: [String]
   ) -> String {
     switch (agent, prompt.isEmpty) {
     case (let agent?, false):
@@ -427,7 +438,8 @@ enum SessionSpawner {
         planMode: planMode,
         remoteControl: remoteControl,
         remoteControlName: remoteControlName,
-        model: model
+        model: model,
+        additionalDirectories: additionalDirectories
       ) + "\r"
     case (let agent?, true):
       return agent.commandWithoutPrompt(
@@ -435,12 +447,35 @@ enum SessionSpawner {
         planMode: planMode,
         remoteControl: remoteControl,
         remoteControlName: remoteControlName,
-        model: model
+        model: model,
+        additionalDirectories: additionalDirectories
       ) + "\r"
     case (nil, false):
       return prompt + "\r"
     case (nil, true):
       return ""
     }
+  }
+
+  /// Extra allowed working directories handed to the agent at launch when
+  /// cross-worktree access is enabled for the repo. Returns the worktrees'
+  /// shared parent (`~/.supacool/repos/<repo>/` by default), which
+  /// transitively covers every sibling worktree — so the agent can `cd`
+  /// into any of them without Claude resetting the shell cwd back to the
+  /// launch dir. Empty when the setting is off (the common single-ticket
+  /// case), so plain sessions stay tightly scoped to their own worktree.
+  static func crossWorktreeAdditionalDirectories(
+    enabled: Bool,
+    repositoryRootURL: URL,
+    globalDefaultPath: String?,
+    repositoryOverridePath: String?
+  ) -> [String] {
+    guard enabled else { return [] }
+    let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
+      for: repositoryRootURL,
+      globalDefaultPath: globalDefaultPath,
+      repositoryOverridePath: repositoryOverridePath
+    )
+    return [baseDirectory.path(percentEncoded: false)]
   }
 }

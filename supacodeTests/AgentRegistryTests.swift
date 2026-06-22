@@ -230,4 +230,79 @@ struct AgentRegistryTests {
     let cmd = AgentType.claude.commandWithoutPrompt(model: "haiku")
     #expect(cmd == "claude --model 'haiku'")
   }
+
+  // MARK: - Additional directories (--add-dir)
+
+  @Test func claudeExposesAddDirFlagCodexAndPiDoNot() {
+    #expect(AgentType.claude.additionalDirsFlag == "--add-dir")
+    #expect(AgentType.codex.additionalDirsFlag == nil)
+    #expect(AgentType.pi.additionalDirsFlag == nil)
+  }
+
+  @Test func claudeRendersAddDirAfterOtherFlagsBeforePrompt() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      additionalDirectories: ["/Users/me/.supacool/repos/acme"]
+    )
+    #expect(cmd == "claude --add-dir '/Users/me/.supacool/repos/acme' 'go'")
+  }
+
+  @Test func claudeRendersMultipleAddDirPathsUnderSingleFlag() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      additionalDirectories: ["/a/b", "/c/d"]
+    )
+    #expect(cmd == "claude --add-dir '/a/b' '/c/d' 'go'")
+  }
+
+  @Test func addDirCombinesWithPermissionAndModelFlags() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      bypassPermissions: true,
+      model: "opus",
+      additionalDirectories: ["/a/b"]
+    )
+    #expect(cmd == "claude --dangerously-skip-permissions --model 'opus' --add-dir '/a/b' 'go'")
+  }
+
+  @Test func emptyAdditionalDirectoriesRenderNoFlag() {
+    let cmd = AgentType.claude.command(prompt: "go", additionalDirectories: [])
+    #expect(cmd == "claude 'go'")
+  }
+
+  @Test func blankAdditionalDirectoriesAreDropped() {
+    let cmd = AgentType.claude.command(prompt: "go", additionalDirectories: ["   ", ""])
+    #expect(cmd == "claude 'go'")
+  }
+
+  @Test func addDirShellQuotesPathsWithSpaces() {
+    let cmd = AgentType.claude.command(
+      prompt: "go",
+      additionalDirectories: ["/Users/me/My Repos/acme"]
+    )
+    #expect(cmd == "claude --add-dir '/Users/me/My Repos/acme' 'go'")
+  }
+
+  @Test func codexSilentlyDropsAdditionalDirectories() {
+    let cmd = AgentType.codex.command(prompt: "hi", additionalDirectories: ["/a/b"])
+    #expect(cmd == "codex 'hi'")
+  }
+
+  @Test func piSilentlyDropsAdditionalDirectories() {
+    let cmd = AgentType.pi.command(prompt: "hi", additionalDirectories: ["/a/b"])
+    #expect(cmd == "pi 'hi'")
+  }
+
+  @Test func commandWithoutPromptRendersAddDir() {
+    let cmd = AgentType.claude.commandWithoutPrompt(additionalDirectories: ["/a/b"])
+    #expect(cmd == "claude --add-dir '/a/b'")
+  }
+
+  @Test func claudeResumeAppendsAddDir() {
+    let cmd = AgentType.claude.resumeCommand(
+      sessionID: "abc-123",
+      additionalDirectories: ["/a/b"]
+    )
+    #expect(cmd == "claude --resume 'abc-123' --add-dir '/a/b'")
+  }
 }

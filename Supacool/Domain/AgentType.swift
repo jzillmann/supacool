@@ -47,6 +47,13 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// model the CLI itself accepts.
   let knownModels: [String]
 
+  /// CLI flag that registers extra allowed working directories at launch
+  /// (Claude Code's `--add-dir`). `nil` for agents with no such concept
+  /// (Codex / Pi). When set and the caller passes `additionalDirectories`,
+  /// each path is appended as `<flag> <quoted path>` so the agent can work
+  /// outside its launch dir without the shell cwd being reset.
+  let additionalDirsFlag: String?
+
   /// Convenience: whether this agent exposes a remote-control launch flag.
   var supportsRemoteControl: Bool { remoteControlFlag != nil }
 
@@ -116,6 +123,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     remoteControlFlag: String? = nil,
     modelFlag: String? = nil,
     knownModels: [String] = [],
+    additionalDirsFlag: String? = nil,
     icon: AgentIcon,
     tintColorName: String,
     launchTemplate: String = "{binary}{flags} {prompt}",
@@ -132,6 +140,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     self.remoteControlFlag = remoteControlFlag
     self.modelFlag = modelFlag
     self.knownModels = knownModels
+    self.additionalDirsFlag = additionalDirsFlag
     self.icon = icon
     self.tintColorName = tintColorName
     self.launchTemplate = launchTemplate
@@ -151,14 +160,16 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     planMode: Bool = false,
     remoteControl: Bool = false,
     remoteControlName: String? = nil,
-    model: String? = nil
+    model: String? = nil,
+    additionalDirectories: [String] = []
   ) -> String {
     let flagFragment = renderFlags(
       bypassPermissions: bypassPermissions,
       planMode: planMode,
       remoteControl: remoteControl,
       remoteControlName: remoteControlName,
-      model: model
+      model: model,
+      additionalDirectories: additionalDirectories
     )
     return launchTemplate
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -172,14 +183,16 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     planMode: Bool = false,
     remoteControl: Bool = false,
     remoteControlName: String? = nil,
-    model: String? = nil
+    model: String? = nil,
+    additionalDirectories: [String] = []
   ) -> String {
     let flagFragment = renderFlags(
       bypassPermissions: bypassPermissions,
       planMode: planMode,
       remoteControl: remoteControl,
       remoteControlName: remoteControlName,
-      model: model
+      model: model,
+      additionalDirectories: additionalDirectories
     )
     // Drop the `{prompt}` placeholder along with any leading whitespace so
     // the rendered string doesn't end with a stray space.
@@ -197,7 +210,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   func resumeCommand(
     sessionID: String,
     bypassPermissions: Bool = false,
-    model: String? = nil
+    model: String? = nil,
+    additionalDirectories: [String] = []
   ) -> String? {
     guard let template = resumeTemplate else { return nil }
     let flagFragment = renderFlags(
@@ -205,7 +219,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       planMode: false,
       remoteControl: false,
       remoteControlName: nil,
-      model: model
+      model: model,
+      additionalDirectories: additionalDirectories
     )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -223,7 +238,8 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       planMode: false,
       remoteControl: false,
       remoteControlName: nil,
-      model: nil
+      model: nil,
+      additionalDirectories: []
     )
     return template
       .replacingOccurrences(of: "{binary}", with: binary)
@@ -236,15 +252,18 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// Plan mode wins over bypass-permissions so those two never conflict in
   /// the rendered command. Remote control is orthogonal — it combines with
   /// whichever permission flag (if any) applies. Agents without a
-  /// `bypassPermissionsFlag` / `remoteControlFlag` / `modelFlag` silently
-  /// drop the respective request — same for plan mode on agents that don't
-  /// support it. A nil/blank model means "agent default": no flag rendered.
+  /// `bypassPermissionsFlag` / `remoteControlFlag` / `modelFlag` /
+  /// `additionalDirsFlag` silently drop the respective request — same for
+  /// plan mode on agents that don't support it. A nil/blank model means
+  /// "agent default": no flag rendered. Additional directories render last
+  /// (still ahead of the prompt) as `<flag> <quoted path>...`.
   private func renderFlags(
     bypassPermissions: Bool,
     planMode: Bool,
     remoteControl: Bool,
     remoteControlName: String?,
-    model: String?
+    model: String?,
+    additionalDirectories: [String]
   ) -> String {
     var fragments: [String] = []
     if planMode, supportsPlanMode {
@@ -263,6 +282,15 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
       if !trimmedModel.isEmpty {
         fragments.append("\(flag) \(Self.shellQuote(trimmedModel))")
+      }
+    }
+    if let flag = additionalDirsFlag {
+      let dirs = additionalDirectories
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+      if !dirs.isEmpty {
+        fragments.append(flag)
+        fragments.append(contentsOf: dirs.map(Self.shellQuote))
       }
     }
     guard !fragments.isEmpty else { return "" }

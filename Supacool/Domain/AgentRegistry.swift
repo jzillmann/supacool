@@ -76,6 +76,7 @@ nonisolated enum AgentRegistry {
     // Stable aliases (each resolves to the latest model of its tier), not
     // dated ids — so this list doesn't rot on every model release.
     knownModels: ["fable", "opus", "sonnet", "haiku"],
+    additionalDirsFlag: "--add-dir",
     icon: .asset("claude-code-mark"),
     tintColorName: "orange",
     launchTemplate: "{binary}{flags} {prompt}",

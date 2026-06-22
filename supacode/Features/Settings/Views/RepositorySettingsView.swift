@@ -82,6 +82,14 @@ struct RepositorySettingsView: View {
           Text("Default directory").monospaced(false)
           Text("Parent path for new worktrees.").monospaced(false)
         }.monospaced()
+        Toggle("Allow cross-worktree access", isOn: settings.allowCrossWorktreeAccess)
+          .help(
+            "Launch Claude Code sessions with --add-dir pointing at the worktrees' parent "
+              + "folder, so an agent can roam across sibling worktrees of this repo without "
+              + "Claude resetting the shell directory. Off by default; this widens the "
+              + "session's file access to every worktree of this repository. Codex and Pi "
+              + "ignore it."
+          )
       } header: {
         Text("Worktree")
       } footer: {

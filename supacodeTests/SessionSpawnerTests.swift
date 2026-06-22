@@ -3,6 +3,7 @@ import Dependencies
 import DependenciesTestSupport
 import Foundation
 import IdentifiedCollections
+import Sharing
 import Testing
 
 @testable import Supacool
@@ -125,6 +126,61 @@ struct SessionSpawnerTests {
     )
     // The flag is persisted on the session so rerun re-arms it.
     #expect(session.remoteControl == true)
+  }
+
+  // MARK: - Cross-worktree access (--add-dir)
+
+  @Test(.dependencies) func claudeSpawnsWithAddDirWhenCrossWorktreeAccessEnabled() async throws {
+    let repoURL = URL(fileURLWithPath: "/tmp/repo")
+    let request = Self.makeRequest(selection: .repoRoot, agent: .claude, prompt: "Triage CI")
+    let spawnedInput = LockIsolated<String?>(nil)
+    let expectedBase = SupacoolPaths.worktreeBaseDirectory(
+      for: repoURL,
+      globalDefaultPath: nil,
+      repositoryOverridePath: nil
+    ).path(percentEncoded: false)
+    @Shared(.repositorySettings(repoURL)) var repositorySettings
+    $repositorySettings.withLock { $0.allowCrossWorktreeAccess = true }
+    try await withDependencies {
+      $0.terminalClient.send = { command in
+        if case .createTabWithInput(_, let input, _, _) = command {
+          spawnedInput.setValue(input)
+        }
+      }
+      $0.repoSync = RepoSyncClient(syncIfSafe: { _ in .skippedDirtyTree })
+    } operation: {
+      _ = try await SessionSpawner.spawnLocal(request)
+    }
+    #expect(
+      spawnedInput.value
+        == "claude --dangerously-skip-permissions --add-dir '\(expectedBase)' 'Triage CI'\r"
+    )
+  }
+
+  @Test func crossWorktreeAdditionalDirectoriesEmptyWhenDisabled() {
+    let dirs = SessionSpawner.crossWorktreeAdditionalDirectories(
+      enabled: false,
+      repositoryRootURL: URL(fileURLWithPath: "/tmp/repo"),
+      globalDefaultPath: nil,
+      repositoryOverridePath: nil
+    )
+    #expect(dirs.isEmpty)
+  }
+
+  @Test func crossWorktreeAdditionalDirectoriesReturnsWorktreeParentWhenEnabled() {
+    let repoURL = URL(fileURLWithPath: "/tmp/repo")
+    let dirs = SessionSpawner.crossWorktreeAdditionalDirectories(
+      enabled: true,
+      repositoryRootURL: repoURL,
+      globalDefaultPath: nil,
+      repositoryOverridePath: nil
+    )
+    let expected = SupacoolPaths.worktreeBaseDirectory(
+      for: repoURL,
+      globalDefaultPath: nil,
+      repositoryOverridePath: nil
+    ).path(percentEncoded: false)
+    #expect(dirs == [expected])
   }
 
   // MARK: - Setup script flag

@@ -90,6 +90,13 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
   /// tickets — see `LinearInboxFeature`. Nil/empty means this repo
   /// contributes no scope to the (global) inbox import.
   var linearTeamKeys: String?
+  /// When true, Claude Code sessions for this repo launch with
+  /// `--add-dir <worktrees parent>` so the agent can roam across sibling
+  /// worktrees without Claude snapping the shell cwd back to the launch
+  /// dir. Off by default — it widens the session's file access to every
+  /// worktree of this repository. Only Claude exposes the flag; Codex and
+  /// Pi silently ignore the request.
+  var allowCrossWorktreeAccess: Bool
 
   private enum CodingKeys: String, CodingKey {
     case setupScript
@@ -105,6 +112,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     case copyUntrackedOnWorktreeCreate
     case pullRequestMergeStrategy
     case linearTeamKeys
+    case allowCrossWorktreeAccess
   }
 
   static let `default` = RepositorySettings(
@@ -120,7 +128,8 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     copyIgnoredOnWorktreeCreate: nil,
     copyUntrackedOnWorktreeCreate: nil,
     pullRequestMergeStrategy: nil,
-    linearTeamKeys: nil
+    linearTeamKeys: nil,
+    allowCrossWorktreeAccess: false
   )
 
   init(
@@ -136,7 +145,8 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     copyIgnoredOnWorktreeCreate: Bool? = nil,
     copyUntrackedOnWorktreeCreate: Bool? = nil,
     pullRequestMergeStrategy: PullRequestMergeStrategy? = nil,
-    linearTeamKeys: String? = nil
+    linearTeamKeys: String? = nil,
+    allowCrossWorktreeAccess: Bool = false
   ) {
     self.setupScript = setupScript
     self.archiveScript = archiveScript
@@ -151,6 +161,7 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
     self.copyUntrackedOnWorktreeCreate = copyUntrackedOnWorktreeCreate
     self.pullRequestMergeStrategy = pullRequestMergeStrategy
     self.linearTeamKeys = linearTeamKeys
+    self.allowCrossWorktreeAccess = allowCrossWorktreeAccess
   }
 
   init(from decoder: Decoder) throws {
@@ -191,5 +202,8 @@ nonisolated struct RepositorySettings: Codable, Equatable, Sendable {
       ?? Self.default.pullRequestMergeStrategy
     linearTeamKeys =
       try container.decodeIfPresent(String.self, forKey: .linearTeamKeys)
+    allowCrossWorktreeAccess =
+      try container.decodeIfPresent(Bool.self, forKey: .allowCrossWorktreeAccess)
+      ?? Self.default.allowCrossWorktreeAccess
   }
 }
