@@ -130,33 +130,4 @@ nonisolated enum SessionDirectoryStore {
       try? data.write(to: file, options: [.atomic])
     }
   }
-
-  // MARK: Migration
-
-  /// One-time import of the legacy single-file board into the per-session
-  /// directory. No-op once any session folder exists. Stamps each migrated
-  /// file's mtime from the session's latest activity so the initial ordering
-  /// reflects real recency, then renames the legacy file aside so it is never
-  /// re-imported.
-  static func migrateLegacyFileIfNeeded(from legacyFile: URL, to directory: URL) {
-    let fileManager = FileManager.default
-    if !load(from: directory).isEmpty { return }
-    guard
-      let data = try? Data(contentsOf: legacyFile),
-      let sessions = try? makeDecoder().decode([AgentSession].self, from: data),
-      !sessions.isEmpty
-    else { return }
-
-    save(sessions, to: directory)
-    for session in sessions {
-      let updatedAt = session.terminals.map(\.lastActivityAt).max() ?? session.createdAt
-      let file = sessionFile(for: session.id, in: directory)
-      try? fileManager.setAttributes(
-        [.modificationDate: updatedAt],
-        ofItemAtPath: file.path(percentEncoded: false)
-      )
-    }
-    try? fileManager.moveItem(at: legacyFile, to: legacyFile.appendingPathExtension("migrated"))
-    logger.info("Migrated \(sessions.count) session(s) from agent-sessions.json to per-session storage")
-  }
 }

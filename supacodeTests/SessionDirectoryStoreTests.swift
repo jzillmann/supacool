@@ -97,27 +97,4 @@ import Testing
 
     #expect(SessionDirectoryStore.load(from: dir).map(\.id) == [good.id])
   }
-
-  @Test func migratesLegacyFileOnce() throws {
-    let dir = tempDir(); defer { try? FileManager.default.removeItem(at: dir) }
-    let base = dir.deletingLastPathComponent()
-    let legacy = base.appending(path: "legacy-\(UUID().uuidString).json", directoryHint: .notDirectory)
-    defer { try? FileManager.default.removeItem(at: legacy) }
-
-    let sessionA = makeSession("a"); let sessionB = makeSession("b")
-    let encoder = JSONEncoder()
-    encoder.dateEncodingStrategy = .iso8601
-    try encoder.encode([sessionA, sessionB]).write(to: legacy)
-
-    SessionDirectoryStore.migrateLegacyFileIfNeeded(from: legacy, to: dir)
-
-    #expect(Set(SessionDirectoryStore.load(from: dir).map(\.id)) == Set([sessionA.id, sessionB.id]))
-    #expect(!FileManager.default.fileExists(atPath: legacy.path(percentEncoded: false)))
-    #expect(
-      FileManager.default.fileExists(
-        atPath: legacy.appendingPathExtension("migrated").path(percentEncoded: false)
-      )
-    )
-    try? FileManager.default.removeItem(at: legacy.appendingPathExtension("migrated"))
-  }
 }

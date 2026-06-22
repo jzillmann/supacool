@@ -17,16 +17,11 @@ nonisolated struct AgentSessionsKeyID: Hashable, Sendable {}
 nonisolated struct SessionStorageLocations: Sendable {
   /// `<root>/sessions` — one folder per session. See `SessionDirectoryStore`.
   var directory: URL
-  /// Legacy single-file board, one-time-migrated into `directory`.
-  var legacyFile: URL
 }
 
 nonisolated enum SessionStorageLocationsKey: DependencyKey {
   static var liveValue: SessionStorageLocations {
-    SessionStorageLocations(
-      directory: SupacoolPaths.sessionsDirectory,
-      legacyFile: SupacoolPaths.legacyAgentSessionsFile
-    )
+    SessionStorageLocations(directory: SupacoolPaths.sessionsDirectory)
   }
   static var previewValue: SessionStorageLocations { liveValue }
   /// A fresh, empty temp root per dependency context. The `.dependencies`
@@ -36,8 +31,7 @@ nonisolated enum SessionStorageLocationsKey: DependencyKey {
     let root = FileManager.default.temporaryDirectory
       .appending(path: "supacool-sessions-\(UUID().uuidString)", directoryHint: .isDirectory)
     return SessionStorageLocations(
-      directory: root.appending(path: "sessions", directoryHint: .isDirectory),
-      legacyFile: root.appending(path: "agent-sessions.json", directoryHint: .notDirectory)
+      directory: root.appending(path: "sessions", directoryHint: .isDirectory)
     )
   }
 }
@@ -176,14 +170,10 @@ nonisolated struct AgentSessionsKey: SharedKey {
     context _: LoadContext<[AgentSession]>,
     continuation: LoadContinuation<[AgentSession]>
   ) {
-    // One-time import of the legacy single-file board, then derive the board
-    // by scanning the per-session directory (priority, then most-recently-
-    // updated first). An undecodable session file is skipped, never fatal.
+    // Derive the board by scanning the per-session directory (priority, then
+    // most-recently-updated first). An undecodable session file is skipped,
+    // never fatal.
     @Dependency(\.sessionStorageLocations) var locations
-    SessionDirectoryStore.migrateLegacyFileIfNeeded(
-      from: locations.legacyFile,
-      to: locations.directory
-    )
     continuation.resume(
       returning: SessionDirectoryStore.load(from: locations.directory)
     )
