@@ -117,4 +117,13 @@ nonisolated enum PRState: String, Codable, Sendable {
     case .draft: return "pencil.circle"
     }
   }
+
+  /// Whether CI checks and the Greptile score are still actionable. Once a PR
+  /// is merged or closed they're stale noise, so the card hides them.
+  var showsLiveStatus: Bool {
+    switch self {
+    case .open, .draft: return true
+    case .merged, .closed: return false
+    }
+  }
 }

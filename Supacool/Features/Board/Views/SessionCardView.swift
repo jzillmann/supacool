@@ -731,7 +731,8 @@ struct ReferenceChip: View {
         Text(reference.chipLabel)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
-        if case .pullRequest = reference, let prSnapshot {
+        if case .pullRequest(_, _, _, let state, _) = reference, let prSnapshot,
+          state?.showsLiveStatus ?? true {
           PRChecksGlyph(checks: prSnapshot.statusChecks)
           GreptileScoreBadge(score: prSnapshot.greptileScore)
         }
@@ -1249,7 +1250,11 @@ private struct ReferenceStackChip: View {
             .truncationMode(.middle)
         }
         Spacer(minLength: 12)
-        if case .pullRequest = reference,
+        // CI checks and the Greptile score only matter while a PR is still in
+        // play; once merged or closed they're settled history and just add
+        // noise. `PRState.showsLiveStatus` owns that rule.
+        if case let .pullRequest(_, _, _, state, _) = reference,
+          state?.showsLiveStatus ?? true,
           let snapshot = prReferenceSnapshots[reference.dedupeKey]
         {
           PRChecksSummaryText(checks: snapshot.statusChecks)
