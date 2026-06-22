@@ -21,7 +21,12 @@ struct DebugSessionSheetView: View {
     }
     .padding(20)
     .frame(width: 520)
-    .frame(minHeight: 200, idealHeight: 400, maxHeight: 420)
+    // Let the sheet size to its content instead of clamping to a fixed
+    // height. The registered body (pickers + branch field + 160pt-min text
+    // editor + footer) is taller than any single small cap, and the text
+    // editor won't shrink below its minHeight, so a hard maxHeight clipped
+    // the content against the window's borders.
+    .fixedSize(horizontal: false, vertical: true)
     .onExitCommand { store.send(.cancelTapped) }
   }
 
