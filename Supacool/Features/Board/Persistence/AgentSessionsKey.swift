@@ -5,7 +5,20 @@ import Sharing
 
 /// `@Shared(.agentSessions)` — the list of Supacool board sessions, persisted
 /// to JSON alongside supacode's other settings files.
-nonisolated struct AgentSessionsKeyID: Hashable, Sendable {}
+///
+/// `Sharing` dedupes the in-memory `@Shared` box by this `id`, so the bound
+/// sessions directory is part of it on purpose. Production always resolves the
+/// single `~/.supacool/sessions`, so the whole app shares ONE box (unchanged).
+/// Under test each `@Test` gets a unique temp directory (injected via
+/// `sessionStorageLocations`), so each resolves a DISTINCT box. Without the
+/// directory here, every concurrently-running Swift Testing `@Test` shares one
+/// global box and pollutes the others — the flaky board/bookmark/PR-pulse
+/// failures that only surfaced under CI's timing. (`-parallel-testing-enabled
+/// NO` disables XCTest's multi-process parallelism, NOT Swift Testing's
+/// in-process concurrency, so the box is genuinely contended across tests.)
+nonisolated struct AgentSessionsKeyID: Hashable, Sendable {
+  var directory: URL
+}
 
 /// On-disk locations the board's per-session store reads and writes. Injected
 /// as a dependency so tests run against an isolated temp directory instead of
@@ -127,44 +140,54 @@ nonisolated struct AgentSessionsKey: SharedKey {
   /// it pulls the next pending value (whatever the latest submission set
   /// it to during the write) and continues. The drain task exits when
   /// no value is pending.
+  ///
+  /// Pending state is keyed by destination directory. Production only ever
+  /// has one (`~/.supacool/sessions`), so this is the same single-store
+  /// coalescing as before. But under test each `@Test` saves to its own temp
+  /// directory; carrying the directory through the batch (instead of capturing
+  /// it from whichever submission won the drain race) guarantees a batch is
+  /// always written to ITS OWN store and never bleeds into another test's.
   private final class SaveCoalescer: @unchecked Sendable {
     private let lock = NSLock()
-    private var pendingValue: [AgentSession]?
-    private var pendingContinuations: [SaveContinuation] = []
+    private var pendingValues: [URL: [AgentSession]] = [:]
+    private var pendingContinuations: [URL: [SaveContinuation]] = [:]
     private var draining = false
 
     /// Returns `true` iff the caller should dispatch a drain task.
     /// Subsequent submissions that arrive while a drain is in flight
     /// just update the pending value + continuation list and return false.
-    func submit(_ value: [AgentSession], continuation: SaveContinuation) -> Bool {
+    func submit(_ value: [AgentSession], directory: URL, continuation: SaveContinuation) -> Bool {
       lock.lock()
       defer { lock.unlock() }
-      pendingValue = value
-      pendingContinuations.append(continuation)
+      pendingValues[directory] = value
+      pendingContinuations[directory, default: []].append(continuation)
       if draining { return false }
       draining = true
       return true
     }
 
-    /// Pulls the next batch to encode + write. Returns `nil` when the
-    /// queue is empty; the drain flag is reset in that case so a future
-    /// `submit` will spin up a new drain task.
-    func takeBatch() -> (value: [AgentSession], continuations: [SaveContinuation])? {
+    /// Pulls the next per-directory batch to encode + write. Returns `nil`
+    /// when nothing is pending; the drain flag is reset in that case so a
+    /// future `submit` will spin up a new drain task.
+    func takeBatch() -> (value: [AgentSession], directory: URL, continuations: [SaveContinuation])? {
       lock.lock()
       defer { lock.unlock() }
-      guard let value = pendingValue else {
+      guard let (directory, value) = pendingValues.first else {
         draining = false
         return nil
       }
-      let conts = pendingContinuations
-      pendingValue = nil
-      pendingContinuations = []
-      return (value, conts)
+      let conts = pendingContinuations[directory] ?? []
+      pendingValues[directory] = nil
+      pendingContinuations[directory] = nil
+      return (value, directory, conts)
     }
   }
   private static let coalescer = SaveCoalescer()
 
-  var id: AgentSessionsKeyID { AgentSessionsKeyID() }
+  var id: AgentSessionsKeyID {
+    @Dependency(\.sessionStorageLocations) var locations
+    return AgentSessionsKeyID(directory: locations.directory)
+  }
 
   func load(
     context _: LoadContext<[AgentSession]>,
@@ -198,7 +221,7 @@ nonisolated struct AgentSessionsKey: SharedKey {
     let resolvedStorage = storage
     let directory = locations.directory
     Task { await Self.telemetry.recordSubmission() }
-    let shouldDrain = Self.coalescer.submit(value, continuation: continuation)
+    let shouldDrain = Self.coalescer.submit(value, directory: directory, continuation: continuation)
     guard shouldDrain else { return }
     Self.saveQueue.async {
       while let batch = Self.coalescer.takeBatch() {
@@ -208,7 +231,7 @@ nonisolated struct AgentSessionsKey: SharedKey {
         // deleted, so a buggy/racing shrink can never silently lose data.
         SessionDirectoryStore.save(
           batch.value,
-          to: directory,
+          to: batch.directory,
           recordRemovals: { removed in
             SessionRecoveryStore.recordRemovals(
               previous: removed,
