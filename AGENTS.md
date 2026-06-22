@@ -189,6 +189,7 @@ The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA.
 
 - After a task, ensure the app builds: `make build-app`
 - Commit your changes only — do not use `git add .`
+- **Don't create branches on your own.** We mostly work directly on `main` here. Either you're already on a branch (use it), or we agree on branching first. Don't branch just because you're about to commit — committing straight to `main` is the default.
 - Before starting work, check the current branch name; if it's something generic like an animal name, rename it appropriately. Do not do this for `main`.
 - After implementing an execplan, submit a PR if you're not on `main`.
 
