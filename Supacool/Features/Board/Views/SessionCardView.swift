@@ -1127,9 +1127,15 @@ private struct ReferenceStackChip: View {
   }
 
   /// Latest checks/Greptile snapshot for the featured PR, used to draw the
-  /// inline glyph + score on the chip. Nil hides both indicators.
+  /// inline glyph + score on the chip. Nil hides both indicators. Once the
+  /// featured PR is merged or closed its CI/score are stale noise, so we drop
+  /// the snapshot — same rule the per-PR `ReferenceChip` applies via
+  /// `PRState.showsLiveStatus`.
   private var featuredSnapshot: PullRequestSnapshot? {
-    guard let featuredPullRequest else { return nil }
+    guard let featuredPullRequest,
+      case .pullRequest(_, _, _, let state, _) = featuredPullRequest,
+      state?.showsLiveStatus ?? true
+    else { return nil }
     return prReferenceSnapshots[featuredPullRequest.dedupeKey]
   }
 
