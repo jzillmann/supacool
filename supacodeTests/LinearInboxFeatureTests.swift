@@ -369,6 +369,47 @@ struct LinearInboxFeatureTests {
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
+  @Test(.dependencies) func bundlesSiblingSubIssuesUnderOneGroup() {
+    // Three siblings under CEN-100 collapse into a group; the lone child of
+    // CEN-200 stays a plain row; the standalone ticket is untouched. Order
+    // follows the bucket, with the group pinned to its first child.
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Standalone"),
+      LinearTicket(identifier: "CEN-101", title: "Doc A", parentIdentifier: "CEN-100", parentTitle: "Help docs"),
+      LinearTicket(identifier: "CEN-102", title: "Doc B", parentIdentifier: "CEN-100", parentTitle: "Help docs"),
+      LinearTicket(identifier: "CEN-103", title: "Doc C", parentIdentifier: "CEN-100", parentTitle: "Help docs"),
+      LinearTicket(identifier: "CEN-201", title: "Lone child", parentIdentifier: "CEN-200", parentTitle: "Other"),
+    ])
+    let state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+
+    #expect(state.visibleEntries.map(\.id) == ["ticket:CEN-1", "group:CEN-100", "ticket:CEN-201"])
+
+    guard case .group(let group) = state.visibleEntries[1] else {
+      Issue.record("expected a group at index 1")
+      return
+    }
+    #expect(group.parentTitle == "Help docs")
+    #expect(group.children.map(\.identifier) == ["CEN-101", "CEN-102", "CEN-103"])
+  }
+
+  @Test(.dependencies) func toggleGroupExpandedFlipsMembership() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-101", parentIdentifier: "CEN-100"),
+      LinearTicket(identifier: "CEN-102", parentIdentifier: "CEN-100"),
+    ])
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.toggleGroupExpanded(parentID: "CEN-100")) {
+      $0.expandedGroupIDs = ["CEN-100"]
+    }
+    await store.send(.toggleGroupExpanded(parentID: "CEN-100")) {
+      $0.expandedGroupIDs = []
+    }
+  }
+
   @Test(.dependencies) func linksAndOpensSessionDiscoveredByTicketReference() async {
     // The ticket was never started from the inbox (no startedSessionID), but a
     // live board session references it — the inbox should link them up.
@@ -565,6 +606,101 @@ struct LinearInboxFeatureTests {
     #expect(!store.state.expandedTicketIDs.contains("CEN-1"))
 
     await store.receive(\.delegate.newTerminalDelegate)
+  }
+
+  @Test(.dependencies) func spawnAutoAssignsAndMovesTicketToInProgress() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", linearID: "u1", title: "Do thing", stateName: "Backlog", stateType: "backlog")
+    ])
+    let now = Date(timeIntervalSince1970: 5_000)
+
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+    state.pendingSessionTicketID = "CEN-1"
+    state.selectedTab = .newTerminal
+    state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
+
+    let synced = LinearIssue(
+      id: "u1",
+      identifier: "CEN-1",
+      title: "Do thing",
+      description: nil,
+      stateName: "In Progress",
+      stateType: "started",
+      assigneeName: "me",
+      assignedToMe: true,
+      url: nil
+    )
+
+    let store = TestStore(initialState: state) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.assignToMe = { id in
+        #expect(id == "u1")
+        return synced
+      }
+      $0.linearClient.startProgress = { id in
+        #expect(id == "u1")
+        return synced
+      }
+    }
+    store.exhaustivity = .off
+
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    await store.send(.newTerminal(.presented(.delegate(.created(session)))))
+    // Optimistic: the row flips before Linear answers.
+    #expect(store.state.tickets[0].assignedToMe)
+    #expect(store.state.tickets[0].stateType == "started")
+    #expect(store.state.tickets[0].stateName == "In Progress")
+
+    await store.receive(\._inProgressSyncCompleted)
+    #expect(store.state.tickets[0].assignedToMe)
+    #expect(store.state.tickets[0].isInProgress)
+    #expect(store.state.tickets[0].startedAt == now)
+  }
+
+  @Test(.dependencies) func spawnRevertsOptimisticStatusWhenLinearRejectsIt() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", linearID: "u1", title: "Do thing", stateName: "Backlog", stateType: "backlog")
+    ])
+    let now = Date(timeIntervalSince1970: 5_000)
+
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+    state.pendingSessionTicketID = "CEN-1"
+    state.selectedTab = .newTerminal
+    state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
+
+    let store = TestStore(initialState: state) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.linearClient.assignToMe = { _ in throw LinearClientError.unauthorized }
+    }
+    store.exhaustivity = .off
+
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    await store.send(.newTerminal(.presented(.delegate(.created(session)))))
+    #expect(store.state.tickets[0].assignedToMe)
+    #expect(store.state.tickets[0].stateType == "started")
+
+    await store.receive(\._inProgressSyncFailed)
+    // Reverted to the pre-spawn Linear status…
+    #expect(!store.state.tickets[0].assignedToMe)
+    #expect(store.state.tickets[0].stateName == "Backlog")
+    #expect(store.state.tickets[0].stateType == "backlog")
+    #expect(store.state.errorMessage != nil)
+    // …but the local "started" stamp survives — the session did launch.
+    #expect(store.state.tickets[0].startedAt == now)
   }
 
   @Test(.dependencies) func openSessionDelegatesWhenTheSessionStillLives() async {

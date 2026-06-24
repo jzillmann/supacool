@@ -290,24 +290,86 @@ struct LinearInboxSheet: View {
       .frame(maxHeight: .infinity)
     } else {
       List {
-        ForEach(store.visibleTickets) { ticket in
-          LinearTicketRow(
-            ticket: ticket,
-            isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
-            isFetching: store.fetchingTicketIDs.contains(ticket.identifier),
-            isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
-            hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
-            onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
-            onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
-            onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
-            onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
-            onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
-            onRemove: { store.send(.removeTicketTapped(ticketID: ticket.identifier)) }
-          )
+        ForEach(store.visibleEntries) { entry in
+          switch entry {
+          case .ticket(let ticket):
+            ticketRow(ticket)
+          case .group(let group):
+            LinearGroupRow(
+              group: group,
+              isExpanded: store.expandedGroupIDs.contains(group.parentIdentifier),
+              onToggleExpanded: { store.send(.toggleGroupExpanded(parentID: group.parentIdentifier)) }
+            )
+            if store.expandedGroupIDs.contains(group.parentIdentifier) {
+              ForEach(group.children) { ticket in
+                ticketRow(ticket)
+                  .padding(.leading, 18)
+              }
+            }
+          }
         }
       }
       .listStyle(.inset)
     }
+  }
+
+  /// A single ticket row, wired to the store. Shared between top-level rows
+  /// and the children revealed under an expanded parent group.
+  private func ticketRow(_ ticket: LinearTicket) -> some View {
+    LinearTicketRow(
+      ticket: ticket,
+      isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
+      isFetching: store.fetchingTicketIDs.contains(ticket.identifier),
+      isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
+      hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
+      onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
+      onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
+      onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
+      onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
+      onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
+      onRemove: { store.send(.removeTicketTapped(ticketID: ticket.identifier)) }
+    )
+  }
+}
+
+/// The header for a bundle of sub-issues sharing one parent. Collapsed by
+/// default: shows the parent key, title and a sub-issue count. Tapping toggles
+/// the children, which render as ordinary rows indented beneath it.
+private struct LinearGroupRow: View {
+  let group: LinearTicketGroup
+  let isExpanded: Bool
+  let onToggleExpanded: () -> Void
+
+  var body: some View {
+    HStack(alignment: .firstTextBaseline, spacing: 10) {
+      Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+      Image(systemName: "square.stack.3d.up.fill")
+        .foregroundStyle(.secondary)
+
+      Text(group.parentIdentifier)
+        .font(.system(.body, design: .monospaced))
+        .fontWeight(.semibold)
+
+      Text(group.parentTitle ?? "Parent issue")
+        .lineLimit(1)
+        .foregroundStyle(group.parentTitle == nil ? .secondary : .primary)
+
+      Spacer(minLength: 8)
+
+      Text("\(group.children.count) sub-issues")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(.quaternary, in: Capsule())
+    }
+    .padding(.vertical, 4)
+    .contentShape(Rectangle())
+    .onTapGesture(perform: onToggleExpanded)
+    .help("Show the \(group.children.count) sub-issues of \(group.parentIdentifier)")
   }
 }
 

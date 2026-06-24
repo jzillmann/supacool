@@ -42,6 +42,11 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
   /// Who filed the issue in Linear. Shown in the row so you can see who's
   /// asking, distinct from who it's assigned to.
   var creatorName: String?
+  /// Parent issue's key when this ticket is a sub-issue, else nil. Drives the
+  /// inbox's grouping: siblings sharing a parent collapse under one header.
+  var parentIdentifier: String?
+  /// Parent issue's title, cached for the group header (no separate fetch).
+  var parentTitle: String?
   var url: String?
   /// When the issue was created in Linear. Drives the row's age badge so you
   /// can tell how fresh or stale a ticket is at a glance.
@@ -82,6 +87,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName: String? = nil,
     assignedToMe: Bool = false,
     creatorName: String? = nil,
+    parentIdentifier: String? = nil,
+    parentTitle: String? = nil,
     url: String? = nil,
     createdAt: Date? = nil,
     source: LinearTicketSource = .pasted,
@@ -101,6 +108,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     self.assigneeName = assigneeName
     self.assignedToMe = assignedToMe
     self.creatorName = creatorName
+    self.parentIdentifier = parentIdentifier
+    self.parentTitle = parentTitle
     self.url = url
     self.createdAt = createdAt
     self.source = source
@@ -116,7 +125,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
 
   enum CodingKeys: String, CodingKey {
     case identifier, linearID, title, summary, stateName, stateType, assigneeName
-    case assignedToMe, creatorName, url, createdAt, source, doneAt, isHidden
+    case assignedToMe, creatorName, parentIdentifier, parentTitle, url, createdAt
+    case source, doneAt, isHidden
     case fetchedAt, addedAt, startedAt, startedSessionID
   }
 
@@ -131,6 +141,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = try c.decodeIfPresent(String.self, forKey: .assigneeName)
     assignedToMe = try c.decodeIfPresent(Bool.self, forKey: .assignedToMe) ?? false
     creatorName = try c.decodeIfPresent(String.self, forKey: .creatorName)
+    parentIdentifier = try c.decodeIfPresent(String.self, forKey: .parentIdentifier)
+    parentTitle = try c.decodeIfPresent(String.self, forKey: .parentTitle)
     url = try c.decodeIfPresent(String.self, forKey: .url)
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt)
     // Pre-source builds persisted only hand-curated tickets — default to
@@ -157,6 +169,8 @@ nonisolated struct LinearTicket: Identifiable, Equatable, Hashable, Codable, Sen
     assigneeName = issue.assigneeName
     assignedToMe = issue.assignedToMe
     creatorName = issue.creatorName
+    parentIdentifier = issue.parentIdentifier
+    parentTitle = issue.parentTitle
     url = issue.url
     createdAt = issue.createdAt
     doneAt = issue.completedAt ?? issue.canceledAt

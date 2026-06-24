@@ -34,6 +34,12 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   /// inbox's auto-drop of stale done tickets.
   var completedAt: Date? = nil
   var canceledAt: Date? = nil
+  /// Parent issue's human key (e.g. `CEN-7735`) when this issue is a
+  /// sub-issue, else nil. Lets the inbox bundle siblings under one row.
+  var parentIdentifier: String? = nil
+  /// Parent issue's title, cached for the group header so the inbox needn't
+  /// fetch the parent separately.
+  var parentTitle: String? = nil
 }
 
 /// Minimal Linear API client. Originally just fetched a single issue title
@@ -60,6 +66,13 @@ struct LinearClient: Sendable {
   /// Assigns the issue (by Linear UUID) to the current API-key holder and
   /// returns the updated record. Throws `.missingAPIKey` when unconfigured.
   var assignToMe: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
+
+  /// Moves the issue (by Linear UUID) into its team's first `started`
+  /// workflow state — canonically "In Progress" — and returns the updated
+  /// record. No-ops (returns the issue unchanged) when it's already in a
+  /// `started` state so an "In Review" ticket isn't dragged backwards.
+  /// Throws `.missingAPIKey` when unconfigured.
+  var startProgress: @Sendable (_ issueUUID: String) async throws -> LinearIssue?
 
   /// Fetches the most recently created issues, newest first, scoped to the
   /// given Linear team keys (e.g. `["CEN"]`). The keys are sourced per-repo
@@ -122,6 +135,12 @@ extension LinearClient: DependencyKey {
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
       return try await LinearLive.assignToMe(issueUUID: trimmed, apiKey: key)
     },
+    startProgress: { issueUUID in
+      let trimmed = issueUUID.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else { return nil }
+      guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
+      return try await LinearLive.startProgress(issueUUID: trimmed, apiKey: key)
+    },
     fetchRecentIssues: { limit, teamKeys in
       guard let key = LinearLive.currentAPIKey() else { throw LinearClientError.missingAPIKey }
       let normalized = parseLinearTeamKeys(teamKeys.joined(separator: ",")).sorted()
@@ -134,6 +153,7 @@ extension LinearClient: DependencyKey {
     fetchIssueTitle: { _ in nil },
     fetchIssues: { _ in [] },
     assignToMe: { _ in nil },
+    startProgress: { _ in nil },
     fetchRecentIssues: { _, _ in [] }
   )
 }
@@ -152,7 +172,8 @@ private nonisolated enum LinearLive {
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
     "id identifier title description url createdAt completedAt canceledAt "
-    + "state { name type } assignee { displayName isMe } creator { displayName }"
+    + "state { name type } assignee { displayName isMe } creator { displayName } "
+    + "parent { identifier title }"
 
   static func currentAPIKey() -> String? {
     let key = UserDefaults.standard.string(forKey: "supacool.linear.apiKey") ?? ""
@@ -248,6 +269,54 @@ private nonisolated enum LinearLive {
     return parseIssue(issue)
   }
 
+  static func startProgress(issueUUID: String, apiKey: String) async throws -> LinearIssue? {
+    // Pull the issue plus its team's workflow states in one round-trip: the
+    // `started` state to move into lives on the team, and we need the current
+    // state to stay idempotent.
+    let query =
+      "query Progress($id: String!) { issue(id: $id) { \(issueFields) "
+      + "team { states { nodes { id type position } } } } }"
+    let lookup = try await post(query: query, variables: ["id": issueUUID], apiKey: apiKey)
+    guard let issueDict = lookup["issue"] as? [String: Any] else {
+      throw LinearClientError.notFound(issueUUID)
+    }
+    let current = parseIssue(issueDict)
+    // Already being worked (In Progress / In Review) — leave it alone.
+    if current?.stateType == "started" { return current }
+
+    guard
+      let team = issueDict["team"] as? [String: Any],
+      let states = team["states"] as? [String: Any],
+      let nodes = states["nodes"] as? [[String: Any]]
+    else {
+      throw LinearClientError.invalidResponse
+    }
+    // A team can define several `started` states; the lowest `position` is the
+    // canonical first one ("In Progress").
+    let targetID = nodes
+      .filter { ($0["type"] as? String) == "started" }
+      .min { (($0["position"] as? Double) ?? .greatestFiniteMagnitude) < (($1["position"] as? Double) ?? .greatestFiniteMagnitude) }?["id"] as? String
+    guard let targetID else {
+      throw LinearClientError.invalidResponse
+    }
+
+    let mutation =
+      "mutation Start($id: String!, $stateId: String!) { "
+      + "issueUpdate(id: $id, input: { stateId: $stateId }) { success issue { \(issueFields) } } }"
+    let data = try await post(
+      query: mutation,
+      variables: ["id": issueUUID, "stateId": targetID],
+      apiKey: apiKey
+    )
+    guard
+      let result = data["issueUpdate"] as? [String: Any],
+      let issue = result["issue"] as? [String: Any]
+    else {
+      return nil
+    }
+    return parseIssue(issue)
+  }
+
   // MARK: Plumbing
 
   /// POSTs a GraphQL operation and returns the `data` payload, translating
@@ -300,6 +369,7 @@ private nonisolated enum LinearLive {
     let state = dict["state"] as? [String: Any]
     let assignee = dict["assignee"] as? [String: Any]
     let creator = dict["creator"] as? [String: Any]
+    let parent = dict["parent"] as? [String: Any]
     return LinearIssue(
       id: id,
       identifier: identifier,
@@ -313,7 +383,9 @@ private nonisolated enum LinearLive {
       url: dict["url"] as? String,
       createdAt: parseISODate(dict["createdAt"]),
       completedAt: parseISODate(dict["completedAt"]),
-      canceledAt: parseISODate(dict["canceledAt"])
+      canceledAt: parseISODate(dict["canceledAt"]),
+      parentIdentifier: parent?["identifier"] as? String,
+      parentTitle: (parent?["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
     )
   }
 

@@ -57,6 +57,8 @@ struct LinearInboxFeature {
     var hideLinked: Bool = false
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
+    /// Parent groups currently expanded to reveal their bundled sub-issues.
+    var expandedGroupIDs: Set<String> = []
     /// Ids with an in-flight metadata fetch.
     var fetchingTicketIDs: Set<String> = []
     /// True while the "last N created" import is in flight.
@@ -134,6 +136,43 @@ struct LinearInboxFeature {
       }
     }
 
+    /// The visible worklist folded into display rows: a sub-issue whose parent
+    /// has 2+ visible siblings collapses into a `.group`; everything else stays
+    /// a standalone `.ticket`. Order follows ``visibleTickets``, with each group
+    /// pinned to where its first child appears. Single-child groups are
+    /// flattened back to plain rows — a lone sub-issue doesn't earn a header.
+    var visibleEntries: [LinearInboxEntry] {
+      var entries: [LinearInboxEntry] = []
+      var groupIndexByParent: [String: Int] = [:]
+      for ticket in visibleTickets {
+        guard let parent = ticket.parentIdentifier, !parent.isEmpty else {
+          entries.append(.ticket(ticket))
+          continue
+        }
+        if let index = groupIndexByParent[parent], case .group(var group) = entries[index] {
+          group.children.append(ticket)
+          entries[index] = .group(group)
+        } else {
+          groupIndexByParent[parent] = entries.count
+          entries.append(
+            .group(
+              LinearTicketGroup(
+                parentIdentifier: parent,
+                parentTitle: ticket.parentTitle,
+                children: [ticket]
+              )
+            )
+          )
+        }
+      }
+      return entries.map { entry in
+        if case .group(let group) = entry, group.children.count == 1 {
+          return .ticket(group.children[0])
+        }
+        return entry
+      }
+    }
+
     /// The live board session linked to this ticket, or nil if none. Prefers
     /// the explicit link stamped when the session was started from the inbox,
     /// then falls back to discovering any live session whose primary ticket is
@@ -164,6 +203,8 @@ struct LinearInboxFeature {
     case fetchRecentTapped
     case refreshAllTapped
     case toggleExpanded(ticketID: String)
+    /// Expand or collapse a parent group to show/hide its bundled sub-issues.
+    case toggleGroupExpanded(parentID: String)
     case assignToMeTapped(ticketID: String)
     case startSessionTapped(ticketID: String)
     /// Jump to the session already spawned from this ticket.
@@ -185,6 +226,17 @@ struct LinearInboxFeature {
     case _fetchFailed(message: String)
     case _assignCompleted(ticketID: String, LinearIssue?)
     case _assignFailed(ticketID: String, message: String)
+    /// The start-session auto-sync (assign-to-me + move to In Progress)
+    /// landed; fold the authoritative record back in.
+    case _inProgressSyncCompleted(ticketID: String, LinearIssue?)
+    /// The auto-sync failed — restore the optimistically flipped fields.
+    case _inProgressSyncFailed(
+      ticketID: String,
+      message: String,
+      previousAssignedToMe: Bool,
+      previousStateName: String?,
+      previousStateType: String?
+    )
 
     case newTerminal(PresentationAction<NewTerminalFeature.Action>)
     case delegate(Delegate)
@@ -200,8 +252,11 @@ struct LinearInboxFeature {
   }
 
   /// How many recently created tickets the recent feed pulls. Linear caps a
-  /// single page at 250; 100 keeps the feed broad without paging.
-  static let recentFetchLimit = 100
+  /// single page at 250, so we pull the full page: a busy team's latest 100 are
+  /// mostly done / in-progress / linked, and after the quick filters the
+  /// actionable worklist shrinks to a handful — a deeper feed surfaces more of
+  /// the tickets that haven't been picked up yet without paying for paging.
+  static let recentFetchLimit = 250
 
   /// Done tickets linger this long (measured from Linear's own
   /// completed/canceled timestamp) before they auto-drop from the inbox.
@@ -219,6 +274,7 @@ struct LinearInboxFeature {
         // Switching repos swaps the visible bucket — refresh that repo's
         // current source so the worklist isn't stale.
         state.expandedTicketIDs = []
+        state.expandedGroupIDs = []
         pruneExpiredDoneTickets(&state)
         return refreshCurrentSource(&state)
 
@@ -236,6 +292,7 @@ struct LinearInboxFeature {
         guard newSource != state.source else { return .none }
         state.$inboxSourceRaw.withLock { $0 = newSource.rawValue }
         state.expandedTicketIDs = []
+        state.expandedGroupIDs = []
         state.errorMessage = nil
         return refreshCurrentSource(&state)
 
@@ -279,6 +336,14 @@ struct LinearInboxFeature {
           state.expandedTicketIDs.remove(ticketID)
         } else {
           state.expandedTicketIDs.insert(ticketID)
+        }
+        return .none
+
+      case let .toggleGroupExpanded(parentID):
+        if state.expandedGroupIDs.contains(parentID) {
+          state.expandedGroupIDs.remove(parentID)
+        } else {
+          state.expandedGroupIDs.insert(parentID)
         }
         return .none
 
@@ -437,6 +502,30 @@ struct LinearInboxFeature {
         state.errorMessage = message
         return .none
 
+      case let ._inProgressSyncCompleted(ticketID, issue):
+        guard let issue else { return .none }
+        let now = date.now
+        mutateSelectedTickets(&state) { tickets in
+          if let index = tickets.firstIndex(where: { $0.identifier == ticketID }) {
+            // `apply` refreshes assignee/state from Linear but leaves the
+            // local `startedAt`/`startedSessionID` stamps intact.
+            tickets[index].apply(issue, fetchedAt: now)
+          }
+        }
+        return .none
+
+      case let ._inProgressSyncFailed(ticketID, message, previousAssignedToMe, previousStateName, previousStateType):
+        // Roll back just the two optimistically flipped fields. The local
+        // "started" stamp stays — the session really did launch.
+        mutateSelectedTickets(&state) { tickets in
+          guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
+          tickets[index].assignedToMe = previousAssignedToMe
+          tickets[index].stateName = previousStateName
+          tickets[index].stateType = previousStateType
+        }
+        state.errorMessage = message
+        return .none
+
       case let .newTerminal(.presented(.delegate(inner))):
         switch inner {
         case .cancel:
@@ -449,6 +538,7 @@ struct LinearInboxFeature {
           // Stamp the originating ticket as started (with the session id,
           // so the row can jump back to it later), then hand the spawn
           // to BoardFeature (it closes the tab and owns the lifecycle).
+          var syncEffect: Effect<Action> = .none
           if let ticketID = state.pendingSessionTicketID {
             let now = date.now
             let sessionID: UUID? =
@@ -467,10 +557,13 @@ struct LinearInboxFeature {
             // to the submit: the summary line now carries the started
             // checkmark (and "Open session" once the spawn completes).
             state.expandedTicketIDs.remove(ticketID)
+            // Picking up a ticket means it's yours and in progress — reflect
+            // that in Linear, optimistically so the row reacts immediately.
+            syncEffect = autoProgressEffect(&state, ticketID: ticketID)
           }
           state.pendingSessionTicketID = nil
           state.selectedTab = .inbox
-          return .send(.delegate(.newTerminalDelegate(inner)))
+          return .merge(syncEffect, .send(.delegate(.newTerminalDelegate(inner))))
         case .bookmarkSaved, .draftSaved, .draftConsumed:
           // Let BoardFeature persist these as usual.
           return .send(.delegate(.newTerminalDelegate(inner)))
@@ -549,6 +642,55 @@ struct LinearInboxFeature {
     }
   }
 
+  /// On session start, optimistically flip the row to "mine, in progress" and
+  /// push the same to Linear (assign-to-me + move to the team's In Progress
+  /// state). Skips whichever half is already true, and reverts both fields if
+  /// the mutation fails. The local "started" stamp is independent and never
+  /// reverts. No-ops without a cached `linearID` (mutations need the UUID).
+  private func autoProgressEffect(_ state: inout State, ticketID: String) -> Effect<Action> {
+    guard
+      let ticket = state.tickets.first(where: { $0.identifier == ticketID }),
+      let linearID = ticket.linearID
+    else { return .none }
+
+    let shouldAssign = !ticket.assignedToMe
+    // Don't drag a done/canceled ticket back to In Progress, and don't bump an
+    // already-started ticket (e.g. In Review) backwards.
+    let shouldStart = !ticket.isDone && !ticket.isInProgress
+    guard shouldAssign || shouldStart else { return .none }
+
+    let previousAssignedToMe = ticket.assignedToMe
+    let previousStateName = ticket.stateName
+    let previousStateType = ticket.stateType
+
+    mutateSelectedTickets(&state) { tickets in
+      guard let index = tickets.firstIndex(where: { $0.identifier == ticketID }) else { return }
+      if shouldAssign { tickets[index].assignedToMe = true }
+      if shouldStart {
+        tickets[index].stateType = "started"
+        tickets[index].stateName = "In Progress"
+      }
+    }
+
+    return .run { send in
+      do {
+        var latest: LinearIssue?
+        if shouldAssign { latest = try await linearClient.assignToMe(linearID) }
+        // Run after the assign so the returned record carries both updates.
+        if shouldStart { latest = try await linearClient.startProgress(linearID) ?? latest }
+        await send(._inProgressSyncCompleted(ticketID: ticketID, latest))
+      } catch {
+        await send(._inProgressSyncFailed(
+          ticketID: ticketID,
+          message: error.localizedDescription,
+          previousAssignedToMe: previousAssignedToMe,
+          previousStateName: previousStateName,
+          previousStateType: previousStateType
+        ))
+      }
+    }
+  }
+
   /// Refresh whichever source is on screen: recent re-pulls Linear's latest
   /// feed; pasted re-fetches metadata for the curated ids.
   private func refreshCurrentSource(_ state: inout State) -> Effect<Action> {
@@ -590,6 +732,30 @@ struct LinearInboxFeature {
       }
     }
   }
+}
+
+/// One row in the inbox list: a standalone ticket, or a parent group that
+/// bundles its visible sub-issues behind a single expandable header.
+nonisolated enum LinearInboxEntry: Equatable, Identifiable, Sendable {
+  case ticket(LinearTicket)
+  case group(LinearTicketGroup)
+
+  var id: String {
+    switch self {
+    case .ticket(let ticket): "ticket:\(ticket.identifier)"
+    case .group(let group): "group:\(group.parentIdentifier)"
+    }
+  }
+}
+
+/// A parent issue and the visible sub-issues bundled under it. The parent
+/// metadata is whatever a child carried (`parentTitle`); the inbox never
+/// fetches the parent separately for the MVP.
+nonisolated struct LinearTicketGroup: Equatable, Identifiable, Sendable {
+  let parentIdentifier: String
+  let parentTitle: String?
+  var children: [LinearTicket]
+  var id: String { parentIdentifier }
 }
 
 extension AgentSession {
