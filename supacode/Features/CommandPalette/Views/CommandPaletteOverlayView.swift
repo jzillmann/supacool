@@ -9,6 +9,7 @@ struct CommandPaletteOverlayView: View {
   @FocusState private var isQueryFocused: Bool
   @State private var hoveredID: CommandPaletteItem.ID?
   @State private var filteredItems: [CommandPaletteItem] = []
+  @State private var hostWindow: NSWindow?
 
   var body: some View {
     ZStack {
@@ -52,7 +53,7 @@ struct CommandPaletteOverlayView: View {
               )
               .zIndex(1)
               .task {
-                isQueryFocused = store.isPresented
+                await focusQueryField()
               }
 
               Spacer(minLength: 0)
@@ -67,13 +68,22 @@ struct CommandPaletteOverlayView: View {
         }
       }
     }
+    .background(WindowAccessor { hostWindow = $0 })
     .onChange(of: store.isPresented) { _, newValue in
-      isQueryFocused = newValue
       if newValue {
+        // The Ghostty terminal surface beneath the overlay holds the
+        // window's first responder. Drop it now so the surface stops
+        // claiming keys; the search field then claims focus in the card's
+        // `focusQueryField()` task once it's installed in the responder
+        // chain. Asserting @FocusState here instead would race the card's
+        // installation and frequently lose, leaving keystrokes in the
+        // terminal.
+        hostWindow?.makeFirstResponder(nil)
         let updatedItems = refreshFilteredItems(items: items)
         updateSelection(rows: updatedItems)
       } else {
         hoveredID = nil
+        isQueryFocused = false
       }
     }
     .onChange(of: store.query) { _, _ in
@@ -90,6 +100,25 @@ struct CommandPaletteOverlayView: View {
     }
     .task {
       _ = refreshFilteredItems(items: items)
+    }
+  }
+
+  /// Claims keyboard focus for the search field once it's on screen.
+  ///
+  /// The field can be absent from the window's responder chain on the tick
+  /// the overlay appears, so a single `@FocusState` write silently no-ops and
+  /// the Ghostty surface keeps first responder — the palette opens but
+  /// keystrokes flow to the terminal. Assert focus and re-assert across a few
+  /// runloop ticks until SwiftUI confirms it landed. Never write `false` while
+  /// presented: that would trip the blur-dismiss in `CommandPaletteQuery`.
+  private func focusQueryField() async {
+    for _ in 0..<5 {
+      guard store.isPresented else { return }
+      if !isQueryFocused {
+        isQueryFocused = true
+      }
+      try? await Task.sleep(for: .milliseconds(30))
+      if isQueryFocused { return }
     }
   }
 
@@ -598,6 +627,22 @@ private func commandPaletteShortcutSymbols(for index: Int) -> [String] {
 
 private func commandPaletteShortcutLabel(for index: Int) -> String {
   "Cmd+\(index + 1)"
+}
+
+/// Hands back the hosting `NSWindow` so the overlay can drop the terminal
+/// surface's first responder before claiming keyboard focus.
+private struct WindowAccessor: NSViewRepresentable {
+  let onWindow: (NSWindow?) -> Void
+
+  func makeNSView(context: Context) -> NSView {
+    let view = NSView()
+    Task { @MainActor in onWindow(view.window) }
+    return view
+  }
+
+  func updateNSView(_ nsView: NSView, context: Context) {
+    Task { @MainActor in onWindow(nsView.window) }
+  }
 }
 
 extension NSColor {
