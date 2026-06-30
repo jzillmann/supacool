@@ -136,6 +136,15 @@ struct NewTerminalFeature {
     /// Empty = no branch name yet — the segmented picker decides whether
     /// that resolves to a blank worktree (default) or the main checkout.
     var workspaceQuery: String = ""
+    /// Shadow of the last `workspaceQuery` value we've already accounted
+    /// for, used to tell a genuine user edit apart from SwiftUI's
+    /// same-value binding re-emissions (focus changes / `@Bindable`
+    /// round-trips). Without this, a spurious round-trip with the field
+    /// still empty would flip `workspaceQueryUserEdited` mid-flight and
+    /// block Linear branch auto-fill. Kept in sync everywhere we write
+    /// `workspaceQuery` programmatically so those writes never look like
+    /// user edits on the round-trip that follows.
+    var previousWorkspaceQuery: String = ""
     /// Loaded lazily on `.task`. Local branch names (e.g. `["main", "feat-x"]`).
     var availableLocalBranches: [String] = []
     /// Loaded lazily on `.task`. Remote tracking refs (e.g. `["origin/main", "origin/feat-x"]`).
@@ -284,6 +293,11 @@ struct NewTerminalFeature {
           selectedWorkspace = .newBranch(name: derived)
           workspaceQuery = derived
         }
+        // A rerun's pre-filled branch is deliberate content; mark it edited
+        // so a Linear ticket in the carried-over prompt can't auto-fill over
+        // it, and mirror the shadow so the first round-trip is a no-op.
+        previousWorkspaceQuery = workspaceQuery
+        workspaceQueryUserEdited = !workspaceQuery.isEmpty
       } else {
         // The previous session ran at repo root. Rerun must preserve
         // that scope explicitly — the sheet's default flipped to a
@@ -366,6 +380,7 @@ struct NewTerminalFeature {
       remoteControl = draft.remoteControl
       model = draft.model ?? ""
       workspaceQuery = draft.workspaceQuery
+      previousWorkspaceQuery = draft.workspaceQuery
       // Initial best-effort selection inference. The branches list is
       // empty at init time so anything non-empty falls into `.newBranch`,
       // but `branchesLoaded` re-runs inference once the actual branches
@@ -374,6 +389,8 @@ struct NewTerminalFeature {
       let trimmed = workspaceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
       if !trimmed.isEmpty {
         selectedWorkspace = .newBranch(name: trimmed)
+        // A draft's saved branch is deliberate; protect it from auto-fill.
+        workspaceQueryUserEdited = true
       }
       editingDraftID = draft.id
     }
@@ -522,10 +539,17 @@ struct NewTerminalFeature {
     Reduce { state, action in
       switch action {
       case .binding(\.workspaceQuery):
-        // The binding fires for user typing, so flag the field as
-        // user-edited. Linear-title auto-fill only happens before this
-        // flips — once the user touches the field we never overwrite.
-        state.workspaceQueryUserEdited = true
+        // BindingReducer has already written the new text. SwiftUI re-emits
+        // this binding on focus changes / `@Bindable` round-trips with the
+        // SAME value — those are not user edits. Only a genuine value change
+        // flags the field as user-edited; otherwise an incidental round-trip
+        // while the field is still empty would flip the flag mid-flight and
+        // block Linear branch auto-fill (the "sometimes the branch doesn't
+        // fill" race). Linear-title auto-fill only happens before this flips —
+        // once the user actually touches the field we never overwrite.
+        if state.workspaceQuery != state.previousWorkspaceQuery {
+          state.workspaceQueryUserEdited = true
+        }
         // Git refuses branch names containing whitespace. Replace any
         // typed (or pasted) whitespace with hyphens inline so the user
         // never has to see the "can't contain spaces" error — what they
@@ -559,6 +583,7 @@ struct NewTerminalFeature {
             state: state
           )
         }
+        state.previousWorkspaceQuery = state.workspaceQuery
         state.validationMessage = nil
         return .none
 
@@ -569,6 +594,7 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         state.selectedWorkspace = .newBranch(name: "")
         state.workspaceQuery = ""
+        state.previousWorkspaceQuery = ""
         state.availableLocalBranches = []
         state.availableRemoteBranches = []
         state.availableRepositoryRemoteTargets = []
@@ -636,6 +662,15 @@ struct NewTerminalFeature {
       case .workspaceSelected(let selection):
         state.selectedWorkspace = selection
         state.workspaceQuery = Self.canonicalQuery(for: selection, state: state)
+        state.previousWorkspaceQuery = state.workspaceQuery
+        // Picking a concrete existing branch/worktree from autocomplete is a
+        // deliberate branch-name choice Linear auto-fill must not clobber.
+        // Toggling the Main/Worktree segment yields an empty query and is
+        // NOT — leave the flag alone so "click Worktree, then paste a ticket"
+        // still auto-fills.
+        if !state.workspaceQuery.isEmpty {
+          state.workspaceQueryUserEdited = true
+        }
         state.validationMessage = nil
         return .none
 
@@ -686,6 +721,7 @@ struct NewTerminalFeature {
       case .branchNameSuggested(let name):
         state.isSuggestingBranchName = false
         state.workspaceQuery = name
+        state.previousWorkspaceQuery = name
         state.selectedWorkspace = Self.inferSelection(from: name, state: state)
         // The wand button is the user explicitly accepting the suggestion;
         // their next manual edit should still flip the user-edited flag,
@@ -1361,6 +1397,7 @@ struct NewTerminalFeature {
     let branchName = branchNameFromLinearTitle(ticketID: ticketID, title: title)
     guard !branchName.isEmpty else { return .none }
     state.workspaceQuery = branchName
+    state.previousWorkspaceQuery = branchName
     state.selectedWorkspace = .newBranch(name: branchName)
     return .none
   }
@@ -1468,6 +1505,7 @@ struct NewTerminalFeature {
       state.availableRemoteBranches = []
     }
     state.workspaceQuery = context.metadata.headRefName
+    state.previousWorkspaceQuery = context.metadata.headRefName
     state.selectedWorkspace = .existingBranch(name: context.metadata.headRefName)
 
     return repoChanged ? .send(.task) : .none

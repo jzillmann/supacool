@@ -326,6 +326,87 @@ struct NewTerminalFeatureTests {
     )
   }
 
+  /// Regression: a spurious empty `workspaceQuery` binding round-trip
+  /// (SwiftUI re-emits the binding on focus/layout with the field still
+  /// empty) must NOT count as a user edit, so a Linear title that resolves
+  /// afterwards still auto-fills the branch. This was the "sometimes the
+  /// worktree/branch doesn't get filled" race — the round-trip flipped
+  /// `workspaceQueryUserEdited` mid-flight and blocked the auto-fill.
+  @Test(.dependencies) func linearAutoFillSurvivesEmptyWorkspaceRoundTrip() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    #expect(store.state.pendingLinearTicketID == "CEN-6690")
+    // The field is still empty; SwiftUI fires the binding anyway.
+    await store.send(\.binding.workspaceQuery, "")
+    #expect(store.state.workspaceQueryUserEdited == false)
+
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+    #expect(
+      store.state.selectedWorkspace
+        == .newBranch(name: "cen-6690-streamline-the-foobar-pipeline")
+    )
+  }
+
+  /// Clicking the Worktree segment (which sends `.workspaceSelected` with an
+  /// empty-name `.newBranch`) is choosing a MODE, not typing a branch name —
+  /// it must not block a subsequent Linear auto-fill.
+  @Test(.dependencies) func linearAutoFillSurvivesWorktreeSegmentToggle() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await store.send(.workspaceSelected(.newBranch(name: "")))
+    #expect(store.state.workspaceQueryUserEdited == false)
+
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+  }
+
+  /// Picking a concrete existing worktree/branch from autocomplete IS a
+  /// deliberate branch choice — it marks the field user-edited so a Linear
+  /// title resolving afterwards leaves the explicit selection alone.
+  @Test(.dependencies) func concreteWorkspacePickBlocksLinearAutoFill() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await store.send(.workspaceSelected(.newBranch(name: "my-explicit-branch")))
+    #expect(store.state.workspaceQueryUserEdited == true)
+
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.workspaceQuery == "my-explicit-branch")
+  }
+
   /// If the user has already typed something into the workspace field,
   /// the auto-fill from a resolved Linear title doesn't overwrite it.
   /// Their intent wins.
