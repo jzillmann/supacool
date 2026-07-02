@@ -27,6 +27,13 @@ struct LinearInboxFeature {
     @Shared(.appStorage("linearInboxSource"))
     var inboxSourceRaw: String = LinearTicketSource.recent.rawValue
 
+    /// The tickets tab's view mode (list vs. focus/triage), persisted so
+    /// reopening the inbox restores the same mode. Stored as a raw string for
+    /// the same reason as `inboxSourceRaw` above — `@Shared(.appStorage(...))`
+    /// bridges scalars more reliably than enums.
+    @Shared(.appStorage("linearInboxViewMode"))
+    var viewModeRaw: String = LinearInboxViewMode.list.rawValue
+
     /// Live board sessions — read-only here. Lets a started ticket offer
     /// "Open session" instead of spawning a duplicate, and lets the row
     /// fall back to "Start session" when the session was deleted.
@@ -43,18 +50,39 @@ struct LinearInboxFeature {
     /// Free-text in the import field (pasted URLs / ids).
     var pasteText: String = ""
     var selectedTab: Tab = .inbox
-    /// When false (the default), tickets in a completed/canceled Linear
-    /// state are hidden so the inbox reads as a worklist of what's left.
-    var showDone: Bool = false
-    /// When false (the default), ignored tickets are hidden from the worklist.
+
+    /// When false (the default), ignored tickets are hidden from the
+    /// worklist. Ephemeral — always resets to hidden the next time the inbox
+    /// opens.
     var showIgnored: Bool = false
-    /// When true, only tickets assigned to the API-key holder are shown.
-    var assignedToMeOnly: Bool = false
-    /// When true, tickets already in progress / in review are hidden, so the
-    /// worklist surfaces only work that hasn't been picked up yet.
-    var hideInProgress: Bool = false
+
+    // MARK: Filter chips (persisted)
+    //
+    // Two orthogonal multi-select chip groups (assignee, status) plus a
+    // standalone "hide linked" toggle. Each flag is its own
+    // `@Shared(.appStorage(...))` scalar rather than one aggregate — mirrors
+    // `inboxSourceRaw` below and keeps every chip independently observable.
+    // Dot-free keys: dotted keys break efficient cross-process KVO (matters
+    // for the isolated preview instance), matching `prPulseIgnoredPRKeys` etc.
+
+    /// Assignee chip: tickets assigned to the API-key holder.
+    @Shared(.appStorage("linearInboxFilterMine")) var filterMine: Bool = true
+    /// Assignee chip: tickets with no assignee — includes not-yet-fetched
+    /// tickets, so a fresh paste is visible by default.
+    @Shared(.appStorage("linearInboxFilterUnassigned")) var filterUnassigned: Bool = true
+    /// Assignee chip: tickets assigned to someone other than the API-key holder.
+    @Shared(.appStorage("linearInboxFilterOthers")) var filterOthers: Bool = false
+
+    /// Status chip: not done and not in progress.
+    @Shared(.appStorage("linearInboxFilterTodo")) var filterTodo: Bool = true
+    /// Status chip: Linear's `started` category (In Progress / In Review).
+    @Shared(.appStorage("linearInboxFilterActive")) var filterActive: Bool = true
+    /// Status chip: completed/canceled.
+    @Shared(.appStorage("linearInboxFilterDone")) var filterDone: Bool = false
+
     /// When true, tickets that already have a live board session are hidden.
-    var hideLinked: Bool = false
+    @Shared(.appStorage("linearInboxHideLinked")) var hideLinked: Bool = false
+
     /// Rows currently showing their description.
     var expandedTicketIDs: Set<String> = []
     /// Parent groups currently expanded to reveal their bundled sub-issues.
@@ -71,6 +99,14 @@ struct LinearInboxFeature {
     /// Used to stamp `startedAt` once the spawn fires.
     var pendingSessionTicketID: String?
 
+    /// Focus mode's position in the ``visibleTickets`` deck. Ephemeral —
+    /// resets on repo/source switch and whenever focus mode is entered.
+    /// Deliberately *not* clamped on write: row-removal (ignore/remove/
+    /// filter changes) shrinks the deck without moving this index, so the
+    /// next ticket slides into the same slot. ``focusIndexClamped`` handles
+    /// the tail once the raw index runs past the deck.
+    var focusIndex: Int = 0
+
     @Presents var newTerminal: NewTerminalFeature.State?
 
     init(
@@ -86,6 +122,11 @@ struct LinearInboxFeature {
     /// The selected source view (recent vs pasted).
     var source: LinearTicketSource {
       LinearTicketSource(rawValue: inboxSourceRaw) ?? .recent
+    }
+
+    /// The tickets tab's view mode.
+    var viewMode: LinearInboxViewMode {
+      LinearInboxViewMode(rawValue: viewModeRaw) ?? .list
     }
 
     /// The repository whose worklist is on screen.
@@ -107,33 +148,80 @@ struct LinearInboxFeature {
       bucket.filter { $0.source == source }
     }
 
-    /// Number of tickets Linear reports as done (completed/canceled).
-    var doneCount: Int { tickets.filter(\.isDone).count }
-
     /// Number of tickets the user ignored.
     var ignoredCount: Int { tickets.filter(\.isHidden).count }
-
-    /// Number of tickets assigned to the API-key holder.
-    var assignedToMeCount: Int { tickets.filter(\.assignedToMe).count }
-
-    /// Number of tickets actively in progress / in review.
-    var inProgressCount: Int { tickets.filter(\.isInProgress).count }
 
     /// Number of tickets linked to a live board session.
     var linkedCount: Int { tickets.filter { liveLinkedSessionID(for: $0) != nil }.count }
 
-    /// Tickets shown in the list, after the quick filters. Done, ignored and
-    /// linked tickets are hidden unless their filter says otherwise;
-    /// "assigned to me" and "hide in progress" narrow further.
+    // MARK: Per-bucket chip counts (pre-filter, matching `tickets`)
+
+    /// Assignee chip count: tickets assigned to the API-key holder.
+    var meCount: Int { tickets.filter { LinearInboxFeature.AssigneeBucket($0) == .me }.count }
+    /// Assignee chip count: tickets with no assignee.
+    var unassignedCount: Int { tickets.filter { LinearInboxFeature.AssigneeBucket($0) == .unassigned }.count }
+    /// Assignee chip count: tickets assigned to someone else.
+    var othersCount: Int { tickets.filter { LinearInboxFeature.AssigneeBucket($0) == .others }.count }
+
+    /// Status chip count: not done and not in progress.
+    var todoCount: Int { tickets.filter { LinearInboxFeature.StatusBucket($0) == .todo }.count }
+    /// Status chip count: actively in progress / in review.
+    var activeCount: Int { tickets.filter { LinearInboxFeature.StatusBucket($0) == .active }.count }
+    /// Status chip count: completed/canceled.
+    var doneCount: Int { tickets.filter { LinearInboxFeature.StatusBucket($0) == .done }.count }
+
+    /// The selected assignee chips. Empty means "no filtering" — every
+    /// assignee bucket is shown — rather than "show nothing".
+    var selectedAssigneeBuckets: Set<LinearInboxFeature.AssigneeBucket> {
+      var buckets: Set<LinearInboxFeature.AssigneeBucket> = []
+      if filterMine { buckets.insert(.me) }
+      if filterUnassigned { buckets.insert(.unassigned) }
+      if filterOthers { buckets.insert(.others) }
+      return buckets
+    }
+
+    /// The selected status chips. Empty means "no filtering", same rule as
+    /// ``selectedAssigneeBuckets``.
+    var selectedStatusBuckets: Set<LinearInboxFeature.StatusBucket> {
+      var buckets: Set<LinearInboxFeature.StatusBucket> = []
+      if filterTodo { buckets.insert(.todo) }
+      if filterActive { buckets.insert(.active) }
+      if filterDone { buckets.insert(.done) }
+      return buckets
+    }
+
+    /// Tickets shown in the list/deck, after the quick filters. A ticket must
+    /// match both the selected assignee chip(s) and the selected status
+    /// chip(s) — unless a group has zero chips selected, in which case that
+    /// group applies no filtering. "Hide linked" and "Ignored" narrow further,
+    /// independent of the chip groups.
     var visibleTickets: [LinearTicket] {
-      tickets.filter { ticket in
-        if assignedToMeOnly, !ticket.assignedToMe { return false }
-        if hideInProgress, ticket.isInProgress { return false }
+      let assigneeBuckets = selectedAssigneeBuckets
+      let statusBuckets = selectedStatusBuckets
+      return tickets.filter { ticket in
+        if !assigneeBuckets.isEmpty, !assigneeBuckets.contains(LinearInboxFeature.AssigneeBucket(ticket)) {
+          return false
+        }
+        if !statusBuckets.isEmpty, !statusBuckets.contains(LinearInboxFeature.StatusBucket(ticket)) {
+          return false
+        }
         if hideLinked, liveLinkedSessionID(for: ticket) != nil { return false }
-        if !showDone, ticket.isDone { return false }
         if !showIgnored, ticket.isHidden { return false }
         return true
       }
+    }
+
+    /// Focus mode's index into ``visibleTickets``, clamped to `[0, count]`.
+    /// The clamped value may equal `count`, the "deck finished" position.
+    var focusIndexClamped: Int { min(focusIndex, visibleTickets.count) }
+
+    /// The ticket focus mode shows right now, or nil when the deck is empty
+    /// or the user has cycled past the last card.
+    var focusedTicket: LinearTicket? {
+      let tickets = visibleTickets
+      let index = focusIndexClamped
+      guard index < tickets.count else { return nil }
+      return tickets[index]
     }
 
     /// The visible worklist folded into display rows: a sub-issue whose parent
@@ -190,6 +278,45 @@ struct LinearInboxFeature {
     case newTerminal
   }
 
+  /// Which assignee chip a ticket falls under. "Unassigned" deliberately
+  /// covers not-yet-fetched tickets (`assigneeName == nil`) too, so a fresh
+  /// paste is visible by default instead of vanishing until the first fetch.
+  nonisolated enum AssigneeBucket: String, Equatable, Sendable, CaseIterable {
+    case me
+    case unassigned
+    case others
+
+    init(_ ticket: LinearTicket) {
+      if ticket.assignedToMe {
+        self = .me
+      } else if ticket.assigneeName == nil {
+        self = .unassigned
+      } else {
+        self = .others
+      }
+    }
+  }
+
+  /// Which status chip a ticket falls under, derived from
+  /// `LinearTicket.isDone`/`isInProgress` rather than raw `stateType` so a
+  /// nil/backlog/triage state and an explicit "Todo" state both bucket the
+  /// same way.
+  nonisolated enum StatusBucket: String, Equatable, Sendable, CaseIterable {
+    case todo
+    case active
+    case done
+
+    init(_ ticket: LinearTicket) {
+      if ticket.isDone {
+        self = .done
+      } else if ticket.isInProgress {
+        self = .active
+      } else {
+        self = .todo
+      }
+    }
+  }
+
   enum Action: BindableAction, Equatable {
     case binding(BindingAction<State>)
     /// Sheet appeared — refresh any tickets we already have.
@@ -213,11 +340,22 @@ struct LinearInboxFeature {
     /// Ignore (or un-ignore) a single ticket — kept in the inbox but off the
     /// worklist until the "Ignored" filter reveals it.
     case toggleIgnoreTapped(ticketID: String)
-    case toggleShowDone
-    case toggleShowIgnored
-    case toggleAssignedToMe
-    case toggleHideInProgress
+    /// Flip one assignee chip. Multi-select — see `State.selectedAssigneeBuckets`.
+    case toggleAssigneeFilter(AssigneeBucket)
+    /// Flip one status chip. Multi-select — see `State.selectedStatusBuckets`.
+    case toggleStatusFilter(StatusBucket)
     case toggleHideLinked
+    case toggleShowIgnored
+    /// Switch the tickets tab between the list and the one-at-a-time focus
+    /// (triage) deck.
+    case viewModeChanged(LinearInboxViewMode)
+    /// Step the focus deck forward one card, clamped to the "deck finished"
+    /// position (`visibleTickets.count`).
+    case focusAdvance
+    /// Step the focus deck back one card, floored at 0.
+    case focusRetreat
+    /// Restart the focus deck from the first card once it's been finished.
+    case focusRestart
     case clearError
     case closeTapped
 
@@ -275,6 +413,7 @@ struct LinearInboxFeature {
         // current source so the worklist isn't stale.
         state.expandedTicketIDs = []
         state.expandedGroupIDs = []
+        state.focusIndex = 0
         pruneExpiredDoneTickets(&state)
         return refreshCurrentSource(&state)
 
@@ -293,6 +432,7 @@ struct LinearInboxFeature {
         state.$inboxSourceRaw.withLock { $0 = newSource.rawValue }
         state.expandedTicketIDs = []
         state.expandedGroupIDs = []
+        state.focusIndex = 0
         state.errorMessage = nil
         return refreshCurrentSource(&state)
 
@@ -404,24 +544,48 @@ struct LinearInboxFeature {
         }
         return .none
 
-      case .toggleShowDone:
-        state.showDone.toggle()
+      case let .toggleAssigneeFilter(bucket):
+        switch bucket {
+        case .me: state.$filterMine.withLock { $0.toggle() }
+        case .unassigned: state.$filterUnassigned.withLock { $0.toggle() }
+        case .others: state.$filterOthers.withLock { $0.toggle() }
+        }
+        return .none
+
+      case let .toggleStatusFilter(bucket):
+        switch bucket {
+        case .todo: state.$filterTodo.withLock { $0.toggle() }
+        case .active: state.$filterActive.withLock { $0.toggle() }
+        case .done: state.$filterDone.withLock { $0.toggle() }
+        }
+        return .none
+
+      case .toggleHideLinked:
+        state.$hideLinked.withLock { $0.toggle() }
         return .none
 
       case .toggleShowIgnored:
         state.showIgnored.toggle()
         return .none
 
-      case .toggleAssignedToMe:
-        state.assignedToMeOnly.toggle()
+      case let .viewModeChanged(mode):
+        guard mode != state.viewMode else { return .none }
+        state.$viewModeRaw.withLock { $0 = mode.rawValue }
+        if mode == .focus {
+          state.focusIndex = 0
+        }
         return .none
 
-      case .toggleHideInProgress:
-        state.hideInProgress.toggle()
+      case .focusAdvance:
+        state.focusIndex = min(state.focusIndex + 1, state.visibleTickets.count)
         return .none
 
-      case .toggleHideLinked:
-        state.hideLinked.toggle()
+      case .focusRetreat:
+        state.focusIndex = max(state.focusIndex - 1, 0)
+        return .none
+
+      case .focusRestart:
+        state.focusIndex = 0
         return .none
 
       case .clearError:
@@ -560,6 +724,15 @@ struct LinearInboxFeature {
             // Picking up a ticket means it's yours and in progress — reflect
             // that in Linear, optimistically so the row reacts immediately.
             syncEffect = autoProgressEffect(&state, ticketID: ticketID)
+            // Focus mode: if the just-started ticket is still sitting at the
+            // current slot (it may remain visible depending on the active
+            // filters), advance past it so returning from New Terminal lands
+            // on the next card instead of re-showing the one just launched.
+            // If the ticket dropped out of the deck (e.g. "Hide linked"), the
+            // next ticket already slid into this slot — don't double-advance.
+            if state.viewMode == .focus, state.focusedTicket?.identifier == ticketID {
+              state.focusIndex = min(state.focusIndex + 1, state.visibleTickets.count)
+            }
           }
           state.pendingSessionTicketID = nil
           state.selectedTab = .inbox
@@ -732,6 +905,15 @@ struct LinearInboxFeature {
       }
     }
   }
+}
+
+/// The tickets tab's view mode: the scrollable ``List`` worklist, or
+/// **focus** — a one-card-at-a-time triage deck driven by keyboard/single
+/// clicks so the user cycles the worklist without losing their place.
+/// Persisted on ``LinearInboxFeature/State/viewModeRaw``.
+nonisolated enum LinearInboxViewMode: String, Equatable, Sendable, CaseIterable {
+  case list
+  case focus
 }
 
 /// One row in the inbox list: a standalone ticket, or a parent group that

@@ -168,14 +168,33 @@ struct LinearInboxFeatureTests {
     worktrees: []
   )
 
-  /// Seeds the repo's bucket and pins the persisted source view. The source is
-  /// global `appStorage`, so every test must set it for determinism. Defaults
-  /// to `.pasted`, matching the hand-curated tickets most tests seed.
+  /// Seeds the repo's bucket and pins the persisted source view, then resets
+  /// every persisted filter chip / view-mode flag to its shipped default.
+  /// All of these are global `appStorage`, so every test must reset them for
+  /// determinism — otherwise one test's `toggleHideLinked` (say) leaks into
+  /// the next. Source defaults to `.pasted`, matching the hand-curated
+  /// tickets most tests seed.
   private func resetInbox(_ tickets: [LinearTicket], source: LinearTicketSource = .pasted) {
     @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
     $inbox.withLock { $0 = [Self.repo.id: tickets] }
     @Shared(.appStorage("linearInboxSource")) var inboxSourceRaw: String = ""
     $inboxSourceRaw.withLock { $0 = source.rawValue }
+    @Shared(.appStorage("linearInboxViewMode")) var viewModeRaw: String = ""
+    $viewModeRaw.withLock { $0 = LinearInboxViewMode.list.rawValue }
+    @Shared(.appStorage("linearInboxFilterMine")) var filterMine = true
+    $filterMine.withLock { $0 = true }
+    @Shared(.appStorage("linearInboxFilterUnassigned")) var filterUnassigned = true
+    $filterUnassigned.withLock { $0 = true }
+    @Shared(.appStorage("linearInboxFilterOthers")) var filterOthers = false
+    $filterOthers.withLock { $0 = false }
+    @Shared(.appStorage("linearInboxFilterTodo")) var filterTodo = true
+    $filterTodo.withLock { $0 = true }
+    @Shared(.appStorage("linearInboxFilterActive")) var filterActive = true
+    $filterActive.withLock { $0 = true }
+    @Shared(.appStorage("linearInboxFilterDone")) var filterDone = false
+    $filterDone.withLock { $0 = false }
+    @Shared(.appStorage("linearInboxHideLinked")) var hideLinked = false
+    $hideLinked.withLock { $0 = false }
   }
 
   @Test(.dependencies) func importParsesPastedTextThenFetchesMetadata() async {
@@ -399,10 +418,14 @@ struct LinearInboxFeatureTests {
     await store.receive(\._issuesFetched)
   }
 
-  @Test(.dependencies) func assignedToMeFilterNarrowsToYourTickets() async {
+  // MARK: - Assignee / status filter chips
+
+  @Test(.dependencies) func assigneeChipsDefaultToMineAndUnassignedHidingOthers() async {
     resetInbox([
       LinearTicket(identifier: "CEN-1", title: "Mine", assignedToMe: true),
-      LinearTicket(identifier: "CEN-2", title: "Theirs", assigneeName: "Someone"),
+      // No assignee at all — buckets as "Unassigned", not just not-fetched.
+      LinearTicket(identifier: "CEN-2", title: "Unassigned"),
+      LinearTicket(identifier: "CEN-3", title: "Theirs", assigneeName: "Ada"),
     ])
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
@@ -410,11 +433,96 @@ struct LinearInboxFeatureTests {
     }
     store.exhaustivity = .off
 
-    #expect(store.state.assignedToMeCount == 1)
+    #expect(store.state.meCount == 1)
+    #expect(store.state.unassignedCount == 1)
+    #expect(store.state.othersCount == 1)
+    // Default chips: Me + Unassigned selected, Others hidden.
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
 
-    await store.send(.toggleAssignedToMe)
-    #expect(store.state.assignedToMeOnly)
+    // Toggling Others on reveals it alongside the defaults.
+    await store.send(.toggleAssigneeFilter(.others))
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2", "CEN-3"])
+
+    // Turning every assignee chip off means "no filtering" — everyone shows.
+    await store.send(.toggleAssigneeFilter(.me))
+    await store.send(.toggleAssigneeFilter(.unassigned))
+    await store.send(.toggleAssigneeFilter(.others))
+    #expect(store.state.selectedAssigneeBuckets.isEmpty)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2", "CEN-3"])
+  }
+
+  @Test(.dependencies) func statusChipsDefaultToTodoAndActiveHidingDone() async {
+    resetInbox([
+      // No `stateType` at all — must still bucket as Todo, same as an
+      // explicit backlog/unstarted state.
+      LinearTicket(identifier: "CEN-1", title: "Backlog"),
+      LinearTicket(identifier: "CEN-2", title: "Working", stateType: "started"),
+      LinearTicket(identifier: "CEN-3", title: "Shipped", stateType: "completed"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.todoCount == 1)
+    #expect(store.state.activeCount == 1)
+    #expect(store.state.doneCount == 1)
+    // Default chips: Todo + Active selected, Done hidden.
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+
+    // Active-only narrows to just the started ticket.
+    await store.send(.toggleStatusFilter(.todo))
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-2"])
+
+    // Turning every status chip off shows everything, including Done.
+    await store.send(.toggleStatusFilter(.active))
+    #expect(store.state.selectedStatusBuckets.isEmpty)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2", "CEN-3"])
+  }
+
+  @Test(.dependencies) func assigneeAndStatusChipsBothMustMatch() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Mine, todo", assignedToMe: true),
+      LinearTicket(identifier: "CEN-2", title: "Mine, active", stateType: "started", assignedToMe: true),
+      LinearTicket(identifier: "CEN-3", title: "Unassigned, todo"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    // Narrow to Me only (Unassigned off) — both statuses still selected.
+    await store.send(.toggleAssigneeFilter(.unassigned))
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2"])
+
+    // Further narrow to Todo — a ticket must match *both* the assignee and
+    // the status chip, not just one.
+    await store.send(.toggleStatusFilter(.active))
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+  }
+
+  @Test(.dependencies) func toggleDoneChipRevealsThenHidesCompletedTickets() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Open", stateType: "started"),
+      LinearTicket(identifier: "CEN-2", title: "Finished", stateType: "completed"),
+      LinearTicket(identifier: "CEN-3", title: "Dropped", stateType: "canceled"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    // Default hides done — the inbox is a worklist of what's left.
+    #expect(store.state.doneCount == 2)
+    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
+
+    await store.send(.toggleStatusFilter(.done))
+    #expect(store.state.visibleTickets.count == 3)
+
+    await store.send(.toggleStatusFilter(.done))
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
@@ -514,7 +622,7 @@ struct LinearInboxFeatureTests {
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-2"])
   }
 
-  @Test(.dependencies) func hideInProgressFilterDropsStartedTickets() async {
+  @Test(.dependencies) func togglingActiveChipOffHidesInProgressAndInReviewTickets() async {
     resetInbox([
       LinearTicket(identifier: "CEN-1", title: "Todo", stateType: "unstarted"),
       LinearTicket(identifier: "CEN-2", title: "Working", stateType: "started"),
@@ -526,12 +634,12 @@ struct LinearInboxFeatureTests {
     }
     store.exhaustivity = .off
 
-    #expect(store.state.inProgressCount == 2)
+    #expect(store.state.activeCount == 2)
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1", "CEN-2", "CEN-3"])
 
-    await store.send(.toggleHideInProgress)
-    #expect(store.state.hideInProgress)
-    // Both the in-progress and in-review tickets drop out.
+    await store.send(.toggleStatusFilter(.active))
+    // Both the in-progress and in-review tickets drop out — Linear's
+    // `started` category covers both.
     #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
   }
 
@@ -810,31 +918,6 @@ struct LinearInboxFeatureTests {
     #expect(store.state.tickets[0].startedAt == nil)
   }
 
-  @Test(.dependencies) func toggleShowDoneFiltersCompletedTickets() async {
-    resetInbox([
-      LinearTicket(identifier: "CEN-1", title: "Open", stateType: "started"),
-      LinearTicket(identifier: "CEN-2", title: "Finished", stateType: "completed"),
-      LinearTicket(identifier: "CEN-3", title: "Dropped", stateType: "canceled"),
-    ])
-
-    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
-      LinearInboxFeature()
-    }
-    store.exhaustivity = .off
-
-    // Default hides done — the inbox is a worklist of what's left.
-    #expect(store.state.doneCount == 2)
-    #expect(store.state.showDone == false)
-    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
-
-    await store.send(.toggleShowDone)
-    #expect(store.state.showDone == true)
-    #expect(store.state.visibleTickets.count == 3)
-
-    await store.send(.toggleShowDone)
-    #expect(store.state.visibleTickets.map(\.identifier) == ["CEN-1"])
-  }
-
   @Test(.dependencies) func openingTheInboxDropsTicketsDoneLongerThanRetention() async {
     let now = Date(timeIntervalSince1970: 1_000_000)
     let fourDaysAgo = now.addingTimeInterval(-4 * 24 * 60 * 60)
@@ -934,5 +1017,183 @@ struct LinearInboxFeatureTests {
 
     await store.send(.removeTicketTapped(ticketID: "CEN-1"))
     #expect(store.state.tickets.map(\.identifier) == ["CEN-2"])
+  }
+
+  // MARK: - Focus (triage) mode
+
+  @Test(.dependencies) func focusAdvanceAndRetreatClampToDeckBounds() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "One"),
+      LinearTicket(identifier: "CEN-2", title: "Two"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.focusedTicket?.identifier == "CEN-1")
+
+    // Can't retreat below 0.
+    await store.send(.focusRetreat)
+    #expect(store.state.focusIndex == 0)
+
+    await store.send(.focusAdvance)
+    #expect(store.state.focusedTicket?.identifier == "CEN-2")
+
+    // Advancing past the last card lands on the "deck finished" position —
+    // no ticket, and the index doesn't run past `count`.
+    await store.send(.focusAdvance)
+    #expect(store.state.focusIndex == 2)
+    #expect(store.state.focusedTicket == nil)
+
+    await store.send(.focusAdvance)
+    #expect(store.state.focusIndex == 2)
+
+    await store.send(.focusRestart)
+    #expect(store.state.focusIndex == 0)
+    #expect(store.state.focusedTicket?.identifier == "CEN-1")
+  }
+
+  @Test(.dependencies) func ignoringTheFocusedTicketSlidesTheNextOneIntoPlace() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "One"),
+      LinearTicket(identifier: "CEN-2", title: "Two"),
+      LinearTicket(identifier: "CEN-3", title: "Three"),
+    ])
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.focusAdvance)
+    #expect(store.state.focusedTicket?.identifier == "CEN-2")
+
+    // Ignoring the card in view shrinks the deck; the index intentionally
+    // stays put so the next ticket slides into the same slot.
+    await store.send(.toggleIgnoreTapped(ticketID: "CEN-2"))
+    #expect(store.state.focusIndex == 1)
+    #expect(store.state.focusedTicket?.identifier == "CEN-3")
+  }
+
+  @Test(.dependencies) func spawnInFocusModeAdvancesPastAStartedTicketThatStaysVisible() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Do thing"),
+      LinearTicket(identifier: "CEN-2", title: "Next"),
+    ])
+    let now = Date(timeIntervalSince1970: 5_000)
+
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+    state.pendingSessionTicketID = "CEN-1"
+    state.selectedTab = .newTerminal
+    state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
+
+    let store = TestStore(initialState: state) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.viewModeChanged(.focus))
+    #expect(store.state.focusedTicket?.identifier == "CEN-1")
+
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    await store.send(.newTerminal(.presented(.delegate(.created(session)))))
+    // CEN-1 has no `linearID`, so the optimistic auto-progress sync no-ops —
+    // it stays under the default chips and remains visible. The deck
+    // advances past it so returning from New Terminal shows CEN-2 next.
+    #expect(store.state.focusIndex == 1)
+    #expect(store.state.focusedTicket?.identifier == "CEN-2")
+  }
+
+  @Test(.dependencies) func spawnInFocusModeDoesNotDoubleAdvanceWhenTheStartedTicketDropsOut() async {
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "Do thing"),
+      LinearTicket(identifier: "CEN-2", title: "Next"),
+    ])
+    let now = Date(timeIntervalSince1970: 5_000)
+
+    var state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+    state.pendingSessionTicketID = "CEN-1"
+    state.selectedTab = .newTerminal
+    state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
+
+    let store = TestStore(initialState: state) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.viewModeChanged(.focus))
+    await store.send(.toggleHideLinked)
+    #expect(store.state.focusedTicket?.identifier == "CEN-1")
+
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    // `liveLinkedSessionID` only recognizes a session once it's in the
+    // shared board list, so seed it here before the spawn stamps the ticket.
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    await store.send(.newTerminal(.presented(.delegate(.created(session)))))
+    // Starting the session links it, so "Hide linked" drops CEN-1 out of the
+    // deck — CEN-2 already slid into slot 0. The index must NOT also
+    // advance, or CEN-2 would be skipped entirely.
+    #expect(store.state.focusIndex == 0)
+    #expect(store.state.focusedTicket?.identifier == "CEN-2")
+  }
+
+  @Test(.dependencies) func repoAndSourceSwitchResetFocusIndex() async {
+    let repoB = Repository(
+      id: "/tmp/repo-b",
+      rootURL: URL(fileURLWithPath: "/tmp/repo-b"),
+      name: "repo-b",
+      worktrees: []
+    )
+    resetInbox([
+      LinearTicket(identifier: "CEN-1", title: "One"),
+      LinearTicket(identifier: "CEN-2", title: "Two"),
+    ])
+    @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
+    $inbox.withLock {
+      $0[repoB.id] = [
+        LinearTicket(identifier: "CEN-9", title: "Recent", source: .recent),
+        LinearTicket(identifier: "CEN-10", title: "Pasted", source: .pasted),
+      ]
+    }
+
+    let store = TestStore(
+      initialState: LinearInboxFeature.State(availableRepositories: [Self.repo, repoB])
+    ) {
+      LinearInboxFeature()
+    } withDependencies: {
+      // The repo-switch path prunes expired-done tickets, which reads `date.now`.
+      $0.date = .constant(Date(timeIntervalSince1970: 1))
+    }
+    store.exhaustivity = .off
+
+    await store.send(.focusAdvance)
+    #expect(store.state.focusIndex == 1)
+
+    await store.send(.binding(.set(\.selectedRepositoryID, repoB.id)))
+    #expect(store.state.focusIndex == 0)
+
+    await store.send(.focusAdvance)
+    #expect(store.state.focusIndex == 1)
+
+    await store.send(.sourceChanged(.recent))
+    #expect(store.state.focusIndex == 0)
   }
 }

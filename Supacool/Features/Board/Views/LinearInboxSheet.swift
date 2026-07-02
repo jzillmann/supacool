@@ -47,8 +47,10 @@ struct LinearInboxSheet: View {
       header
       Divider()
       sourcePicker
-      // The paste field is the "Pasted" source's editor — only shown there.
-      if store.source == .pasted {
+      // The paste field is the "Pasted" source's editor — only shown there,
+      // and only in list mode: focus mode has no room for it and triaging
+      // one card at a time isn't when you're curating the pasted set.
+      if store.source == .pasted, store.viewMode == .list {
         importField
       }
       if let message = store.errorMessage {
@@ -56,7 +58,11 @@ struct LinearInboxSheet: View {
       }
       Divider()
       filterBar
-      ticketList
+      if store.viewMode == .focus {
+        focusContent
+      } else {
+        ticketList
+      }
     }
   }
 
@@ -80,25 +86,34 @@ struct LinearInboxSheet: View {
     .help("Switch between Linear's most-recently-created tickets and your pasted worklist")
   }
 
-  /// Quick filters: narrow to your own tickets, and reveal done / ignored rows.
+  /// Quick filters: two multi-select chip groups (assignee, status) — empty
+  /// selection in a group means "show all" for that group — plus two
+  /// standalone toggles. Visually grouped with dividers so the two
+  /// independent chip groups don't read as one long row of unrelated toggles.
   private var filterBar: some View {
     HStack(spacing: 8) {
-      filterToggle(
-        "Assigned to me",
-        systemImage: "person.fill",
-        isOn: store.assignedToMeOnly,
-        count: store.assignedToMeCount,
-        help: "Show only tickets assigned to you",
-        onToggle: { store.send(.toggleAssignedToMe) }
-      )
-      filterToggle(
-        "Hide in progress",
-        systemImage: "hammer",
-        isOn: store.hideInProgress,
-        count: store.inProgressCount,
-        help: "Hide tickets already in progress or in review",
-        onToggle: { store.send(.toggleHideInProgress) }
-      )
+      HStack(spacing: 6) {
+        assigneeChip(.me, title: "Me", systemImage: "person.fill", help: "Show tickets assigned to you")
+        assigneeChip(
+          .unassigned,
+          title: "Unassigned",
+          systemImage: "person.crop.circle.dashed",
+          help: "Show tickets nobody is assigned to"
+        )
+        assigneeChip(
+          .others,
+          title: "Others",
+          systemImage: "person.2.fill",
+          help: "Show tickets assigned to someone else"
+        )
+      }
+      Divider().frame(height: 14)
+      HStack(spacing: 6) {
+        statusChip(.todo, title: "Todo", systemImage: "circle", help: "Show tickets not yet started")
+        statusChip(.active, title: "Active", systemImage: "hammer", help: "Show tickets in progress or in review")
+        statusChip(.done, title: "Done", systemImage: "checkmark.circle", help: "Show completed and canceled tickets")
+      }
+      Divider().frame(height: 14)
       filterToggle(
         "Hide linked",
         systemImage: "link",
@@ -106,14 +121,6 @@ struct LinearInboxSheet: View {
         count: store.linkedCount,
         help: "Hide tickets that already have a running session",
         onToggle: { store.send(.toggleHideLinked) }
-      )
-      filterToggle(
-        "Done",
-        systemImage: "checkmark.circle",
-        isOn: store.showDone,
-        count: store.doneCount,
-        help: "Reveal completed and canceled tickets",
-        onToggle: { store.send(.toggleShowDone) }
       )
       filterToggle(
         "Ignored",
@@ -130,6 +137,50 @@ struct LinearInboxSheet: View {
     }
     .padding(.horizontal)
     .padding(.vertical, 6)
+  }
+
+  private func assigneeChip(
+    _ bucket: LinearInboxFeature.AssigneeBucket,
+    title: String,
+    systemImage: String,
+    help: String
+  ) -> some View {
+    let count: Int =
+      switch bucket {
+      case .me: store.meCount
+      case .unassigned: store.unassignedCount
+      case .others: store.othersCount
+      }
+    return filterToggle(
+      title,
+      systemImage: systemImage,
+      isOn: store.selectedAssigneeBuckets.contains(bucket),
+      count: count,
+      help: help,
+      onToggle: { store.send(.toggleAssigneeFilter(bucket)) }
+    )
+  }
+
+  private func statusChip(
+    _ bucket: LinearInboxFeature.StatusBucket,
+    title: String,
+    systemImage: String,
+    help: String
+  ) -> some View {
+    let count: Int =
+      switch bucket {
+      case .todo: store.todoCount
+      case .active: store.activeCount
+      case .done: store.doneCount
+      }
+    return filterToggle(
+      title,
+      systemImage: systemImage,
+      isOn: store.selectedStatusBuckets.contains(bucket),
+      count: count,
+      help: help,
+      onToggle: { store.send(.toggleStatusFilter(bucket)) }
+    )
   }
 
   private func filterToggle(
@@ -171,6 +222,7 @@ struct LinearInboxSheet: View {
         .help("Switch which repository's Linear worklist you're triaging")
       }
       Spacer()
+      viewModePicker
       Button {
         store.send(.refreshAllTapped)
       } label: {
@@ -197,6 +249,44 @@ struct LinearInboxSheet: View {
       .keyboardShortcut(.cancelAction)
     }
     .padding()
+  }
+
+  /// List vs. focus (triage) mode. Two icon-only buttons rather than a
+  /// `Picker(.segmented)` so each mode carries its own `.help()` tooltip —
+  /// segmented pickers on macOS don't reliably surface per-segment help text.
+  private var viewModePicker: some View {
+    HStack(spacing: 2) {
+      viewModeButton(
+        .list,
+        systemImage: "list.bullet",
+        help: "List — scroll through the full worklist"
+      )
+      viewModeButton(
+        .focus,
+        systemImage: "rectangle.portrait.on.rectangle.portrait",
+        help: "Focus — triage one ticket at a time (→ skip, ← back)"
+      )
+    }
+    .padding(2)
+    .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+  }
+
+  private func viewModeButton(_ mode: LinearInboxViewMode, systemImage: String, help: String) -> some View {
+    let isSelected = store.viewMode == mode
+    return Button {
+      store.send(.viewModeChanged(mode))
+    } label: {
+      Image(systemName: systemImage)
+        .frame(width: 22, height: 18)
+    }
+    .buttonStyle(.borderless)
+    .foregroundStyle(isSelected ? .primary : .secondary)
+    .background {
+      if isSelected {
+        RoundedRectangle(cornerRadius: 4).fill(.background)
+      }
+    }
+    .help(help)
   }
 
   private var importField: some View {
@@ -252,42 +342,55 @@ struct LinearInboxSheet: View {
     .background(.orange.opacity(0.08))
   }
 
+  /// No tickets in the bucket at all (before any quick filter). Shared
+  /// between list and focus mode.
+  @ViewBuilder
+  private var emptyTicketsView: some View {
+    if store.isFetchingRecent {
+      VStack(spacing: 8) {
+        ProgressView()
+        Text("Loading recent tickets…")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if store.source == .recent {
+      ContentUnavailableView(
+        "No recent tickets",
+        systemImage: "clock",
+        description: Text(
+          "Nothing recently created for this repository's Linear team, "
+            + "or no team key is set under Settings → repository → Linear."
+        )
+      )
+      .frame(maxHeight: .infinity)
+    } else {
+      ContentUnavailableView(
+        "No pasted tickets",
+        systemImage: "tray",
+        description: Text("Paste one or more Linear issue links above to build your worklist.")
+      )
+      .frame(maxHeight: .infinity)
+    }
+  }
+
+  /// Tickets exist, but every one is filtered out. Shared between list and
+  /// focus mode.
+  private var nothingToShowView: some View {
+    ContentUnavailableView(
+      "Nothing to show",
+      systemImage: "line.3.horizontal.decrease.circle",
+      description: Text("Every ticket is filtered out — toggle the quick filters above to reveal them.")
+    )
+    .frame(maxHeight: .infinity)
+  }
+
   @ViewBuilder
   private var ticketList: some View {
     if store.tickets.isEmpty {
-      if store.isFetchingRecent {
-        VStack(spacing: 8) {
-          ProgressView()
-          Text("Loading recent tickets…")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else if store.source == .recent {
-        ContentUnavailableView(
-          "No recent tickets",
-          systemImage: "clock",
-          description: Text(
-            "Nothing recently created for this repository's Linear team, "
-              + "or no team key is set under Settings → repository → Linear."
-          )
-        )
-        .frame(maxHeight: .infinity)
-      } else {
-        ContentUnavailableView(
-          "No pasted tickets",
-          systemImage: "tray",
-          description: Text("Paste one or more Linear issue links above to build your worklist.")
-        )
-        .frame(maxHeight: .infinity)
-      }
+      emptyTicketsView
     } else if store.visibleTickets.isEmpty {
-      ContentUnavailableView(
-        "Nothing to show",
-        systemImage: "line.3.horizontal.decrease.circle",
-        description: Text("Every ticket is filtered out — toggle the quick filters above to reveal them.")
-      )
-      .frame(maxHeight: .infinity)
+      nothingToShowView
     } else {
       List {
         ForEach(store.visibleEntries) { entry in
@@ -329,6 +432,41 @@ struct LinearInboxSheet: View {
       onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
       onRemove: { store.send(.removeTicketTapped(ticketID: ticket.identifier)) }
     )
+  }
+
+  // MARK: - Focus (triage) mode
+
+  /// One ticket at a time, cycled with keyboard/single clicks. The deck is
+  /// exactly ``LinearInboxFeature/State/visibleTickets`` — no grouping — so
+  /// sub-issues triage individually here even when the list bundles them.
+  @ViewBuilder
+  private var focusContent: some View {
+    if store.tickets.isEmpty {
+      emptyTicketsView
+    } else if store.visibleTickets.isEmpty {
+      nothingToShowView
+    } else if let ticket = store.focusedTicket {
+      FocusTicketCard(
+        ticket: ticket,
+        position: store.focusIndexClamped + 1,
+        total: store.visibleTickets.count,
+        isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
+        hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
+        canRetreat: store.focusIndexClamped > 0,
+        onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
+        onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
+        onAdvance: { store.send(.focusAdvance) },
+        onRetreat: { store.send(.focusRetreat) },
+        onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
+        onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
+        onRemove: { store.send(.removeTicketTapped(ticketID: ticket.identifier)) }
+      )
+    } else {
+      FocusDeckFinishedCard(
+        onRestart: { store.send(.focusRestart) },
+        onRetreat: { store.send(.focusRetreat) }
+      )
+    }
   }
 }
 
@@ -603,16 +741,271 @@ private struct LinearTicketRow: View {
     }
     .padding(.leading, 22)
   }
+}
 
-  /// Linear's desktop app registers the `linear://` scheme; any
-  /// `https://linear.app/…` URL becomes a deep link by swapping the prefix.
-  /// Falls back to the browser when the desktop app isn't installed.
-  private func openInLinear(webURL: URL) {
-    let deepLink = URL(string: webURL.absoluteString.replacing("https://linear.app/", with: "linear://"))
-    if let deepLink, deepLink != webURL, NSWorkspace.shared.urlForApplication(toOpen: deepLink) != nil {
-      NSWorkspace.shared.open(deepLink)
-    } else {
-      NSWorkspace.shared.open(webURL)
+/// Linear's desktop app registers the `linear://` scheme; any
+/// `https://linear.app/…` URL becomes a deep link by swapping the prefix.
+/// Falls back to the browser when the desktop app isn't installed. Shared
+/// between the list row's expanded content and the focus card's action bar.
+fileprivate func openInLinear(webURL: URL) {
+  let deepLink = URL(string: webURL.absoluteString.replacing("https://linear.app/", with: "linear://"))
+  if let deepLink, deepLink != webURL, NSWorkspace.shared.urlForApplication(toOpen: deepLink) != nil {
+    NSWorkspace.shared.open(deepLink)
+  } else {
+    NSWorkspace.shared.open(webURL)
+  }
+}
+
+/// One ticket shown full-card in focus mode: position, identity, state,
+/// assignee and age up top; the full title and description below; a fixed
+/// action bar at the bottom so the controls never move as the deck advances.
+private struct FocusTicketCard: View {
+  let ticket: LinearTicket
+  /// 1-based position in the deck, e.g. `3` of `total == 24`.
+  let position: Int
+  let total: Int
+  let isAssigning: Bool
+  let hasLiveSession: Bool
+  let canRetreat: Bool
+  let onStartSession: () -> Void
+  let onOpenSession: () -> Void
+  let onAdvance: () -> Void
+  let onRetreat: () -> Void
+  let onToggleIgnored: () -> Void
+  let onAssignToMe: () -> Void
+  let onRemove: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          topRow
+          if let parent = ticket.parentIdentifier, !parent.isEmpty {
+            parentChip(parent)
+          }
+          Text(ticket.title ?? "Loading…")
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(ticket.title == nil ? .secondary : .primary)
+            .textSelection(.enabled)
+            .fixedSize(horizontal: false, vertical: true)
+          Group {
+            if let summary = ticket.summary, !summary.isEmpty {
+              // Linear descriptions are markdown; render the structure
+              // instead of showing raw `**`/`[…](…)` markup.
+              MarkdownText(source: summary)
+            } else {
+              Text(ticket.fetchedAt == nil ? "Loading description…" : "No description.")
+            }
+          }
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding()
+      }
+      Divider()
+      actionBar
     }
+  }
+
+  private var topRow: some View {
+    HStack(spacing: 10) {
+      Text("\(position) of \(total)")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+
+      Text(ticket.identifier)
+        .font(.system(.body, design: .monospaced))
+        .fontWeight(.semibold)
+
+      if let state = ticket.stateName {
+        Text(state)
+          .font(.caption)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(.quaternary, in: Capsule())
+      }
+
+      assigneeBadge
+
+      if let creator = ticket.creatorName, !creator.isEmpty {
+        Text("by \(creator)")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      }
+
+      if let createdAt = ticket.createdAt {
+        Text("open \(spelledOutAge(since: createdAt))")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .help("Created \(createdAt.formatted(date: .abbreviated, time: .shortened))")
+      }
+
+      if hasLiveSession {
+        Image(systemName: "checkmark.seal.fill")
+          .foregroundStyle(.green)
+          .help("A session for this ticket is running on the board")
+      }
+
+      Spacer(minLength: 0)
+    }
+  }
+
+  @ViewBuilder
+  private var assigneeBadge: some View {
+    if ticket.assignedToMe {
+      Label("You", systemImage: "person.fill")
+        .font(.caption)
+        .foregroundStyle(.tint)
+        .labelStyle(.titleAndIcon)
+    } else if let assignee = ticket.assigneeName {
+      Text(assignee)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    } else {
+      Text("Unassigned")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    }
+  }
+
+  private func parentChip(_ parent: String) -> some View {
+    Text("Sub-issue of \(parent)\(ticket.parentTitle.map { " — \($0)" } ?? "")")
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .padding(.horizontal, 8)
+      .padding(.vertical, 3)
+      .background(.quaternary, in: Capsule())
+  }
+
+  private var actionBar: some View {
+    HStack(spacing: 8) {
+      if hasLiveSession {
+        Button {
+          onOpenSession()
+        } label: {
+          Label("Open session", systemImage: "terminal")
+        }
+        .keyboardShortcut(.defaultAction)
+        .help("Jump to the session already running for this ticket (⏎)")
+      } else {
+        Button {
+          onStartSession()
+        } label: {
+          Label("Start session", systemImage: "play.fill")
+        }
+        .keyboardShortcut(.defaultAction)
+        .help("Open a New Terminal pre-filled with “Fix \(ticket.identifier): …” (⏎)")
+      }
+
+      Button {
+        onRetreat()
+      } label: {
+        Label("Back", systemImage: "chevron.left")
+      }
+      .keyboardShortcut(.leftArrow, modifiers: [])
+      .disabled(!canRetreat)
+      .help("Back to the previous ticket (←)")
+
+      Button {
+        onAdvance()
+      } label: {
+        Label("Skip", systemImage: "chevron.right")
+      }
+      .keyboardShortcut(.rightArrow, modifiers: [])
+      .help("Skip to the next ticket (→)")
+
+      Button {
+        onToggleIgnored()
+      } label: {
+        Label(ticket.isHidden ? "Un-ignore" : "Ignore", systemImage: ticket.isHidden ? "eye" : "eye.slash")
+      }
+      .keyboardShortcut("i", modifiers: [])
+      .help(ticket.isHidden ? "Un-ignore this ticket (I)" : "Ignore this ticket, kept in the inbox (I)")
+
+      Button {
+        onAssignToMe()
+      } label: {
+        if isAssigning {
+          ProgressView().controlSize(.small)
+        } else {
+          Label("Assign to me", systemImage: "person.crop.circle.badge.checkmark")
+        }
+      }
+      .keyboardShortcut("a", modifiers: [])
+      .disabled(isAssigning || ticket.assignedToMe)
+      .help("Assign this ticket to you in Linear (A)")
+
+      if let urlString = ticket.url, let url = URL(string: urlString) {
+        Button {
+          openInLinear(webURL: url)
+        } label: {
+          Label("Open in Linear", systemImage: "arrow.up.right.square")
+        }
+        .keyboardShortcut("o", modifiers: [])
+        .help("Open the ticket in the Linear desktop app (O)")
+      }
+
+      Spacer()
+
+      // Destructive stays mouse-only — no keyboard shortcut, matching the
+      // list row's hover controls.
+      Button(role: .destructive) {
+        onRemove()
+      } label: {
+        Label("Remove", systemImage: "trash")
+          .labelStyle(.iconOnly)
+      }
+      .buttonStyle(.borderless)
+      .help("Remove this ticket from the inbox")
+    }
+    .padding()
+  }
+
+  /// Fuller, spelled-out sibling of the list row's `compactAge` — the focus
+  /// card has room for "open 4 hours" instead of a terse "4h".
+  private func spelledOutAge(since created: Date) -> String {
+    let seconds = max(0, Date().timeIntervalSince(created))
+    let minute = 60.0, hour = 3_600.0, day = 86_400.0, week = 7 * day, month = 30 * day, year = 365 * day
+    func plural(_ count: Int, _ unit: String) -> String { "\(count) \(unit)\(count == 1 ? "" : "s")" }
+    switch seconds {
+    case ..<minute: return "just now"
+    case ..<hour: return plural(Int(seconds / minute), "minute")
+    case ..<day: return plural(Int(seconds / hour), "hour")
+    case ..<week: return plural(Int(seconds / day), "day")
+    case ..<month: return plural(Int(seconds / week), "week")
+    case ..<year: return plural(Int(seconds / month), "month")
+    default: return plural(Int(seconds / year), "year")
+    }
+  }
+}
+
+/// Shown once the user has cycled through every card in the focus deck.
+/// "Back" stays available so a user who overshot can still step back in.
+private struct FocusDeckFinishedCard: View {
+  let onRestart: () -> Void
+  let onRetreat: () -> Void
+
+  var body: some View {
+    ContentUnavailableView {
+      Label("All caught up", systemImage: "checkmark.seal")
+    } description: {
+      Text("You've cycled through every ticket matching the filters.")
+    } actions: {
+      Button("Back") {
+        onRetreat()
+      }
+      .keyboardShortcut(.leftArrow, modifiers: [])
+      .help("Back to the previous ticket (←)")
+
+      Button("Start over") {
+        onRestart()
+      }
+      .keyboardShortcut(.defaultAction)
+      .help("Restart the deck from the first ticket")
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 }
