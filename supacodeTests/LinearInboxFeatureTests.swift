@@ -48,6 +48,55 @@ struct LinearTicketDoneTests {
   }
 }
 
+// MARK: - Start-progress target selection (pure)
+
+struct LinearStartedStateSelectionTests {
+  private typealias State = LinearClient.WorkflowState
+
+  /// CEN's layout: "Blocked" is a `started` state that sorts ahead of
+  /// "In Progress" by position. Starting a ticket must land on In Progress,
+  /// not Blocked. This is the regression that motivated the helper.
+  @Test func skipsBlockedAndPicksInProgress() {
+    let states = [
+      State(id: "backlog", name: "Backlog", type: "backlog", position: 0),
+      State(id: "blocked", name: "Blocked", type: "started", position: 1),
+      State(id: "progress", name: "In Progress", type: "started", position: 2),
+      State(id: "review", name: "In Review", type: "started", position: 3),
+      State(id: "done", name: "Done", type: "completed", position: 4),
+    ]
+    #expect(LinearClient.canonicalStartedStateID(from: states) == "progress")
+  }
+
+  /// Without an explicit "In Progress", the lowest-position non-holding
+  /// started state wins.
+  @Test func fallsBackToLowestPositionActiveState() {
+    let states = [
+      State(id: "review", name: "In Review", type: "started", position: 3),
+      State(id: "doing", name: "Doing", type: "started", position: 2),
+      State(id: "blocked", name: "Blocked", type: "started", position: 1),
+    ]
+    #expect(LinearClient.canonicalStartedStateID(from: states) == "doing")
+  }
+
+  /// If every started state looks like a holding state, don't return nil —
+  /// fall back to lowest position among them.
+  @Test func fallsBackToHoldingStatesWhenNoneActive() {
+    let states = [
+      State(id: "review", name: "In Review", type: "started", position: 2),
+      State(id: "blocked", name: "Blocked", type: "started", position: 1),
+    ]
+    #expect(LinearClient.canonicalStartedStateID(from: states) == "blocked")
+  }
+
+  @Test func returnsNilWhenNoStartedState() {
+    let states = [
+      State(id: "backlog", name: "Backlog", type: "backlog", position: 0),
+      State(id: "done", name: "Done", type: "completed", position: 1),
+    ]
+    #expect(LinearClient.canonicalStartedStateID(from: states) == nil)
+  }
+}
+
 // MARK: - Metadata application (pure)
 
 struct LinearTicketApplyTests {

@@ -84,6 +84,46 @@ struct LinearClient: Sendable {
   var fetchRecentIssues: @Sendable (_ limit: Int, _ teamKeys: [String]) async throws -> [LinearIssue]
 }
 
+extension LinearClient {
+  /// One of a team's workflow states, flattened for `startProgress`'s
+  /// target-selection logic.
+  nonisolated struct WorkflowState: Equatable, Sendable {
+    var id: String
+    var name: String
+    var type: String
+    var position: Double
+  }
+
+  /// Picks the workflow state to move an issue into when "starting" it.
+  ///
+  /// A team can define several `started`-type states — Linear's defaults are
+  /// "In Progress" and "In Review", and teams routinely add "Blocked",
+  /// "Paused", etc. `position` alone is unreliable: "Blocked" can sort ahead
+  /// of "In Progress" (it does on CEN), so the lowest-position started state
+  /// isn't necessarily the one you want. So: drop holding states (blocked /
+  /// review / paused / on-hold / waiting) from consideration, prefer a state
+  /// whose name reads like active work, then fall back to lowest position.
+  nonisolated static func canonicalStartedStateID(from states: [WorkflowState]) -> String? {
+    let started = states.filter { $0.type == "started" }
+    guard !started.isEmpty else { return nil }
+
+    let holdingMarkers = ["block", "review", "pause", "hold", "wait"]
+    let active = started.filter { state in
+      let name = state.name.lowercased()
+      return !holdingMarkers.contains { name.contains($0) }
+    }
+    // If every started state looks like a holding state, fall back to all of
+    // them rather than returning nothing.
+    let pool = active.isEmpty ? started : active
+
+    let preferred = pool.first {
+      let name = $0.name.lowercased()
+      return name.contains("progress") || name.contains("doing")
+    }
+    return (preferred ?? pool.min { $0.position < $1.position })?.id
+  }
+}
+
 nonisolated enum LinearClientError: LocalizedError {
   case invalidResponse
   case missingAPIKey
@@ -275,7 +315,7 @@ private nonisolated enum LinearLive {
     // state to stay idempotent.
     let query =
       "query Progress($id: String!) { issue(id: $id) { \(issueFields) "
-      + "team { states { nodes { id type position } } } } }"
+      + "team { states { nodes { id name type position } } } } }"
     let lookup = try await post(query: query, variables: ["id": issueUUID], apiKey: apiKey)
     guard let issueDict = lookup["issue"] as? [String: Any] else {
       throw LinearClientError.notFound(issueUUID)
@@ -291,12 +331,15 @@ private nonisolated enum LinearLive {
     else {
       throw LinearClientError.invalidResponse
     }
-    // A team can define several `started` states; the lowest `position` is the
-    // canonical first one ("In Progress").
-    let targetID = nodes
-      .filter { ($0["type"] as? String) == "started" }
-      .min { (($0["position"] as? Double) ?? .greatestFiniteMagnitude) < (($1["position"] as? Double) ?? .greatestFiniteMagnitude) }?["id"] as? String
-    guard let targetID else {
+    let workflowStates = nodes.map {
+      LinearClient.WorkflowState(
+        id: $0["id"] as? String ?? "",
+        name: $0["name"] as? String ?? "",
+        type: $0["type"] as? String ?? "",
+        position: ($0["position"] as? Double) ?? .greatestFiniteMagnitude
+      )
+    }
+    guard let targetID = LinearClient.canonicalStartedStateID(from: workflowStates) else {
       throw LinearClientError.invalidResponse
     }
 
