@@ -549,6 +549,32 @@ struct LinearInboxFeatureTests {
     #expect(group.children.map(\.identifier) == ["CEN-101", "CEN-102", "CEN-103"])
   }
 
+  @Test(.dependencies) func foldsParentOwnRowIntoItsBundleHeader() {
+    // The parent CEN-100 is in the inbox alongside its two children. It must
+    // read once — as the bundle header — not twice (a synthesized header plus
+    // its own standalone row).
+    resetInbox([
+      LinearTicket(identifier: "CEN-100", title: "Baseline epic"),
+      LinearTicket(identifier: "CEN-101", title: "Doc A", parentIdentifier: "CEN-100", parentTitle: "Baseline epic"),
+      LinearTicket(identifier: "CEN-102", title: "Doc B", parentIdentifier: "CEN-100", parentTitle: "Baseline epic"),
+    ])
+    let state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+
+    #expect(state.visibleEntries.map(\.id) == ["group:CEN-100"])
+  }
+
+  @Test(.dependencies) func keepsParentOwnRowWhenItsLoneChildFlattens() {
+    // A single child of CEN-100 flattens to a plain row, leaving no bundle
+    // header — so the parent's own row must survive rather than being folded.
+    resetInbox([
+      LinearTicket(identifier: "CEN-100", title: "Baseline epic"),
+      LinearTicket(identifier: "CEN-101", title: "Doc A", parentIdentifier: "CEN-100", parentTitle: "Baseline epic"),
+    ])
+    let state = LinearInboxFeature.State(availableRepositories: [Self.repo])
+
+    #expect(state.visibleEntries.map(\.id) == ["ticket:CEN-100", "ticket:CEN-101"])
+  }
+
   @Test(.dependencies) func toggleGroupExpandedFlipsMembership() async {
     resetInbox([
       LinearTicket(identifier: "CEN-101", parentIdentifier: "CEN-100"),

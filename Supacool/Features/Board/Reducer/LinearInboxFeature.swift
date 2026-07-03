@@ -229,6 +229,8 @@ struct LinearInboxFeature {
     /// a standalone `.ticket`. Order follows ``visibleTickets``, with each group
     /// pinned to where its first child appears. Single-child groups are
     /// flattened back to plain rows — a lone sub-issue doesn't earn a header.
+    /// When the parent issue is itself in the inbox, its own row is folded away
+    /// so the root reads once (as the bundle header) instead of twice.
     var visibleEntries: [LinearInboxEntry] {
       var entries: [LinearInboxEntry] = []
       var groupIndexByParent: [String: Int] = [:]
@@ -253,11 +255,24 @@ struct LinearInboxFeature {
           )
         }
       }
-      return entries.map { entry in
-        if case .group(let group) = entry, group.children.count == 1 {
-          return .ticket(group.children[0])
+      // Parents that keep a real bundle header (2+ children). If such a parent is
+      // also in the inbox as its own ticket, that standalone row would render a
+      // second time beside its synthesized header — so fold it away and let the
+      // bundle stand as the single entry for that issue.
+      let bundledParents = Set(
+        entries.compactMap { entry -> String? in
+          guard case .group(let group) = entry, group.children.count > 1 else { return nil }
+          return group.parentIdentifier
         }
-        return entry
+      )
+      return entries.compactMap { entry in
+        switch entry {
+        case .ticket(let ticket):
+          return bundledParents.contains(ticket.identifier) ? nil : entry
+        case .group(let group):
+          // A lone sub-issue doesn't earn a header; flatten back to a plain row.
+          return group.children.count == 1 ? .ticket(group.children[0]) : entry
+        }
       }
     }
 
