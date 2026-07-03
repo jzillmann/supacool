@@ -51,9 +51,12 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
 /// a Personal API Key (`lin_api_…`, sent raw in the `Authorization`
 /// header per Linear's docs) or an OAuth bearer token works.
 struct LinearClient: Sendable {
-  /// Returns the issue title for the given Linear identifier, or `nil`
-  /// when no API key is configured. Throws on network / API errors so
-  /// callers can downgrade to a fallback (LLM-generated branch name).
+  /// Returns the issue title for the given Linear identifier. Returns
+  /// `nil` when the API resolves but the issue doesn't exist (a genuine
+  /// "not found"). Throws on network / API errors, and `.missingAPIKey`
+  /// when no key is configured — the New Terminal sheet treats a throw as
+  /// a *transient* miss it can retry (and surface), rather than a sticky
+  /// negative, so adding a key later doesn't require reopening the sheet.
   var fetchIssueTitle: @Sendable (_ id: String) async throws -> String?
 
   /// Batch-fetches full issue records for the given identifiers (e.g.
@@ -157,9 +160,12 @@ extension LinearClient: DependencyKey {
     fetchIssueTitle: { id in
       let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { return nil }
-      // Title lookup is best-effort: a missing key downgrades to nil so
-      // the New Terminal sheet falls back to its LLM branch name.
-      guard let key = LinearLive.currentAPIKey() else { return nil }
+      // No key throws (not nil): the sheet then shows "add a key" and
+      // retries on the next paste, instead of silently negative-caching
+      // the id for the sheet's whole life.
+      guard let key = LinearLive.currentAPIKey() else {
+        throw LinearClientError.missingAPIKey
+      }
       return try await LinearLive.fetchIssueTitle(id: trimmed, apiKey: key)
     },
     fetchIssues: { ids in

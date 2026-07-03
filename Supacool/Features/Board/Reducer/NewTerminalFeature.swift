@@ -213,6 +213,21 @@ struct NewTerminalFeature {
     /// same id doesn't re-hit the API. Negative results are stored as
     /// empty-string sentinels so we don't loop on missing tickets.
     var linearTitleCache: [String: String] = [:]
+    /// Ids whose lookup failed for a *transient* reason (network blip,
+    /// cancellation, or no API key yet) as opposed to a genuine "no such
+    /// ticket". They're cached as empty sentinels too — so continued
+    /// typing doesn't thrash the API — but they're evicted the moment the
+    /// ticket id leaves the prompt, so removing + re-pasting the id (or
+    /// closing/reopening the sheet) retries instead of being stuck on the
+    /// first bad attempt. This is the "close, reopen, re-paste fixes it"
+    /// bug: a single early hiccup used to poison the id for the whole
+    /// sheet.
+    var linearTransientFailureIDs: Set<String> = []
+    /// User-facing note about the current prompt ticket's lookup — a
+    /// failure reason ("No Linear API key…") or "not found". Nil when the
+    /// lookup is healthy (scanning or resolved). Surfaced by the sheet's
+    /// Linear status chip.
+    var linearLookupMessage: String?
     /// True the first time the user has manually edited the workspace
     /// query field. Used to decide whether to overwrite the field with
     /// a freshly-fetched ticket-derived branch name (we won't, once the
@@ -465,11 +480,12 @@ struct NewTerminalFeature {
     /// When `title` is nil we record a negative cache so the same id
     /// doesn't get re-fetched on every keystroke.
     case linearTicketTitleResolved(id: String, title: String?)
-    /// Background Linear fetch failed (network / auth / etc). Caches a
-    /// negative result so the failure doesn't thrash the API on every
-    /// keystroke; the user can retry by editing the prompt or clicking
-    /// the wand button.
-    case linearTicketTitleFailed(id: String)
+    /// Background Linear fetch failed (network / auth / no key / etc).
+    /// Caches an empty sentinel so the failure doesn't thrash the API on
+    /// every keystroke, but marks the id transient so removing + re-pasting
+    /// it retries. `message` is a short user-facing reason shown in the
+    /// Linear status chip.
+    case linearTicketTitleFailed(id: String, message: String?)
 
     /// User flipped the destination segmented picker. `.local` reverts
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
@@ -855,18 +871,28 @@ struct NewTerminalFeature {
         // most recently kicked off. Anything older is yesterday's news.
         guard state.pendingLinearTicketID == id else { return .none }
         state.pendingLinearTicketID = nil
+        // A real answer arrived — this id is no longer a transient failure.
+        state.linearTransientFailureIDs.remove(id)
+        let cleaned = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // Negative cache: empty string sentinel keeps us from re-fetching
-        // a typo'd id on every keystroke.
-        state.linearTitleCache[id] = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // a typo'd id on every keystroke. An empty title here is a genuine
+        // "issue not found" (the API resolved but had no such issue), so —
+        // unlike a transient failure — it stays cached across re-pastes.
+        state.linearTitleCache[id] = cleaned
+        state.linearLookupMessage = cleaned.isEmpty ? "Linear issue \(id) not found." : nil
         return Self.maybeAutoFillWorkspaceQueryFromLinear(state: &state)
 
-      case .linearTicketTitleFailed(let id):
+      case .linearTicketTitleFailed(let id, let message):
         guard state.pendingLinearTicketID == id else { return .none }
         state.pendingLinearTicketID = nil
-        // Cache the failure so a transient outage doesn't pummel the API
-        // every time the user adds a character. The user can still hit
-        // the wand button to retry; the cache only blocks the auto path.
+        // Cache an empty sentinel so a transient outage doesn't pummel the
+        // API every time the user adds a character while the id sits in the
+        // prompt. Mark it transient so removing + re-pasting the id retries
+        // (see `linearTransientFailureIDs`). The user can also hit the wand
+        // button to retry.
         state.linearTitleCache[id] = ""
+        state.linearTransientFailureIDs.insert(id)
+        state.linearLookupMessage = message
         return .none
 
       case .pullRequestDismissTapped:
@@ -1342,21 +1368,37 @@ struct NewTerminalFeature {
     state: inout State
   ) -> Effect<Action> {
     guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
-      // Ticket id removed — drop any in-flight fetch but keep the cache;
-      // re-typing the same id should still hit it.
+      // Ticket id removed. Drop any in-flight fetch. Evict transient
+      // failures (network / no-key / cancelled) so a genuine re-paste
+      // retries them — those weren't real "no such ticket" answers.
+      // Genuine not-found entries stay cached so a typo doesn't re-hit
+      // the API on every keystroke.
       state.pendingLinearTicketID = nil
+      for id in state.linearTransientFailureIDs {
+        state.linearTitleCache[id] = nil
+      }
+      state.linearTransientFailureIDs.removeAll()
+      state.linearLookupMessage = nil
       return .cancel(id: CancelID.linearTicketLookup)
     }
-    if state.linearTitleCache[ticketID] != nil {
-      // Already resolved (or negatively cached). The auto-fill helper
-      // re-runs whenever the cache gains an entry, so nothing to do here.
-      return .none
+    if let cached = state.linearTitleCache[ticketID] {
+      // Already resolved once this sheet. A positive title lets us
+      // (re-)attempt the workspace auto-fill right now — this is what makes
+      // a re-paste recover from an earlier fill that lost the binding
+      // round-trip race, without a fresh network round-trip. An empty
+      // entry is a genuine not-found; leave the field (and its note) alone.
+      if cached.isEmpty {
+        return .none
+      }
+      state.linearLookupMessage = nil
+      return Self.maybeAutoFillWorkspaceQueryFromLinear(state: &state)
     }
     if state.pendingLinearTicketID == ticketID {
       // Same id already mid-flight — let it finish.
       return .none
     }
     state.pendingLinearTicketID = ticketID
+    state.linearLookupMessage = nil
     return .run { [linearClient, clock] send in
       // Tiny debounce so a typing storm doesn't fire one HTTP call per
       // keystroke once the id is fully formed (`CEN-`, `CEN-6`, …).
@@ -1370,7 +1412,10 @@ struct NewTerminalFeature {
         newTerminalLogger.warning(
           "Linear ticket lookup failed for \(ticketID): \(error.localizedDescription)"
         )
-        await send(.linearTicketTitleFailed(id: ticketID))
+        let message =
+          (error as? LinearClientError)?.errorDescription
+          ?? "Couldn't reach Linear — re-paste the ticket id to retry."
+        await send(.linearTicketTitleFailed(id: ticketID, message: message))
       }
     }
     .cancellable(id: CancelID.linearTicketLookup, cancelInFlight: true)

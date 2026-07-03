@@ -462,6 +462,80 @@ struct NewTerminalFeatureTests {
     #expect(fetchCount.value == 1)
   }
 
+  /// Re-entrancy: once a title is cached, re-pasting the ticket (a fresh
+  /// prompt binding) fills the workspace field immediately from the cache
+  /// with no new fetch. This is what lets a re-paste recover from an
+  /// earlier auto-fill that lost the binding round-trip race — previously
+  /// the cache short-circuited to `.none` and only reopening the sheet
+  /// (which clears the cache) would refill.
+  @Test(.dependencies) func linearCachedTitleRefillsWithoutRefetch() async {
+    var state = Self.makeState()
+    state.linearTitleCache["CEN-6690"] = "Streamline the foobar pipeline"
+    let clock = TestClock()
+    let fetchCount = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in
+        fetchCount.withValue { $0 += 1 }
+        return "should not be called"
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+
+    #expect(fetchCount.value == 0)
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+    #expect(
+      store.state.selectedWorkspace
+        == .newBranch(name: "cen-6690-streamline-the-foobar-pipeline")
+    )
+  }
+
+  /// A *transient* failure (network blip / no API key yet) must not poison
+  /// the id for the sheet's life. Removing the ticket from the prompt
+  /// evicts the transient sentinel, so re-pasting it retries — and this
+  /// time resolves and auto-fills. This is the "close, reopen, re-paste
+  /// fixes it" bug, now fixed without needing to reopen.
+  @Test(.dependencies) func linearTransientFailureRetriesAfterRepaste() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    struct Boom: Error {}
+    let attempts = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in
+        let n = attempts.withValue { $0 += 1; return $0 }
+        if n == 1 { throw Boom() }
+        return "Streamline the foobar pipeline"
+      }
+    }
+    store.exhaustivity = .off
+
+    // First paste fails transiently and is cached as an empty sentinel.
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleFailed)
+    #expect(store.state.linearTitleCache["CEN-6690"] == "")
+    #expect(store.state.linearLookupMessage != nil)
+
+    // Removing the ticket evicts the transient sentinel …
+    await store.send(\.binding.prompt, "Fix ")
+    #expect(store.state.linearTitleCache["CEN-6690"] == nil)
+    #expect(store.state.linearLookupMessage == nil)
+
+    // … so re-pasting retries and, this time, resolves + fills.
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+    #expect(attempts.value == 2)
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+  }
+
   /// When a Linear title is cached, the wand button uses it directly
   /// instead of round-tripping through the LLM.
   @Test(.dependencies) func suggestBranchNamePrefersCachedLinearTitle() async {

@@ -43,6 +43,9 @@ struct NewTerminalSheet: View {
             onDismiss: { store.send(.pullRequestDismissTapped) }
           )
         }
+        if let linearStatus {
+          LinearTicketBannerView(status: linearStatus)
+        }
       } header: {
         Text("New Terminal")
         Text(headerSubtitle)
@@ -249,6 +252,32 @@ struct NewTerminalSheet: View {
     case .idle, .dismissed: return false
     case .fetching, .resolved, .failed: return true
     }
+  }
+
+  /// Derives the Linear ticket status chip from reducer state: scanning
+  /// while a lookup is in flight, resolved (id + title + suggested branch)
+  /// once cached, or a note when the lookup failed / the issue wasn't
+  /// found. Nil hides the chip entirely. Gives the user visible feedback
+  /// that a pasted ticket is being recognised and named — the flow used to
+  /// be silent, so a slow or failed lookup looked like nothing happened.
+  private var linearStatus: LinearTicketBannerView.Status? {
+    if let pending = store.pendingLinearTicketID {
+      return .scanning(id: pending)
+    }
+    guard let id = firstLinearTicketID(in: store.prompt)?.uppercased() else {
+      return nil
+    }
+    if let title = store.linearTitleCache[id], !title.isEmpty {
+      return .resolved(
+        id: id,
+        title: title,
+        branch: branchNameFromLinearTitle(ticketID: id, title: title)
+      )
+    }
+    if let message = store.linearLookupMessage {
+      return .note(message)
+    }
+    return nil
   }
 
   /// Lock repo + workspace fields when a PR has resolved — the PR context
@@ -1068,6 +1097,101 @@ private struct PullRequestBannerView: View {
         + "a worktree will be checked out from this branch."
     case .failed(_, let message):
       return message
+    }
+  }
+}
+
+// MARK: - Linear ticket banner
+
+/// Status chip shown below the prompt when a Linear ticket id is detected.
+/// Purely informational — mirrors `PullRequestBannerView` but has no
+/// dismiss affordance (there's nothing to opt out of; the chip just
+/// reports what the ticket lookup is doing).
+private struct LinearTicketBannerView: View {
+  enum Status: Equatable {
+    /// Lookup in flight for this id.
+    case scanning(id: String)
+    /// Title resolved; `branch` is the name we'd auto-fill.
+    case resolved(id: String, title: String, branch: String)
+    /// Failure / not-found note to surface to the user.
+    case note(String)
+  }
+
+  let status: Status
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Image(systemName: iconName)
+        .font(.callout)
+        .foregroundStyle(iconColor)
+        .frame(width: 18)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(headline)
+          .font(.callout)
+          .lineLimit(2)
+        if let detail {
+          Text(detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(2)
+        }
+      }
+      Spacer(minLength: 8)
+      if case .scanning = status {
+        ProgressView().controlSize(.small)
+      }
+    }
+    .padding(.vertical, 6)
+    .padding(.horizontal, 10)
+    .background(
+      RoundedRectangle(cornerRadius: 6, style: .continuous)
+        .fill(backgroundTint)
+    )
+  }
+
+  private var iconName: String {
+    switch status {
+    case .scanning: return "sparkle.magnifyingglass"
+    case .resolved: return "checkmark.circle.fill"
+    case .note: return "exclamationmark.triangle.fill"
+    }
+  }
+
+  private var iconColor: Color {
+    switch status {
+    case .resolved: return .accentColor
+    case .note: return .orange
+    case .scanning: return .secondary
+    }
+  }
+
+  private var backgroundTint: Color {
+    switch status {
+    case .resolved: return Color.accentColor.opacity(0.08)
+    case .note: return Color.orange.opacity(0.08)
+    case .scanning: return Color.secondary.opacity(0.06)
+    }
+  }
+
+  private var headline: String {
+    switch status {
+    case .scanning(let id):
+      return "Looking up Linear ticket \(id)…"
+    case .resolved(let id, let title, _):
+      return "\(id) · \(title)"
+    case .note(let message):
+      return message
+    }
+  }
+
+  private var detail: String? {
+    switch status {
+    case .scanning:
+      return nil
+    case .resolved(_, _, let branch):
+      return "Suggested branch \(branch)"
+    case .note:
+      return nil
     }
   }
 }
