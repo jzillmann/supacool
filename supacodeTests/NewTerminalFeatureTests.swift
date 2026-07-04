@@ -536,6 +536,82 @@ struct NewTerminalFeatureTests {
     #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
   }
 
+  /// A transient network error auto-retries with backoff before ever
+  /// surfacing the failure chip — a single blip self-heals silently.
+  @Test(.dependencies) func linearAutoRetriesTransientNetworkError() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let attempts = LockIsolated(0)
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in
+        let n = attempts.withValue { $0 += 1; return $0 }
+        if n == 1 { throw URLError(.networkConnectionLost) }
+        return "Streamline the foobar pipeline"
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await clock.advance(by: .milliseconds(400))  // debounce → attempt 1 fails
+    await clock.advance(by: .milliseconds(400))  // backoff → attempt 2 succeeds
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(attempts.value == 2)
+    #expect(store.state.linearLookupMessage == nil)
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
+  }
+
+  /// A cancelled request (`URLError.cancelled`, thrown when the effect is
+  /// torn down because the user typed past the id) must NOT be reported as
+  /// a failure. Regression: `URLError.cancelled` isn't a Swift
+  /// `CancellationError`, so the naive handler misclassified it and showed
+  /// a bogus "Couldn't reach Linear" chip.
+  @Test(.dependencies) func linearCancelledRequestIsNotAFailure() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in throw URLError(.cancelled) }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await clock.advance(by: .milliseconds(400))
+
+    #expect(store.state.linearLookupMessage == nil)
+    #expect(store.state.linearTitleCache["CEN-6690"] == nil)
+  }
+
+  /// Tapping Retry on the failure chip drops the cached failure and
+  /// re-runs the lookup immediately (no debounce), filling on success.
+  @Test(.dependencies) func linearRetryTappedRefetchesAndFills() async {
+    var state = Self.makeState()
+    state.prompt = "Might already be done: CEN-6811"
+    state.linearTitleCache["CEN-6811"] = ""
+    state.linearTransientFailureIDs = ["CEN-6811"]
+    state.linearLookupMessage = "Couldn't reach Linear — retry?"
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueTitle = { _ in "Fix the thing" }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.linearLookupRetryTapped)
+    #expect(store.state.pendingLinearTicketID == "CEN-6811")
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.linearLookupMessage == nil)
+    #expect(store.state.workspaceQuery == "cen-6811-fix-the-thing")
+  }
+
   /// When a Linear title is cached, the wand button uses it directly
   /// instead of round-tripping through the LLM.
   @Test(.dependencies) func suggestBranchNamePrefersCachedLinearTitle() async {

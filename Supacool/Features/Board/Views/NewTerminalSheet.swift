@@ -44,7 +44,10 @@ struct NewTerminalSheet: View {
           )
         }
         if let linearStatus {
-          LinearTicketBannerView(status: linearStatus)
+          LinearTicketBannerView(
+            status: linearStatus,
+            onRetry: { store.send(.linearLookupRetryTapped) }
+          )
         }
       } header: {
         Text("New Terminal")
@@ -1118,6 +1121,8 @@ private struct LinearTicketBannerView: View {
   }
 
   let status: Status
+  /// Invoked when the user taps Retry on a failure note.
+  var onRetry: () -> Void = {}
 
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
@@ -1137,8 +1142,15 @@ private struct LinearTicketBannerView: View {
         }
       }
       Spacer(minLength: 8)
-      if case .scanning = status {
+      switch status {
+      case .scanning:
         ProgressView().controlSize(.small)
+      case .note:
+        Button("Retry") { onRetry() }
+          .controlSize(.small)
+          .help("Retry the Linear ticket lookup")
+      case .resolved:
+        EmptyView()
       }
     }
     .padding(.vertical, 6)

@@ -486,6 +486,10 @@ struct NewTerminalFeature {
     /// it retries. `message` is a short user-facing reason shown in the
     /// Linear status chip.
     case linearTicketTitleFailed(id: String, message: String?)
+    /// User tapped Retry on the Linear failure chip. Drops the cached
+    /// failure for the current prompt ticket and re-runs the lookup
+    /// immediately (no debounce).
+    case linearLookupRetryTapped
 
     /// User flipped the destination segmented picker. `.local` reverts
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
@@ -894,6 +898,17 @@ struct NewTerminalFeature {
         state.linearTransientFailureIDs.insert(id)
         state.linearLookupMessage = message
         return .none
+
+      case .linearLookupRetryTapped:
+        guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
+          return .none
+        }
+        // Clear the cached failure so the lookup actually re-runs (a
+        // cached empty sentinel would otherwise short-circuit), then fire
+        // immediately.
+        state.linearTitleCache[ticketID] = nil
+        state.linearTransientFailureIDs.remove(ticketID)
+        return startLinearLookup(state: &state, ticketID: ticketID, debounce: false)
 
       case .pullRequestDismissTapped:
         let parsed: ParsedPullRequestURL
@@ -1397,25 +1412,67 @@ struct NewTerminalFeature {
       // Same id already mid-flight — let it finish.
       return .none
     }
+    return startLinearLookup(state: &state, ticketID: ticketID, debounce: true)
+  }
+
+  /// Kicks off the Linear title fetch for `ticketID` and owns the failure
+  /// policy so the sheet's status chip behaves. Two things make the
+  /// "Couldn't reach Linear" banner far rarer than the naive one-shot:
+  ///
+  ///  - **Cancellation is not failure.** When the effect is cancelled
+  ///    (the user typed past this id, the sheet closed) the underlying
+  ///    `URLSession` task throws `URLError.cancelled` — which is *not* a
+  ///    Swift `CancellationError`, so the old `catch is CancellationError`
+  ///    missed it and reported a bogus failure. Both are now swallowed.
+  ///  - **Transient network errors auto-retry** a couple of times with a
+  ///    short backoff before the banner ever appears. A single blip
+  ///    self-heals silently.
+  ///
+  /// `debounce` is true for prompt-driven lookups (coalesce a typing
+  /// storm) and false for an explicit Retry tap (act immediately).
+  private func startLinearLookup(
+    state: inout State,
+    ticketID: String,
+    debounce: Bool
+  ) -> Effect<Action> {
     state.pendingLinearTicketID = ticketID
     state.linearLookupMessage = nil
     return .run { [linearClient, clock] send in
-      // Tiny debounce so a typing storm doesn't fire one HTTP call per
-      // keystroke once the id is fully formed (`CEN-`, `CEN-6`, …).
-      try? await clock.sleep(for: .milliseconds(400))
-      do {
-        let title = try await linearClient.fetchIssueTitle(ticketID)
-        await send(.linearTicketTitleResolved(id: ticketID, title: title))
-      } catch is CancellationError {
-        return
-      } catch {
+      if debounce {
+        // Tiny debounce so a typing storm doesn't fire one HTTP call per
+        // keystroke once the id is fully formed (`CEN-`, `CEN-6`, …).
+        // A plain `try await` here means cancellation propagates out as a
+        // `CancellationError`, which TCA drops silently — exactly right.
+        try await clock.sleep(for: .milliseconds(400))
+      }
+      let maxAttempts = 3
+      var lastError: Error?
+      for attempt in 1...maxAttempts {
+        do {
+          let title = try await linearClient.fetchIssueTitle(ticketID)
+          await send(.linearTicketTitleResolved(id: ticketID, title: title))
+          return
+        } catch is CancellationError {
+          return
+        } catch let error as URLError where error.code == .cancelled {
+          // In-flight request torn down (id changed / sheet closed). Not a
+          // failure — stay quiet and let the replacement lookup take over.
+          return
+        } catch {
+          lastError = error
+          // Only network hiccups are worth retrying; API-level errors
+          // (auth, malformed response) won't change on a retry.
+          guard error is URLError, attempt < maxAttempts else { break }
+          try await clock.sleep(for: .milliseconds(400 * attempt))
+        }
+      }
+      if let lastError {
         newTerminalLogger.warning(
-          "Linear ticket lookup failed for \(ticketID): \(error.localizedDescription)"
+          "Linear ticket lookup failed for \(ticketID): \(lastError.localizedDescription)"
         )
-        let message =
-          (error as? LinearClientError)?.errorDescription
-          ?? "Couldn't reach Linear — re-paste the ticket id to retry."
-        await send(.linearTicketTitleFailed(id: ticketID, message: message))
+        await send(
+          .linearTicketTitleFailed(id: ticketID, message: linearFailureMessage(lastError))
+        )
       }
     }
     .cancellable(id: CancelID.linearTicketLookup, cancelInFlight: true)
@@ -1790,6 +1847,27 @@ nonisolated func displayNameFromLinearTitle(ticketID: String, title: String) -> 
   guard !trimmedTitle.isEmpty else { return ticketID }
   let combined = "\(ticketID) · \(trimmedTitle)"
   return String(combined.prefix(80))
+}
+
+/// Turns a Linear lookup error into a short, user-facing chip message.
+/// `LinearClientError` already carries good copy (auth / no key / not
+/// found); network `URLError`s get a friendlier, retry-oriented phrasing
+/// than the raw system description.
+nonisolated func linearFailureMessage(_ error: Error) -> String {
+  if let linearError = error as? LinearClientError {
+    return linearError.errorDescription ?? "Linear lookup failed — retry?"
+  }
+  if let urlError = error as? URLError {
+    switch urlError.code {
+    case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed:
+      return "No connection to Linear — check your network, then retry."
+    case .timedOut:
+      return "Linear timed out — retry?"
+    default:
+      return "Couldn't reach Linear — retry?"
+    }
+  }
+  return "Couldn't reach Linear — retry?"
 }
 
 /// Find the first configured repository whose GitHub remote matches the
