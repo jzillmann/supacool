@@ -217,4 +217,78 @@ struct AwaitingInputSignalTests {
       """
     #expect(WorktreeTerminalManager.isAwaitingInputPromptScreen(screen))
   }
+
+  // MARK: - Idle-reminder (soft awaiting signal) classification
+
+  /// Claude's built-in 60s idle reminder is the only *soft* awaiting
+  /// signal — the one a deferred-work lease may absorb. Everything else
+  /// that `isAwaitingInputSignal` matches stays authoritative.
+
+  @Test func exactIdleReminderBodyIsIdleReminder() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "Claude is waiting for your input",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
+
+  @Test func idleReminderMatchIgnoresSurroundingWhitespaceAndCase() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "  Claude is waiting for your input\n",
+      sessionID: nil
+    )
+    #expect(WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
+
+  @Test func permissionPromptIsNotIdleReminder() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "Claude needs your permission to use Bash",
+      sessionID: nil
+    )
+    #expect(!WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
+
+  /// Richer wording means the agent composed a real message — exact-match
+  /// only, so anything beyond the canned reminder promotes as before.
+  @Test func idleReminderWithExtraWordsIsNotIdleReminder() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Notification",
+      title: nil,
+      body: "Claude is waiting for your input on the deploy question",
+      sessionID: nil
+    )
+    #expect(!WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
+
+  @Test func stopEventIsNeverIdleReminder() {
+    let note = AgentHookNotification(
+      agent: "claude",
+      event: "Stop",
+      title: nil,
+      body: "Claude is waiting for your input",
+      sessionID: nil
+    )
+    #expect(!WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
+
+  @Test func codexNotificationIsNeverIdleReminder() {
+    let note = AgentHookNotification(
+      agent: "codex",
+      event: "Notification",
+      title: nil,
+      body: "Claude is waiting for your input",
+      sessionID: nil
+    )
+    #expect(!WorktreeTerminalManager.isIdleReminderNotification(note))
+  }
 }

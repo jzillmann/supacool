@@ -1181,6 +1181,95 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression for trace BF99621E (04:49): an evaluator holding for CI
+  /// took (should take) a deferred-work lease, then Claude's built-in 60s
+  /// idle reminder fired. The reminder used to clear the lease and promote
+  /// the card to "Wants Input" mid-hold. The soft idle reminder must now
+  /// be absorbed by an active lease, while a hard permission prompt still
+  /// promotes and clears the lease.
+  @Test func idleReminderDuringDeferredWorkLeaseDoesNotPromoteAwaitingInput() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer(
+          testingSocketPath: "/tmp/supacool-test-idle-reminder-deferred"
+        )
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          deferredWorkFallbackTTL: .seconds(60),
+          clock: clock
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        // Evaluator-style Stop: holding for CI with a background poller.
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Stop",
+            title: nil,
+            body: "evaluator: iter 3, step_8 waiting on live CI for PR #4346 "
+              + "with an active background poller in the doer — holding for "
+              + "the doer's next yield.",
+            sessionID: nil
+          )
+        )
+        #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+
+        // Claude's 60s idle reminder lands mid-hold.
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude is waiting for your input",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+        await clock.advance(by: .milliseconds(250))
+
+        // The reminder must not clobber the lease nor present the chip.
+        #expect(manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+
+        // A permission prompt stays authoritative: promotes to awaiting
+        // and releases the lease.
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude needs your permission to use Bash",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+        await clock.advance(by: .milliseconds(250))
+        #expect(!manager.isDeferredWorkActive(worktreeID: worktree.id, tabID: tabId))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   @Test func markAllNotificationsReadEmitsUpdatedIndicatorCount() async {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

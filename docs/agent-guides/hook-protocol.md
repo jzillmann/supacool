@@ -124,6 +124,31 @@ does the *identical* `nc -U $SUPACOOL_SOCKET_PATH`. Key choices (details and rat
 - `onNotification` posts the system notification and calls
   `captureAgentNativeSessionID(tabID:notification:)`.
 
+### Deferred-work lease (intentional idle ≠ waiting on the user)
+
+Claude can end its turn *on purpose* while something external runs — holding for CI, a
+background poller, a timed re-check. The Stop hook body carries the agent's last message;
+`isDeferredWorkSignal` matches it against a phrase list ("check back", "waiting on ci",
+"poll pending", "background poller", "holding for", …) and, on match, takes a
+**deferred-work lease** for the tab. While the lease is live, `classify` keeps the card
+**In Progress** even though the busy bit is off.
+
+- Lease duration: parsed from the body when it names one ("in ~7 min" → 7 min + 90 s
+  buffer), else a 15-minute fallback TTL.
+- Lease cleared by: any busy-on edge, any non-deferred Stop, a hard awaiting-input
+  signal, or TTL expiry (at which point the card falls through to Waiting on
+  External / Waiting on Me — a dead hold always resurfaces).
+
+**Soft vs hard awaiting signals.** Claude's built-in idle reminder (`Notification`, body
+exactly "Claude is waiting for your input", fires ~60 s after the prompt goes idle) is
+*soft*: while a lease is active it is suppressed — otherwise every hold longer than a
+minute got dumped into Waiting on Me (trace BF99621E). Permission / approval
+notifications are *hard*: they always promote to `.awaitingInput` and release the lease.
+Known caveat: the synthetic PreToolUse notification for blocking tools reuses the idle
+reminder's exact body, so an AskUserQuestion asked as the very first tool call after a
+deferred-work Stop is masked until the lease expires (bounded by the 15-min TTL; any
+other tool call first clears the lease via its busy-on edge).
+
 ## Gotchas
 
 - **Preview instances**: `scripts/preview-isolated.sh` strips inherited `SUPACOOL_*` vars
@@ -134,5 +159,6 @@ does the *identical* `nc -U $SUPACOOL_SOCKET_PATH`. Key choices (details and rat
   [`out-of-scope.md`](./out-of-scope.md) refers to.
 - **Tests**: `AgentHookSocketServerTests`, `AgentHookCommandTests`,
   `ClaudeProgressHookTests`, `CodexHookPayloadTests`, `AgentPIDSweepTests`,
-  `RemoteHookInstallerTests` are the executable spec; extend them when you change any of
-  the above.
+  `RemoteHookInstallerTests`, `AwaitingInputSignalTests`, `DeferredWorkSignalTests`, and
+  the deferred-work / awaiting cases in `WorktreeTerminalManagerTests` are the executable
+  spec; extend them when you change any of the above.

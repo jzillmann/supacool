@@ -95,6 +95,22 @@ The `| tail -80` pattern some Makefiles use buffers all output until completion 
 
 Test bundle flakiness: the upstream `AppFeatureCommandPaletteTests`, `WorktreeTerminalManagerTests`, and a few `DeeplinkClientTests` sometimes fail at 0.000 seconds due to test-bundle-loading issues. These are environmental, not regressions from Supacool changes. Re-run full suite with `make test` and they usually pass.
 
+**Tests while the app is running**: the tests are hosted *in* the app, and LaunchServices refuses to launch the test host while another instance of `io.morethan.supacool` is running — `xcodebuild` fails with `Could not launch "supacoolTests" … The LaunchServices launcher has returned an error`, even from a separate `-derivedDataPath`. Don't quit the user's app (live sessions!) — give the test build its own bundle id instead:
+
+```bash
+xcodebuild test -project supacool.xcodeproj -scheme supacool \
+  -destination "platform=macOS" \
+  -derivedDataPath build/dd-tests \
+  -clonedSourcePackagesDirPath build/spm-cache \
+  -only-testing:supacoolTests/<YourSuite> \
+  -parallel-testing-enabled NO \
+  'PRODUCT_BUNDLE_IDENTIFIER=io.morethan.tests.$(TARGET_NAME)' \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+  -skipMacroValidation
+```
+
+The `$(TARGET_NAME)` reference keeps the app and test-bundle ids distinct. Side effect: `UserDefaults` reads from a fresh prefs domain, which is extra isolation, not a problem, for unit tests.
+
 ## Logs
 
 ```bash

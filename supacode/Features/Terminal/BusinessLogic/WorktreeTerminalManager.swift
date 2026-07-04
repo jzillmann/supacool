@@ -315,6 +315,24 @@ final class WorktreeTerminalManager {
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
       if awaiting {
+        // Claude's generic 60s idle reminder while a deferred-work lease
+        // is live is expected noise, not evidence the agent needs the
+        // user: the agent's own Stop message just declared it stopped on
+        // purpose (holding for CI, a background poller, a timed
+        // re-check). Promoting it here is what used to drop mid-hold
+        // sessions into Waiting on Me one minute into every hold (trace
+        // BF99621E, 04:49). Keep the lease; its TTL still resurfaces the
+        // card if the agent never wakes. Hard signals (permission /
+        // approval prompts) never match the idle-reminder check and
+        // promote as before.
+        if Self.isIdleReminderNotification(notification),
+          self?.isDeferredWorkActive(worktreeID: decoded, tabID: wrappedTabID) == true
+        {
+          terminalLogger.info(
+            "Idle reminder suppressed by deferred-work lease for tab \(tabID)"
+          )
+          return
+        }
         // An authoritative awaiting-input hook means the agent has
         // yielded its turn and is blocked on the user — it is, by
         // definition, not busy. Clear the busy latch (and any optimistic
@@ -392,6 +410,31 @@ final class WorktreeTerminalManager {
     return notification.event == "Notification"
   }
 
+  /// Claude's built-in idle reminder — fires ~60s after the prompt goes
+  /// idle, with this exact body. It is the one awaiting-input signal that
+  /// is *soft*: when the agent's most recent Stop declared deferred work
+  /// (holding for CI, a background poller, a timed re-check), the reminder
+  /// is expected noise, not evidence the agent needs the user. Permission /
+  /// approval notifications never match — they stay authoritative.
+  ///
+  /// Caveat: the synthetic PreToolUse notification for blocking tools
+  /// (`AgentHookSettingsCommand.preToolUseCommand`) reuses the same body,
+  /// so a real question asked as the *first* tool call after a
+  /// deferred-work Stop is masked until the lease TTL expires. Acceptable:
+  /// any other hook edge (busy-on, non-deferred Stop) clears the lease
+  /// first, and the lease is capped at `deferredWorkFallbackTTL`.
+  nonisolated static func isIdleReminderNotification(
+    _ notification: AgentHookNotification
+  ) -> Bool {
+    guard notification.agent.lowercased().contains("claude"),
+      notification.event == "Notification"
+    else { return false }
+    let body = (notification.body ?? "")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+    return body == "claude is waiting for your input"
+  }
+
   /// Claude can stop its foreground turn while intentionally waiting on
   /// a timed check (CI, deploy retry, external poll). That is not
   /// "waiting on the user", but it also should not drop the card into
@@ -439,6 +482,18 @@ final class WorktreeTerminalManager {
       "scheduled a",
       "diagnostic is running",
       "diagnostic preview running",
+      // Orchestration-loop holds (trace BF99621E): an evaluator ends its
+      // turn while a doer's background poller watches CI. Phrases the
+      // c-ci-triage evaluator actually emitted, generalized slightly.
+      "waiting on ci",
+      "waiting on live ci",
+      "waiting for ci",
+      "ci poll",
+      "poll pending",
+      "background poller",
+      "background task",
+      "holding for",
+      "awaiting yield",
     ]
 
     return deferredPhrases.contains(where: { body.contains($0) })
