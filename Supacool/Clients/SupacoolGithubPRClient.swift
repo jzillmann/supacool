@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-private nonisolated let prClientLogger = SupaLogger("Supacool.GithubPR")
-
 /// Minimal Supacool-owned wrapper around `gh pr view` that returns enough
 /// metadata to drive the "create session from a pasted PR URL" flow in
 /// the New Terminal sheet. Upstream's `GithubCLIClient.viewPullRequest`
@@ -59,23 +57,6 @@ extension DependencyValues {
   var supacoolGithubPR: SupacoolGithubPRClient {
     get { self[SupacoolGithubPRClient.self] }
     set { self[SupacoolGithubPRClient.self] = newValue }
-  }
-}
-
-// MARK: - Shelling out
-
-/// Run `gh` via a login shell so PATH / auth plugins are loaded. We use
-/// `/usr/bin/env gh` rather than replicating upstream's executable resolver
-/// — if `gh` isn't on PATH, the error is surfaced as a non-blocking warning
-/// in the sheet, same as any other lookup failure.
-private nonisolated func runGh(shell: ShellClient, arguments: [String]) async throws -> String {
-  let envURL = URL(fileURLWithPath: "/usr/bin/env")
-  let ghArguments = ["gh"] + arguments
-  do {
-    return try await shell.runLogin(envURL, ghArguments, nil, log: false).stdout
-  } catch {
-    prClientLogger.warning("gh invocation failed: \(error.localizedDescription)")
-    throw error
   }
 }
 

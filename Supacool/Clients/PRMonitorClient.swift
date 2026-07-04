@@ -1,8 +1,6 @@
 import ComposableArchitecture
 import Foundation
 
-private nonisolated let prMonitorLogger = SupaLogger("Supacool.PRMonitor")
-
 /// Repo-wide PR monitoring for the board's PR Pulse badge. The open-PR list
 /// is a *union* of two `gh pr list` round-trips — PRs you authored and PRs
 /// assigned to you — because `gh pr list` ANDs its filters, so a single
@@ -97,19 +95,6 @@ nonisolated func mergeByNumber(
     merged.append(pr)
   }
   return merged
-}
-
-// MARK: - Shelling out
-
-private nonisolated func runGh(shell: ShellClient, arguments: [String]) async throws -> String {
-  let envURL = URL(fileURLWithPath: "/usr/bin/env")
-  let ghArguments = ["gh"] + arguments
-  do {
-    return try await shell.runLogin(envURL, ghArguments, nil, log: false).stdout
-  } catch {
-    prMonitorLogger.warning("gh invocation failed: \(error.localizedDescription)")
-    throw error
-  }
 }
 
 // MARK: - JSON decoding
