@@ -244,6 +244,7 @@ struct NewTerminalFeatureTests {
     await store.receive(.branchNameSuggested("add-ssh-connection-pooling")) {
       $0.isSuggestingBranchName = false
       $0.workspaceQuery = "add-ssh-connection-pooling"
+      $0.previousWorkspaceQuery = "add-ssh-connection-pooling"
       $0.selectedWorkspace = .newBranch(name: "add-ssh-connection-pooling")
       $0.workspaceQueryUserEdited = true
     }
@@ -289,6 +290,7 @@ struct NewTerminalFeatureTests {
     await store.receive(\.branchNameSuggested) {
       $0.isSuggestingBranchName = false
       $0.workspaceQuery = "fix-marios-bug"
+      $0.previousWorkspaceQuery = "fix-marios-bug"
       $0.selectedWorkspace = .newBranch(name: "fix-marios-bug")
       $0.workspaceQueryUserEdited = true
     }
