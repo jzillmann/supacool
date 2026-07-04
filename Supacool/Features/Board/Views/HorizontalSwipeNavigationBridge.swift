@@ -18,7 +18,7 @@ nonisolated struct HorizontalSwipeDetector: Equatable, Sendable {
   var dominanceRatio: Double
 
   private var accumulatedX: Double = 0
-  private var accumulatedY: Double = 0
+  private var verticalTravel: Double = 0
   private var didTrigger: Bool = false
 
   init(threshold: Double = 80, dominanceRatio: Double = 1.35) {
@@ -28,7 +28,7 @@ nonisolated struct HorizontalSwipeDetector: Equatable, Sendable {
 
   mutating func reset() {
     accumulatedX = 0
-    accumulatedY = 0
+    verticalTravel = 0
     didTrigger = false
   }
 
@@ -47,7 +47,10 @@ nonisolated struct HorizontalSwipeDetector: Equatable, Sendable {
     if isBeginning { reset() }
 
     accumulatedX += deltaX
-    accumulatedY += deltaY
+    // Vertical *travel* (not net displacement): scrolling up then down while
+    // reading must not cancel out, or its dominance guard would evaporate and a
+    // little horizontal drift would masquerade as a page swipe.
+    verticalTravel += abs(deltaY)
 
     defer {
       if isEnding { reset() }
@@ -56,9 +59,8 @@ nonisolated struct HorizontalSwipeDetector: Equatable, Sendable {
     guard !didTrigger else { return nil }
 
     let horizontal = abs(accumulatedX)
-    let vertical = abs(accumulatedY)
     guard horizontal >= threshold,
-      horizontal >= vertical * dominanceRatio
+      horizontal >= verticalTravel * dominanceRatio
     else { return nil }
 
     didTrigger = true
