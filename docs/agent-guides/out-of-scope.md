@@ -8,7 +8,9 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **Why it's out**: Comandante explicitly said "let's go ahead with the fork. and let's get it functional quickly. This will be just my personal CLI terminal." Supacool's scope is the terminal UI. If the workflow-engine vision comes back, it lives in a **separate project** that communicates with Supacool over HTTP/SSE, not as code inside this repo.
 
-**Signals this is creeping back into scope**: anyone talks about adding a scheduled-task / cron / polling loop inside Supacool, or wiring Linear/GitHub webhooks.
+**Signals this is creeping back into scope**: anyone talks about Supacool *autonomously routing work* — spawning agents on a schedule, phase state machines, webhook-driven orchestration.
+
+**What is NOT engine creep** (shipped, in scope): read-only integrations that inform the human at the board — the Linear inbox (`LinearInboxFeature`, paste/refresh/assign/start-session-on-ticket), PR Pulse polling (`PRMonitorClient`, Greptile scores, merge-conflict surfacing), and narrowly-guarded conveniences like opt-in auto-resume when a PR bounces on a mechanical reason (attempt-capped in `BoardFeature.autoResumeAttempts`). The line: Supacool may *watch and surface*; a human (or an explicit per-session opt-in with a loop guard) decides what runs. A headless service that plans and dispatches work is still out.
 
 ## 2. Supervisor-via-CLI (Pi replacement)
 
@@ -24,19 +26,21 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **Signals this is creeping back**: anyone adds a background daemon, or anyone talks about a "supacool-daemon" companion process.
 
-## 4. Archive, pin, or group cards
+## 4. A full archive tier for cards
 
-**What it is**: the old sidebar-era flow had "Pinned" / "All" worktree view modes, archive, and manual ordering. The Matrix Board has none of that.
+**What it is**: the old sidebar-era flow had "Pinned" / "All" worktree view modes, archive, and manual ordering — a "not visible but not deleted" tier with its own sort/filter UI.
 
-**Why it's out for now**: the repo multi-select filter does most of the triage work. If a session's truly stale, the context-menu Remove handles it. Archiving implies a "not visible but not deleted" tier which needs its own sort/filter UI.
+**What shipped instead** (in scope, don't re-litigate): `isPriority` pinning, the tray (park cards out of the main grid), bookmarks (respawnable prompts), drafts, and a 3-day trash with restore (`TrashedSession` + `TrashSheet`). Together these cover the triage need the archive idea was for.
 
-**If the card list gets huge** (>50 sessions), revisit — at that scale, dismissibility matters.
+**Why the rest is out**: a true archive duplicates what trash + tray already do, at the cost of another lifecycle state. If the card list gets huge (>50 sessions) and tray+trash stop being enough, revisit.
 
 ## 5. Rich per-card previews (last assistant snippet, token usage, cost)
 
 **What it is**: cards that show the agent's latest output on the card face, plus metadata like token count or estimated cost.
 
-**Why it's out**: requires wiring into the hook protocol or scraping PTY output. Worth doing when the board gets dense enough that "name + timestamp" isn't enough to triage.
+**What shipped instead**: footprint/vitals chips (CPU/memory per session via `ProcessFootprintClient`, fleet vitals in the header) and reference chips (ticket ids / PR URLs parsed from the prompt). Transcript recording (`TranscriptRecorder`) exists as the substrate a "last assistant snippet" could read from.
+
+**Why the rest is out**: rendering agent *output* on the card face still requires hook-protocol extension or PTY scraping. Worth doing when the board gets dense enough that the shipped chips aren't enough to triage.
 
 ## 6. Mobile / web UI
 

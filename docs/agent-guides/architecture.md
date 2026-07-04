@@ -57,11 +57,23 @@ AppFeature.State                    (supacode, modified)
 ├── settings:     SettingsFeature.State      (supacode)
 ├── commandPalette, updates, etc.            (supacode)
 └── board:        BoardFeature.State         (Supacool — adds this)
-    ├── sessions: [AgentSession]             @Shared(.agentSessions) → JSON on disk
-    ├── filters:  BoardFilters               @Shared(.boardFilters)  → JSON on disk
+    ├── @Shared(.agentSessions)   sessions: [AgentSession]        → sessions/ dir on disk (see below)
+    ├── @Shared(.boardFilters)    filters: BoardFilters           → board-filters.json
+    ├── @Shared(.bookmarks)       bookmarks: [Bookmark]           → bookmarks.json
+    ├── @Shared(.drafts)          drafts: [Draft]                 → drafts.json
+    ├── @Shared(.trashedSessions) trashedSessions: [TrashedSession] → trashed-sessions.json
+    ├── @Shared(.remoteHosts)     remoteHosts: [RemoteHost]       → remote-hosts.json
+    ├── @Shared(.remoteWorkspaces) remoteWorkspaces: [RemoteWorkspace] → remote-workspaces.json
     ├── focusedSessionID: AgentSession.ID?   (transient — UI mode switch)
-    └── newTerminalSheet: NewTerminalFeature.State?   @Presents
+    ├── @Presents newTerminalSheet: NewTerminalFeature.State?     (prompt / agent / repo / worktree)
+    ├── @Presents linearInbox:     LinearInboxFeature.State?      (Linear ticket inbox sheet)
+    ├── @Presents debugSheet:      DebugSessionFeature.State?     ("Debug this session…" sheet)
+    ├── @Presents worktreeJanitor: WorktreeJanitorFeature.State?  (worktree scan/prune, in trash dialog)
+    └── plus transient sets/flags (reinitializing ids, auto-observer/auto-resume guards,
+        getting-started state, trash sheet flag, …) — see BoardFeature.State doc comments
 ```
+
+Four child reducers hang off `BoardFeature` via `@Presents` + `ifLet`; when you add a new sheet-shaped sub-domain, follow that pattern rather than inlining more actions into `BoardFeature` (it is already the largest reducer in the repo).
 
 `RepositoriesFeature.State` continues to own the registered-repos list. `BoardFeature` doesn't duplicate it — instead, actions that need the list (`openNewTerminalSheet`, `rerunDetachedSession`, `resumeDetachedSession`) take `[Repository]` as a parameter, passed from the view.
 
@@ -71,13 +83,21 @@ AppFeature.State                    (supacode, modified)
 ContentView                         (supacode/App/, modified)
 └── BoardRootView                   (Supacool/Features/Board/Views/)
     ├── [focusedSessionID == nil] → BoardView
-    │   └── SessionCardContainer (hover, busy-change observer)
-    │       └── SessionCardView  (name, chips, status)
+    │   ├── GettingStartedCarouselView   (first-run onboarding cards)
+    │   ├── BookmarkPillRow / DraftPillRow  (spawn-from-bookmark, resume half-finished prompts)
+    │   ├── SessionCardContainer (hover, busy-change observer)
+    │   │   └── SessionCardView  (name, chips — repo status, footprint, PR status —, status)
+    │   └── BoardTrayView                (parked/trayed cards strip)
     │
     └── [focusedSessionID != nil] → FullScreenTerminalView
         └── SingleSessionTerminalView  (Supacool's equivalent of WorktreeTerminalTabsView,
                                          but for exactly one tab — no tab bar, no siblings)
             └── TerminalSplitTreeAXContainer (supacode, reused) → GhosttySurfaceView
+
+Sheets mounted on BoardRootView: NewTerminalSheet, LinearInboxSheet, TrashSheet (with
+WorktreeJanitorSheet tab), DebugSessionSheetView. The board header also hosts
+PRPulseButton (repo-wide PR badge + popover) and BoardVitalsChip (fleet vitals with
+per-bucket session counts).
 ```
 
 The **toolbar** on `BoardRootView` hosts: `RepoPickerButton` (popover with multi-select + Add Repository), `ToolbarSpacer(.flexible)`, `+ New Terminal` button, and a DEBUG-only "Add Fake Session" button. Window title is hidden via `.toolbar(removing: .title)` — the macOS menu bar + window menu still say "Supacool" because that's what `Window("Supacool", ...)` sets.
@@ -129,13 +149,21 @@ Tab exists:
 
 All persistence lives in `~/.supacool/` via `SupacoolPaths.baseDirectory`:
 
-- `~/.supacool/agent-sessions.json` — `[AgentSession]` via `AgentSessionsKey` (Supacool)
-- `~/.supacool/board-filters.json` — `BoardFilters` via `BoardFiltersKey` (Supacool)
+- `~/.supacool/sessions/<uuid>/session.json` — one directory per `AgentSession`, via `AgentSessionsKey` → `SessionDirectoryStore`. **This replaced the old single `agent-sessions.json` array.** The board list is derived by scanning the directory (priority first, then most-recently-updated); an undecodable session file is skipped, never fatal. Saves are coalesced onto a utility queue and written per-session atomically — only changed session files are rewritten.
+- `~/.supacool/agent-sessions-recovery.json` — crash-safety journal via `SessionRecoveryStore`: removed sessions are recorded *before* their folder is deleted, so a buggy or racing shrink can never silently lose data.
+- `~/.supacool/board-filters.json` — `BoardFilters` via `BoardFiltersKey`
+- `~/.supacool/bookmarks.json` — `[Bookmark]` via `BookmarksKey`
+- `~/.supacool/drafts.json` — `[Draft]` via `DraftsKey`
+- `~/.supacool/trashed-sessions.json` — `[TrashedSession]` via `TrashedSessionsKey` (3-day recovery window)
+- `~/.supacool/linear-inbox.json` — Linear inbox tickets via `LinearInboxKey`
+- `~/.supacool/remote-hosts.json` / `remote-workspaces.json` — SSH remote hosts/workspaces via `RemoteHostsKey` / `RemoteWorkspacesKey`
 - `~/.supacool/layouts.json` — `[Worktree.ID: TerminalLayoutSnapshot]` (inherited from upstream supacode, unchanged)
 - `~/.supacool/settings.json` — app settings (inherited, unchanged)
 - `~/.supacool/repos/<name>/…` — per-repo state and worktree checkouts (inherited, unchanged)
 
 All plain JSON; safe to inspect and edit by hand when debugging. Upstream supacode uses `~/.supacode/` — the two are cleanly separate.
+
+**Testing seam**: the sessions directory is injected via the `sessionStorageLocations` dependency. Tests **must** run with the `.dependencies` trait so each test resolves its own temp directory — otherwise concurrent tests share one `@Shared(.agentSessions)` box and pollute each other. See the doc comment on `AgentSessionsKey.swift`.
 
 ## The "orphan" inventory
 
@@ -153,6 +181,6 @@ Don't edit these expecting UI changes. If an upstream merge modifies them, accep
 
 ## Where things talk
 
-- **Agent hook → session state**: `AgentHookSocketServer.onBusy` / `onNotification` closures in `WorktreeTerminalManager.configureSocketServer`. The `onNotification` closure also calls `captureAgentNativeSessionID(tabID:notification:)` which writes `session_id` into the `@Shared(.agentSessions)` store, so Resume can relaunch the exact conversation.
+- **Agent hook → session state**: `AgentHookSocketServer.onBusy` / `onNotification` closures in `WorktreeTerminalManager.configureSocketServer`. The `onNotification` closure also calls `captureAgentNativeSessionID(tabID:notification:)` which writes `session_id` into the `@Shared(.agentSessions)` store, so Resume can relaunch the exact conversation. Full wire spec (env vars, message formats, install paths, remote forwarding): [`hook-protocol.md`](./hook-protocol.md).
 - **Create a session → spawn a PTY**: `NewTerminalFeature` → `TerminalClient.send(.createTabWithInput(...))` → `WorktreeTerminalManager.handleTabCommand` → `WorktreeTerminalState.createTab(initialInput:)` → ghostty.
 - **Repository registration**: same flow as upstream supacode — file importer in `ContentView` → `RepositoriesFeature` actions.

@@ -90,18 +90,18 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 
 ---
 
-## What's in (recent) and what's explicitly out
+## What's in and what's explicitly out
 
-**In, shipped:**
-- Matrix Board primary UI — card per agent session, Waiting on Me / In Progress buckets, repo filter, full-screen terminal on tap.
-- Session persistence across relaunches; detached vs interrupted state; Rerun (fresh) and Resume (with captured agent session id) affordances.
-- New Terminal sheet: prompt, agent (Claude/Codex), repo picker, optional worktree creation.
-- Forward-compatible Codable on all persisted types.
-- App icon, bundle identity (`io.morethan.supacool`, display name "Supacool"), Metal-free ghostty build.
+**In, shipped** — the full feature → files map lives in [`docs/agent-guides/features.md`](./docs/agent-guides/features.md). Headlines:
+- Matrix Board primary UI — card per agent session, Waiting on Me / In Progress buckets, repo filter, full-screen terminal on tap, tray, bookmarks/drafts, 3-day trash.
+- Session persistence across relaunches (per-session directory store); detached vs interrupted state; Rerun (fresh) and Resume (with captured agent session id).
+- New Terminal sheet: prompt, agent (Claude/Codex/pi via the agent registry), repo picker, optional worktree, PR-URL and Linear-ticket prefill.
+- Linear inbox, PR Pulse (checks/Greptile/ball-court), Worktree Janitor, fleet vitals, transcript recording, remote SSH sessions (ssh + tmux + forwarded hook socket).
+- Forward-compatible Codable on all persisted types; single-instance guard; Metal-free ghostty build.
 
 **Out of scope** (deliberately — see [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md)):
-- Workflow engine / autonomous orchestration. The earlier forgn+forgin merger idea is parked.
-- PTY survival across relaunches (tmux-style). Detached/Resume is the substitute.
+- Workflow engine / autonomous orchestration. The earlier forgn+forgin merger idea is parked. (Read-only Linear/GitHub *surfacing* is in; autonomous *routing* is out.)
+- PTY survival across relaunches (tmux-style) for local sessions. Detached/Resume is the substitute.
 - Separate "Ready" vs "Wants Input" buckets. Needs a hook-protocol extension we haven't built.
 - Stock supacode's sidebar/detail UI. Files exist but aren't wired; don't edit them.
 
@@ -111,8 +111,10 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 
 | You want to… | Read |
 |---|---|
+| Find which files implement a shipped feature | [`docs/agent-guides/features.md`](./docs/agent-guides/features.md) |
 | Understand the data model and reducer flow | [`docs/agent-guides/architecture.md`](./docs/agent-guides/architecture.md) |
 | Add a new field to a persisted Codable | [`docs/agent-guides/persistence.md`](./docs/agent-guides/persistence.md) |
+| Touch busy state, notifications, or hook install | [`docs/agent-guides/hook-protocol.md`](./docs/agent-guides/hook-protocol.md) |
 | Understand a Swift 6 compiler error | [`docs/agent-guides/swift6-gotchas.md`](./docs/agent-guides/swift6-gotchas.md) |
 | Build / run / test quirks | [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md) |
 | Touch the toolbar, cursor, or text input | [`docs/agent-guides/ui-patterns.md`](./docs/agent-guides/ui-patterns.md) |
@@ -120,6 +122,27 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 | Know what NOT to build | [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md) |
 | Change `RemoteHost` / ssh_config handling | [`docs/agent-guides/remote-hosts.md`](./docs/agent-guides/remote-hosts.md) |
 | Add a new feature end-to-end | Skill: [`.claude/skills/add-feature/SKILL.md`](./.claude/skills/add-feature/SKILL.md) |
+| Check the docs for drift against the code | Skill: [`.claude/skills/docs-lint/SKILL.md`](./.claude/skills/docs-lint/SKILL.md) |
+
+### Documentation system
+
+The docs follow a wiki-style discipline (adapted from Karpathy's "LLM Wiki" pattern —
+synthesis happens once and stays current, instead of being re-derived from source every
+session). Roles:
+
+- **Schema + index**: this file. Conventions live here; the two tables above are the
+  index. Content beyond a paragraph goes in a guide page, never inline here.
+- **Pages**: `docs/agent-guides/*.md` — one page per subsystem/concern. Pages must
+  *synthesize* (invariants, wire contracts, why-decisions) — never mirror what a grep of
+  the code answers just as fast. `features.md` is the flat map for everything that
+  doesn't warrant a page yet.
+- **Log**: git history. We do not keep a separate changelog for docs.
+- **Ingest** (on every shipped change): update the `features.md` row and any guide page
+  your change made stale, in the same commit. Adding a feature without its index row is
+  an incomplete change.
+- **Lint** (periodic): run the `docs-lint` skill — it diffs doc claims against the code
+  and reports stale paths, dead names, and shipped-but-undocumented subsystems. Run it
+  when docs feel off, after big refactors, or roughly monthly.
 
 ---
 

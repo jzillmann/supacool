@@ -70,8 +70,14 @@ No. Synthesized `encode(to:)` is fine because it writes every declared field. Th
 
 Files following this pattern:
 
-- `Supacool/Domain/AgentSession.swift` → persisted in `~/.supacool/agent-sessions.json`
+- `Supacool/Domain/AgentSession.swift` → persisted per session in `~/.supacool/sessions/<uuid>/session.json` (see below)
 - `Supacool/Domain/SessionTerminal.swift` → embedded inside each `AgentSession.terminals[]`
+- `Supacool/Domain/Bookmark.swift` (via `BookmarksKey`) → `~/.supacool/bookmarks.json`
+- `Supacool/Domain/Draft.swift` (via `DraftsKey`) → `~/.supacool/drafts.json`
+- `Supacool/Domain/TrashedSession.swift` (via `TrashedSessionsKey`) → `~/.supacool/trashed-sessions.json`
+- `Supacool/Domain/LinearTicket.swift` (via `LinearInboxKey`) → `~/.supacool/linear-inbox.json`
+- `Supacool/Domain/RemoteHost.swift` (via `RemoteHostsKey`) → `~/.supacool/remote-hosts.json`
+- `Supacool/Features/RemoteHosts/Persistence/RemoteWorkspacesKey.swift` (type `RemoteWorkspace`) → `~/.supacool/remote-workspaces.json`
 - `Supacool/Features/Board/Persistence/BoardFiltersKey.swift` (type `BoardFilters`) → `~/.supacool/board-filters.json`
 - `supacode/Features/Settings/Models/SettingsFile.swift` (type `SettingsFile`) → `~/.supacool/settings.json`
 - `supacode/Features/Settings/Models/GlobalSettings.swift` (type `GlobalSettings`) → embedded in `settings.json`
@@ -80,6 +86,14 @@ Files following this pattern:
 - `supacode/Features/Terminal/Models/TerminalLayoutSnapshot.swift` (types `TerminalLayoutSnapshot` and `TabSnapshot`) → `~/.supacool/layouts.json`
 
 If you add another `@Shared`-backed Codable, append it here.
+
+### Special case: sessions live in a directory store, not one JSON file
+
+`AgentSession` storage moved from a single `agent-sessions.json` array to a **per-session directory store**: `~/.supacool/sessions/<session-uuid>/session.json`, managed by `SessionDirectoryStore` behind `AgentSessionsKey`. Load scans the directory (an undecodable file is skipped, never fatal); save is coalesced off the main thread and writes only changed session files, atomically. Sessions removed from the array are journaled to `~/.supacool/agent-sessions-recovery.json` (`SessionRecoveryStore`) *before* their folder is deleted. The forward-compat decoding rules on this page apply unchanged to each `session.json`.
+
+Two consequences for you:
+1. Don't use `AgentSessionsKey` as the template for a new persisted key — copy one of the simple one-file keys (`BookmarksKey`, `DraftsKey`) instead.
+2. Board tests **must** use the `.dependencies` Swift Testing trait so `sessionStorageLocations` resolves a per-test temp directory; otherwise tests share one `@Shared` box (and the real `~/.supacool/sessions`) and pollute each other. See the doc comment on `AgentSessionsKey.swift`.
 
 ### Special case: schema-shape migrations
 

@@ -61,24 +61,26 @@ Don't use `.pointerStyle(.link)` — the hand-rolled push/pop pattern matches su
 
 ### If you're adding state that must survive relaunch
 
-Create a new `@Shared` key under `Supacool/Features/Board/Persistence/`, following `AgentSessionsKey.swift` or `BoardFiltersKey.swift`:
+Create a new `@Shared` key under `Supacool/Features/Board/Persistence/`, following `BookmarksKey.swift`, `DraftsKey.swift`, or `BoardFiltersKey.swift`:
 
 1. Value type: Codable struct with manual `init(from decoder:)`.
 2. Key struct conforming to `SharedKey` with `load`, `subscribe` (empty), `save`.
 3. Extension on `SharedReaderKey` adding a static `myKey` accessor.
 4. Wire it into `BoardFeature.State` via `@Shared(.myKey) var value: T = .empty`.
-5. Storage lives at `~/.supacode/<your-file>.json` using `SupacodePaths.baseDirectory`.
+5. Storage lives at `~/.supacool/<your-file>.json` using `SupacoolPaths.baseDirectory`.
+
+Do **not** copy `AgentSessionsKey.swift` as a template — sessions are special (per-session directory store, save coalescing, recovery journal; see `SessionDirectoryStore.swift` and `docs/agent-guides/persistence.md`). The simple one-file keys above are the pattern for new state.
 
 ### Tests
 
-Add a test file under `supacodeTests/`. Pattern:
+Add a test file under `supacodeTests/` (the directory keeps its historical name; the Xcode target is `supacoolTests`). Pattern:
 
 ```swift
 import ComposableArchitecture
 import DependenciesTestSupport
 import Testing
 
-@testable import supacode
+@testable import supacool
 
 @MainActor
 struct MyFeatureTests {
@@ -90,11 +92,13 @@ struct MyFeatureTests {
 }
 ```
 
+The `.dependencies` trait is **mandatory** for any test whose state touches `@Shared(.agentSessions)`: it makes `sessionStorageLocations` resolve a fresh temp directory per test, so each test gets its own `@Shared` box. Without it, concurrently-running Swift Testing tests all share one global sessions box (and the real `~/.supacool/sessions`!) and pollute each other — the historical flaky board/bookmark/PR-pulse failures. Details in the doc comment on `AgentSessionsKey.swift`.
+
 Run with:
 ```bash
-xcodebuild test -project supacode.xcodeproj -scheme supacode \
+xcodebuild test -project supacool.xcodeproj -scheme supacool \
   -destination "platform=macOS" \
-  -only-testing:supacodeTests/MyFeatureTests \
+  -only-testing:supacoolTests/MyFeatureTests \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
   -skipMacroValidation 2>&1 | tee /tmp/test.log | grep -E "Test case|TEST"
 ```
@@ -103,16 +107,17 @@ xcodebuild test -project supacode.xcodeproj -scheme supacode \
 
 1. `make build-app` succeeds.
 2. Your new tests pass.
-3. `xcodebuild test ... -only-testing:supacodeTests/BoardFeatureTests -only-testing:supacodeTests/NewTerminalFeatureTests` all pass (you didn't break the existing Supacool tests).
+3. `xcodebuild test ... -only-testing:supacoolTests/BoardFeatureTests -only-testing:supacoolTests/NewTerminalFeatureTests` all pass (you didn't break the existing Supacool tests).
 4. `make run-app` launches and the feature works when you exercise it by hand.
 
 ## Commit hygiene
 
 - Commit in meaningful chunks per [CLAUDE.md](../../../CLAUDE.md) (the user's global preference).
 - Commit message: one-line summary, then paragraph-ish body explaining WHY, not just WHAT.
-- End with `Co-Authored-By: Claude Opus 4.6 (1M context) <noreply@anthropic.com>`.
+- End with the standard `Co-Authored-By: Claude … <noreply@anthropic.com>` trailer for the model you are.
 - Don't `git add .` — add specific paths. Protects against accidentally committing secrets, `.env`, or leftover debug artifacts.
-- Push with `git push origin supacool`. Never commit to `main`.
+- **Commit straight to `main` and push.** Don't create branches on your own — only work on a branch if you're already on one or Comandante asked for one (see the Workflow rules in `AGENTS.md`).
+- After shipping, do the **docs ingest pass** described in `AGENTS.md` § Documentation system (update the feature index + any guide your change made stale).
 
 ## Before handing back to Comandante
 

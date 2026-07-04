@@ -68,7 +68,7 @@ UI surface: in `RemoteHostsSettingsView`, a disclosure section "Found in shell h
 
 ## Runtime command assembly
 
-`RemoteSpawnClient.sshInvocation(for:host:…)` (see `docs/agent-guides/architecture.md` and the PR 2 plan) builds:
+`RemoteSpawnClient.sshInvocation(for:host:…)` (shipped, tested in `RemoteSpawnClientTests`) builds:
 
 ```text
 /usr/bin/ssh -tt \
@@ -114,6 +114,8 @@ No silent overwrite. Supacool's stored state is treated as user-owned from the m
 | Reducer (import + CRUD) | `Supacool/Features/RemoteHosts/Reducer/RemoteHostsFeature.swift` |
 | ssh_config client (`ssh -G`) | `Supacool/Clients/SSHConfigClient.swift` |
 | Settings UI | `Supacool/Features/Settings/Views/RemoteHostsSettingsView.swift` |
-| Spawn command assembly (future) | `Supacool/Clients/RemoteSpawnClient.swift` |
+| Spawn command assembly (ssh + tmux bootstrap) | `Supacool/Clients/RemoteSpawnClient.swift` |
+| Remote hook install (claude/codex/pi config on the host) | `Supacool/Clients/RemoteHookInstaller.swift` |
+| Remote workspaces persistence | `Supacool/Features/RemoteHosts/Persistence/RemoteWorkspacesKey.swift` |
 
 Related: `docs/agent-guides/persistence.md` (how to add new fields safely), `docs/agent-guides/architecture.md` (where this fits in the overall TCA graph).
