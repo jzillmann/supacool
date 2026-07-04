@@ -805,6 +805,9 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories
         )
+        if !store.visibleSessions.isEmpty {
+          BoardVitalsChip(vitals: boardVitals)
+        }
         PRPulseButton(store: store, repositories: repositories, sessionStatus: classify)
         if let footprintStore {
           FootprintChip(store: footprintStore)
@@ -990,6 +993,14 @@ struct BoardRootView: View {
       worktreeID: session.worktreeID,
       tabID: TerminalTabID(rawValue: session.id)
     )
+  }
+
+  /// Live session tally for the toolbar's `BoardVitalsChip`, computed over
+  /// the same repo-filtered set the board renders so the counts always
+  /// match the sections on screen. Reads live busy state through
+  /// `classify`, so `@Observable` terminal changes refresh it.
+  private var boardVitals: BoardVitals {
+    BoardVitals.tally(sessions: store.visibleSessions, classify: classify)
   }
 
   private func classify(_ session: AgentSession) -> BoardSessionStatus {
