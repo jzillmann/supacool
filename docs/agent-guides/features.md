@@ -9,7 +9,7 @@ feature or materially reshape one, update its row here in the same commit (see
 |---|---|---|---|
 | Matrix Board (core) | Card per agent session; Waiting on Me / In Progress buckets; full-screen terminal on tap; swipe-nav | `BoardFeature.swift`, `BoardRootView.swift`, `BoardView.swift`, `SessionCardView.swift`, `FullScreenTerminalView.swift`, `Supacool/Domain/AgentSession.swift` | [architecture.md](./architecture.md) |
 | Session persistence | Per-session directory store, crash-safe removals, detached/interrupted classification, Rerun + Resume | `AgentSessionsKey.swift`, `SessionDirectoryStore.swift`, `SessionRecoveryStore.swift` | [persistence.md](./persistence.md) |
-| New Terminal sheet | Prompt, agent picker, repo picker, optional worktree, drafts, PR-URL and Linear-ticket prefill | `NewTerminalFeature.swift`, `NewTerminalSheet.swift`, `PromptTextEditor.swift` | [architecture.md](./architecture.md) § spawn path |
+| New Terminal sheet | Prompt, agent picker, unified workspace picker (repo root / worktrees / branches / new branch), AI-assisted branch names (wand), drafts, PR-URL and Linear-ticket prefill | `NewTerminalFeature.swift`, `NewTerminalSheet.swift`, `PromptTextEditor.swift`, `Supacool/Clients/BackgroundInferenceClient.swift` | [architecture.md](./architecture.md) § spawn path |
 | Agent registry | Claude / Codex / pi as pluggable agent types (commands, hook config, resume flags) | `Supacool/Domain/AgentType.swift`, `AgentRegistry.swift` | — |
 | Hook socket / busy state | Agents report busy + notifications over a Unix socket; drives card buckets and Resume | `AgentHookSocketServer.swift`, `AgentHookSettingsCommand.swift`, `ClaudeHookSettings.swift`, `CodexHookSettings.swift` | [hook-protocol.md](./hook-protocol.md) |
 | Linear inbox | Paste/collect Linear tickets, refresh metadata, assign to me, start a session on a ticket; ticket auto-fill in the sheet | `LinearInboxFeature.swift`, `LinearInboxSheet.swift`, `Supacool/Clients/LinearClient.swift`, `Supacool/Domain/LinearTicket.swift`, `LinearInboxKey.swift` | — |
@@ -18,7 +18,10 @@ feature or materially reshape one, update its row here in the same commit (see
 | Fleet vitals / footprint | Per-session CPU/memory chips and a header chip with per-bucket session counts | `Supacool/Domain/BoardVitals.swift`, `BoardVitalsChip.swift`, `FootprintChip.swift`, `Supacool/Clients/ProcessFootprintClient.swift`, `SessionFootprintStore.swift` | — |
 | Bookmarks / drafts / trash / tray | Respawnable prompt pills; half-finished prompts; 3-day recovery trash; park cards in a tray | `Supacool/Domain/Bookmark.swift`, `Draft.swift`, `TrashedSession.swift`, `BookmarkPillRow.swift`, `DraftPillRow.swift`, `TrashSheet.swift`, `BoardTrayView.swift` | [out-of-scope.md](./out-of-scope.md) §4 for the boundary |
 | Remote SSH sessions | Spawn agents on remote hosts via ssh + tmux, hook events forwarded back over a reverse socket | `Supacool/Domain/RemoteHost.swift`, `RemoteHostsFeature.swift`, `Supacool/Clients/RemoteSpawnClient.swift`, `RemoteHookInstaller.swift`, `SSHConfigClient.swift` | [remote-hosts.md](./remote-hosts.md) |
-| Transcript recording | Records per-session terminal transcripts for later reading (debug-session substrate) | `Supacool/Features/Transcript/TranscriptRecorder.swift`, `TranscriptReader.swift`, `TranscriptEntry.swift` | — |
+| Transcript recording | Records per-session terminal transcripts for later reading (debug-session and Auto-Observer substrate) | `Supacool/Features/Transcript/TranscriptRecorder.swift`, `TranscriptReader.swift`, `TranscriptEntry.swift` | — |
+| Auto-Observer | Per-session idle watcher: a small LLM reads the transcript and auto-answers obvious prompts so overnight runs don't stall | `Supacool/Clients/AutoObserverClient.swift`, `AutoObserverPopover.swift`, `BackgroundInferenceClient.swift` | — |
+| Session switcher | ⌘⌥-arrow ⌘-Tab-style overlay cycling sessions, grouped by Waiting / Working | `SessionSwitcherOverlay.swift` | — |
+| Reference chips | Linear ticket ids + GitHub PR URLs parsed from the session transcript, surfaced as clickable card chips | `Supacool/Clients/SessionReferenceScanner.swift`, `Supacool/Domain/SessionReference.swift`, `PRReferenceStatusViews.swift` | — |
 | Debug this session | Free-text observation sheet that spawns a debug agent in the supacool repo primed with a source trace | `Supacool/Features/Debug/DebugSessionFeature.swift`, `DebugSessionSheetView.swift` | — |
 | Skill autocomplete | `/skill` autocomplete in the prompt editor from the repo's skill catalog | `Supacool/Domain/SkillCatalog.swift`, `SkillAutocompletePopover.swift` | — |
 | Getting started | First-run onboarding task carousel on the board | `GettingStartedState.swift`, `Supacool/Domain/GettingStartedTask.swift`, `GettingStartedCarouselView.swift` | — |
@@ -29,3 +32,7 @@ feature or materially reshape one, update its row here in the same commit (see
 Rows with `—` in the deep-doc column are documented only by this index and their code;
 if you find yourself explaining one at length in a PR or session, that's the signal to
 promote it to its own page under `docs/agent-guides/`.
+
+The human-facing feature list in the root [`README.md`](../../README.md) is the marketing
+view of this same table — when you add a row here, check whether the README deserves the
+bullet too (and vice versa). `docs-lint` checks both.

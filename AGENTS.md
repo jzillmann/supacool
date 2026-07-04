@@ -121,6 +121,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 | Cherry-pick from upstream supacode | [`docs/agent-guides/upstream-cherry-pick.md`](./docs/agent-guides/upstream-cherry-pick.md) |
 | Know what NOT to build | [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md) |
 | Change `RemoteHost` / ssh_config handling | [`docs/agent-guides/remote-hosts.md`](./docs/agent-guides/remote-hosts.md) |
+| Cut a release (sign, notarize, Sparkle, DMG) | [`RELEASING.md`](./RELEASING.md) |
 | Add a new feature end-to-end | Skill: [`.claude/skills/add-feature/SKILL.md`](./.claude/skills/add-feature/SKILL.md) |
 | Check the docs for drift against the code | Skill: [`.claude/skills/docs-lint/SKILL.md`](./.claude/skills/docs-lint/SKILL.md) |
 
@@ -136,6 +137,9 @@ session). Roles:
   *synthesize* (invariants, wire contracts, why-decisions) — never mirror what a grep of
   the code answers just as fast. `features.md` is the flat map for everything that
   doesn't warrant a page yet.
+- **Human-facing edges**: the root `README.md` (feature storefront — the marketing view
+  of `features.md`) and `RELEASING.md` (release runbook). They live outside
+  `agent-guides/` but inside the system: indexed above, covered by lint.
 - **Log**: git history. We do not keep a separate changelog for docs.
 - **Ingest** (on every shipped change): update the `features.md` row and any guide page
   your change made stale, in the same commit. Adding a feature without its index row is
@@ -211,6 +215,9 @@ The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA.
 ### Workflow rules
 
 - After a task, ensure the app builds: `make build-app`
+- **Docs ingest**: if you shipped or reshaped a feature, update its row in
+  [`docs/agent-guides/features.md`](./docs/agent-guides/features.md) and any guide page
+  your change made stale — in the same commit. See § Documentation system above.
 - Commit your changes only — do not use `git add .`
 - **Don't create branches on your own.** We mostly work directly on `main` here. Either you're already on a branch (use it), or we agree on branching first. Don't branch just because you're about to commit — committing straight to `main` is the default.
 - Before starting work, check the current branch name; if it's something generic like an animal name, rename it appropriately. Do not do this for `main`.

@@ -45,6 +45,7 @@ exported by the remote bootstrap script (`RemoteSpawnClient`):
 | `SUPACOOL_TAB_ID` | The terminal tab UUID == `SessionTerminal.id` |
 | `SUPACOOL_SURFACE_ID` | The Ghostty surface UUID |
 | `SUPACOOL_WORKTREE_PATH` / `SUPACOOL_ROOT_PATH` / `SUPACOOL_REPOSITORY_PATH` | Plain paths for user scripts (`supacode/Domain/Worktree.swift`); not part of the hook wire format |
+| `SUPACOOL_REPO_ROOT` / `SUPACOOL_WORKTREE_ROOT` | Same idea, injected by `WorktreeTerminalState` for repo setup scripts (the pair the README documents); not part of the hook wire format |
 
 Hook commands guard on the first four being non-empty and no-op otherwise (`|| true`), so
 running an agent outside Supacool is harmless.

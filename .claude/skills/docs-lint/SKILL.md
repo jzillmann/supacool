@@ -17,6 +17,10 @@ Check these, in priority order:
 2. `docs/agent-guides/features.md` (every row: files exist? feature description current?)
 3. `docs/agent-guides/*.md` (each page's concrete claims)
 4. `.claude/skills/*/SKILL.md` (commands, paths, and workflow rules in skills)
+5. Root `README.md` (human-facing feature list — every bullet should map to a
+   `features.md` row and vice versa; flag one-sided entries), `RELEASING.md`
+   (script names, cert/profile names, Sparkle steps still real?), and
+   `Supacool/README.md` (layout claims)
 
 ## The checks
 
