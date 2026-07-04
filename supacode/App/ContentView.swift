@@ -80,9 +80,8 @@ struct ContentView: View {
   private var rootContent: some View {
     if store.repositories.isInitialLoadComplete {
       // Supacool: the Matrix Board is the primary (and only) root view.
-      // The old NavigationSplitView + SidebarView + WorktreeDetailView
-      // code remains on disk for reference but is no longer wired to any
-      // Scene. See Supacool/Features/Board/ for the new UI.
+      // The old NavigationSplitView sidebar/detail UI was deleted after
+      // being orphaned here. See Supacool/Features/Board/ for the UI.
       BoardRootView(
         store: boardStore,
         repositories: store.repositories.repositories,

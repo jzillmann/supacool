@@ -2,10 +2,10 @@ import AppKit
 import ComposableArchitecture
 import SwiftUI
 
-/// Full-screen terminal view shown when a board card is tapped. Reuses
-/// supacode's `WorktreeTerminalTabsView` (the same component the detail
-/// pane uses to render a worktree's tab+split tree), wrapped in a minimal
-/// Supacool header with a back button.
+/// Full-screen terminal view shown when a board card is tapped. Renders
+/// the session's single tab via `SingleSessionTerminalView` (which reuses
+/// supacode's split-tree machinery), wrapped in a minimal Supacool header
+/// with a back button.
 ///
 /// `⌘.`, `⌘B`, or a two-finger swipe left returns to the board. `⌘/`
 /// advances to the next terminal in the same board state, and `⌘⇧/`

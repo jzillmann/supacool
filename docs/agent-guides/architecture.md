@@ -165,19 +165,20 @@ All plain JSON; safe to inspect and edit by hand when debugging. Upstream supaco
 
 **Testing seam**: the sessions directory is injected via the `sessionStorageLocations` dependency. Tests **must** run with the `.dependencies` trait so each test resolves its own temp directory — otherwise concurrent tests share one `@Shared(.agentSessions)` box and pollute each other. See the doc comment on `AgentSessionsKey.swift`.
 
-## The "orphan" inventory
+## The former "orphan" inventory (deleted July 2026)
 
-Files supacode wrote, Supacool doesn't reference, but kept on disk for clean upstream merges:
+The sidebar/detail views, the terminal tab-bar UI (`supacode/Features/Terminal/TabBar/`),
+`WorktreeTerminalTabsView`, and `SidebarCommands` — 42 files supacode wrote and Supacool
+never rendered — were deleted after per-file reachability verification. If an upstream
+cherry-pick reintroduces one, it's dead on arrival; drop it rather than wiring it up.
 
-- `supacode/Features/Repositories/Views/SidebarView.swift`
-- `supacode/Features/Repositories/Views/SidebarListView.swift`
-- `supacode/Features/Repositories/Views/SidebarViewMode.swift`
-- `supacode/Features/Repositories/Views/WorktreeRow.swift`
-- `supacode/Features/Repositories/Views/WorktreeRowsView.swift`
-- `supacode/Features/Repositories/Views/WorktreeDetailView.swift`
-- `supacode/Features/Repositories/Views/WorktreeDetailTitleView.swift`
-
-Don't edit these expecting UI changes. If an upstream merge modifies them, accept the upstream version wholesale.
+What survives in `supacode/Features/Repositories/Views/` is **live**: the
+`PullRequestStatusButton` cluster (used by `SessionCardView` / `FullScreenTerminalView`),
+`WorktreeCreationPromptView` (sheet in `ContentView`), and `SidebarSelection` /
+`SidebarViewMode` (consumed by the still-live `RepositoriesFeature` reducer). Likewise all
+of `supacode/Features/Terminal/Views/` is live — the split-tree renderer
+(`TerminalSplitTreeView` + `SplitView` + overlays) is exactly what
+`SingleSessionTerminalView` mounts for the full-screen session view.
 
 ## Where things talk
 

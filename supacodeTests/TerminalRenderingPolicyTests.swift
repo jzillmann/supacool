@@ -88,29 +88,4 @@ struct TerminalRenderingPolicyTests {
     #expect(!activity.isFocused)
   }
 
-  @Test func tabContentStackReturnsSelectedTabWhenItExists() {
-    let selected = TerminalTabID()
-    let tabs = [
-      TerminalTabItem(title: "one", icon: nil),
-      TerminalTabItem(id: selected, title: "two", icon: nil),
-    ]
-    let selectedTab = TerminalTabContentStack<EmptyView>.selectedTabID(
-      in: tabs,
-      selectedTabId: selected
-    )
-    #expect(selectedTab == selected)
-  }
-
-  @Test func tabContentStackReturnsNilWhenSelectionDoesNotExist() {
-    let selected = TerminalTabID()
-    let tabs = [
-      TerminalTabItem(title: "one", icon: nil),
-      TerminalTabItem(title: "two", icon: nil),
-    ]
-    let selectedTab = TerminalTabContentStack<EmptyView>.selectedTabID(
-      in: tabs,
-      selectedTabId: selected
-    )
-    #expect(selectedTab == nil)
-  }
 }

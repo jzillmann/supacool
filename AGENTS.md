@@ -8,7 +8,7 @@ This is the master document for anyone (human or AI agent) working in this repo.
 
 ## Read this first: the three things that bite
 
-1. **The UI is not supacode's.** Supacool replaced the `NavigationSplitView(sidebar:, detail:)` layout with the **Matrix Board** — a grid of cards, each one a persistent agent session (claude-code or codex). The old sidebar/detail files still exist on disk but are orphaned (not wired to any Scene). Don't touch them expecting UI changes to take effect.
+1. **The UI is not supacode's.** Supacool replaced the `NavigationSplitView(sidebar:, detail:)` layout with the **Matrix Board** — a grid of cards, each one a persistent agent session (claude-code or codex). The orphaned sidebar/detail and tab-bar view files were deleted from the tree in July 2026; if an upstream cherry-pick brings one back, it's dead on arrival — don't wire it up.
 
 2. **Persisted Codable types have a non-obvious invariant.** Every `@Shared` struct needs a manual `init(from decoder:)` using `decodeIfPresent ?? default`. Synthesized Codable silently wipes user data on schema changes. Hard-won lesson. See [`docs/agent-guides/persistence.md`](./docs/agent-guides/persistence.md).
 
@@ -103,7 +103,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 - Workflow engine / autonomous orchestration. The earlier forgn+forgin merger idea is parked. (Read-only Linear/GitHub *surfacing* is in; autonomous *routing* is out.)
 - PTY survival across relaunches (tmux-style) for local sessions. Detached/Resume is the substitute.
 - Separate "Ready" vs "Wants Input" buckets. Needs a hook-protocol extension we haven't built.
-- Stock supacode's sidebar/detail UI. Files exist but aren't wired; don't edit them.
+- Stock supacode's sidebar/detail UI. The orphaned files were deleted in July 2026; the live remnants of `Repositories/Views/` are the PR-status cluster and `WorktreeCreationPromptView`.
 
 ---
 
