@@ -775,6 +775,10 @@ private struct FocusTicketCard: View {
   let onAssignToMe: () -> Void
   let onRemove: () -> Void
 
+  /// Briefly true after copying the ticket number, swapping the copy icon
+  /// for a checkmark as feedback.
+  @State private var justCopiedIdentifier = false
+
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       ScrollView {
@@ -819,6 +823,16 @@ private struct FocusTicketCard: View {
       Text(ticket.identifier)
         .font(.system(.body, design: .monospaced))
         .fontWeight(.semibold)
+
+      Button {
+        copyIdentifier()
+      } label: {
+        Image(systemName: justCopiedIdentifier ? "checkmark" : "doc.on.doc")
+          .foregroundStyle(justCopiedIdentifier ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+      }
+      .buttonStyle(.borderless)
+      .keyboardShortcut(".", modifiers: .command)
+      .help("Copy the ticket number (⌘.)")
 
       if let state = ticket.stateName {
         Text(state)
@@ -962,6 +976,16 @@ private struct FocusTicketCard: View {
       .help("Remove this ticket from the inbox")
     }
     .padding()
+  }
+
+  private func copyIdentifier() {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(ticket.identifier, forType: .string)
+    justCopiedIdentifier = true
+    Task {
+      try? await Task.sleep(for: .seconds(1.5))
+      justCopiedIdentifier = false
+    }
   }
 
   /// Fuller, spelled-out sibling of the list row's `compactAge` — the focus
