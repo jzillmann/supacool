@@ -308,7 +308,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { id in
+      $0.linearClient.fetchIssueNaming = { id in
         #expect(id == "CEN-6690")
         return "Streamline the foobar pipeline"
       }
@@ -328,6 +328,34 @@ struct NewTerminalFeatureTests {
     )
   }
 
+  /// When Linear supplies its own suggested branch name, we auto-fill with
+  /// that (owner prefix stripped) instead of the title-derived slug — so
+  /// the branch matches Linear's "Copy git branch name" / CLI output.
+  @Test(.dependencies) func linearResolvesAndAutoFillsWithLinearSlug() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueNaming = { _ in
+        LinearIssueNaming(
+          title: "Streamline the foobar pipeline",
+          branchName: "johannes/cen-6690-streamline-foobar"
+        )
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(\.binding.prompt, "Fix CEN-6690")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+
+    #expect(store.state.linearBranchNameCache["CEN-6690"] == "cen-6690-streamline-foobar")
+    #expect(store.state.workspaceQuery == "cen-6690-streamline-foobar")
+    #expect(store.state.selectedWorkspace == .newBranch(name: "cen-6690-streamline-foobar"))
+  }
+
   /// Regression: a spurious empty `workspaceQuery` binding round-trip
   /// (SwiftUI re-emits the binding on focus/layout with the field still
   /// empty) must NOT count as a user edit, so a Linear title that resolves
@@ -341,7 +369,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+      $0.linearClient.fetchIssueNaming = { _ in "Streamline the foobar pipeline" }
     }
     store.exhaustivity = .off
 
@@ -371,7 +399,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+      $0.linearClient.fetchIssueNaming = { _ in "Streamline the foobar pipeline" }
     }
     store.exhaustivity = .off
 
@@ -395,7 +423,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in "Streamline the foobar pipeline" }
+      $0.linearClient.fetchIssueNaming = { _ in "Streamline the foobar pipeline" }
     }
     store.exhaustivity = .off
 
@@ -421,7 +449,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in "Some Linear title" }
+      $0.linearClient.fetchIssueNaming = { _ in "Some Linear title" }
     }
     store.exhaustivity = .off
 
@@ -445,7 +473,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in
+      $0.linearClient.fetchIssueNaming = { _ in
         fetchCount.withValue { $0 += 1 }
         throw Boom()
       }
@@ -479,7 +507,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in
+      $0.linearClient.fetchIssueNaming = { _ in
         fetchCount.withValue { $0 += 1 }
         return "should not be called"
       }
@@ -510,7 +538,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in
+      $0.linearClient.fetchIssueNaming = { _ in
         let n = attempts.withValue { $0 += 1; return $0 }
         if n == 1 { throw Boom() }
         return "Streamline the foobar pipeline"
@@ -548,7 +576,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in
+      $0.linearClient.fetchIssueNaming = { _ in
         let n = attempts.withValue { $0 += 1; return $0 }
         if n == 1 { throw URLError(.networkConnectionLost) }
         return "Streamline the foobar pipeline"
@@ -578,7 +606,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in throw URLError(.cancelled) }
+      $0.linearClient.fetchIssueNaming = { _ in throw URLError(.cancelled) }
     }
     store.exhaustivity = .off
 
@@ -602,7 +630,7 @@ struct NewTerminalFeatureTests {
       NewTerminalFeature()
     } withDependencies: {
       $0.continuousClock = clock
-      $0.linearClient.fetchIssueTitle = { _ in "Fix the thing" }
+      $0.linearClient.fetchIssueNaming = { _ in "Fix the thing" }
     }
     store.exhaustivity = .off
 
@@ -654,6 +682,57 @@ struct NewTerminalFeatureTests {
     // Empty title falls back to bare ticket id.
     #expect(branchNameFromLinearTitle(ticketID: "CEN-6690", title: "  ") == "cen-6690")
     #expect(displayNameFromLinearTitle(ticketID: "CEN-6690", title: "") == "CEN-6690")
+  }
+
+  /// Owner-strip keeps everything from the identifier onward, dropping any
+  /// `owner/` or `team/owner/` prefix Linear puts in front.
+  @Test func linearBranchNameStripsOwnerPrefix() {
+    #expect(
+      linearBranchNameStrippingOwner(
+        "johannes/cen-6690-streamline-the-foobar", ticketID: "CEN-6690")
+        == "cen-6690-streamline-the-foobar"
+    )
+    // No prefix → unchanged.
+    #expect(
+      linearBranchNameStrippingOwner("cen-6690-streamline", ticketID: "CEN-6690")
+        == "cen-6690-streamline"
+    )
+    // Multi-segment prefix → still keeps from the identifier.
+    #expect(
+      linearBranchNameStrippingOwner("team/johannes/cen-6690-fix", ticketID: "CEN-6690")
+        == "cen-6690-fix"
+    )
+    // Identifier not present → drop a single leading segment as a fallback.
+    #expect(
+      linearBranchNameStrippingOwner("johannes/custom-slug", ticketID: "CEN-6690")
+        == "custom-slug"
+    )
+  }
+
+  /// `branchNameFromLinear` prefers Linear's own (owner-stripped) branch
+  /// name and only falls back to the title-derived slug when Linear didn't
+  /// supply one. Notably, it does NOT re-truncate Linear's slug the way the
+  /// title-derived path caps at 40 chars.
+  @Test func branchNameFromLinearPrefersLinearSlug() {
+    #expect(
+      branchNameFromLinear(
+        ticketID: "CEN-6690",
+        title: "Streamline the foobar",
+        linearBranchName: "cen-6690-a-much-longer-linear-authored-slug-past-forty-chars")
+        == "cen-6690-a-much-longer-linear-authored-slug-past-forty-chars"
+    )
+    // Empty Linear branch → title-derived fallback.
+    #expect(
+      branchNameFromLinear(
+        ticketID: "CEN-6690", title: "Streamline the foobar", linearBranchName: "")
+        == "cen-6690-streamline-the-foobar"
+    )
+    // Nil Linear branch → title-derived fallback.
+    #expect(
+      branchNameFromLinear(
+        ticketID: "CEN-6690", title: "Streamline the foobar", linearBranchName: nil)
+        == "cen-6690-streamline-the-foobar"
+    )
   }
 
   /// `suggestedDisplayName` prefers a resolved PR over a Linear title

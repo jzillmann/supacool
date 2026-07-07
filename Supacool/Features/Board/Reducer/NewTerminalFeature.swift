@@ -223,6 +223,12 @@ struct NewTerminalFeature {
     /// bug: a single early hiccup used to poison the id for the whole
     /// sheet.
     var linearTransientFailureIDs: Set<String> = []
+    /// Cache of Linear's own suggested branch name, owner-prefix stripped
+    /// (`cen-6690-streamline-the-foobar`), keyed by uppercase id. Empty
+    /// string = Linear returned no branch name, so the workspace branch
+    /// falls back to the title-derived slug. Kept in lockstep with
+    /// `linearTitleCache` — same lifecycle, same transient eviction.
+    var linearBranchNameCache: [String: String] = [:]
     /// User-facing note about the current prompt ticket's lookup — a
     /// failure reason ("No Linear API key…") or "not found". Nil when the
     /// lookup is healthy (scanning or resolved). Surfaced by the sheet's
@@ -475,11 +481,12 @@ struct NewTerminalFeature {
     /// the lookup.
     case pullRequestDismissTapped
 
-    /// Background fetch of a Linear issue title resolved successfully.
-    /// `id` is the ticket id we asked about (uppercase, e.g. `CEN-6690`).
-    /// When `title` is nil we record a negative cache so the same id
-    /// doesn't get re-fetched on every keystroke.
-    case linearTicketTitleResolved(id: String, title: String?)
+    /// Background fetch of a Linear issue's naming (title + suggested
+    /// branch) resolved successfully. `id` is the ticket id we asked about
+    /// (uppercase, e.g. `CEN-6690`). When `naming` is nil we record a
+    /// negative cache so the same id doesn't get re-fetched on every
+    /// keystroke.
+    case linearTicketTitleResolved(id: String, naming: LinearIssueNaming?)
     /// Background Linear fetch failed (network / auth / no key / etc).
     /// Caches an empty sentinel so the failure doesn't thrash the API on
     /// every keystroke, but marks the id transient so removing + re-pasting
@@ -709,7 +716,11 @@ struct NewTerminalFeature {
         if let ticketID = firstLinearTicketID(in: prompt)?.uppercased(),
           let title = state.linearTitleCache[ticketID], !title.isEmpty
         {
-          let derived = branchNameFromLinearTitle(ticketID: ticketID, title: title)
+          let derived = branchNameFromLinear(
+            ticketID: ticketID,
+            title: title,
+            linearBranchName: state.linearBranchNameCache[ticketID]
+          )
           if !derived.isEmpty {
             return .send(.branchNameSuggested(derived))
           }
@@ -870,19 +881,24 @@ struct NewTerminalFeature {
         state.validationMessage = nil
         return .none
 
-      case .linearTicketTitleResolved(let id, let title):
+      case .linearTicketTitleResolved(let id, let naming):
         // Stale guard: only accept the result if it matches the id we
         // most recently kicked off. Anything older is yesterday's news.
         guard state.pendingLinearTicketID == id else { return .none }
         state.pendingLinearTicketID = nil
         // A real answer arrived — this id is no longer a transient failure.
         state.linearTransientFailureIDs.remove(id)
-        let cleaned = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleaned = naming?.title.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // Negative cache: empty string sentinel keeps us from re-fetching
         // a typo'd id on every keystroke. An empty title here is a genuine
         // "issue not found" (the API resolved but had no such issue), so —
         // unlike a transient failure — it stays cached across re-pastes.
         state.linearTitleCache[id] = cleaned
+        // Cache Linear's own branch name with the owner prefix stripped
+        // (`johannes/cen-6690-…` → `cen-6690-…`). Empty when Linear didn't
+        // supply one, so the branch falls back to the title-derived slug.
+        state.linearBranchNameCache[id] =
+          naming?.branchName.map { linearBranchNameStrippingOwner($0, ticketID: id) } ?? ""
         state.linearLookupMessage = cleaned.isEmpty ? "Linear issue \(id) not found." : nil
         return Self.maybeAutoFillWorkspaceQueryFromLinear(state: &state)
 
@@ -907,6 +923,7 @@ struct NewTerminalFeature {
         // cached empty sentinel would otherwise short-circuit), then fire
         // immediately.
         state.linearTitleCache[ticketID] = nil
+        state.linearBranchNameCache[ticketID] = nil
         state.linearTransientFailureIDs.remove(ticketID)
         return startLinearLookup(state: &state, ticketID: ticketID, debounce: false)
 
@@ -1391,6 +1408,7 @@ struct NewTerminalFeature {
       state.pendingLinearTicketID = nil
       for id in state.linearTransientFailureIDs {
         state.linearTitleCache[id] = nil
+        state.linearBranchNameCache[id] = nil
       }
       state.linearTransientFailureIDs.removeAll()
       state.linearLookupMessage = nil
@@ -1449,8 +1467,8 @@ struct NewTerminalFeature {
       var lastError: Error?
       for attempt in 1...maxAttempts {
         do {
-          let title = try await linearClient.fetchIssueTitle(ticketID)
-          await send(.linearTicketTitleResolved(id: ticketID, title: title))
+          let naming = try await linearClient.fetchIssueNaming(ticketID)
+          await send(.linearTicketTitleResolved(id: ticketID, naming: naming))
           return
         } catch is CancellationError {
           return
@@ -1496,7 +1514,11 @@ struct NewTerminalFeature {
     if case .resolved = state.pullRequestLookup {
       return .none
     }
-    let branchName = branchNameFromLinearTitle(ticketID: ticketID, title: title)
+    let branchName = branchNameFromLinear(
+      ticketID: ticketID,
+      title: title,
+      linearBranchName: state.linearBranchNameCache[ticketID]
+    )
     guard !branchName.isEmpty else { return .none }
     state.workspaceQuery = branchName
     state.previousWorkspaceQuery = branchName
@@ -1837,6 +1859,44 @@ nonisolated func branchNameFromLinearTitle(ticketID: String, title: String) -> S
     return sanitizeBranchName(ticketID)
   }
   return sanitizeBranchName("\(ticketID) \(trimmedTitle)")
+}
+
+/// The workspace branch name for a Linear ticket. Prefers Linear's OWN
+/// suggested branch name (already owner-stripped by the caller) so the
+/// branch matches what you'd get from Linear's "Copy git branch name" or
+/// the CLI — honoring your workspace's configured slug format and Linear's
+/// exact slug rules, with no local 40-char truncation. Falls back to the
+/// title-derived slug when Linear didn't supply a name (empty string) or
+/// it stripped to nothing.
+nonisolated func branchNameFromLinear(
+  ticketID: String,
+  title: String,
+  linearBranchName: String?
+) -> String {
+  if let linear = linearBranchName?.trimmingCharacters(in: .whitespacesAndNewlines),
+    !linear.isEmpty
+  {
+    return linear
+  }
+  return branchNameFromLinearTitle(ticketID: ticketID, title: title)
+}
+
+/// Strips Linear's owner/team prefix from a suggested branch name, keeping
+/// everything from the ticket identifier onward:
+/// `johannes/cen-6690-streamline` → `cen-6690-streamline`. The identifier
+/// is preserved (so Linear's branch↔issue auto-linking still fires). When
+/// the identifier can't be located, falls back to dropping a single
+/// leading `owner/` segment.
+nonisolated func linearBranchNameStrippingOwner(_ raw: String, ticketID: String) -> String {
+  let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return "" }
+  if let range = trimmed.range(of: ticketID.lowercased()) {
+    return String(trimmed[range.lowerBound...])
+  }
+  if let slash = trimmed.firstIndex(of: "/") {
+    return String(trimmed[trimmed.index(after: slash)...])
+  }
+  return trimmed
 }
 
 /// Builds a card display name from a Linear ticket id and its title:

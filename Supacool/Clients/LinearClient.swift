@@ -50,14 +50,34 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
 /// API key lives in UserDefaults under `supacool.linear.apiKey`. Either
 /// a Personal API Key (`lin_api_…`, sent raw in the `Authorization`
 /// header per Linear's docs) or an OAuth bearer token works.
+/// A ticket's naming payload: its human title plus Linear's own suggested
+/// git branch name (e.g. `johannes/cen-6690-streamline-the-foobar`, owner
+/// segment intact — the caller strips it). `branchName` is nil when Linear
+/// didn't return one. `ExpressibleByStringLiteral` so tests can keep
+/// stubbing a bare title string.
+nonisolated struct LinearIssueNaming: Equatable, Sendable, ExpressibleByStringLiteral {
+  var title: String
+  var branchName: String?
+
+  init(title: String, branchName: String? = nil) {
+    self.title = title
+    self.branchName = branchName
+  }
+
+  init(stringLiteral value: String) {
+    self.init(title: value)
+  }
+}
+
 struct LinearClient: Sendable {
-  /// Returns the issue title for the given Linear identifier. Returns
-  /// `nil` when the API resolves but the issue doesn't exist (a genuine
-  /// "not found"). Throws on network / API errors, and `.missingAPIKey`
-  /// when no key is configured — the New Terminal sheet treats a throw as
-  /// a *transient* miss it can retry (and surface), rather than a sticky
-  /// negative, so adding a key later doesn't require reopening the sheet.
-  var fetchIssueTitle: @Sendable (_ id: String) async throws -> String?
+  /// Returns the title and Linear-suggested git branch name for the given
+  /// identifier. Returns `nil` when the API resolves but the issue doesn't
+  /// exist (a genuine "not found"). Throws on network / API errors, and
+  /// `.missingAPIKey` when no key is configured — the New Terminal sheet
+  /// treats a throw as a *transient* miss it can retry (and surface),
+  /// rather than a sticky negative, so adding a key later doesn't require
+  /// reopening the sheet.
+  var fetchIssueNaming: @Sendable (_ id: String) async throws -> LinearIssueNaming?
 
   /// Batch-fetches full issue records for the given identifiers (e.g.
   /// `["CEN-7404", "CEN-7405"]`). Identifiers that don't resolve are
@@ -157,7 +177,7 @@ nonisolated enum LinearClientError: LocalizedError {
 
 extension LinearClient: DependencyKey {
   static let liveValue = Self(
-    fetchIssueTitle: { id in
+    fetchIssueNaming: { id in
       let trimmed = id.trimmingCharacters(in: .whitespacesAndNewlines)
       guard !trimmed.isEmpty else { return nil }
       // No key throws (not nil): the sheet then shows "add a key" and
@@ -166,7 +186,7 @@ extension LinearClient: DependencyKey {
       guard let key = LinearLive.currentAPIKey() else {
         throw LinearClientError.missingAPIKey
       }
-      return try await LinearLive.fetchIssueTitle(id: trimmed, apiKey: key)
+      return try await LinearLive.fetchIssueNaming(id: trimmed, apiKey: key)
     },
     fetchIssues: { ids in
       let trimmed = ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -196,7 +216,7 @@ extension LinearClient: DependencyKey {
   )
 
   static let testValue = Self(
-    fetchIssueTitle: { _ in nil },
+    fetchIssueNaming: { _ in nil },
     fetchIssues: { _ in [] },
     assignToMe: { _ in nil },
     startProgress: { _ in nil },
@@ -229,9 +249,9 @@ private nonisolated enum LinearLive {
 
   // MARK: Requests
 
-  static func fetchIssueTitle(id: String, apiKey: String) async throws -> String? {
+  static func fetchIssueNaming(id: String, apiKey: String) async throws -> LinearIssueNaming? {
     let data = try await post(
-      query: "query IssueTitle($id: String!) { issue(id: $id) { title } }",
+      query: "query IssueNaming($id: String!) { issue(id: $id) { title branchName } }",
       variables: ["id": id],
       apiKey: apiKey
     )
@@ -240,7 +260,11 @@ private nonisolated enum LinearLive {
     // the sheet stays quiet on typos.
     guard let issue = data["issue"] as? [String: Any] else { return nil }
     guard let title = issue["title"] as? String else { throw LinearClientError.invalidResponse }
-    return title.trimmingCharacters(in: .whitespacesAndNewlines)
+    let branchName = (issue["branchName"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return LinearIssueNaming(
+      title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+      branchName: (branchName?.isEmpty == false) ? branchName : nil
+    )
   }
 
   static func fetchIssues(ids: [String], apiKey: String) async throws -> [LinearIssue] {

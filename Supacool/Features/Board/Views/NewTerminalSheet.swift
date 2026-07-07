@@ -274,7 +274,11 @@ struct NewTerminalSheet: View {
       return .resolved(
         id: id,
         title: title,
-        branch: branchNameFromLinearTitle(ticketID: id, title: title)
+        branch: branchNameFromLinear(
+          ticketID: id,
+          title: title,
+          linearBranchName: store.linearBranchNameCache[id]
+        )
       )
     }
     if let message = store.linearLookupMessage {
