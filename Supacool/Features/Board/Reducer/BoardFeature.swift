@@ -1017,34 +1017,10 @@ struct BoardFeature {
       case .binding:
         return .none
 
+      // MARK: - Session lifecycle (create) — handlers live in BoardFeature+SessionLifecycle.swift
+
       case .createSession(let session):
-        state.$sessions.withLock { $0.append(session) }
-        if let bookmarkID = session.sourceBookmarkID {
-          state.bookmarkSpawnInFlight.remove(bookmarkID)
-        }
-        // Surface a short-lived "Starting session" tray card so the user
-        // sees the spawn is underway without having to hunt the new card
-        // on a crowded board. The card clears on busy=true, when the
-        // session is observed live, or via × dismiss. Card id is anchored
-        // to `session.id` so lookups are trivial and tests stay
-        // deterministic without injecting a `uuid` dependency.
-        let creatingCard = TrayCard(
-          id: session.id,
-          kind: .sessionCreating(sessionID: session.id, displayName: session.displayName)
-        )
-        state.trayCards.append(creatingCard)
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(
-            kind: "created",
-            context: Self.lifecycleCreatedContext(for: session),
-            at: Date()
-          ),
-          tabID: TerminalTabID(rawValue: session.id)
-        )
-        // Intentionally do NOT focus the new session. Spawning an agent
-        // is background work; the user stays on the board and sees the
-        // new card appear in "In Progress." They can tap in when ready.
-        return autoDisplayNameEffect(for: session)
+        return reduceCreateSession(state: &state, session: session)
 
       case .renameSession(let id, let newName):
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1326,95 +1302,13 @@ struct BoardFeature {
         state.focusedSessionID = id
         return .none
 
+      // MARK: - Session lifecycle (park) — handlers live in BoardFeature+SessionLifecycle.swift
+
       case .parkSession(let id, let repositories):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        let now = date.now
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].parked = true
-          sessions[index].parkedActive = false
-          sessions[index].updatePrimaryTerminal {
-            $0.lastKnownBusy = false
-            $0.lastBusyTransitionAt = nil
-            $0.lastActivityAt = now
-          }
-        }
-        state.reinitializingSessionIDs.remove(id)
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "parked", context: "detached", at: now),
-          tabID: TerminalTabID(rawValue: id)
-        )
-        // Drop focus if we're parking the focused session.
-        if state.focusedSessionID == id {
-          state.focusedSessionID = nil
-        }
-        // Destroy the PTY so the session stops consuming resources.
-        // We build the worktree value the same way the resume paths do,
-        // pinning .id to session.worktreeID so the terminal manager's
-        // state lookup hits the right key.
-        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
-          return .none
-        }
-        let worktree = Self.resumeWorktree(for: session, repository: repository)
-        let shouldReleaseOwnedProcesses = Self.allSessionsParked(
-          inWorkspace: session.currentWorkspacePath,
-          sessions: state.sessions
-        )
-        let releasePath = session.currentWorkspacePath
-        let lifecycleEffect = prepareAutoStopLifecycleEffect(
-          &state,
-          session: session,
-          reason: .park,
-          sessions: state.sessions
-        )
-        let terminalEffect: Effect<Action> = .run { _ in
-          await terminalClient.send(
-            .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
-          )
-          if shouldReleaseOwnedProcesses {
-            await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
-          }
-        }
-        return .merge(lifecycleEffect, terminalEffect)
+        return reduceParkSession(state: &state, id: id, repositories: repositories)
 
       case .parkActiveSession(let id):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        let now = date.now
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].parked = true
-          sessions[index].parkedActive = true
-          sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
-        }
-        state.reinitializingSessionIDs.remove(id)
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "parked", context: "active", at: now),
-          tabID: TerminalTabID(rawValue: id)
-        )
-        if state.focusedSessionID == id {
-          state.focusedSessionID = nil
-        }
-        guard Self.allSessionsParked(
-          inWorkspace: session.currentWorkspacePath,
-          sessions: state.sessions
-        ) else {
-          return .none
-        }
-        let releasePath = session.currentWorkspacePath
-        let lifecycleEffect = prepareAutoStopLifecycleEffect(
-          &state,
-          session: session,
-          reason: .park,
-          sessions: state.sessions
-        )
-        let releaseEffect: Effect<Action> = .run { _ in
-          await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
-        }
-        return .merge(lifecycleEffect, releaseEffect)
+        return reduceParkActiveSession(state: &state, id: id)
 
       case .unparkSession(let id):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
@@ -1785,166 +1679,21 @@ struct BoardFeature {
         state.$drafts.withLock { $0.removeAll { $0.id == id } }
         return .none
 
+      // MARK: - Session lifecycle (resume / rerun) — handlers live in BoardFeature+SessionLifecycle.swift
+
       case .resumeDetachedSession(let id, let repositories, let focusOnComplete):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        guard let sessionID = session.agentNativeSessionID, !sessionID.isEmpty else {
-          return .send(.resumeFailed(id: id, message: "No captured session id to resume."))
-        }
-        guard let agent = session.agent else {
-          return .send(.resumeFailed(id: id, message: "Shell sessions can't be resumed."))
-        }
-        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
-          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
-        }
-        // CRITICAL: the worktree object we pass to the terminal client MUST
-        // have `id == session.worktreeID`. `WorktreeTerminalManager` keys its
-        // `states` dictionary by `worktree.id`, and `FullScreenTerminalView`
-        // probes that dictionary with `session.worktreeID` verbatim. Supacool
-        // may discover a worktree record with a slightly different id (e.g.
-        // trailing-slash normalization), so if we picked up that record here
-        // the tab would land under a different key and the detached view
-        // would never resolve it — looking like "resume does nothing".
-        let worktree = Self.resumeWorktree(for: session, repository: repository)
-        // Reset transient status so the card immediately reflects the new run.
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].parked = false
-          sessions[index].parkedActive = false
-          sessions[index].updatePrimaryTerminal {
-            $0.lastKnownBusy = false
-            $0.lastBusyTransitionAt = nil
-            $0.lastActivityAt = Date()
-          }
-        }
-        state.reinitializingSessionIDs.insert(id)
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "resumed", context: "captured-id", at: Date()),
-          tabID: TerminalTabID(rawValue: id)
+        return reduceResumeDetachedSession(
+          state: &state,
+          id: id,
+          repositories: repositories,
+          focusOnComplete: focusOnComplete
         )
-        guard
-          let resumeCommand = agent.resumeCommand(
-            sessionID: sessionID,
-            bypassPermissions: Self.readBypassPermissions(),
-            model: session.model
-          )
-        else {
-          return .send(
-            .resumeFailed(id: id, message: "\(agent.displayName) doesn't support resume by id.")
-          )
-        }
-        if focusOnComplete {
-          state.focusedSessionID = id
-        }
-        let command = resumeCommand + "\r"
-        return .run { [terminalClient, piSettingsClient, agent] _ in
-          if agent.id == "pi" {
-            do {
-              try await piSettingsClient.install()
-            } catch {
-              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
-            }
-          }
-          await terminalClient.send(
-            .createTabWithInput(
-              worktree,
-              input: command,
-              runSetupScriptIfNew: false,
-              id: id
-            )
-          )
-        }
 
       case .resumeDetachedSessionWithPicker(let id, let repositories):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        guard let agent = session.agent else {
-          return .send(.resumeFailed(id: id, message: "Shell sessions can't be resumed."))
-        }
-        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
-          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
-        }
-        let worktree = Self.resumeWorktree(for: session, repository: repository)
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].parked = false
-          sessions[index].parkedActive = false
-          sessions[index].updatePrimaryTerminal {
-            $0.lastKnownBusy = false
-            $0.lastBusyTransitionAt = nil
-            $0.lastActivityAt = Date()
-          }
-        }
-        state.reinitializingSessionIDs.insert(id)
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "resumed", context: "picker", at: Date()),
-          tabID: TerminalTabID(rawValue: id)
-        )
-        guard
-          let pickerCommand =
-            agent.resumePickerCommand(bypassPermissions: Self.readBypassPermissions())
-        else {
-          return .send(
-            .resumeFailed(id: id, message: "\(agent.displayName) has no resume picker.")
-          )
-        }
-        state.focusedSessionID = id
-        let command = pickerCommand + "\r"
-        return .run { [terminalClient, piSettingsClient, agent] _ in
-          if agent.id == "pi" {
-            do {
-              try await piSettingsClient.install()
-            } catch {
-              boardLogger.warning("Failed to auto-install Pi extension: \(error)")
-            }
-          }
-          await terminalClient.send(
-            .createTabWithInput(
-              worktree,
-              input: command,
-              runSetupScriptIfNew: false,
-              id: id
-            )
-          )
-        }
+        return reduceResumeDetachedSessionWithPicker(state: &state, id: id, repositories: repositories)
 
       case .restoreShellSessionLayout(let id, let repositories):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        guard session.agent == nil, !session.isRemote else {
-          return .send(
-            .resumeFailed(id: id, message: "Only local shell sessions can restore a shell layout.")
-          )
-        }
-        guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
-          return .send(.resumeFailed(id: id, message: "Repository no longer registered."))
-        }
-        let now = date.now
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].parked = false
-          sessions[index].parkedActive = false
-          sessions[index].updatePrimaryTerminal {
-            $0.lastKnownBusy = false
-            $0.lastBusyTransitionAt = nil
-            $0.lastActivityAt = now
-          }
-        }
-        state.reinitializingSessionIDs.insert(id)
-        state.focusedSessionID = id
-        TranscriptRecorder.shared.append(
-          event: .sessionLifecycle(kind: "restored-shell-layout", context: nil, at: now),
-          tabID: TerminalTabID(rawValue: id)
-        )
-        let worktree = Self.shellRestoreWorktree(for: session, repository: repository)
-        return .run { _ in
-          await terminalClient.send(
-            .restoreShellLayout(worktree, tabID: TerminalTabID(rawValue: id))
-          )
-        }
+        return reduceRestoreShellSessionLayout(state: &state, id: id, repositories: repositories)
 
       case .resumeFailed(let id, let message):
         state.reinitializingSessionIDs.remove(id)
@@ -1952,58 +1701,7 @@ struct BoardFeature {
         return .none
 
       case .reconnectRemoteSession(let id):
-        guard
-          let session = state.sessions.first(where: { $0.id == id }),
-          let workspaceID = session.remoteWorkspaceID,
-          let workspace = state.remoteWorkspaces.first(where: { $0.id == workspaceID }),
-          let host = state.remoteHosts.first(where: { $0.id == workspace.hostID }),
-          let tmuxSessionName = session.tmuxSessionName
-        else {
-          return .send(._reconnectFailed(id: id, message: "Remote session metadata is missing."))
-        }
-        guard let localSocketPath = terminalClient.hookSocketPath() else {
-          return .send(._reconnectFailed(id: id, message: "Agent hook socket isn't running."))
-        }
-        // Reset the disconnected flag and stamp activity so the card
-        // flips out of `.disconnected` as soon as the surface comes up.
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].remoteConnectionLost = false
-          sessions[index].updatePrimaryTerminal {
-            $0.lastKnownBusy = false
-            $0.lastBusyTransitionAt = nil
-            $0.lastActivityAt = Date()
-          }
-        }
-        state.reinitializingSessionIDs.insert(id)
-        let invocation = RemoteSpawnInvocation(
-          sshAlias: host.sshAlias,
-          user: host.connection.user,
-          hostname: host.connection.hostname,
-          port: host.connection.port,
-          identityFile: host.connection.identityFile,
-          deferToSSHConfig: host.deferToSSHConfig,
-          remoteWorkingDirectory: workspace.remoteWorkingDirectory,
-          remoteSocketPath: Self.remoteSocketPath(for: id, host: host),
-          localSocketPath: localSocketPath,
-          tmuxSessionName: tmuxSessionName,
-          worktreeID: session.worktreeID,
-          tabID: id,
-          surfaceID: id,
-          agentCommand: session.agent.map { Self.remoteAgentCommand(for: $0, session: session) },
-          agent: session.agent
-        )
-        let sshCommand = remoteSpawnClient.sshInvocation(invocation)
-        let worktree = Self.remoteShimWorktree(for: session)
-        // Ensure the old (dead) tab entry is gone before the new spawn,
-        // so `createRemoteTab` re-registers under the same UUID without
-        // colliding with the stale one.
-        return .run { _ in
-          await terminalClient.send(.destroyTab(worktree, tabID: TerminalTabID(rawValue: id)))
-          await terminalClient.send(
-            .createRemoteTab(worktree, command: sshCommand, id: id, surfaceID: id)
-          )
-        }
+        return reduceReconnectRemoteSession(state: &state, id: id)
 
       case ._reconnectFailed(let id, let message):
         state.reinitializingSessionIDs.remove(id)
@@ -2011,54 +1709,12 @@ struct BoardFeature {
         return .none
 
       case .convertSessionToWorktree(let id, let branchName, let repositories):
-        let trimmedBranch = branchName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedBranch.isEmpty,
-          let session = state.sessions.first(where: { $0.id == id }),
-          let repository = repositories.first(where: { $0.id == session.repositoryID })
-        else {
-          return .none
-        }
-        let repoRoot = repository.rootURL
-        let worktreeID = session.worktreeID
-        let tabID = TerminalTabID(rawValue: session.id)
-        return .run { [gitClient, terminalClient] send in
-          do {
-            let baseDirectory = SupacoolPaths.worktreeBaseDirectory(
-              for: repoRoot,
-              globalDefaultPath: nil,
-              repositoryOverridePath: nil
-            )
-            let worktree = try await gitClient.createWorktree(
-              trimmedBranch,
-              repoRoot,
-              baseDirectory,
-              false,
-              false,
-              ""
-            )
-            await send(
-              ._convertSessionToWorktreeSucceeded(
-                id: id,
-                newWorkspacePath: worktree.id
-              )
-            )
-            let escapedPath = worktree.id.replacingOccurrences(of: "'", with: "'\\''")
-            await terminalClient.send(
-              .sendText(
-                worktreeID: worktreeID,
-                tabID: tabID,
-                text: "cd '\(escapedPath)'"
-              )
-            )
-          } catch {
-            await send(
-              ._convertSessionToWorktreeFailed(
-                id: id,
-                message: error.localizedDescription
-              )
-            )
-          }
-        }
+        return reduceConvertSessionToWorktree(
+          state: &state,
+          id: id,
+          branchName: branchName,
+          repositories: repositories
+        )
 
       case ._convertSessionToWorktreeSucceeded(let id, let newWorkspacePath):
         state.$sessions.withLock { sessions in
@@ -2072,21 +1728,7 @@ struct BoardFeature {
         return .none
 
       case .rerunDetachedSession(let id, let repositories):
-        guard let previous = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        // Pop focus so the user lands on the sheet with the board
-        // behind it. Crucially, do NOT remove the previous session
-        // here — wait until the new session is created. A failed
-        // create or a cancelled sheet would otherwise lose the
-        // original card and its prompt.
-        state.pendingRerunSessionID = previous.id
-        state.focusedSessionID = nil
-        state.newTerminalSheet = NewTerminalFeature.State(
-          availableRepositories: IdentifiedArray(uniqueElements: repositories),
-          rerunFrom: previous
-        )
-        return .none
+        return reduceRerunDetachedSession(state: &state, id: id, repositories: repositories)
 
       case .toggleAutoObserver(let id):
         var nowEnabled = false
@@ -2181,71 +1823,18 @@ struct BoardFeature {
           state: &state
         )
 
+      // MARK: - Session lifecycle (spawn results) — handlers live in BoardFeature+SessionLifecycle.swift
+
       case ._sessionSpawnCompleted(let session):
-        var sessionToCreate = session
-        // Preserve lineage across rerun so coupled cards/bookmarks stay
-        // linked for the replacement incarnation too.
-        if let pendingID = state.pendingRerunSessionID,
-          let previous = state.sessions.first(where: { $0.id == pendingID })
-        {
-          if sessionToCreate.sourceBookmarkID == nil {
-            sessionToCreate.sourceBookmarkID = previous.sourceBookmarkID
-          }
-          if sessionToCreate.debugSourceSessionID == nil {
-            sessionToCreate.debugSourceSessionID = previous.debugSourceSessionID
-          }
-        }
-        // Refresh the placeholder's displayName in case it was refined
-        // (e.g. PR-context displayName is set on the AgentSession).
-        if let index = state.trayCards.firstIndex(where: { $0.id == sessionToCreate.id }) {
-          state.trayCards[index].kind = .sessionCreating(
-            sessionID: sessionToCreate.id,
-            displayName: sessionToCreate.displayName
-          )
-        }
-        if let pendingID = state.pendingRerunSessionID {
-          state.$sessions.withLock { $0.removeAll(where: { $0.id == pendingID }) }
-          state.pendingRerunSessionID = nil
-        }
-        return .send(.createSession(sessionToCreate))
+        return reduceSessionSpawnCompleted(state: &state, session: session)
 
       case ._sessionSpawnFailed(let sessionID, let message, let draftSnapshot):
-        boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
-        // Convert the in-flight placeholder card into a red failure
-        // card so the user sees what went wrong instead of watching
-        // the "Starting session" toast disappear silently. Falls back
-        // to appending a fresh card if the placeholder was already
-        // dropped (e.g. user dismissed it manually mid-spawn).
-        //
-        // `draftSnapshot` (when non-nil) lets the user tap the failed
-        // card to reopen the New Terminal sheet with their original
-        // values — see `trayCardPrimaryTapped`.
-        let displayName: String
-        if let index = state.trayCards.firstIndex(where: { $0.id == sessionID }),
-          case .sessionCreating(_, let placeholderName) = state.trayCards[index].kind
-        {
-          displayName = placeholderName
-          state.trayCards[index].kind = .sessionSpawnFailed(
-            displayName: displayName,
-            message: message,
-            draftSnapshot: draftSnapshot
-          )
-        } else {
-          displayName = "Session"
-          state.trayCards.append(
-            TrayCard(
-              id: sessionID,
-              kind: .sessionSpawnFailed(
-                displayName: displayName,
-                message: message,
-                draftSnapshot: draftSnapshot
-              )
-            )
-          )
-        }
-        // Keep `pendingRerunSessionID` set so the user's original
-        // session card stays put — they can retry.
-        return .none
+        return reduceSessionSpawnFailed(
+          state: &state,
+          sessionID: sessionID,
+          message: message,
+          draftSnapshot: draftSnapshot
+        )
 
       case let ._sessionSpawnConflict(sessionID, placeholderDisplayName, request, branch, existing):
         boardLogger.info(
@@ -2376,145 +1965,25 @@ struct BoardFeature {
         state.pendingRerunSessionID = nil
         return .none
 
+      // MARK: - References (ticket ids, PR URLs) — handlers live in BoardFeature+References.swift
+
       case .cardAppeared(let id):
-        guard let session = state.sessions.first(where: { $0.id == id }) else {
-          return .none
-        }
-        // Re-scan when the references cache is missing OR the session has
-        // had activity since the last scan. This keeps the transcript-
-        // extracted refs (tickets, PR URLs) fresh after the agent writes
-        // something new without spamming scans on every board render.
-        //
-        // PR state refresh used to live here as well — it now lives in
-        // the global `_runPRRefreshTick` scheduler so a single periodic
-        // tick fetches each unique PR once across the whole board with
-        // bounded concurrency. Spawning per-session per-cardAppeared was
-        // architecturally wrong: it produced 200+ concurrent `gh pr
-        // view` subprocesses when many sessions referenced the same
-        // PRs and refreshed in lockstep on every busy↔idle transition.
-        let needsScan = session.referencesScannedAt == nil
-          || session.lastActivityAt > (session.referencesScannedAt ?? .distantPast)
-        guard needsScan else { return .none }
-        let worktreeID = session.worktreeID
-        let agentID = session.agentNativeSessionID
-        let initialPrompt = session.initialPrompt
-        // Chip parsing is scoped to this session's repo team keys (e.g.
-        // `CEN`), so a multi-team workspace doesn't surface noise like
-        // `HTTP-200`. An unconfigured repo yields an empty set = match any.
-        @Shared(.repositorySettings(URL(fileURLWithPath: session.repositoryID)))
-        var repositorySettings
-        let allowedPrefixes = parseLinearTeamKeys(repositorySettings.linearTeamKeys)
-        return .run { [scannerClient] send in
-          var refs: [SessionReference] = []
-          if let agentID, !agentID.isEmpty {
-            refs = await scannerClient.scan(worktreeID, agentID, allowedPrefixes)
-          }
-          // Always also scan the initialPrompt and Supacool's own
-          // terminal transcript. The transcript pass catches Codex/raw
-          // terminal refs that never land in Claude's native JSONL.
-          let promptRefs = scannerClient.scanText(initialPrompt, allowedPrefixes)
-          let terminalRefs = await scannerClient.scanTerminalTranscript(id, allowedPrefixes)
-          let merged = Self.mergeReferences(
-            Self.mergeReferences(refs, with: promptRefs),
-            with: terminalRefs
-          )
-          await send(._referencesScanned(id: id, refs: merged))
-        }
+        return reduceCardAppeared(state: &state, id: id)
 
       case ._referencesScanned(let id, let refs):
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          let dismissed = sessions[index].dismissedReferenceKeys
-          let merged = Self.mergeReferences(
-            refs,
-            with: sessions[index].references,
-            preferNewStates: true
-          )
-          // Honor user unlinks: never re-surface a reference the user
-          // explicitly removed, even if it is still in the transcript.
-          sessions[index].references = merged.filter { !dismissed.contains($0.dedupeKey) }
-          sessions[index].referencesScannedAt = Date()
-        }
-        // No per-scan PR-refresh dispatch here anymore — the global
-        // `_runPRRefreshTick` scheduler picks up newly-discovered and
-        // still-active refs on its next tick. This eliminates the
-        // multi-session lockstep storm where every busy↔idle edge
-        // re-fetched the same PRs once per referencing session.
-        return .none
+        return reduceReferencesScanned(state: &state, id: id, refs: refs)
 
       case .removeReference(let id, let dedupeKey):
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].references.removeAll { $0.dedupeKey == dedupeKey }
-          sessions[index].dismissedReferenceKeys.insert(dedupeKey)
-        }
-        return .none
+        return reduceRemoveReference(state: &state, id: id, dedupeKey: dedupeKey)
 
       case .refreshPRReferences(let id):
-        let batch = Self.pickPRRefreshCandidates(
-          sessions: state.sessions,
-          sessionID: id,
-          mode: .visible,
-          lastFailureAt: state.prRefreshFailureAt,
-          lastSuccessAt: state.prRefreshSuccessAt,
-          jitter: state.prRefreshFailureJitter,
-          inFlight: state.prRefreshInFlight,
-          now: date.now
-        )
-        guard !batch.isEmpty else { return .none }
-        return prRefreshEffect(batch: batch, previousSnapshots: state.prReferenceSnapshots)
+        return reduceRefreshPRReferences(state: &state, id: id)
 
       case ._refreshPRStatus(let id, let ref):
-        guard case .pullRequest(let owner, let repo, let number, _, _) = ref else {
-          return .none
-        }
-        return .run { [githubCLI] send in
-          do {
-            // Race the gh subprocess against a wall-clock timeout.
-            // Without this, a `gh pr view` that hangs (network stall,
-            // or its own `zsh -l` startup blocked on a fork() EAGAIN
-            // under proc-table pressure) never returns success OR
-            // failure. The failure cache below only populates from the
-            // catch path, so a hung subprocess means the same PR ref
-            // gets re-spawned on every cardAppeared wave. We saw 377
-            // accumulated stuck gh wrappers in the wild before this
-            // fix; the cumulative slot consumption then *causes* more
-            // forks to fail, so the storm self-reinforces.
-            let snapshot = try await withThrowingTaskGroup(of: PullRequestSnapshot.self) {
-              group in
-              group.addTask {
-                try await githubCLI.viewPullRequest(owner, repo, number)
-              }
-              group.addTask {
-                try await Task.sleep(for: Self.prRefreshTimeout)
-                throw PRRefreshTimeoutError()
-              }
-              defer { group.cancelAll() }
-              guard let result = try await group.next() else {
-                throw PRRefreshTimeoutError()
-              }
-              return result
-            }
-            await send(._prStatusUpdated(id: id, ref: ref, snapshot: snapshot))
-          } catch {
-            boardLogger.warning(
-              "Failed to fetch PR state for \(owner)/\(repo)#\(number): \(error)"
-            )
-            await send(._prRefreshFailed(refKey: ref.dedupeKey))
-          }
-        }
-        .cancellable(id: PRRefreshCancelID(refKey: ref.dedupeKey), cancelInFlight: true)
+        return reduceRefreshPRStatus(state: &state, id: id, ref: ref)
 
       case ._prRefreshFailed(let refKey):
-        // Record the failure timestamp + a random per-ref jitter so the
-        // next tick's cooldown filter spreads retries instead of letting
-        // N synchronous failures produce N synchronous retries.
-        state.prRefreshFailureAt[refKey] = date.now
-        state.prRefreshFailureJitter[refKey] = Double.random(
-          in: 0...Self.prRefreshFailureJitterMax
-        )
-        state.prRefreshInFlight.remove(refKey)
-        return .none
+        return reducePRRefreshFailed(state: &state, refKey: refKey)
 
       // MARK: - Global PR refresh scheduler — handlers live in BoardFeature+PRPulse.swift
 
@@ -2561,29 +2030,10 @@ struct BoardFeature {
           repositories: repositories
         )
 
+      // MARK: - References (per-session PR status) — handler lives in BoardFeature+References.swift
+
       case ._prStatusUpdated(let id, let ref, let snapshot):
-        let outcome = Self.pullRequestReturnOutcome(
-          refKey: ref.dedupeKey,
-          previous: state.prReferenceSnapshots[ref.dedupeKey],
-          next: snapshot,
-          sessions: state.sessions,
-          autoResumeEnabled: Self.readAutoResumeEnabled(),
-          priorAttempts: state.autoResumeAttempts[ref.dedupeKey] ?? 0,
-          maxAttempts: Self.autoResumeMaxAttempts
-        )
-        state.$sessions.withLock { sessions in
-          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          sessions[index].references = sessions[index].references.map { existing in
-            existing.dedupeKey == ref.dedupeKey
-              ? Self.updatingPRSnapshot(of: existing, to: snapshot)
-              : existing
-          }
-        }
-        state.prReferenceSnapshots[ref.dedupeKey] = snapshot
-        state.prRefreshFailureAt.removeValue(forKey: ref.dedupeKey)
-        state.prRefreshFailureJitter.removeValue(forKey: ref.dedupeKey)
-        state.prRefreshSuccessAt[ref.dedupeKey] = date.now
-        return Self.applyPRReturnOutcome(outcome, refKey: ref.dedupeKey, next: snapshot, into: &state)
+        return reducePRStatusUpdated(state: &state, id: id, ref: ref, snapshot: snapshot)
 
       case ._autoDisplayNameSuggested(let id, let suggested):
         state.$sessions.withLock { sessions in
@@ -3050,7 +2500,7 @@ struct BoardFeature {
     )
   }
 
-  nonisolated fileprivate enum ServerLifecycleAutoStopReason {
+  nonisolated enum ServerLifecycleAutoStopReason {
     case sessionRemove
     case park
   }
@@ -3174,7 +2624,7 @@ struct BoardFeature {
     )
   }
 
-  fileprivate func prepareAutoStopLifecycleEffect(
+  func prepareAutoStopLifecycleEffect(
     _ state: inout State,
     session: AgentSession,
     reason: ServerLifecycleAutoStopReason,
@@ -3443,7 +2893,7 @@ struct BoardFeature {
   /// toggle. Mirrored via @AppStorage in the view layer; the reducer
   /// reads it on demand so resume paths stay in sync with whatever the
   /// user last chose, without threading the flag through state.
-  fileprivate static func readBypassPermissions() -> Bool {
+  static func readBypassPermissions() -> Bool {
     UserDefaults.standard.object(forKey: "supacool.bypassPermissions") as? Bool ?? true
   }
 
@@ -3545,200 +2995,6 @@ struct BoardFeature {
     return .send(.createSession(sessionToCreate))
   }
 
-  /// Shared effect body for scheduled and user-visible PR refreshes.
-  /// Bounded TaskGroup keeps the `gh pr view` subprocess count capped.
-  /// Overlap between a scheduler tick and a popover-driven refresh is
-  /// handled by the `prRefreshInFlight` dedupe in `pickPRRefreshCandidates`,
-  /// not by cancellation — see the `cancelInFlight: false` note below for
-  /// why tearing a batch down mid-flight would strand in-flight keys.
-  func prRefreshEffect(
-    batch: [(refKey: String, owner: String, repo: String, number: Int)],
-    previousSnapshots: [String: PullRequestSnapshot]
-  ) -> Effect<Action> {
-    .run { [githubCLI, prMonitor, clock] send in
-      await withTaskGroup(of: Void.self) { group in
-        var iter = batch.makeIterator()
-        var active = 0
-        while active < Self.prRefreshConcurrencyCap, let next = iter.next() {
-          await send(._prRefreshStarted(refKey: next.refKey))
-          group.addTask {
-            await Self.fetchPRWithTimeout(
-              refKey: next.refKey,
-              owner: next.owner,
-              repo: next.repo,
-              number: next.number,
-              previous: previousSnapshots[next.refKey],
-              githubCLI: githubCLI,
-              prMonitor: prMonitor,
-              clock: clock,
-              send: send
-            )
-          }
-          active += 1
-        }
-        while await group.next() != nil {
-          active -= 1
-          if let next = iter.next() {
-            await send(._prRefreshStarted(refKey: next.refKey))
-            group.addTask {
-              await Self.fetchPRWithTimeout(
-                refKey: next.refKey,
-                owner: next.owner,
-                repo: next.repo,
-                number: next.number,
-                previous: previousSnapshots[next.refKey],
-                githubCLI: githubCLI,
-                prMonitor: prMonitor,
-                clock: clock,
-                send: send
-              )
-            }
-            active += 1
-          }
-        }
-      }
-    }
-    // `cancelInFlight: false` is load-bearing, not a default. This effect
-    // inserts each refKey into `prRefreshInFlight` via `_prRefreshStarted`
-    // and only ever removes it via the terminal `_prStateFanout` /
-    // `_prRefreshFailed` sends. TCA's `Send` opens with
-    // `guard !Task.isCancelled` — so if a tick or popover-driven refresh
-    // tore down a still-fetching batch (both call sites share this id), the
-    // terminal send is swallowed and the key is stranded in-flight forever.
-    // `pickPRRefreshCandidates` then permanently skips it, freezing that PR
-    // at its last state (e.g. a merged PR stuck rendering OPEN/green). Letting
-    // batches always drain is safe: the in-flight set already dedupes work, so
-    // overlapping batches skip each other's keys instead of racing.
-    .cancellable(id: PRRefresherTickCancelID(), cancelInFlight: false)
-  }
-
-  // MARK: - Remote helpers
-
-  /// Remote-side socket path the reverse-forward binds to. Per-session so
-  /// concurrent remote tabs don't fight over a single path. Lives under
-  /// `/tmp` so cleanup on remote reboot is automatic.
-  fileprivate static func remoteSocketPath(for id: AgentSession.ID, host: RemoteHost) -> String {
-    let short = id.uuidString.lowercased().prefix(12)
-    let dir = host.overrides.effectiveRemoteTmpdir
-    return "\(dir)/supacool-hook-\(short).sock"
-  }
-
-  /// Synthesizes the `Worktree` value the terminal manager keys by for
-  /// remote sessions. `id` must match `session.worktreeID` so the
-  /// existing classifier lookups land on the right key.
-  fileprivate static func remoteShimWorktree(for session: AgentSession) -> Worktree {
-    Worktree(
-      id: session.worktreeID,
-      name: session.displayName,
-      detail: "",
-      workingDirectory: URL(fileURLWithPath: "/"),
-      repositoryRootURL: URL(fileURLWithPath: "/")
-    )
-  }
-
-  /// The command string tmux exec's on the remote for a given agent.
-  /// Uses the agent's existing run/resume helpers so local and remote
-  /// stay in lockstep; falls back to a fresh run for agents without a
-  /// captured session id.
-  fileprivate static func remoteAgentCommand(
-    for agent: AgentType,
-    session: AgentSession
-  ) -> String {
-    let bypass = readBypassPermissions()
-    if let resumeID = session.agentNativeSessionID, !resumeID.isEmpty,
-      let resumeCommand = agent.resumeCommand(
-        sessionID: resumeID,
-        bypassPermissions: bypass,
-        model: session.model
-      )
-    {
-      return resumeCommand
-    }
-    return agent.command(
-      prompt: session.initialPrompt,
-      bypassPermissions: bypass,
-      model: session.model
-    )
-  }
-
-  fileprivate static func shellRestoreWorktree(
-    for session: AgentSession,
-    repository: Repository
-  ) -> Worktree {
-    let workingDirectory = URL(fileURLWithPath: session.currentWorkspacePath).standardizedFileURL
-    return Worktree(
-      id: session.worktreeID,
-      name: workingDirectory.lastPathComponent,
-      detail: "",
-      workingDirectory: workingDirectory,
-      repositoryRootURL: repository.rootURL.standardizedFileURL
-    )
-  }
-
-  /// True when every session whose `currentWorkspacePath` matches the
-  /// given path is parked. Empty match (no sessions found) returns
-  /// false so we don't fire `releaseOwnedProcesses` for a worktree we
-  /// don't actually own.
-  fileprivate static func allSessionsParked(
-    inWorkspace path: String,
-    sessions: [AgentSession]
-  ) -> Bool {
-    let matching = sessions.filter { $0.currentWorkspacePath == path }
-    guard !matching.isEmpty else { return false }
-    return matching.allSatisfy(\.parked)
-  }
-
-  /// One auxiliary terminal that needs its tab re-spawned at launch.
-  struct AuxiliaryReattachJob: Sendable, Equatable {
-    let worktree: Worktree
-    let tabID: UUID
-  }
-
-  /// Walk all sessions and emit a reattach job for every auxiliary
-  /// terminal whose owning repository is registered. The agent (primary)
-  /// terminal is skipped so an `.interrupted` card stays distinguishable
-  /// — the user reanimates via Resume/Rerun explicitly. Remote sessions
-  /// are skipped: their tabs are tied to live ssh and tmux state that
-  /// the reattach path doesn't understand. Repositories that aren't
-  /// registered any more (e.g. user removed a repo between quits) are
-  /// silently skipped — the corresponding session is already
-  /// `.disconnected` / `.detached` in the UI.
-  fileprivate static func collectAuxiliaryReattachJobs(
-    sessions: [AgentSession],
-    repositories: [Repository]
-  ) -> [AuxiliaryReattachJob] {
-    var jobs: [AuxiliaryReattachJob] = []
-    for session in sessions where !session.isRemote {
-      guard !session.auxiliaryTerminals.isEmpty else { continue }
-      guard let repository = repositories.first(where: { $0.id == session.repositoryID })
-      else { continue }
-      let worktree = Self.resumeWorktree(for: session, repository: repository)
-      for terminal in session.auxiliaryTerminals {
-        jobs.append(AuxiliaryReattachJob(worktree: worktree, tabID: terminal.id))
-      }
-    }
-    return jobs
-  }
-
-  fileprivate static func resumeWorktree(
-    for session: AgentSession,
-    repository: Repository
-  ) -> Worktree {
-    let workingDirectory: URL = {
-      if let existing = repository.worktrees.first(where: { $0.id == session.worktreeID }) {
-        return existing.workingDirectory
-      }
-      return URL(fileURLWithPath: session.worktreeID).standardizedFileURL
-    }()
-    return Worktree(
-      id: session.worktreeID,
-      name: workingDirectory.lastPathComponent,
-      detail: "",
-      workingDirectory: workingDirectory,
-      repositoryRootURL: repository.rootURL.standardizedFileURL
-    )
-  }
-
   // MARK: - Auto display name
 
   /// Kick off a background LLM call to turn the session's prompt into a
@@ -3746,7 +3002,7 @@ struct BoardFeature {
   /// empty prompt, short prompt (deterministic slice is already fine),
   /// or a custom name the sheet pinned (e.g. PR title from the
   /// pasted-PR-URL flow).
-  private func autoDisplayNameEffect(for session: AgentSession) -> Effect<Action> {
+  func autoDisplayNameEffect(for session: AgentSession) -> Effect<Action> {
     let prompt = session.initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !prompt.isEmpty else { return .none }
 
@@ -3845,21 +3101,6 @@ private nonisolated struct AutoDisplayNameCancelID: Hashable, Sendable {
 private nonisolated struct ServerLifecycleCancelID: Hashable, Sendable {
   let workspacePath: String
 }
-
-/// Cancel ID for the legacy one-session `_refreshPRStatus` effect.
-/// Keyed by the PR's `dedupeKey` so a later scoped refresh cancels the
-/// prior gh subprocess instead of stacking another one on top.
-private nonisolated struct PRRefreshCancelID: Hashable, Sendable {
-  let refKey: String
-}
-
-/// Cancel ID for the in-flight PR-refresh worker effect. Registered so the
-/// batch can be torn down on store teardown, but dispatched with
-/// `cancelInFlight: false`: a new scheduled or user-visible refresh must NOT
-/// cancel a still-fetching batch, because cancellation swallows the terminal
-/// `_prStateFanout` / `_prRefreshFailed` send (TCA `Send` no-ops once
-/// `Task.isCancelled`) and strands the refKey in `prRefreshInFlight` forever.
-private nonisolated struct PRRefresherTickCancelID: Hashable, Sendable {}
 
 /// Thrown by the timeout arm of the `_refreshPRStatus` TaskGroup race.
 /// Surfaces as a generic failure via the same path as any other
