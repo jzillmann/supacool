@@ -70,7 +70,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 │   ├── assets/               # app-icon.svg (non-code)
 │   └── README.md
 ├── supacode/                 # originally-supacode source (top-level dir name kept for historical reasons)
-├── supacodeTests/            # tests, flat. Directory name kept; Xcode target is `supacoolTests`.
+├── supacodeTests/            # tests, grouped by feature area (App/, Board/, Git/, …). Directory name kept; Xcode target is `supacoolTests`.
 ├── supacool.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups; targets `supacool` + `supacoolTests`)
 ├── docs/agent-guides/        # deep reference docs (start here when doing architecture work)
 ├── .claude/skills/           # Claude-invokable skill modules (recurring workflows)
