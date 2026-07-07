@@ -814,6 +814,16 @@ struct BoardView: View {
         showsRepoLabelAbove: showsRepoLabelAbove
       )
       .frame(width: boardCardWidth)
+      // Both bucket layouts are lazy containers that propose a *concrete*
+      // height to their cells (the rail's LazyHStack forwards the ScrollView
+      // viewport height; the matrix LazyVGrid its computed row height). A
+      // card that grows after first layout — reference chips arrive async
+      // from the transcript scanner — can then never report its larger ideal
+      // height back (frame(minHeight:) just echoes the proposal), so the
+      // container keeps the stale height and the card's clipShape cuts off
+      // the footer. fixedSize(vertical:) sizes the card to its ideal height
+      // so the growth propagates and the rail/row grows with it.
+      .fixedSize(horizontal: false, vertical: true)
       .id(session.id)
       .transition(.opacity.combined(with: .scale(scale: 0.98)))
       .background(
