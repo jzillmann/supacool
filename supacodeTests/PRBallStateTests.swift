@@ -228,16 +228,48 @@ struct PRBallStateTests {
     #expect(PRBallState.ciFailed(1).isAutoResumable)
     #expect(PRBallState.mergeConflict.isAutoResumable)
     #expect(PRBallState.greptileLow(2).isAutoResumable)
-    #expect(PRBallState.ciFailed(1).autoResumePrompt != nil)
-    #expect(PRBallState.mergeConflict.autoResumePrompt?.contains("merge conflicts") == true)
-    #expect(PRBallState.greptileLow(2).autoResumePrompt != nil)
   }
 
   @Test func judgmentReasonsAreNotAutoResumable() {
     for ball: PRBallState in [.changesRequested, .readyToMerge, .closedUnmerged, .draft] {
       #expect(!ball.isAutoResumable)
-      #expect(ball.autoResumePrompt == nil)
     }
+  }
+
+  // MARK: concurrent auto-resumable conditions
+
+  @Test func collectsAllSimultaneousMechanicalConditions() {
+    // The classifier is exclusive (ciFailed wins), but the condition
+    // collector reports everything wrong at once so auto-resume can hand
+    // the agent one combined instruction.
+    let snapshot = PullRequestSnapshot(
+      state: .open,
+      title: "x",
+      statusChecks: [
+        GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "FAILURE")
+      ],
+      greptileScore: 2,
+      mergeable: "CONFLICTING"
+    )
+    let conditions = PRBallState.autoResumableConditions(snapshot: snapshot)
+    #expect(conditions == [.ciFailed(1), .mergeConflict, .greptileLow(2)])
+  }
+
+  @Test func singleConditionCollectsAlone() {
+    let snapshot = PullRequestSnapshot(
+      state: .open,
+      title: "x",
+      statusChecks: [
+        GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")
+      ],
+      greptileScore: 3
+    )
+    #expect(PRBallState.autoResumableConditions(snapshot: snapshot) == [.greptileLow(3)])
+  }
+
+  @Test func nonOpenSnapshotsHaveNoConditions() {
+    let merged = PullRequestSnapshot(state: .merged, title: "x", greptileScore: 1)
+    #expect(PRBallState.autoResumableConditions(snapshot: merged).isEmpty)
   }
 }
 

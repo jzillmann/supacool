@@ -80,7 +80,7 @@ extension BoardFeature {
       previous: state.prReferenceSnapshots[refKey],
       next: snapshot,
       sessions: state.sessions,
-      autoResumeEnabled: Self.readAutoResumeEnabled(),
+      autoResume: AutoResumeSettings.load(),
       priorAttempts: state.autoResumeAttempts[refKey] ?? 0,
       maxAttempts: Self.autoResumeMaxAttempts
     )
@@ -566,14 +566,14 @@ extension BoardFeature {
 
   /// Decides the outcome of a their-court→your-court PR transition. Pure so the
   /// gating (armed reason, agent idle, retry budget) is fully testable; the
-  /// reducer feeds in the live opt-in flag and prior attempt count and applies
+  /// reducer feeds in the live settings and prior attempt count and applies
   /// the resulting state mutation + effect.
   nonisolated static func pullRequestReturnOutcome(
     refKey: String,
     previous: PullRequestSnapshot?,
     next: PullRequestSnapshot,
     sessions: [AgentSession],
-    autoResumeEnabled: Bool,
+    autoResume: AutoResumeSettings,
     priorAttempts: Int,
     maxAttempts: Int
   ) -> PRReturnOutcome {
@@ -595,9 +595,14 @@ extension BoardFeature {
 
     // Auto-resume only mechanical reasons, only when armed, only for a session
     // that exists and is idle (never interrupt a working agent), and only
-    // while the per-PR retry budget holds.
-    guard autoResumeEnabled, after.isAutoResumable, let prompt = after.autoResumePrompt,
-      let session, !session.lastKnownBusy
+    // while the per-PR retry budget holds. `after.isAutoResumable` keeps the
+    // human-judgment precedence: a changes-requested PR is never auto-resumed
+    // even when a low Greptile score co-occurs. The prompt combines every
+    // enabled condition present on the snapshot (CI + conflicts + score can
+    // hit simultaneously); nil means all applicable cases are switched off.
+    guard autoResume.enabled, after.isAutoResumable,
+      let session, !session.lastKnownBusy,
+      let prompt = autoResume.prompt(for: PRBallState.autoResumableConditions(snapshot: next))
     else {
       return .notify(notification())
     }
@@ -631,13 +636,6 @@ extension BoardFeature {
       state.autoResumeAttempts[refKey, default: 0] += 1
       return .send(._autoResumePRReturn(id: id, prompt: prompt, fallback: fallback))
     }
-  }
-
-  /// Opt-in flag for Phase-3 auto-resume. Read straight from UserDefaults
-  /// (mirrors `readBypassPermissions`); the Settings toggle writes the same
-  /// key via `@AppStorage`. Defaults to off.
-  nonisolated static func readAutoResumeEnabled() -> Bool {
-    UserDefaults.standard.bool(forKey: "supacool.autoResumeOnPRReturn")
   }
 
   /// True iff `ref` is a PR reference that hasn't failed within the

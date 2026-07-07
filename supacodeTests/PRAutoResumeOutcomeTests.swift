@@ -35,19 +35,46 @@ struct PRAutoResumeOutcomeTests {
     )
   }
 
+  /// Settings fixture: master flag as given, every case enabled with its
+  /// built-in template unless listed in `disabledCases`.
+  private func settings(
+    enabled: Bool,
+    disabledCases: Set<AutoResumeSettings.Case> = [],
+    templates: [AutoResumeSettings.Case: String] = [:]
+  ) -> AutoResumeSettings {
+    AutoResumeSettings(
+      enabled: enabled,
+      caseSettings: Dictionary(
+        uniqueKeysWithValues: AutoResumeSettings.Case.allCases.map { kind in
+          (
+            kind,
+            AutoResumeSettings.CaseSetting(
+              enabled: !disabledCases.contains(kind),
+              template: templates[kind] ?? kind.defaultTemplate
+            )
+          )
+        }
+      )
+    )
+  }
+
   private func outcome(
     previous: PullRequestSnapshot?,
     next: PullRequestSnapshot,
     enabled: Bool,
     busy: Bool = false,
-    priorAttempts: Int = 0
+    priorAttempts: Int = 0,
+    disabledCases: Set<AutoResumeSettings.Case> = [],
+    templates: [AutoResumeSettings.Case: String] = [:]
   ) -> BoardFeature.PRReturnOutcome {
     BoardFeature.pullRequestReturnOutcome(
       refKey: refKey,
       previous: previous,
       next: next,
       sessions: [session(busy: busy)],
-      autoResumeEnabled: enabled,
+      autoResume: settings(
+        enabled: enabled, disabledCases: disabledCases, templates: templates
+      ),
       priorAttempts: priorAttempts,
       maxAttempts: 3
     )
@@ -131,5 +158,78 @@ struct PRAutoResumeOutcomeTests {
       Issue.record("expected none for first sight")
       return
     }
+  }
+
+  // MARK: per-case configuration
+
+  @Test func simultaneousConditionsCombineIntoOnePrompt() {
+    // CI failed AND Greptile flagged it → one injected instruction carrying
+    // both texts, in triage order.
+    let doubleTrouble = PullRequestSnapshot(
+      state: .open,
+      title: "Fix it",
+      statusChecks: [
+        GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "FAILURE")
+      ],
+      greptileScore: 2
+    )
+    let result = outcome(previous: running, next: doubleTrouble, enabled: true)
+    guard case .autoResume(_, let prompt, _) = result else {
+      Issue.record("expected autoResume, got \(result)")
+      return
+    }
+    #expect(prompt.contains("CI failed"))
+    #expect(prompt.contains("Greptile"))
+    if let ciRange = prompt.range(of: "CI failed"),
+      let greptileRange = prompt.range(of: "Greptile")
+    {
+      #expect(ciRange.lowerBound < greptileRange.lowerBound)
+    }
+  }
+
+  @Test func disabledCaseIsLeftOutOfTheCombinedPrompt() {
+    // ciFailed switched off, but the co-occurring low score is still armed →
+    // auto-resume with only the Greptile text.
+    let doubleTrouble = PullRequestSnapshot(
+      state: .open,
+      title: "Fix it",
+      statusChecks: [
+        GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "FAILURE")
+      ],
+      greptileScore: 2
+    )
+    let result = outcome(
+      previous: running, next: doubleTrouble, enabled: true, disabledCases: [.ciFailed]
+    )
+    guard case .autoResume(_, let prompt, _) = result else {
+      Issue.record("expected autoResume, got \(result)")
+      return
+    }
+    #expect(!prompt.contains("CI failed"))
+    #expect(prompt.contains("Greptile"))
+  }
+
+  @Test func allApplicableCasesDisabledFallsBackToNotify() {
+    let result = outcome(
+      previous: running, next: failed, enabled: true, disabledCases: [.ciFailed]
+    )
+    guard case .notify = result else {
+      Issue.record("expected notify when the only applicable case is disabled, got \(result)")
+      return
+    }
+  }
+
+  @Test func customTemplateRendersPlaceholders() {
+    let result = outcome(
+      previous: running,
+      next: failed,
+      enabled: true,
+      templates: [.ciFailed: "Broken: {count} checks. Use /fix-ci."]
+    )
+    guard case .autoResume(_, let prompt, _) = result else {
+      Issue.record("expected autoResume, got \(result)")
+      return
+    }
+    #expect(prompt == "Broken: 1 checks. Use /fix-ci.")
   }
 }

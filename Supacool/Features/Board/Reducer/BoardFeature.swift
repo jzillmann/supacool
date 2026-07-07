@@ -1779,10 +1779,12 @@ struct BoardFeature {
         else { return .none }
         let worktreeID = session.worktreeID
         let tabID = TerminalTabID(rawValue: id)
-        // Append newline so the response is submitted like pressing Enter.
-        let text = response.hasSuffix("\n") ? response : response + "\n"
+        // sendPrompt submits with a synthesized Enter keypress — a trailing
+        // "\n" via sendText is swallowed by bracketed paste and never submits.
         return .run { _ in
-          await terminalClient.send(.sendText(worktreeID: worktreeID, tabID: tabID, text: text))
+          await terminalClient.send(
+            .sendPrompt(worktreeID: worktreeID, tabID: tabID, text: response)
+          )
         }
 
       case ._autoResumePRReturn(let id, let prompt, let fallback):
@@ -1791,7 +1793,6 @@ struct BoardFeature {
         }
         let worktreeID = session.worktreeID
         let tabID = TerminalTabID(rawValue: id)
-        let text = prompt.hasSuffix("\n") ? prompt : prompt + "\n"
         return .run { send in
           // A live, non-empty screen means the agent's tab is still up and
           // sitting at its prompt — inject the fix-it instruction. If the tab
@@ -1799,7 +1800,9 @@ struct BoardFeature {
           // notification so the bounce is never silently dropped.
           let screen = await terminalClient.readScreenContents(worktreeID, tabID)
           if let screen, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            await terminalClient.send(.sendText(worktreeID: worktreeID, tabID: tabID, text: text))
+            await terminalClient.send(
+              .sendPrompt(worktreeID: worktreeID, tabID: tabID, text: prompt)
+            )
           } else {
             await send(.delegate(fallback))
           }

@@ -539,6 +539,35 @@ final class WorktreeTerminalState {
     surface.bridge.sendText(text)
   }
 
+  /// Sends text like `sendText(to:)` and then submits it with a synthesized
+  /// Return key press. The Enter is a separate, slightly delayed key event:
+  /// text goes through ghostty's bracketed-paste path, and agent TUIs treat a
+  /// newline inside (or batched with) the paste as literal input — only a
+  /// discrete later keypress reliably submits, same as a human pasting and
+  /// then hitting Enter.
+  func sendPrompt(to tabID: TerminalTabID, text: String) {
+    guard let surfaceID = focusedSurfaceIdByTab[tabID],
+      let surface = surfaces[surfaceID]
+    else {
+      terminalStateLogger.warning("sendPrompt(to:): no focused surface for tab \(tabID.rawValue)")
+      return
+    }
+    let trimmed = text.hasSuffix("\n") ? String(text.dropLast()) : text
+    terminalStateLogger.info(
+      "sendPrompt(to:): sending \(trimmed.count) chars + Enter to tab \(tabID.rawValue)"
+    )
+    surface.bridge.sendText(trimmed)
+    Task { [weak surface] in
+      try? await Task.sleep(for: .milliseconds(Self.promptSubmitDelayMilliseconds))
+      surface?.bridge.sendEnterKey()
+    }
+  }
+
+  /// Gap between the pasted prompt and the synthesized Enter. Long enough for
+  /// the TUI to finish ingesting the paste (so the Enter isn't coalesced into
+  /// it), short enough to feel instantaneous.
+  private static let promptSubmitDelayMilliseconds = 150
+
   func syncFocus(windowIsKey: Bool, windowIsVisible: Bool) {
     lastWindowIsKey = windowIsKey
     lastWindowIsVisible = windowIsVisible

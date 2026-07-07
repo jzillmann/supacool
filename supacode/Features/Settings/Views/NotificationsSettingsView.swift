@@ -5,9 +5,9 @@ struct NotificationsSettingsView: View {
   @Bindable var store: StoreOf<SettingsFeature>
 
   /// Opt-in for Phase-3 PR auto-resume. Board-local behaviour, so it lives in
-  /// UserDefaults (read by `BoardFeature.readAutoResumeEnabled`) rather than
-  /// the persisted GlobalSettings file. Off by default.
-  @AppStorage("supacool.autoResumeOnPRReturn") private var autoResumeOnPRReturn: Bool = false
+  /// UserDefaults (read by `AutoResumeSettings.load()`) rather than the
+  /// persisted GlobalSettings file. Off by default.
+  @AppStorage(AutoResumeSettings.masterDefaultsKey) private var autoResumeOnPRReturn: Bool = false
 
   var body: some View {
     Form {
@@ -32,16 +32,22 @@ struct NotificationsSettingsView: View {
         Toggle(
           isOn: $autoResumeOnPRReturn
         ) {
-          Text("Auto-resume on CI failure / low Greptile score")
+          Text("Auto-resume on PR return")
           Text(
-            "When a PR-backed session's checks fail or Greptile flags it, hand the fix back to the"
-              + " idle agent automatically (capped, then it resurfaces). Otherwise just notify."
+            "When a PR-backed session bounces back for a mechanical reason, hand the fix back to"
+              + " the idle agent automatically (capped, then it resurfaces). Otherwise just notify."
           )
         }
         .help(
-          "Only CI-failure and low-Greptile reasons are auto-resumed, and only while the agent is"
-            + " idle. If its tab is gone, it resurfaces (via notification) instead."
+          "Only mechanical reasons are auto-resumed, and only while the agent is idle. If its tab"
+            + " is gone, it resurfaces (via notification) instead. When several reasons hit at"
+            + " once, their texts are combined into one instruction."
         )
+        if autoResumeOnPRReturn {
+          ForEach(AutoResumeSettings.Case.allCases) { kind in
+            AutoResumeCaseEditor(kind: kind)
+          }
+        }
       }
       Section("Worktrees") {
         Toggle(
@@ -64,5 +70,49 @@ struct NotificationsSettingsView: View {
     .padding(.trailing, -6)
 
     .navigationTitle("Notifications")
+  }
+}
+
+/// One auto-resume case: an enable toggle plus the editable instruction
+/// template injected into the agent when that condition brings the PR back.
+/// Reads/writes the same UserDefaults keys `AutoResumeSettings.load()` reads.
+private struct AutoResumeCaseEditor: View {
+  let kind: AutoResumeSettings.Case
+  @AppStorage private var enabled: Bool
+  @AppStorage private var template: String
+
+  init(kind: AutoResumeSettings.Case) {
+    self.kind = kind
+    _enabled = AppStorage(wrappedValue: true, kind.enabledDefaultsKey)
+    _template = AppStorage(wrappedValue: kind.defaultTemplate, kind.templateDefaultsKey)
+  }
+
+  var body: some View {
+    Toggle(isOn: $enabled) {
+      Text(kind.title)
+    }
+    .help("Auto-resume the session's agent when this brings the PR back into your court")
+    if enabled {
+      VStack(alignment: .leading, spacing: 4) {
+        TextEditor(text: $template)
+          .font(.body.monospaced())
+          .frame(minHeight: 56)
+        if let hint = kind.placeholderHint {
+          Text(hint)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if template.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+          || template != kind.defaultTemplate
+        {
+          Button("Reset to default") {
+            template = kind.defaultTemplate
+          }
+          .buttonStyle(.link)
+          .font(.caption)
+          .help("Restore this case's built-in instruction text")
+        }
+      }
+    }
   }
 }

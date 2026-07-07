@@ -119,29 +119,6 @@ nonisolated enum PRBallState: Equatable, Sendable {
     }
   }
 
-  /// The instruction injected into the agent when auto-resume is armed for
-  /// this reason. `nil` for non-auto-resumable states.
-  var autoResumePrompt: String? {
-    switch self {
-    case .ciFailed(let count):
-      let checks = count == 1 ? "check" : "checks"
-      return
-        "CI failed on this pull request (\(count) \(checks)). Run `gh pr checks` to see which, "
-        + "investigate the failure, fix it, and push."
-    case .greptileLow(let score):
-      return
-        "Greptile flagged this pull request with a low confidence score (\(score)/5). Review the "
-        + "Greptile review comments on the PR, address the concerns, and push."
-    case .mergeConflict:
-      return
-        "This pull request has merge conflicts. Update the branch against its base, resolve the "
-        + "conflicts locally, run the relevant checks, and push the resolution."
-    case .changesRequested, .draft, .readyToMerge, .closedUnmerged,
-      .ciRunning, .awaitingReview, .merged:
-      return nil
-    }
-  }
-
   /// Ordering for "which reason wins" when a session has several PRs in the
   /// user's court — lower is more urgent. Their-court / done states sort last
   /// so they're never surfaced as the card's reason chip.
@@ -236,6 +213,33 @@ extension [String: PullRequestSnapshot] {
 }
 
 extension PRBallState {
+  /// The mechanical fix-it conditions present on `snapshot` *simultaneously*.
+  /// The classifier below is exclusive (first match wins), but a PR can fail
+  /// CI, carry merge conflicts, and get flagged by Greptile all at once —
+  /// auto-resume uses this to hand the agent one combined instruction instead
+  /// of only the highest-precedence reason. Empty for non-open PRs. The
+  /// instruction text per condition lives in `AutoResumeSettings`.
+  nonisolated static func autoResumableConditions(
+    snapshot: PullRequestSnapshot,
+    greptileThreshold: Int = 5
+  ) -> [PRBallState] {
+    guard snapshot.state == .open else { return [] }
+    var conditions: [PRBallState] = []
+    let breakdown = PullRequestCheckBreakdown(checks: snapshot.statusChecks)
+    if breakdown.failed > 0 {
+      conditions.append(.ciFailed(breakdown.failed))
+    }
+    if snapshot.mergeable?.uppercased() == "CONFLICTING"
+      || snapshot.mergeStateStatus?.uppercased() == "DIRTY"
+    {
+      conditions.append(.mergeConflict)
+    }
+    if let score = snapshot.greptileScore, score < greptileThreshold {
+      conditions.append(.greptileLow(score))
+    }
+    return conditions
+  }
+
   /// Classifies a freshly-fetched PR snapshot. `greptileThreshold` matches the
   /// PR Pulse rows (a score below 5/5 reads as "needs a look").
   nonisolated init(snapshot: PullRequestSnapshot, greptileThreshold: Int = 5) {

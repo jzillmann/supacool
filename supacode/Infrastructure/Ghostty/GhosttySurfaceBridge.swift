@@ -82,6 +82,31 @@ final class GhosttySurfaceBridge {
     sendText(finalCommand)
   }
 
+  /// Synthesizes a Return key press + release. `sendText` goes through
+  /// ghostty's paste path, so under bracketed paste (which agent TUIs like
+  /// Claude Code enable) a trailing "\n" arrives *inside* the paste markers
+  /// and is inserted as literal text instead of submitting. A programmatic
+  /// submit must therefore be a real key event, exactly like the user
+  /// pressing Enter after a paste.
+  func sendEnterKey() {
+    guard let surface else { return }
+    onInputSubmitted?()
+    var key = ghostty_input_key_s()
+    key.action = GHOSTTY_ACTION_PRESS
+    key.keycode = 36  // kVK_Return
+    key.composing = false
+    key.mods = GHOSTTY_MODS_NONE
+    key.consumed_mods = GHOSTTY_MODS_NONE
+    key.unshifted_codepoint = 0x0D
+    "\r".withCString { ptr in
+      key.text = ptr
+      _ = ghostty_surface_key(surface, key)
+    }
+    key.action = GHOSTTY_ACTION_RELEASE
+    key.text = nil
+    _ = ghostty_surface_key(surface, key)
+  }
+
   /// What slice of the surface a `readScreenContents` call should read.
   ///   - `.screen`: only the visible viewport. Cheap, what existing callers
   ///      (awaiting-input detection) expect.

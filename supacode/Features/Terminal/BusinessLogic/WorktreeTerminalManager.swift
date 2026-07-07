@@ -811,6 +811,8 @@ final class WorktreeTerminalManager {
       }
     case .sendText(let worktreeID, let tabID, let text):
       states[worktreeID]?.sendText(to: tabID, text: text)
+    case .sendPrompt(let worktreeID, let tabID, let text):
+      states[worktreeID]?.sendPrompt(to: tabID, text: text)
     default:
       return false
     }
@@ -833,7 +835,7 @@ final class WorktreeTerminalManager {
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
       .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune,
       .releaseOwnedProcesses, .setNotificationsEnabled, .setSelectedWorktreeID,
-      .refreshTabBarVisibility, .sendText:
+      .refreshTabBarVisibility, .sendText, .sendPrompt:
       return false
     }
     return true
@@ -847,7 +849,8 @@ final class WorktreeTerminalManager {
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch,
       .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab,
       .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .releaseOwnedProcesses,
-      .setNotificationsEnabled, .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText:
+      .setNotificationsEnabled, .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText,
+      .sendPrompt:
       return false
     }
     return true
@@ -876,7 +879,8 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
       .startSearch, .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch,
-      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .sendText:
+      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .sendText,
+      .sendPrompt:
       assertionFailure("Unhandled terminal command reached management handler: \(command)")
     }
   }

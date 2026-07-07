@@ -172,7 +172,7 @@ extension BoardFeature {
       previous: state.prReferenceSnapshots[ref.dedupeKey],
       next: snapshot,
       sessions: state.sessions,
-      autoResumeEnabled: Self.readAutoResumeEnabled(),
+      autoResume: AutoResumeSettings.load(),
       priorAttempts: state.autoResumeAttempts[ref.dedupeKey] ?? 0,
       maxAttempts: Self.autoResumeMaxAttempts
     )

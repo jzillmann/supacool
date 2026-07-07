@@ -75,6 +75,11 @@ struct TerminalClient {
     /// Auto-Observer: inject text into the focused surface of a tab without
     /// requiring the tab to be selected or focused in the UI.
     case sendText(worktreeID: Worktree.ID, tabID: TerminalTabID, text: String)
+    /// Like `sendText`, but submits the text with a synthesized Return key
+    /// press afterwards. Use this to hand a prompt to an agent TUI — a
+    /// trailing "\n" in `sendText` is swallowed by bracketed paste and never
+    /// submits.
+    case sendPrompt(worktreeID: Worktree.ID, tabID: TerminalTabID, text: String)
   }
 
   enum Event: Equatable {
