@@ -545,6 +545,33 @@ final class WorktreeTerminalState {
     applySurfaceActivity()
   }
 
+  /// Identity of the session view instance currently presenting this
+  /// state's surfaces. Board↔session and session→session swaps overlap:
+  /// SwiftUI fires the incoming view's `onAppear` (which resumes
+  /// renderers) before the outgoing view's teardown (`onDisappear`, its
+  /// window-observer detaching), so an unconditional pause from the dying
+  /// instance would land *after* the resume and freeze the visible
+  /// terminal — keys still reach the PTY but nothing repaints. Pauses are
+  /// therefore honored only from the current claimant.
+  private(set) var sessionViewToken: UUID?
+
+  /// Called from a session view's `onAppear`. Returns the token the view
+  /// must present to `releaseSessionView` on disappear.
+  func claimSessionView() -> UUID {
+    let token = UUID()
+    sessionViewToken = token
+    return token
+  }
+
+  /// Pause this state's renderers, but only if `token` is still the
+  /// current claim — a stale token means another session view has taken
+  /// over these surfaces since, and its resume must not be undone.
+  func releaseSessionView(_ token: UUID) {
+    guard sessionViewToken == token else { return }
+    sessionViewToken = nil
+    syncFocus(windowIsKey: false, windowIsVisible: false)
+  }
+
   private func applySurfaceActivity() {
     let selectedTabId = tabManager.selectedTabId
     var surfaceToFocus: GhosttySurfaceView?

@@ -49,7 +49,12 @@ final class WindowFocusObserverNSView: NSView {
     clearObservers()
     observedWindow = window
     guard let window else {
-      emitActivityIfNeeded(force: true)
+      // Emit nothing on detach. A dying view's observer detaches AFTER
+      // its replacement has already appeared and resumed the shared
+      // terminal state (SwiftUI removes the outgoing subtree late), so a
+      // forced `.inactive` here would pause renderers the new view just
+      // resumed. Hosts pause explicitly in their own onDisappear instead.
+      lastEmittedActivity = nil
       return
     }
     let center = NotificationCenter.default
@@ -87,6 +92,7 @@ final class WindowFocusObserverNSView: NSView {
   }
 
   private func emitActivityIfNeeded(force: Bool = false) {
+    guard window != nil else { return }
     let activity = activityState
     if !force, activity == lastEmittedActivity {
       return

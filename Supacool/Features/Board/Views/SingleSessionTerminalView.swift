@@ -18,6 +18,11 @@ struct SingleSessionTerminalView: View {
   let manager: WorktreeTerminalManager
 
   @State private var windowActivity = WindowActivityState.inactive
+  /// Claim on the shared `WorktreeTerminalState` proving this instance is
+  /// the one currently presenting its surfaces. `onDisappear` may only
+  /// pause renderers while the claim is still ours — see
+  /// `WorktreeTerminalState.claimSessionView`.
+  @State private var sessionViewToken: UUID?
 
   var body: some View {
     let state = manager.state(for: worktree) { false }
@@ -42,6 +47,7 @@ struct SingleSessionTerminalView: View {
       }
     )
     .onAppear {
+      sessionViewToken = state.claimSessionView()
       // Align the worktree state's selected tab to the session's tab so
       // any bar-less commands (close-surface, split, binding actions)
       // target the right one.
@@ -89,9 +95,17 @@ struct SingleSessionTerminalView: View {
       // core in the renderer pool. syncFocus → applySurfaceActivity
       // recomputes per-surface visibility and calls setOcclusion(false)
       // on each leaf, which is the upstream lever for renderer pausing.
-      // When the user re-enters this session, the .onAppear above flips
-      // them back via the same path.
-      state.syncFocus(windowIsKey: false, windowIsVisible: false)
+      //
+      // Released through the claim token because this onDisappear can
+      // fire AFTER a replacement instance's onAppear (SwiftUI tears the
+      // outgoing subtree down late, e.g. behind a transition). An
+      // unconditional pause here would then undo the resume the new
+      // instance just performed on the same shared state, leaving a
+      // frozen terminal: keys reach the PTY but nothing repaints until
+      // the user leaves and re-enters. The state ignores the release
+      // when the token is stale.
+      guard let sessionViewToken else { return }
+      state.releaseSessionView(sessionViewToken)
     }
   }
 
