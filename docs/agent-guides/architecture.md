@@ -80,7 +80,7 @@ Four child reducers hang off `BoardFeature` via `@Presents` + `ifLet`; when you 
 ## View hierarchy
 
 ```
-ContentView                         (supacode/App/, modified)
+ContentView                         (Supacool/App/)
 └── BoardRootView                   (Supacool/Features/Board/Views/)
     ├── [focusedSessionID == nil] → BoardView
     │   ├── GettingStartedCarouselView   (first-run onboarding cards)

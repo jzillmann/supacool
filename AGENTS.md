@@ -65,6 +65,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 ├── AGENTS.md                 # THIS FILE — master doc
 ├── CLAUDE.md → AGENTS.md     # symlink (Claude Code convention)
 ├── Supacool/                 # net-new Supacool Swift source (Board, AgentSession, RemoteHost, etc.)
+│   ├── App/                  # app entry point (SupacoolApp, ContentView) — moved from supacode/App
 │   ├── Clients/, Domain/, Features/   # auto-compiled into the `supacool` target
 │   ├── assets/               # app-icon.svg (non-code)
 │   └── README.md
