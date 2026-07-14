@@ -235,7 +235,7 @@ struct WorktreeInventoryMergeTests {
         path: "/worktrees/foo/group/nested",
         head: "abc",
         isBare: false
-      )
+      ),
     ]
     let merged = mergeWorktreeInventoryEntries(
       registeredEntries: registered,
@@ -325,7 +325,7 @@ struct WorktreeInventoryClassifyTests {
         path: "/repos/foo/converted",
         head: "a",
         isBare: false
-      )
+      ),
     ]
     let result = classifyWorktreeInventory(
       entries: entries,

@@ -80,6 +80,7 @@ struct RemoteHostsSettingsView: View {
         HStack(spacing: 8) {
           Image(systemName: "clock.arrow.circlepath")
             .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
           Text("Found in shell history")
             .font(.body.weight(.medium))
           if !store.historyCandidates.isEmpty {
@@ -234,6 +235,7 @@ struct RemoteHostsSettingsView: View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundStyle(.yellow)
+        .accessibilityHidden(true)
       Text(
         "ssh_config changed for \(store.drift.count) host\(store.drift.count == 1 ? "" : "s") "
           + "since last import."
@@ -321,6 +323,7 @@ private struct RemoteHostRow: View {
     HStack(spacing: 8) {
       Image(systemName: "network")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(host.alias)
           .font(.body.weight(.medium))
@@ -340,6 +343,9 @@ private struct RemoteHostRow: View {
       Spacer()
       Button(role: .destructive, action: onForget) {
         Image(systemName: "minus.circle")
+          .accessibilityLabel(
+            host.importedFromSSHConfig ? "Hide this imported host" : "Remove this host"
+          )
       }
       .buttonStyle(.plain)
       .help(
@@ -494,6 +500,7 @@ private struct RemoteHostRow: View {
         Image(systemName: "exclamationmark.circle")
           .foregroundStyle(.yellow)
           .help("This field changed in ssh_config since last import.")
+          .accessibilityLabel("This field changed in ssh_config since last import.")
       }
     }
   }

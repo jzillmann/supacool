@@ -47,7 +47,7 @@ extension SSHConfigClient: DependencyKey {
   ) -> SSHConfigClient {
     SSHConfigClient(
       listAliases: {
-        try await readAliases(fromFile: configFileURL)
+        try readAliases(fromFile: configFileURL)
       },
       effectiveConfig: { alias in
         try await runEffectiveConfig(alias: alias, shell: shell)
@@ -80,7 +80,7 @@ extension DependencyValues {
 /// Host lines — users with `Include` directives will miss sourced aliases,
 /// which we accept as a known-gap (they can add manually). Wildcards are
 /// filtered because they're patterns, not connectable aliases.
-nonisolated func readAliases(fromFile url: URL) async throws -> [String] {
+nonisolated func readAliases(fromFile url: URL) throws -> [String] {
   let contents: String
   do {
     contents = try String(contentsOf: url, encoding: .utf8)

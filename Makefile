@@ -108,8 +108,15 @@ archive: build-ghostty-xcframework # Archive Release build for distribution
 export-archive: # Export xarchive
 	bash -o pipefail -c 'xcodebuild -exportArchive -archivePath build/supacool.xcarchive -exportPath build/export -exportOptionsPlist build/ExportOptions.plist 2>&1 $(FORMATTER)'
 
+# The test host carries a distinct bundle id and builds into its own
+# DerivedData (build/dd-tests, gitignored). Both are required so a Supacool
+# you already have running from the shared DerivedData can't block the test
+# runner: LaunchServices keys the host app by bundle id, so a second app with
+# the canonical id collides with the running one, and re-stamping the id in
+# the *shared* DerivedData would rewrite the running app's Info.plist on disk.
+# Isolating both leaves your live app untouched and the runner free to launch.
 test: build-ghostty-xcframework # Run all tests
-	bash -o pipefail -c 'xcodebuild test -project supacool.xcodeproj -scheme supacool -destination "platform=macOS" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -parallel-testing-enabled NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild test -project supacool.xcodeproj -scheme supacool -destination "platform=macOS" -derivedDataPath build/dd-tests PRODUCT_BUNDLE_IDENTIFIER=io.morethan.supacool.tests CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" -skipMacroValidation -parallel-testing-enabled NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
 
 format: # Format code with swift-format (local only)
 	swift-format -p --in-place --recursive --configuration ./.swift-format.json Supacool supacode supacodeTests

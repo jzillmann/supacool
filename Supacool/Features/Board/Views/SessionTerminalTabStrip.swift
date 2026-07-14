@@ -42,6 +42,7 @@ struct SessionTerminalTabStrip: View {
       HStack(spacing: 5) {
         Image(systemName: terminal.role == .agent ? "sparkles" : "terminal.fill")
           .font(.system(size: 10, weight: .semibold))
+          .accessibilityLabel(terminal.role == .agent ? "Agent terminal" : "Shell terminal")
         Text(label(for: terminal))
           .font(.caption.weight(.medium))
           .lineLimit(1)
@@ -54,6 +55,7 @@ struct SessionTerminalTabStrip: View {
               .foregroundStyle(.secondary)
               .padding(2)
               .contentShape(Rectangle())
+              .accessibilityLabel("Close this shell tab")
           }
           .buttonStyle(.plain)
           .help("Close this shell tab")
@@ -76,6 +78,7 @@ struct SessionTerminalTabStrip: View {
       Image(systemName: "plus")
         .font(.system(size: 10, weight: .bold))
         .foregroundStyle(.secondary)
+        .accessibilityLabel("Add a shell tab to this session")
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
         .background(

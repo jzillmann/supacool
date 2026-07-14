@@ -121,6 +121,7 @@ struct TrashSheet: View {
         Image(systemName: "trash")
           .font(.largeTitle)
           .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
         Text("Trash is empty.")
           .foregroundStyle(.secondary)
       }
@@ -130,6 +131,7 @@ struct TrashSheet: View {
         Image(systemName: "magnifyingglass")
           .font(.largeTitle)
           .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
         Text("No trashed cards match “\(trimmedTrashSearchText)”.")
           .foregroundStyle(.secondary)
         Button("Clear Search") { trashSearchText = "" }
@@ -156,6 +158,7 @@ struct TrashSheet: View {
         Image(systemName: "folder.badge.questionmark")
           .font(.largeTitle)
           .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
         Text("Add a repository first to manage worktrees.")
           .foregroundStyle(.secondary)
       }
@@ -181,6 +184,7 @@ struct TrashSheet: View {
     HStack(spacing: 6) {
       Image(systemName: "magnifyingglass")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       TextField("Search trash", text: $trashSearchText)
         .textFieldStyle(.plain)
         .help("Search trashed cards by title, prompt, repository, worktree, or agent.")

@@ -95,31 +95,7 @@ extension WorktreeInventoryClient: DependencyKey {
         return parseWorktreePorcelain(output.stdout)
       },
       listFolders: { baseDirectory in
-        let fileManager = FileManager.default
-        let basePath = baseDirectory.standardizedFileURL.path(percentEncoded: false)
-        var isDirectory: ObjCBool = false
-        guard
-          fileManager.fileExists(atPath: basePath, isDirectory: &isDirectory),
-          isDirectory.boolValue
-        else {
-          return []
-        }
-        let children = try fileManager.contentsOfDirectory(
-          at: baseDirectory.standardizedFileURL,
-          includingPropertiesForKeys: [.isDirectoryKey],
-          options: []
-        )
-        return
-          children
-          .filter { url in
-            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
-          }
-          .map(\.standardizedFileURL)
-          .sorted {
-            $0.path(percentEncoded: false).localizedStandardCompare(
-              $1.path(percentEncoded: false)
-            ) == .orderedAscending
-          }
+        try listChildFolders(of: baseDirectory)
       },
       measure: { path in
         // `du -sk` → 1K-block count + tab + path. macOS default block
@@ -141,48 +117,7 @@ extension WorktreeInventoryClient: DependencyKey {
         return bytes
       },
       gitMetadata: { path, baseRef in
-        var metadata = WorktreeInventoryGitMetadata()
-        let repoPath = path.path(percentEncoded: false)
-
-        // Log: %H (full sha), %cI (committer date ISO-8601 strict), %s
-        // (subject). Separated by \x1f so subjects containing tabs or
-        // pipes don't confuse the parser.
-        if let out = try? await shell.run(
-          env,
-          [
-            "git", "-C", repoPath, "log", "-1",
-            "--format=%H%x1f%cI%x1f%s",
-          ],
-          nil
-        ) {
-          metadata.lastCommit = parseLastCommit(out.stdout)
-        }
-
-        // Count uncommitted files via porcelain — empty output means
-        // clean; each non-empty line is one change entry.
-        if let out = try? await shell.run(
-          env,
-          ["git", "-C", repoPath, "status", "--porcelain"],
-          nil
-        ) {
-          metadata.uncommittedCount = parsePorcelainLineCount(out.stdout)
-        }
-
-        // `--left-right --count baseRef...HEAD` → "<behind>\t<ahead>".
-        // (left = reachable from baseRef not HEAD = behind;
-        //  right = reachable from HEAD not baseRef = ahead.)
-        if let out = try? await shell.run(
-          env,
-          [
-            "git", "-C", repoPath, "rev-list",
-            "--left-right", "--count", "\(baseRef)...HEAD",
-          ],
-          nil
-        ) {
-          metadata.aheadBehind = parseAheadBehind(out.stdout)
-        }
-
-        return metadata
+        await fetchGitMetadata(shell: shell, env: env, path: path, baseRef: baseRef)
       },
       diffStat: { path, baseRef in
         let out = try await shell.run(
@@ -244,6 +179,92 @@ extension DependencyValues {
     get { self[WorktreeInventoryClient.self] }
     set { self[WorktreeInventoryClient.self] = newValue }
   }
+}
+
+// MARK: - Live closure bodies
+
+/// Body of the live `listFolders` closure: immediate child directories
+/// under `baseDirectory`, sorted for stable table order. Missing base
+/// directory returns `[]`.
+private nonisolated func listChildFolders(of baseDirectory: URL) throws -> [URL] {
+  let fileManager = FileManager.default
+  let basePath = baseDirectory.standardizedFileURL.path(percentEncoded: false)
+  var isDirectory: ObjCBool = false
+  guard
+    fileManager.fileExists(atPath: basePath, isDirectory: &isDirectory),
+    isDirectory.boolValue
+  else {
+    return []
+  }
+  let children = try fileManager.contentsOfDirectory(
+    at: baseDirectory.standardizedFileURL,
+    includingPropertiesForKeys: [.isDirectoryKey],
+    options: []
+  )
+  return
+    children
+    .filter { url in
+      (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+    }
+    .map(\.standardizedFileURL)
+    .sorted {
+      $0.path(percentEncoded: false).localizedStandardCompare(
+        $1.path(percentEncoded: false)
+      ) == .orderedAscending
+    }
+}
+
+/// Body of the live `gitMetadata` closure: the three cheap per-row git
+/// calls, each individually optional — a failed call leaves its field at
+/// the default rather than failing the whole row.
+private nonisolated func fetchGitMetadata(
+  shell: ShellClient,
+  env: URL,
+  path: URL,
+  baseRef: String
+) async -> WorktreeInventoryGitMetadata {
+  var metadata = WorktreeInventoryGitMetadata()
+  let repoPath = path.path(percentEncoded: false)
+
+  // Log: %H (full sha), %cI (committer date ISO-8601 strict), %s
+  // (subject). Separated by \x1f so subjects containing tabs or
+  // pipes don't confuse the parser.
+  if let out = try? await shell.run(
+    env,
+    [
+      "git", "-C", repoPath, "log", "-1",
+      "--format=%H%x1f%cI%x1f%s",
+    ],
+    nil
+  ) {
+    metadata.lastCommit = parseLastCommit(out.stdout)
+  }
+
+  // Count uncommitted files via porcelain — empty output means
+  // clean; each non-empty line is one change entry.
+  if let out = try? await shell.run(
+    env,
+    ["git", "-C", repoPath, "status", "--porcelain"],
+    nil
+  ) {
+    metadata.uncommittedCount = parsePorcelainLineCount(out.stdout)
+  }
+
+  // `--left-right --count baseRef...HEAD` → "<behind>\t<ahead>".
+  // (left = reachable from baseRef not HEAD = behind;
+  //  right = reachable from HEAD not baseRef = ahead.)
+  if let out = try? await shell.run(
+    env,
+    [
+      "git", "-C", repoPath, "rev-list",
+      "--left-right", "--count", "\(baseRef)...HEAD",
+    ],
+    nil
+  ) {
+    metadata.aheadBehind = parseAheadBehind(out.stdout)
+  }
+
+  return metadata
 }
 
 // MARK: - Inventory merging

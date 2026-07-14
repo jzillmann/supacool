@@ -475,6 +475,15 @@ extension BoardFeature {
     case visible
   }
 
+  /// One PR eligible for a refresh fetch: picked by
+  /// `pickPRRefreshCandidates`, consumed by `prRefreshEffect`.
+  nonisolated struct PRRefreshCandidate: Equatable, Sendable {
+    let refKey: String
+    let owner: String
+    let repo: String
+    let number: Int
+  }
+
   /// Collect unique PR refs eligible for refresh under the requested mode.
   /// Applies in-flight, failure-backoff, and success-cache throttles before
   /// returning the bounded worker batch.
@@ -487,8 +496,8 @@ extension BoardFeature {
     jitter: [String: TimeInterval],
     inFlight: Set<String>,
     now: Date
-  ) -> [(refKey: String, owner: String, repo: String, number: Int)] {
-    var picked: [(refKey: String, owner: String, repo: String, number: Int)] = []
+  ) -> [PRRefreshCandidate] {
+    var picked: [PRRefreshCandidate] = []
     var seenKeys = Set<String>()
     for session in sessions where sessionID == nil || session.id == sessionID {
       for ref in session.references {
@@ -511,7 +520,7 @@ extension BoardFeature {
           now: now
         ) { continue }
         seenKeys.insert(key)
-        picked.append((key, owner, repo, number))
+        picked.append(PRRefreshCandidate(refKey: key, owner: owner, repo: repo, number: number))
       }
     }
     return picked

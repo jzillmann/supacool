@@ -43,6 +43,7 @@ struct GettingStartedCarouselView: View {
         Image(systemName: "xmark.circle.fill")
           .font(.title3)
           .foregroundStyle(.tertiary)
+          .accessibilityLabel("Hide Getting Started")
       }
       .buttonStyle(.plain)
       .help("Hide Getting Started for this session. Bring it back from Settings → General.")
@@ -104,6 +105,7 @@ struct GettingStartedCarouselView: View {
               animation: .easeInOut(duration: 0.2)
             )
           }
+          .accessibilityAddTraits(.isButton)
       }
     }
     .padding(.top, 4)

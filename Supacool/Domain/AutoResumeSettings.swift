@@ -75,7 +75,7 @@ nonisolated struct AutoResumeSettings: Equatable, Sendable {
     }
   }
 
-  static let masterDefaultsKey = "supacool.autoResumeOnPRReturn"
+  static let globalEnabledDefaultsKey = "supacool.autoResumeOnPRReturn"
 
   /// Reads the live configuration straight from UserDefaults (mirrors
   /// `readBypassPermissions`); the Settings toggles write the same keys via
@@ -93,7 +93,7 @@ nonisolated struct AutoResumeSettings: Equatable, Sendable {
       )
     }
     return AutoResumeSettings(
-      enabled: defaults.bool(forKey: masterDefaultsKey),
+      enabled: defaults.bool(forKey: globalEnabledDefaultsKey),
       caseSettings: caseSettings
     )
   }

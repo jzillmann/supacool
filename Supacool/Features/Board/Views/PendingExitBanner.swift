@@ -23,6 +23,7 @@ struct PendingExitBanner: View {
           Image(systemName: "arrow.right.circle")
             .font(.callout)
             .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
           Text(destination)
             .font(.callout.weight(.medium))
             .foregroundStyle(.primary)

@@ -834,6 +834,24 @@ struct BoardRootView: View {
     ToolbarSpacer(.flexible)
     ToolbarItem(placement: .primaryAction) {
       Button {
+        openNewTerminalFromCurrentContext()
+      } label: {
+        Label("New Terminal", systemImage: "plus")
+      }
+      .help("New Terminal (⌘N)")
+      .disabled(repositories.isEmpty)
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
+        store.send(.openLinearInbox(repositories: Array(repositories)))
+      } label: {
+        Label("Linear Inbox", systemImage: "tray.and.arrow.down")
+      }
+      .help("Import Linear tickets to triage and start sessions on")
+      .disabled(repositories.isEmpty)
+    }
+    ToolbarItem(placement: .primaryAction) {
+      Button {
         matrixLayoutEnabled.toggle()
       } label: {
         Label(
@@ -881,24 +899,6 @@ struct BoardRootView: View {
           ? "Open cleanup archive (removed cards + worktrees)"
           : "Open cleanup archive — \(store.trashedSessions.count) recoverable card(s)"
       )
-    }
-    ToolbarItem(placement: .primaryAction) {
-      Button {
-        store.send(.openLinearInbox(repositories: Array(repositories)))
-      } label: {
-        Label("Linear Inbox", systemImage: "tray.and.arrow.down")
-      }
-      .help("Import Linear tickets to triage and start sessions on")
-      .disabled(repositories.isEmpty)
-    }
-    ToolbarItem(placement: .primaryAction) {
-      Button {
-        openNewTerminalFromCurrentContext()
-      } label: {
-        Label("New Terminal", systemImage: "plus")
-      }
-      .help("New Terminal (⌘N)")
-      .disabled(repositories.isEmpty)
     }
   }
 

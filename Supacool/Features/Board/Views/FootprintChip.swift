@@ -33,6 +33,7 @@ struct FootprintChip: View {
       HStack(spacing: 4) {
         Image(systemName: "memorychip")
           .font(.caption)
+          .accessibilityLabel("Memory footprint")
         Text(displayTotal)
           .font(.caption.monospacedDigit())
       }
@@ -142,6 +143,7 @@ struct FootprintAnalysisSheet: View {
         onRefresh()
       } label: {
         Image(systemName: "arrow.clockwise")
+          .accessibilityLabel("Re-sample the process tree")
       }
       .buttonStyle(.plain)
       .help("Re-sample the process tree")
@@ -156,6 +158,7 @@ struct FootprintAnalysisSheet: View {
         HStack(spacing: 10) {
           Image(systemName: "app.badge")
             .foregroundStyle(.blue)
+            .accessibilityHidden(true)
           VStack(alignment: .leading, spacing: 1) {
             Text("Supacool (this app)")
               .font(.callout.weight(.medium))
@@ -194,6 +197,7 @@ struct FootprintAnalysisSheet: View {
       Image(systemName: "checkmark.seal")
         .font(.largeTitle)
         .foregroundStyle(.green)
+        .accessibilityHidden(true)
       Text("No descendant processes")
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -222,8 +226,8 @@ struct FootprintAnalysisSheet: View {
     let total = FootprintChip.formatBytes(snapshot.totalBytes)
     let app = FootprintChip.formatBytes(snapshot.rootBytes)
     let descendants = FootprintChip.formatBytes(snapshot.descendantBytes)
-    return
-      "\(total) total — \(app) app + \(descendants) across \(snapshot.descendantCount) descendant process\(snapshot.descendantCount == 1 ? "" : "es")"
+    return "\(total) total — \(app) app + \(descendants) across "
+      + "\(snapshot.descendantCount) descendant process\(snapshot.descendantCount == 1 ? "" : "es")"
   }
 
   /// Plain-text report pasted into a ticket body. Deliberately wide
@@ -287,6 +291,7 @@ private struct SubtreeRow: View {
         Image(systemName: subtreeIcon)
           .foregroundStyle(iconColor)
           .frame(width: 22)
+          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 2) {
           Text(prettyCommand(subtree.rootCommand))
             .font(.callout.weight(.medium))
@@ -310,6 +315,7 @@ private struct SubtreeRow: View {
             .font(.caption2)
             .foregroundStyle(.tertiary)
             .frame(width: 22)
+            .accessibilityLabel("Heaviest descendant")
           Text(prettyCommand(heavy.command))
             .font(.caption.monospaced())
             .foregroundStyle(.secondary)

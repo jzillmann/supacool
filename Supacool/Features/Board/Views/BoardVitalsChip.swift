@@ -50,6 +50,7 @@ struct BoardVitalsChip: View {
     HStack(spacing: 3) {
       Image(systemName: systemImage)
         .font(.caption2)
+        .accessibilityHidden(true)
       Text("\(count)")
         .font(.caption.monospacedDigit())
     }

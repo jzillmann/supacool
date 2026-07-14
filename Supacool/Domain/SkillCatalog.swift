@@ -392,7 +392,8 @@ enum SkillCatalog {
   }
 
   private static func isUserInvocable(description: String) -> Bool {
-    let pattern = "(?i)(use this skill when|use when asked to|use when|this skill should be used when|use this skill|triggers on)"
+    let pattern =
+      "(?i)(use this skill when|use when asked to|use when|this skill should be used when|use this skill|triggers on)"
     return description.range(of: pattern, options: .regularExpression) != nil
   }
 

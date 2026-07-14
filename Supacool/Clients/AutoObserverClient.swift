@@ -91,11 +91,9 @@ private nonisolated enum AutoObserverLive {
   }()
 
   static func layer1(tail: String) -> String? {
-    for entry in patterns {
-      if tail.contains(entry.regex) {
-        observerLogger.debug("Auto-observer layer-1 match: pattern=\(entry.raw) → \(entry.response)")
-        return entry.response
-      }
+    for entry in patterns where tail.contains(entry.regex) {
+      observerLogger.debug("Auto-observer layer-1 match: pattern=\(entry.raw) → \(entry.response)")
+      return entry.response
     }
     return nil
   }

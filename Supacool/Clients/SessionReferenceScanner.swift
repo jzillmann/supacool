@@ -14,7 +14,9 @@ struct SessionReferenceScannerClient: Sendable {
   /// and assistant messages. `allowedPrefixes` scopes ticket matches to a
   /// repo's Linear team keys (empty = match any uppercase prefix). Returns
   /// `[]` if the file doesn't exist.
-  var scan: @Sendable (_ cwdPath: String, _ agentNativeSessionID: String, _ allowedPrefixes: Set<String>) async -> [SessionReference]
+  var scan:
+    @Sendable (_ cwdPath: String, _ agentNativeSessionID: String, _ allowedPrefixes: Set<String>) async
+      -> [SessionReference]
   /// One-shot regex pass over a plain string (e.g. `session.initialPrompt`),
   /// scoped to `allowedPrefixes`.
   var scanText: @Sendable (_ text: String, _ allowedPrefixes: Set<String>) -> [SessionReference]

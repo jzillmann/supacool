@@ -213,6 +213,11 @@ final class WorktreeTerminalManager {
   }
 
   private func configureSocketServer(_ server: AgentHookSocketServer) {
+    configureBusyHandler(server)
+    configureNotificationHandler(server)
+  }
+
+  private func configureBusyHandler(_ server: AgentHookSocketServer) {
     server.onBusy = { [weak self] worktreeID, tabID, surfaceID, active, pid in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
       let wrappedTabID = TerminalTabID(rawValue: tabID)
@@ -278,6 +283,9 @@ final class WorktreeTerminalManager {
         }
       }
     }
+  }
+
+  private func configureNotificationHandler(_ server: AgentHookSocketServer) {
     server.onNotification = { [weak self] worktreeID, tabID, surfaceID, notification in
       let decoded = worktreeID.removingPercentEncoding ?? worktreeID
       let awaiting = Self.isAwaitingInputSignal(notification)

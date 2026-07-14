@@ -36,6 +36,7 @@ struct RecentPromptsPopover: View {
     HStack {
       Image(systemName: "text.line.first.and.arrowtriangle.forward")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text("Recent prompts")
         .font(.headline)
       Spacer()

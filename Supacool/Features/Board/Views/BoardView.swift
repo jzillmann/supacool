@@ -40,6 +40,11 @@ struct BoardView: View {
   @State private var standbyBucketExpanded: Bool = false
   @State private var parkedBucketExpanded: Bool = false
 
+  /// Whether the frozen deck is fanned out into individual cards. Deliberately
+  /// view-local and non-persisted: the deck exists to absorb the post-relaunch
+  /// flood of detached cards, so every launch should start it collapsed.
+  @State private var frozenDeckExpanded: Bool = false
+
   /// Visible width of each bucket's carousel rail, keyed by section title.
   /// Populated via `onScrollGeometryChange`. Used to suppress the
   /// reveal-highlighted-card scroll when every card already fits — that
@@ -57,6 +62,9 @@ struct BoardView: View {
   private let boardCardWidth: CGFloat = 280
   private let boardCarouselSpacing: CGFloat = 14
   private static let boardGridCoordSpace = "BoardGrid"
+  /// Scroll identity for the frozen deck. Distinct from the `AgentSession.ID`
+  /// keys the other cards use, so the rail can pin to it by name.
+  private static let frozenDeckScrollID = "board.frozenDeck"
 
   var body: some View {
     // The repo filter moved to a toolbar popover (RepoPickerButton) next
@@ -113,8 +121,23 @@ struct BoardView: View {
 
   /// Flat visit order for arrow keys: waiting cards first, then
   /// in-progress. Recomputed on every read — cheap; the grid is small.
+  /// Sessions folded into the collapsed frozen deck drop out — arrow keys
+  /// must not highlight a card nobody can see.
   private var currentNavOrder: [AgentSession.ID] {
-    BoardNavOrder.order(visibleSessions: store.visibleSessions, classify: classify)
+    let collapsed = Set(frozenDeckSessions.map(\.id))
+    let order = BoardNavOrder.order(visibleSessions: store.visibleSessions, classify: classify)
+    guard !collapsed.isEmpty else { return order }
+    return order.filter { !collapsed.contains($0) }
+  }
+
+  /// The idle sessions currently folded into the deck. Empty when the deck is
+  /// expanded, or when too few idle cards exist to be worth stacking.
+  private var frozenDeckSessions: [AgentSession] {
+    BoardFrozenDeck.members(
+      visibleSessions: store.visibleSessions,
+      isExpanded: frozenDeckExpanded,
+      classify: classify
+    )
   }
 
   private var visibleSessionIDSet: Set<AgentSession.ID> {
@@ -191,6 +214,39 @@ struct BoardView: View {
       }
     }
     store.send(.focusSession(id: nil))
+  }
+
+  /// Resume every session in the deck that can be revived automatically. The
+  /// rest stay put; the user reaches them by ungrouping.
+  private func resumeFrozenDeck(_ sessions: [AgentSession]) {
+    resumeSelectedSessions(routes: frozenDeckResumeRoutes(sessions))
+  }
+
+  private func frozenDeckResumeRoutes(_ sessions: [AgentSession]) -> [BoardSelectedResumeRoute] {
+    BoardResumeEligibility.resumeRoutes(
+      sessions: sessions,
+      classify: classify,
+      tabExists: sessionTabExists
+    )
+  }
+
+  private func setFrozenDeckExpanded(_ expanded: Bool) {
+    if !expanded {
+      // Cards about to disappear behind the deck must not stay selected —
+      // otherwise a hidden selection quietly drives the bulk-resume routes.
+      selectedSessionIDs.subtract(
+        BoardFrozenDeck.members(
+          visibleSessions: store.visibleSessions,
+          isExpanded: false,
+          classify: classify
+        )
+        .map(\.id)
+      )
+    }
+    withAnimation(.easeInOut(duration: 0.2)) {
+      frozenDeckExpanded = expanded
+    }
+    ensureHighlightValid()
   }
 
   private func moveHighlight(by delta: Int) {
@@ -288,7 +344,17 @@ struct BoardView: View {
       }
     } else {
       let live = visible.filter { classify($0) != .parked }
-      let waiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(classify($0)) })
+      // The deck swallows the idle cards, but "Waiting on Me (n)" keeps
+      // counting them — a collapsed pile is hidden, not gone.
+      let deck = frozenDeckSessions
+      let deckIDs = Set(deck.map(\.id))
+      let allWaiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(classify($0)) })
+      let waiting = deckIDs.isEmpty ? allWaiting : allWaiting.filter { !deckIDs.contains($0.id) }
+      let waitingCount = allWaiting.count
+      // Once expanded, the header offers the way back — otherwise a fanned-out
+      // pile could only be restacked by relaunching the app.
+      let canRestack = frozenDeckExpanded
+        && live.filter { classify($0) == .detached && !$0.isPriority }.count >= BoardFrozenDeck.minimumCount
       let checksPending = BoardNavOrder.priorityFirst(
         live.filter { BoardNavOrder.isChecksPendingStatus(classify($0)) }
       )
@@ -379,7 +445,10 @@ struct BoardView: View {
               sessions: waiting,
               dimmed: false,
               emptyMessage: "Nothing waiting on you.",
-              showsRepoLabelAbove: showsRepoLabelAbove
+              showsRepoLabelAbove: showsRepoLabelAbove,
+              headerCount: waitingCount,
+              frozenDeck: deck,
+              onRestackFrozenDeck: canRestack ? { setFrozenDeckExpanded(false) } : nil
             )
             if !checksPending.isEmpty {
               Divider()
@@ -509,6 +578,7 @@ struct BoardView: View {
       Image(systemName: "square.grid.3x3")
         .font(.system(size: 42))
         .foregroundStyle(.tertiary)
+        .accessibilityHidden(true)
       if repositories.isEmpty {
         Text("No repositories yet")
           .font(.title3.weight(.medium))
@@ -545,33 +615,31 @@ struct BoardView: View {
     dimmed: Bool,
     emptyMessage: String?,
     hidesHeader: Bool = false,
-    showsRepoLabelAbove: Bool = false
+    showsRepoLabelAbove: Bool = false,
+    headerCount: Int? = nil,
+    frozenDeck: [AgentSession] = [],
+    onRestackFrozenDeck: (() -> Void)? = nil
   ) -> some View {
-    if sessions.isEmpty && emptyMessage == nil {
+    if sessions.isEmpty && frozenDeck.isEmpty && emptyMessage == nil {
       EmptyView()
     } else {
       VStack(alignment: .leading, spacing: 12) {
         if !hidesHeader {
-          Label {
-            Text(title)
-              .font(.headline)
-              .foregroundStyle(.secondary)
-            Text("(\(sessions.count))")
-              .font(.subheadline)
-              .foregroundStyle(.tertiary)
-              .monospacedDigit()
-          } icon: {
-            Image(systemName: systemImage)
-              .foregroundStyle(color)
-          }
+          sectionHeader(
+            title: title,
+            systemImage: systemImage,
+            color: color,
+            count: headerCount ?? sessions.count,
+            onRestackFrozenDeck: onRestackFrozenDeck
+          )
         }
 
-        if sessions.isEmpty, emptyMessage != nil {
+        if sessions.isEmpty, frozenDeck.isEmpty, emptyMessage != nil {
           WaitingEmptyPlaceholder()
             .padding(.vertical, 4)
         }
 
-        if !sessions.isEmpty {
+        if !sessions.isEmpty || !frozenDeck.isEmpty {
           if matrixLayoutEnabled {
             // Full matrix: wrap the bucket's cards into as many rows as
             // needed so every session is visible without horizontal
@@ -588,14 +656,24 @@ struct BoardView: View {
               alignment: .leading,
               spacing: boardCarouselSpacing
             ) {
-              sectionCards(sessions: sessions, dimmed: dimmed, showsRepoLabelAbove: showsRepoLabelAbove)
+              sectionCards(
+                sessions: sessions,
+                dimmed: dimmed,
+                showsRepoLabelAbove: showsRepoLabelAbove,
+                frozenDeck: frozenDeck
+              )
             }
             .padding(.vertical, 2)
           } else {
             ScrollViewReader { proxy in
               ScrollView(.horizontal, showsIndicators: true) {
                 LazyHStack(alignment: .top, spacing: boardCarouselSpacing) {
-                  sectionCards(sessions: sessions, dimmed: dimmed, showsRepoLabelAbove: showsRepoLabelAbove)
+                  sectionCards(
+                    sessions: sessions,
+                    dimmed: dimmed,
+                    showsRepoLabelAbove: showsRepoLabelAbove,
+                    frozenDeck: frozenDeck
+                  )
                 }
                 .scrollTargetLayout()
                 .padding(.vertical, 2)
@@ -619,23 +697,69 @@ struct BoardView: View {
                 carouselViewportWidth[title] = width
                 // Once we know the rail fits every card, pin it to the
                 // first card so it rests at zero — this heals a rail that
-                // an earlier reveal scroll already nudged off-screen.
-                if carouselCardsWidth(count: sessions.count) <= width, let first = sessions.first {
+                // an earlier reveal scroll already nudged off-screen. The
+                // frozen deck, when present, is that first card.
+                let railCount = sessions.count + (frozenDeck.isEmpty ? 0 : 1)
+                guard carouselCardsWidth(count: railCount) <= width else { return }
+                if !frozenDeck.isEmpty {
+                  proxy.scrollTo(Self.frozenDeckScrollID, anchor: .leading)
+                } else if let first = sessions.first {
                   proxy.scrollTo(first.id, anchor: .leading)
                 }
               }
               .onAppear {
                 scrollHighlightedCard(
-                  in: sessions, proxy: proxy, viewportWidth: carouselViewportWidth[title], animated: false
+                  in: sessions,
+                  proxy: proxy,
+                  viewportWidth: carouselViewportWidth[title],
+                  extraCards: frozenDeck.isEmpty ? 0 : 1,
+                  animated: false
                 )
               }
               .onChange(of: highlightedSessionID) { _, _ in
-                scrollHighlightedCard(in: sessions, proxy: proxy, viewportWidth: carouselViewportWidth[title])
+                scrollHighlightedCard(
+                  in: sessions,
+                  proxy: proxy,
+                  viewportWidth: carouselViewportWidth[title],
+                  extraCards: frozenDeck.isEmpty ? 0 : 1
+                )
               }
             }
           }
         }
       }
+    }
+  }
+
+  /// The bucket header row: icon + title + count, the optional restack
+  /// button, and the trailing spacer. Split out of `section` purely to
+  /// keep that function under the length limit.
+  @ViewBuilder
+  private func sectionHeader(
+    title: String,
+    systemImage: String,
+    color: Color,
+    count: Int,
+    onRestackFrozenDeck: (() -> Void)?
+  ) -> some View {
+    HStack(spacing: 10) {
+      Label {
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(.secondary)
+        Text("(\(count))")
+          .font(.subheadline)
+          .foregroundStyle(.tertiary)
+          .monospacedDigit()
+      } icon: {
+        Image(systemName: systemImage)
+          .foregroundStyle(color)
+          .accessibilityHidden(true)
+      }
+      if let onRestackFrozenDeck {
+        RestackFrozenDeckButton(action: onRestackFrozenDeck)
+      }
+      Spacer(minLength: 0)
     }
   }
 
@@ -645,173 +769,31 @@ struct BoardView: View {
   private func sectionCards(
     sessions: [AgentSession],
     dimmed: Bool,
-    showsRepoLabelAbove: Bool
+    showsRepoLabelAbove: Bool,
+    frozenDeck: [AgentSession] = []
   ) -> some View {
     let bulkResumeRoutes = selectedResumeRoutes
-    let selectedResumeCount = bulkResumeRoutes.count
-    let selectedPickerResumeCount = bulkResumeRoutes.filter(\.usesPicker).count
+    if !frozenDeck.isEmpty {
+      FrozenDeckCardView(
+        sessions: frozenDeck,
+        resumableCount: frozenDeckResumeRoutes(frozenDeck).count,
+        onResumeAll: { resumeFrozenDeck(frozenDeck) },
+        onExpand: { setFrozenDeckExpanded(true) }
+      )
+      .frame(width: boardCardWidth)
+      .fixedSize(horizontal: false, vertical: true)
+      .id(Self.frozenDeckScrollID)
+      .transition(.opacity.combined(with: .scale(scale: 0.98)))
+      // The deck stands in for cards that carry a repo caption above them.
+      // Without the matching top inset it sits proud of its neighbours.
+      .padding(.top, showsRepoLabelAbove ? 20 : 0)
+    }
     ForEach(sessions, id: \.id) { session in
-      let sessionStatus = classify(session)
-      let sessionHasTab = sessionTabExists(session)
-      let activeParked = session.parkedActive
-      let debugLink = debugLinkDescriptor(for: session)
-      let onDebugLinkTap: (() -> Void)? = {
-        guard let targetID = debugLink?.targetID else { return nil }
-        return { store.send(.focusSession(id: targetID)) }
-      }()
-      SessionCardContainer(
+      sessionCard(
         session: session,
-        repositoryName: repositories[id: session.repositoryID]?.name,
-        pullRequest: matchedPullRequest(for: session),
-        status: sessionStatus,
-        serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
-        debugLinkTitle: debugLink?.title,
-        onDebugLinkTap: onDebugLinkTap,
         dimmed: dimmed,
-        isHighlighted: highlightedSessionID == session.id,
-        isActiveParked: activeParked,
-        isSelected: selectedSessionIDs.contains(session.id),
-        selectedResumeCount: selectedResumeCount,
-        selectedPickerResumeCount: selectedPickerResumeCount,
-        onTap: { handleCardTap(session) },
-        onRemove: { store.send(.requestRemoveSession(id: session.id)) },
-        onRename: { onRenameSession(session) },
-        onTogglePriority: { store.send(.togglePriority(id: session.id)) },
-        onSetStatusOverride: { status in
-          store.send(.setManualStatusOverride(id: session.id, status: status))
-        },
-        onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
-          ? {
-            store.send(
-              .rerunDetachedSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
-          : nil,
-        onResume: canDirectResume(session, status: sessionStatus)
-          ? {
-            store.send(
-              .resumeDetachedSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
-          : nil,
-        onResumeInPlace: BoardResumeEligibility.canDirectResume(
-          session,
-          status: sessionStatus,
-          tabExists: sessionHasTab,
-          includingParked: true
-        )
-          ? {
-            store.send(
-              .resumeDetachedSession(
-                id: session.id,
-                repositories: Array(repositories),
-                focusOnComplete: false
-              )
-            )
-          }
-          : nil,
-        onResumePicker: canResumeWithPicker(session, status: sessionStatus)
-          ? {
-            store.send(
-              .resumeDetachedSessionWithPicker(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
-          : nil,
-        onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
-          ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
-          : nil,
-        onPark: (sessionStatus != .parked)
-          ? {
-            store.send(
-              .parkSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
-          : nil,
-        onParkActive: (sessionStatus != .parked && sessionHasTab)
-          ? {
-            store.send(.parkActiveSession(id: session.id))
-          }
-          : nil,
-        // Unpark routing:
-        //   • Still has a live tab (Park as Active) → just clear
-        //     the parked bit; the running terminal stays untouched.
-        //   • Captured session id → one-click resume, same as
-        //     detached cards with the same state.
-        //   • No captured id (shell session, or agent whose id we
-        //     never learned) → focus the card. The full-screen
-        //     detached UI takes over with explicit Rerun / Resume
-        //     via Picker / Remove buttons, matching the behavior
-        //     of a non-parked detached card. This gives the user
-        //     a choice rather than picking for them.
-        onUnpark: (sessionStatus == .parked)
-          ? {
-            if sessionHasTab {
-              store.send(.unparkSession(id: session.id))
-            } else if session.agent != nil && hasCapturedNativeSessionID(session) {
-              store.send(
-                .resumeDetachedSession(
-                  id: session.id,
-                  repositories: Array(repositories)
-                )
-              )
-            } else {
-              store.send(.focusSession(id: session.id))
-            }
-          }
-          : nil,
-        onAutoObserverToggle: {
-          store.send(.toggleAutoObserver(id: session.id))
-        },
-        onAutoObserverPromptChanged: { prompt in
-          store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
-        },
-        onAutoObserverRunNow: {
-          store.send(.autoObserverTriggered(id: session.id))
-        },
-        onDebug: {
-          store.send(
-            .debugSessionRequested(
-              id: session.id,
-              repositories: Array(repositories)
-            )
-          )
-        },
-        onServerLifecycleRefresh: {
-          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
-        },
-        onServerLifecycleStart: {
-          store.send(.serverLifecycleStartTapped(sessionID: session.id))
-        },
-        onServerLifecycleStop: {
-          store.send(.serverLifecycleStopTapped(sessionID: session.id))
-        },
-        onAppear: {
-          store.send(.cardAppeared(id: session.id))
-          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
-        },
-        onReferencesPopoverOpened: {
-          store.send(.refreshPRReferences(id: session.id))
-        },
-        onRemoveReference: { reference in
-          store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
-        },
-        prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
-          of: session,
-          pulseFallback: store.state.prPulseSnapshots
-        ),
-        showsRepoLabelAbove: showsRepoLabelAbove
+        showsRepoLabelAbove: showsRepoLabelAbove,
+        bulkResumeRoutes: bulkResumeRoutes
       )
       .frame(width: boardCardWidth)
       // Both bucket layouts are lazy containers that propose a *concrete*
@@ -840,6 +822,206 @@ struct BoardView: View {
     }
   }
 
+  /// One fully wired board card: status classification, debug-link
+  /// routing, and every reducer hand-off for a single session.
+  private func sessionCard(
+    session: AgentSession,
+    dimmed: Bool,
+    showsRepoLabelAbove: Bool,
+    bulkResumeRoutes: [BoardSelectedResumeRoute]
+  ) -> some View {
+    let sessionStatus = classify(session)
+    let debugLink = debugLinkDescriptor(for: session)
+    let onDebugLinkTap: (() -> Void)? = {
+      guard let targetID = debugLink?.targetID else { return nil }
+      return { store.send(.focusSession(id: targetID)) }
+    }()
+    let flow = flowActions(for: session, status: sessionStatus)
+    let selectedResumeCount = bulkResumeRoutes.count
+    return SessionCardContainer(
+      session: session,
+      repositoryName: repositories[id: session.repositoryID]?.name,
+      pullRequest: matchedPullRequest(for: session),
+      status: sessionStatus,
+      serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
+      debugLinkTitle: debugLink?.title,
+      onDebugLinkTap: onDebugLinkTap,
+      dimmed: dimmed,
+      isHighlighted: highlightedSessionID == session.id,
+      isActiveParked: session.parkedActive,
+      isSelected: selectedSessionIDs.contains(session.id),
+      selectedResumeCount: selectedResumeCount,
+      selectedPickerResumeCount: bulkResumeRoutes.filter(\.usesPicker).count,
+      onTap: { handleCardTap(session) },
+      onRemove: { store.send(.requestRemoveSession(id: session.id)) },
+      onRename: { onRenameSession(session) },
+      onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+      onSetStatusOverride: { status in
+        store.send(.setManualStatusOverride(id: session.id, status: status))
+      },
+      onRerun: flow.onRerun,
+      onResume: flow.onResume,
+      onResumeInPlace: flow.onResumeInPlace,
+      onResumePicker: flow.onResumePicker,
+      onResumeSelected: (selectedSessionIDs.contains(session.id) && selectedResumeCount > 1)
+        ? { resumeSelectedSessions(routes: bulkResumeRoutes) }
+        : nil,
+      onPark: flow.onPark,
+      onParkActive: flow.onParkActive,
+      onUnpark: flow.onUnpark,
+      onAutoObserverToggle: {
+        store.send(.toggleAutoObserver(id: session.id))
+      },
+      onAutoObserverPromptChanged: { prompt in
+        store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
+      },
+      onAutoObserverRunNow: {
+        store.send(.autoObserverTriggered(id: session.id))
+      },
+      onDebug: {
+        store.send(
+          .debugSessionRequested(
+            id: session.id,
+            repositories: Array(repositories)
+          )
+        )
+      },
+      onServerLifecycleRefresh: {
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+      },
+      onServerLifecycleStart: {
+        store.send(.serverLifecycleStartTapped(sessionID: session.id))
+      },
+      onServerLifecycleStop: {
+        store.send(.serverLifecycleStopTapped(sessionID: session.id))
+      },
+      onAppear: {
+        store.send(.cardAppeared(id: session.id))
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+      },
+      onReferencesPopoverOpened: {
+        store.send(.refreshPRReferences(id: session.id))
+      },
+      onRemoveReference: { reference in
+        store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
+      },
+      prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
+        of: session,
+        pulseFallback: store.state.prPulseSnapshots
+      ),
+      showsRepoLabelAbove: showsRepoLabelAbove
+    )
+  }
+
+  /// Optional rerun/resume/park hand-offs for one board card, derived
+  /// from its classification. A `nil` closure hides the matching action.
+  private struct SessionCardFlowActions {
+    var onRerun: (() -> Void)?
+    var onResume: (() -> Void)?
+    var onResumeInPlace: (() -> Void)?
+    var onResumePicker: (() -> Void)?
+    var onPark: (() -> Void)?
+    var onParkActive: (() -> Void)?
+    var onUnpark: (() -> Void)?
+  }
+
+  private func flowActions(
+    for session: AgentSession,
+    status sessionStatus: BoardSessionStatus
+  ) -> SessionCardFlowActions {
+    let sessionHasTab = sessionTabExists(session)
+    return SessionCardFlowActions(
+      onRerun: (sessionStatus == .detached || sessionStatus == .interrupted)
+        ? {
+          store.send(
+            .rerunDetachedSession(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        }
+        : nil,
+      onResume: canDirectResume(session, status: sessionStatus)
+        ? {
+          store.send(
+            .resumeDetachedSession(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        }
+        : nil,
+      onResumeInPlace: BoardResumeEligibility.canDirectResume(
+        session,
+        status: sessionStatus,
+        tabExists: sessionHasTab,
+        includingParked: true
+      )
+        ? {
+          store.send(
+            .resumeDetachedSession(
+              id: session.id,
+              repositories: Array(repositories),
+              focusOnComplete: false
+            )
+          )
+        }
+        : nil,
+      onResumePicker: canResumeWithPicker(session, status: sessionStatus)
+        ? {
+          store.send(
+            .resumeDetachedSessionWithPicker(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        }
+        : nil,
+      onPark: (sessionStatus != .parked)
+        ? {
+          store.send(
+            .parkSession(
+              id: session.id,
+              repositories: Array(repositories)
+            )
+          )
+        }
+        : nil,
+      onParkActive: (sessionStatus != .parked && sessionHasTab)
+        ? {
+          store.send(.parkActiveSession(id: session.id))
+        }
+        : nil,
+      // Unpark routing:
+      //   • Still has a live tab (Park as Active) → just clear
+      //     the parked bit; the running terminal stays untouched.
+      //   • Captured session id → one-click resume, same as
+      //     detached cards with the same state.
+      //   • No captured id (shell session, or agent whose id we
+      //     never learned) → focus the card. The full-screen
+      //     detached UI takes over with explicit Rerun / Resume
+      //     via Picker / Remove buttons, matching the behavior
+      //     of a non-parked detached card. This gives the user
+      //     a choice rather than picking for them.
+      onUnpark: (sessionStatus == .parked)
+        ? {
+          if sessionHasTab {
+            store.send(.unparkSession(id: session.id))
+          } else if session.agent != nil && hasCapturedNativeSessionID(session) {
+            store.send(
+              .resumeDetachedSession(
+                id: session.id,
+                repositories: Array(repositories)
+              )
+            )
+          } else {
+            store.send(.focusSession(id: session.id))
+          }
+        }
+        : nil
+    )
+  }
+
   /// Total width the bucket's cards occupy on the rail, ignoring the
   /// trailing content-margin slack. Used to decide whether a carousel
   /// actually overflows its viewport.
@@ -852,6 +1034,7 @@ struct BoardView: View {
     in sessions: [AgentSession],
     proxy: ScrollViewProxy,
     viewportWidth: CGFloat?,
+    extraCards: Int = 0,
     animated: Bool = true
   ) {
     guard let highlightedSessionID,
@@ -862,7 +1045,7 @@ struct BoardView: View {
     // Scrolling here would only nudge the rail off its zero rest position
     // and clip the leftmost card's left edge, so leave it alone — the
     // `onScrollGeometryChange` pin keeps it anchored to the first card.
-    if let viewportWidth, carouselCardsWidth(count: sessions.count) <= viewportWidth {
+    if let viewportWidth, carouselCardsWidth(count: sessions.count + extraCards) <= viewportWidth {
       return
     }
 
@@ -1202,6 +1385,7 @@ private struct SessionCardContainer: View {
           .background(Circle().fill(.background))
           .padding(6)
           .allowsHitTesting(false)
+          .accessibilityLabel("Selected")
       }
     }
     .animation(.easeOut(duration: 0.12), value: isHovered)
@@ -1215,6 +1399,28 @@ private struct SessionCardContainer: View {
         NSCursor.pop()
       }
     }
+  }
+}
+
+/// The way back from an ungrouped frozen deck. Sits in the "Waiting on Me"
+/// header only while the pile is fanned out.
+private struct RestackFrozenDeckButton: View {
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Label("Restack", systemImage: "rectangle.stack.fill")
+        .font(.caption.weight(.medium))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(
+          Capsule(style: .continuous)
+            .fill(.thinMaterial)
+        )
+    }
+    .buttonStyle(.plain)
+    .help("Fold the idle sessions back into one stack")
   }
 }
 
@@ -1238,9 +1444,11 @@ private struct DormantBucketPill: View {
           .font(.system(size: 9, weight: .semibold))
           .foregroundStyle(.tertiary)
           .rotationEffect(.degrees(isExpanded ? 90 : 0))
+          .accessibilityLabel(isExpanded ? "Expanded" : "Collapsed")
         Image(systemName: systemImage)
           .font(.system(size: 12))
           .foregroundStyle(color)
+          .accessibilityHidden(true)
         Text(title)
           .font(.subheadline.weight(.medium))
           .foregroundStyle(.secondary)

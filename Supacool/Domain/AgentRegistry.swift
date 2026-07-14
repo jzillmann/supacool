@@ -9,7 +9,8 @@ nonisolated enum AgentRegistry {
   /// All agents, built-ins first then user-defined (sorted by display
   /// name). Used by the New Terminal sheet picker and the Settings list.
   static var allAgents: [AgentType] {
-    builtins + userDefined.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
+    builtins
+      + userDefined.sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
   }
 
   /// Convenience for lookups in views and tests.

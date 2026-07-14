@@ -538,6 +538,10 @@ extension BoardFeature {
     }
     // Keep `pendingRerunSessionID` set so the user's original
     // session card stays put — they can retry.
+    //
+    // If a Linear inbox ticket was stamped as started by this spawn, revert
+    // it to "Start session" — the stamped session will never reach the board.
+    LinearInboxFeature.clearStartedStamp(forSessionID: sessionID)
     return .none
   }
 

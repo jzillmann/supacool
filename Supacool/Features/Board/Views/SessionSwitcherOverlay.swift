@@ -30,6 +30,8 @@ struct SessionSwitcherOverlay: View {
       Color.black.opacity(0.25)
         .contentShape(.rect)
         .onTapGesture { onCancel() }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel("Cancel session switching")
 
       panel
         .frame(maxWidth: 720)
@@ -96,6 +98,7 @@ struct SessionSwitcherOverlay: View {
         Image(systemName: systemImage)
           .font(.caption2)
           .foregroundStyle(tint)
+          .accessibilityHidden(true)
         Text(title)
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
@@ -173,6 +176,7 @@ struct SessionSwitcherOverlay: View {
       Image(systemName: "rectangle.stack")
         .font(.headline)
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text("Switch session")
         .font(.headline)
         .foregroundStyle(.primary)

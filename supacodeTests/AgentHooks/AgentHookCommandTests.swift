@@ -101,7 +101,7 @@ struct AgentHookCommandTests {
     let json = String(command[bodyStart..<bodyEnd])
 
     struct Payload: Decodable {
-      let hook_event_name: String  // swiftlint:disable:this identifier_name
+      let hook_event_name: String
       let message: String
     }
     let payload = try JSONDecoder().decode(Payload.self, from: Data(json.utf8))
