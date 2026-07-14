@@ -124,6 +124,52 @@ does the *identical* `nc -U $SUPACOOL_SOCKET_PATH`. Key choices (details and rat
 - `onNotification` posts the system notification and calls
   `captureAgentNativeSessionID(tabID:notification:)`.
 
+### The hooks alone cannot answer "is it working?"
+
+**This is the protocol's sharpest edge.** `UserPromptSubmit` and `PreToolUse` are the only
+busy-on edges, so a turn the agent spends *thinking* — reasoning with no tool call — emits
+**nothing at all**, sometimes for minutes. Worse, the blocking-tool special case above
+fires a `Notification` *instead of* busy-on, and that notification **clears the busy
+latch** by design. Put the two together and you get trace D5AF6FE4: `AskUserQuestion`
+cleared the latch, the awaiting lease expired 8s later, and the card sat in **Waiting** for
+2.5 minutes while the terminal plainly read `thinking more`.
+
+So busy is fused from **three** sources, and `WorktreeTerminalManager.isAgentBusy` is true
+if *any* holds:
+
+| Source | Set by | Lives for |
+|---|---|---|
+| hook latch | `onBusy(active:)` | until busy-off / `Stop` / an awaiting notification |
+| optimistic busy | a submitted prompt (`handleInputObserved`) | 15s TTL |
+| **screen-working** | the agent's own interrupt hint on screen (`isAgentWorkingScreen`) | while the hint is visible, +3 ticks of grace |
+
+The screen-working lease is the only one that survives a hook-silent think. It reads the
+`esc to interrupt` footer that claude/codex paint for the whole turn — a *semantic* read of
+the agent's own UI, deliberately **not** a "did the screen repaint" diff (a repaint also
+fires for cursor blinks, scrollback and focus; a user scrolling an idle card would turn it
+green). Two invariants worth keeping:
+
+- The hint list is **interrupt**, never **cancel** — Claude's *approval prompt* footer reads
+  `Esc to cancel`, so matching "cancel" would classify a permission prompt, the exact
+  opposite state, as working. `AgentWorkingScreenTests` guards this.
+- Hooked tabs are **not** excluded from this scan (they used to be, on the theory that the
+  hook stream told us everything — it does not). They *are* skipped while the hook latch is
+  already on, since a read tells us nothing new then. The awaiting-*prompt* screen fallback
+  remains hookless-only.
+
+Cost is bounded: a tab that shows neither a hook nor a hint for `screenWorkingQuietTickLimit`
+ticks (~2 min) drops out of the scan until the next hook or submit re-arms it, so a board of
+long-idle cards costs no screen reads.
+
+### One state, not three booleans
+
+`BoardSessionStatus.classify` takes a single `AgentActivity`
+(`.working` / `.wantsInput` / `.deferredWork` / `.idle`), produced by
+`WorktreeTerminalManager.agentActivity(worktreeID:tabID:)`. It used to fuse three
+independent booleans at the call site, which is how the card could fall through to
+"Waiting" whenever all of them happened to be false. There is now exactly one definition of
+"the agent is working", in one place.
+
 ### Deferred-work lease (intentional idle ≠ waiting on the user)
 
 Claude can end its turn *on purpose* while something external runs — holding for CI, a
@@ -159,6 +205,7 @@ other tool call first clears the lease via its busy-on edge).
   [`out-of-scope.md`](./out-of-scope.md) refers to.
 - **Tests**: `AgentHookSocketServerTests`, `AgentHookCommandTests`,
   `ClaudeProgressHookTests`, `CodexHookPayloadTests`, `AgentPIDSweepTests`,
-  `RemoteHookInstallerTests`, `AwaitingInputSignalTests`, `DeferredWorkSignalTests`, and
-  the deferred-work / awaiting cases in `WorktreeTerminalManagerTests` are the executable
-  spec; extend them when you change any of the above.
+  `RemoteHookInstallerTests`, `AwaitingInputSignalTests`, `AgentWorkingScreenTests`,
+  `DeferredWorkSignalTests`, and the deferred-work / awaiting / thinking-gap cases in
+  `WorktreeTerminalManagerTests` are the executable spec; extend them when you change any
+  of the above.

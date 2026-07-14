@@ -413,6 +413,184 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression (trace D5AF6FE4). A Claude turn spent *thinking* emits no busy
+  /// hook at all: `UserPromptSubmit` and `PreToolUse` are the only busy-on
+  /// edges, so a stretch of pure reasoning with no tool call is hook-silent for
+  /// minutes. Replays the trace exactly — a blocking-tool Notification clears
+  /// the busy latch and raises the awaiting lease, the lease expires 8s later,
+  /// and the agent then thinks for 2.5 minutes with the interrupt hint on
+  /// screen. The card used to sit in "Waiting" for that entire stretch while
+  /// the terminal plainly read "thinking more".
+  ///
+  /// It must read Working the whole time, and fall to idle only once the hint
+  /// actually leaves the screen.
+  @Test func thinkingAfterAwaitingLeaseExpiresKeepsCardWorking() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-thinking-gap")
+        // Step 1: the blocking tool (AskUserQuestion) has painted its prompt.
+        let screenContents = LockIsolated(
+          """
+          Do you want to proceed?
+          1. Yes
+          2. No
+
+          Esc to cancel
+          """
+        )
+        let worktree = makeWorktree()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          screenWorkingMissGrace: 3,
+          startPromptScreenScanning: false,
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+
+        let sessionID = UUID()
+        let state = manager.state(for: worktree)
+        let tab = state.registerTestTab(tabID: sessionID)
+        let tabID = tab.tabId
+
+        @Shared(.agentSessions) var sessions: [AgentSession]
+        $sessions.withLock {
+          $0 = [
+            AgentSession(
+              id: sessionID,
+              repositoryID: worktree.id,
+              worktreeID: worktree.id,
+              agent: .claude,
+              initialPrompt: "Plan CEN-7715",
+            ),
+          ]
+        }
+
+        // The synthetic "waiting for your input" Notification a blocking tool
+        // fires *instead of* busy-on. It clears the busy latch by design.
+        server.onNotification?(
+          worktree.id,
+          tabID.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude is waiting for your input",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .wantsInput)
+
+        // Step 2: the user answers. Claude drops the prompt and starts thinking
+        // — no tool call yet, so not a single hook fires from here on.
+        screenContents.setValue(
+          """
+          ⏺ Confirmed the two key facts. Rewriting the plan now.
+
+          ✻ Growing… (3× 47s · ↑ 4.3k tokens · esc to interrupt)
+          """
+        )
+
+        // Step 3: the awaiting lease expires (the old bug's trigger).
+        await clock.advance(by: .seconds(8))
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(!manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabID))
+
+        // ...and the card is Working, on the strength of the footer alone.
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .working)
+
+        // Step 4: 2.5 minutes of hook-silent thinking. Card must not budge.
+        for _ in 0..<150 {
+          await clock.advance(by: .seconds(1))
+          await manager.sampleAwaitingInputPromptScreensForTesting()
+        }
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .working)
+
+        // Step 5: the turn really ends — the hint leaves the screen. The lease
+        // drops after `screenWorkingMissGrace` consecutive misses, not instantly.
+        screenContents.setValue(
+          """
+          ⏺ Posted the plan to Linear.
+
+          >
+          """
+        )
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .working)
+
+        for _ in 0..<3 {
+          await clock.advance(by: .seconds(1))
+          await manager.sampleAwaitingInputPromptScreensForTesting()
+        }
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .idle)
+      }
+    }
+  }
+
+  /// A permission prompt is the *opposite* of working, and its footer reads
+  /// "Esc to cancel" — one word away from the interrupt hint. The working-screen
+  /// scan must not promote it, or a card silently blocked on the user would sit
+  /// in "Working" forever.
+  @Test func approvalPromptScreenDoesNotPromoteWorking() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let screenContents = LockIsolated(
+          """
+          Do you want to make this edit to widget.cue?
+          1. Yes
+          2. No
+
+          Esc to cancel  Tab to amend
+          """
+        )
+        let worktree = makeWorktree()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          awaitingInputActivityPollInterval: .seconds(1),
+          startPromptScreenScanning: false,
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+
+        let sessionID = UUID()
+        let state = manager.state(for: worktree)
+        let tab = state.registerTestTab(tabID: sessionID)
+        let tabID = tab.tabId
+
+        @Shared(.agentSessions) var sessions: [AgentSession]
+        $sessions.withLock {
+          $0 = [
+            AgentSession(
+              id: sessionID,
+              repositoryID: worktree.id,
+              worktreeID: worktree.id,
+              agent: .claude,
+              initialPrompt: "Edit the widget",
+            ),
+          ]
+        }
+
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+      }
+    }
+  }
+
   /// Regression: a hooked agent (Claude/Codex) that fires a single
   /// "waiting for input" hook and then goes genuinely quiet — blocked on
   /// the user or a background process — must stay in the waiting bucket.

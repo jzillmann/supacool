@@ -372,7 +372,7 @@ struct AgentSessionMigrationTests {
     #expect(session.lastActivityAt == newDate.addingTimeInterval(1))
   }
 
-  /// The classifier itself takes a single `busy: Bool`. Verifies the
+  /// The classifier itself takes a single `AgentActivity`. Verifies the
   /// invariant that auxiliary shells with their own busy flags do not
   /// participate: classify is fed the primary terminal's signals only,
   /// and the presence of busy auxiliaries does NOT change the result.
@@ -395,14 +395,13 @@ struct AgentSessionMigrationTests {
       SessionTerminal(id: UUID(), role: .shell, lastKnownBusy: true)
     )
 
-    // Real call site reads `terminalManager.isAgentBusy(tabID: session.id)`
+    // Real call site reads `terminalManager.agentActivity(tabID: session.id)`
     // which targets the primary. Mirror that here: feed classify the
-    // primary's busy state, not anything aggregated from auxiliaries.
+    // primary's activity, not anything aggregated from auxiliaries.
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: session.lastKnownBusy,
+      activity: session.lastKnownBusy ? .working : .idle,
       now: now
     )
     #expect(status == .waitingOnMe)

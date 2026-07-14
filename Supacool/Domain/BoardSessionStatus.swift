@@ -67,9 +67,7 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
   static func classify(
     session: AgentSession,
     tabExists: Bool,
-    awaitingInput: Bool,
-    busy: Bool,
-    deferredWork: Bool = false,
+    activity: AgentActivity,
     waitingExternally: Bool = false,
     now: Date = Date()
   ) -> Self {
@@ -91,11 +89,13 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
     if let override = session.manualStatusOverride {
       return override
     }
-    if awaitingInput {
+    switch activity {
+    case .wantsInput:
       return .awaitingInput
-    }
-    if busy || deferredWork {
+    case .working, .deferredWork:
       return .inProgress
+    case .idle:
+      break
     }
     if shouldKeepInProgressWhileIdle(session: session, now: now) {
       return session.hasCompletedAtLeastOnce ? .inProgress : .fresh
