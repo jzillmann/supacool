@@ -1765,6 +1765,78 @@ struct BoardFeatureTests {
 
     // Never launched into the wrong directory.
     #expect(sentCommands.value.isEmpty)
+    // …and the failure is actually visible: a red tray card, not just a log
+    // line. Tapping it focuses the session so the user can Rerun.
+    let card = store.state.trayCards[id: sessionID]
+    guard case .sessionResumeFailed(let cardSessionID, _, let message)? = card?.kind else {
+      Issue.record("Expected a sessionResumeFailed tray card, got \(String(describing: card?.kind))")
+      return
+    }
+    #expect(cardSessionID == sessionID)
+    #expect(message.contains("couldn't be recreated"))
+  }
+
+  @Test(.dependencies) func resumePickerRecreatesMissingWorktreeThenLaunches() async throws {
+    // The picker has the same cwd sensitivity as the captured-id path: it only
+    // lists conversations for the current directory's project, so from a
+    // fallback cwd it would show an empty or wrong list.
+    let sessionID = UUID()
+    let repoRoot = "/tmp/supacool-picker-\(UUID().uuidString)"
+    let worktreePath = "\(repoRoot)-wt/cen-8189-demo"
+    var session = Self.sampleSession(
+      id: sessionID,
+      repositoryID: repoRoot,
+      worktreeID: worktreePath,
+      removeBackingWorktreeOnDelete: true
+    )
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = nil }
+    let repository = Repository(
+      id: repoRoot,
+      rootURL: URL(fileURLWithPath: repoRoot),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let recreatedTargets = LockIsolated<[URL]>([])
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.gitClient.createWorktreeForExistingBranch = { branch, root, base in
+        recreatedTargets.withValue {
+          $0.append(base.appending(path: branch).standardizedFileURL)
+        }
+        return Worktree(
+          id: worktreePath,
+          name: branch,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: worktreePath),
+          repositoryRootURL: root
+        )
+      }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSessionWithPicker(id: sessionID, repositories: [repository]))
+    await store.send(.sessionTabPresenceObserved(id: sessionID, exists: true))
+    await store.finish()
+
+    #expect(recreatedTargets.value == [URL(fileURLWithPath: worktreePath).standardizedFileURL])
+    let command = try #require(sentCommands.value.first)
+    guard case .createTabWithInput(let worktree, _, _, let id) = command else {
+      Issue.record("Expected createTabWithInput command, got \(command)")
+      return
+    }
+    #expect(
+      worktree.workingDirectory.standardizedFileURL
+        == URL(fileURLWithPath: worktreePath).standardizedFileURL
+    )
+    #expect(id == sessionID)
   }
 
   @Test(.dependencies) func deleteFromTrashFiresCapturedCleanup() async {

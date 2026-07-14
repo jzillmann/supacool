@@ -197,21 +197,12 @@ extension BoardFeature {
       // path first — otherwise the shell falls back to an unrelated cwd and
       // `claude --resume` reports "No conversation found" even though the
       // transcript is intact. See `recreateWorktreeIfMissing`.
-      do {
-        try await Self.recreateWorktreeIfMissing(
-          at: worktree.workingDirectory,
-          repository: repository,
-          gitClient: gitClient
-        )
-      } catch {
-        await send(
-          .resumeFailed(
-            id: id,
-            message: "Couldn't recreate worktree at "
-              + "\(worktree.workingDirectory.path(percentEncoded: false)): "
-              + error.localizedDescription
-          )
-        )
+      if let failure = await Self.recreateWorktreeIfMissing(
+        at: worktree.workingDirectory,
+        repository: repository,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
         return
       }
       if agent.id == "pi" {
@@ -272,7 +263,19 @@ extension BoardFeature {
     }
     state.focusedSessionID = id
     let command = pickerCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    return .run {
+      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      // Same cwd sensitivity as the captured-id path: the resume picker only
+      // lists conversations belonging to the current directory's project, so a
+      // missing worktree would show an empty (or wrong) picker.
+      if let failure = await Self.recreateWorktreeIfMissing(
+        at: worktree.workingDirectory,
+        repository: repository,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -678,26 +681,38 @@ extension BoardFeature {
   /// at its *exact original path* (`baseDirectory/branchName`, which is how
   /// `worktreeID` was formed) restores the hash so resume resolves.
   ///
-  /// No-op for repo-root sessions (`worktreeURL == repo root`) and when the
-  /// directory already exists. Throws if `git worktree add` fails (e.g. the
-  /// branch was deleted too) so callers can recreate-or-surface as they see
-  /// fit.
+  /// No-op for repo-root sessions (`worktreeURL == repo root` — mirroring
+  /// `cleanupPlan`, which only ever removes a worktree when
+  /// `worktreeID != repositoryID`) and when the directory already exists.
+  ///
+  /// Returns `nil` when the directory is present (or was rebuilt), or a
+  /// user-facing message when it's gone and can't be rebuilt (e.g. the branch
+  /// was deleted too).
   static func recreateWorktreeIfMissing(
     at worktreeURL: URL,
     repository: Repository,
     gitClient: GitClientDependency
-  ) async throws {
+  ) async -> String? {
     let standardized = worktreeURL.standardizedFileURL
-    guard standardized != repository.rootURL.standardizedFileURL else { return }
     guard
-      !FileManager.default.fileExists(
-        atPath: standardized.path(percentEncoded: false)
+      standardized != repository.rootURL.standardizedFileURL,
+      !FileManager.default.fileExists(atPath: standardized.path(percentEncoded: false))
+    else { return nil }
+    // Supacool lays worktrees out as `<baseDirectory>/<branch>`, so the branch
+    // is the path's last component and re-adding it reconstructs the identical
+    // path the captured session id was recorded under.
+    let branchName = standardized.lastPathComponent
+    do {
+      _ = try await gitClient.createWorktreeForExistingBranch(
+        branchName,
+        repository.rootURL,
+        standardized.deletingLastPathComponent()
       )
-    else { return }
-    _ = try await gitClient.createWorktreeForExistingBranch(
-      standardized.lastPathComponent,
-      repository.rootURL,
-      standardized.deletingLastPathComponent()
-    )
+      return nil
+    } catch {
+      return "The worktree for this session was deleted and couldn't be recreated "
+        + "(branch \"\(branchName)\" may be gone): \(error.localizedDescription). "
+        + "Use Rerun to start fresh."
+    }
   }
 }

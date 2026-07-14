@@ -1194,17 +1194,13 @@ struct BoardFeature {
         }
         let worktreeURL = URL(fileURLWithPath: restoredSession.worktreeID)
         return .run { [gitClient] _ in
-          do {
-            try await Self.recreateWorktreeIfMissing(
-              at: worktreeURL,
-              repository: repository,
-              gitClient: gitClient
-            )
-          } catch {
+          if let failure = await Self.recreateWorktreeIfMissing(
+            at: worktreeURL,
+            repository: repository,
+            gitClient: gitClient
+          ) {
             boardLogger.warning(
-              "Restore: couldn't recreate worktree at "
-                + "\(worktreeURL.path(percentEncoded: false)): "
-                + error.localizedDescription
+              "Restore: \(worktreeURL.path(percentEncoded: false)): \(failure)"
             )
           }
         }
@@ -1728,6 +1724,23 @@ struct BoardFeature {
       case .resumeFailed(let id, let message):
         state.reinitializingSessionIDs.remove(id)
         boardLogger.warning("Resume failed for session \(id): \(message)")
+        // Surface the failure in the tray. This was previously log-only, so a
+        // failed resume looked identical to nothing happening at all.
+        guard let session = state.sessions.first(where: { $0.id == id }) else { return .none }
+        // Card id is anchored to the session id (same convention as
+        // `.sessionCreating`), so drop any stale card for this session first —
+        // `trayCards` is an IdentifiedArray and won't hold duplicate ids.
+        state.trayCards.removeAll { $0.id == id }
+        state.trayCards.append(
+          TrayCard(
+            id: id,
+            kind: .sessionResumeFailed(
+              sessionID: id,
+              displayName: session.displayName,
+              message: message
+            )
+          )
+        )
         return .none
 
       case .reconnectRemoteSession(let id):
@@ -2158,6 +2171,11 @@ struct BoardFeature {
             resuming: snapshot
           )
           return .none
+        case .sessionResumeFailed(let sessionID, _, _):
+          // The session card is still on the board (detached) — focus it so
+          // the user can Rerun from there.
+          state.trayCards.remove(id: id)
+          return .send(.focusSession(id: sessionID))
         }
 
       case .trayCardSecondaryTapped(let id):
@@ -2170,7 +2188,7 @@ struct BoardFeature {
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
         case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
-          .worktreeDeleteFailed, .sessionSpawnFailed:
+          .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed:
           return .none
         }
 
