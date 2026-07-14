@@ -189,7 +189,31 @@ extension BoardFeature {
       state.focusedSessionID = id
     }
     let command = resumeCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    return .run {
+      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      // Guardrail: never launch the resume command into a directory that no
+      // longer exists. If this is an owns-worktree session whose checkout was
+      // deleted (trash → restore), put the worktree back at its exact original
+      // path first — otherwise the shell falls back to an unrelated cwd and
+      // `claude --resume` reports "No conversation found" even though the
+      // transcript is intact. See `recreateWorktreeIfMissing`.
+      do {
+        try await Self.recreateWorktreeIfMissing(
+          at: worktree.workingDirectory,
+          repository: repository,
+          gitClient: gitClient
+        )
+      } catch {
+        await send(
+          .resumeFailed(
+            id: id,
+            message: "Couldn't recreate worktree at "
+              + "\(worktree.workingDirectory.path(percentEncoded: false)): "
+              + error.localizedDescription
+          )
+        )
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -638,6 +662,42 @@ extension BoardFeature {
       detail: "",
       workingDirectory: workingDirectory,
       repositoryRootURL: repository.rootURL.standardizedFileURL
+    )
+  }
+
+  /// Re-adds the session's backing worktree checkout from its (surviving)
+  /// branch when the directory is gone — the trash-then-restore case.
+  ///
+  /// Trashing an `owns-worktree` session deletes the checkout immediately
+  /// (`git worktree remove`, which keeps the branch ref). Restore only
+  /// re-adds the card, so a later Resume would launch `claude --resume <id>`
+  /// in a directory that no longer exists; the shell falls back to an
+  /// unrelated cwd, and because `claude --resume` scopes its lookup to the
+  /// current directory's project hash, the intact conversation becomes
+  /// unfindable — the opaque "No conversation found". Re-adding the worktree
+  /// at its *exact original path* (`baseDirectory/branchName`, which is how
+  /// `worktreeID` was formed) restores the hash so resume resolves.
+  ///
+  /// No-op for repo-root sessions (`worktreeURL == repo root`) and when the
+  /// directory already exists. Throws if `git worktree add` fails (e.g. the
+  /// branch was deleted too) so callers can recreate-or-surface as they see
+  /// fit.
+  static func recreateWorktreeIfMissing(
+    at worktreeURL: URL,
+    repository: Repository,
+    gitClient: GitClientDependency
+  ) async throws {
+    let standardized = worktreeURL.standardizedFileURL
+    guard standardized != repository.rootURL.standardizedFileURL else { return }
+    guard
+      !FileManager.default.fileExists(
+        atPath: standardized.path(percentEncoded: false)
+      )
+    else { return }
+    _ = try await gitClient.createWorktreeForExistingBranch(
+      standardized.lastPathComponent,
+      repository.rootURL,
+      standardized.deletingLastPathComponent()
     )
   }
 }

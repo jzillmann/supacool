@@ -495,8 +495,10 @@ struct BoardFeature {
     case dismissTrashSheet
     /// User picked Restore on a trashed entry. Re-adds the AgentSession
     /// to `state.sessions` (no live PTY — user picks Rerun/Resume to
-    /// reanimate) and removes it from trash.
-    case restoreFromTrash(id: AgentSession.ID)
+    /// reanimate) and removes it from trash. `repositories` lets restore
+    /// re-add the backing worktree checkout that trash deleted (see the
+    /// handler) so the reanimated card points at a live directory.
+    case restoreFromTrash(id: AgentSession.ID, repositories: [Repository])
     /// User picked Delete now. Removes from trash and emits
     /// `.sessionRemoved` so AppFeature/RepositoriesFeature do the
     /// worktree cleanup. (PTY tab was destroyed at trash-push time;
@@ -1161,7 +1163,7 @@ struct BoardFeature {
         state.worktreeJanitor = nil
         return .none
 
-      case .restoreFromTrash(let id):
+      case .restoreFromTrash(let id, let repositories):
         guard let entry = state.trashedSessions.first(where: { $0.id == id }) else {
           return .none
         }
@@ -1177,7 +1179,35 @@ struct BoardFeature {
           event: .sessionLifecycle(kind: "restored", context: nil, at: Date()),
           tabID: TerminalTabID(rawValue: id)
         )
-        return .none
+        // Trashing an owns-worktree session deleted its checkout (the branch
+        // ref survives). Put the directory back now, at its exact original
+        // path, so the restored card points at a live worktree and a
+        // subsequent Resume finds the cwd-scoped claude conversation.
+        // Best-effort: if the branch is gone too, the resume-time guard in
+        // `reduceResumeDetachedSession` surfaces the actionable error.
+        let restoredSession = entry.session
+        guard
+          restoredSession.worktreeID != restoredSession.repositoryID,
+          let repository = repositories.first(where: { $0.id == restoredSession.repositoryID })
+        else {
+          return .none
+        }
+        let worktreeURL = URL(fileURLWithPath: restoredSession.worktreeID)
+        return .run { [gitClient] _ in
+          do {
+            try await Self.recreateWorktreeIfMissing(
+              at: worktreeURL,
+              repository: repository,
+              gitClient: gitClient
+            )
+          } catch {
+            boardLogger.warning(
+              "Restore: couldn't recreate worktree at "
+                + "\(worktreeURL.path(percentEncoded: false)): "
+                + error.localizedDescription
+            )
+          }
+        }
 
       case .deleteFromTrash(let id):
         guard let entry = state.trashedSessions.first(where: { $0.id == id }) else {

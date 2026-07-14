@@ -140,7 +140,7 @@ struct TrashSheet: View {
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 8) {
           ForEach(filteredEntries, id: \.id) { entry in
-            TrashRow(entry: entry, store: store)
+            TrashRow(entry: entry, store: store, repositories: repositories)
           }
         }
         .padding(.horizontal)
@@ -317,6 +317,9 @@ struct TrashSheet: View {
 private struct TrashRow: View {
   let entry: TrashedSession
   @Bindable var store: StoreOf<BoardFeature>
+  /// Passed through so Restore can hand the reducer the repo list it needs
+  /// to recreate a trashed session's deleted worktree.
+  let repositories: IdentifiedArrayOf<Repository>
 
   var body: some View {
     HStack(alignment: .top, spacing: 12) {
@@ -349,7 +352,9 @@ private struct TrashRow: View {
       Spacer()
 
       VStack(spacing: 6) {
-        Button("Restore") { store.send(.restoreFromTrash(id: entry.id)) }
+        Button("Restore") {
+          store.send(.restoreFromTrash(id: entry.id, repositories: Array(repositories)))
+        }
         Button("Delete", role: .destructive) {
           store.send(.deleteFromTrash(id: entry.id))
         }
