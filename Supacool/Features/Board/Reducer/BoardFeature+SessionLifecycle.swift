@@ -189,7 +189,22 @@ extension BoardFeature {
       state.focusedSessionID = id
     }
     let command = resumeCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    return .run {
+      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      // Guardrail: never launch the resume command into a directory that no
+      // longer exists. If this is an owns-worktree session whose checkout was
+      // deleted (trash → restore), put the worktree back at its exact original
+      // path first — otherwise the shell falls back to an unrelated cwd and
+      // `claude --resume` reports "No conversation found" even though the
+      // transcript is intact. See `recreateWorktreeIfMissing`.
+      if let failure = await Self.recreateWorktreeIfMissing(
+        at: worktree.workingDirectory,
+        repository: repository,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -248,7 +263,19 @@ extension BoardFeature {
     }
     state.focusedSessionID = id
     let command = pickerCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    return .run {
+      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      // Same cwd sensitivity as the captured-id path: the resume picker only
+      // lists conversations belonging to the current directory's project, so a
+      // missing worktree would show an empty (or wrong) picker.
+      if let failure = await Self.recreateWorktreeIfMissing(
+        at: worktree.workingDirectory,
+        repository: repository,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -643,5 +670,53 @@ extension BoardFeature {
       workingDirectory: workingDirectory,
       repositoryRootURL: repository.rootURL.standardizedFileURL
     )
+  }
+
+  /// Re-adds the session's backing worktree checkout from its (surviving)
+  /// branch when the directory is gone — the trash-then-restore case.
+  ///
+  /// Trashing an `owns-worktree` session deletes the checkout immediately
+  /// (`git worktree remove`, which keeps the branch ref). Restore only
+  /// re-adds the card, so a later Resume would launch `claude --resume <id>`
+  /// in a directory that no longer exists; the shell falls back to an
+  /// unrelated cwd, and because `claude --resume` scopes its lookup to the
+  /// current directory's project hash, the intact conversation becomes
+  /// unfindable — the opaque "No conversation found". Re-adding the worktree
+  /// at its *exact original path* (`baseDirectory/branchName`, which is how
+  /// `worktreeID` was formed) restores the hash so resume resolves.
+  ///
+  /// No-op for repo-root sessions (`worktreeURL == repo root` — mirroring
+  /// `cleanupPlan`, which only ever removes a worktree when
+  /// `worktreeID != repositoryID`) and when the directory already exists.
+  ///
+  /// Returns `nil` when the directory is present (or was rebuilt), or a
+  /// user-facing message when it's gone and can't be rebuilt (e.g. the branch
+  /// was deleted too).
+  static func recreateWorktreeIfMissing(
+    at worktreeURL: URL,
+    repository: Repository,
+    gitClient: GitClientDependency
+  ) async -> String? {
+    let standardized = worktreeURL.standardizedFileURL
+    guard
+      standardized != repository.rootURL.standardizedFileURL,
+      !FileManager.default.fileExists(atPath: standardized.path(percentEncoded: false))
+    else { return nil }
+    // Supacool lays worktrees out as `<baseDirectory>/<branch>`, so the branch
+    // is the path's last component and re-adding it reconstructs the identical
+    // path the captured session id was recorded under.
+    let branchName = standardized.lastPathComponent
+    do {
+      _ = try await gitClient.createWorktreeForExistingBranch(
+        branchName,
+        repository.rootURL,
+        standardized.deletingLastPathComponent()
+      )
+      return nil
+    } catch {
+      return "The worktree for this session was deleted and couldn't be recreated "
+        + "(branch \"\(branchName)\" may be gone): \(error.localizedDescription). "
+        + "Use Rerun to start fresh."
+    }
   }
 }

@@ -66,13 +66,23 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// from before this feature) — primary tap then just dismisses.
   case sessionSpawnFailed(displayName: String, message: String, draftSnapshot: Draft?)
 
+  /// Resuming a detached session failed before any PTY was spawned — most
+  /// commonly because the session's worktree was deleted when it was trashed
+  /// and couldn't be rebuilt (its branch is gone too). Without this card the
+  /// only feedback was a log line: the card just sat there detached, or —
+  /// worse, before the worktree rebuild landed — the agent was resumed in
+  /// whatever directory the shell fell back to and reported "No conversation
+  /// found with session ID". Primary tap focuses the session so the user can
+  /// Rerun it.
+  case sessionResumeFailed(sessionID: AgentSession.ID, displayName: String, message: String)
+
   /// Whether this kind offers a secondary call-to-action button next to
   /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
   var hasSecondaryAction: Bool {
     switch self {
     case .staleHooks: true
     case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
-      .worktreeDeleteFailed, .sessionSpawnFailed: false
+      .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed: false
     }
   }
 
@@ -99,6 +109,8 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
       return ("Couldn't remove worktree \(folder)", message)
     case .sessionSpawnFailed(let displayName, let message, _):
       return ("Couldn't start \(displayName)", message)
+    case .sessionResumeFailed(_, let displayName, let message):
+      return ("Couldn't resume \(displayName)", message)
     }
   }
 }
