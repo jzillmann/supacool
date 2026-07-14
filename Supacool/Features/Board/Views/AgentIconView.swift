@@ -32,25 +32,26 @@ extension AgentType {
     "yellow", "mint", "teal", "indigo", "brown", "gray",
   ]
 
+  private static let colorsByName: [String: Color] = [
+    "primary": .primary,
+    "secondary": .secondary,
+    "purple": .purple,
+    "cyan": .cyan,
+    "orange": .orange,
+    "pink": .pink,
+    "green": .green,
+    "blue": .blue,
+    "red": .red,
+    "yellow": .yellow,
+    "mint": .mint,
+    "teal": .teal,
+    "indigo": .indigo,
+    "brown": .brown,
+    "gray": .gray,
+  ]
+
   fileprivate static func color(named name: String) -> Color {
-    switch name {
-    case "primary": .primary
-    case "secondary": .secondary
-    case "purple": .purple
-    case "cyan": .cyan
-    case "orange": .orange
-    case "pink": .pink
-    case "green": .green
-    case "blue": .blue
-    case "red": .red
-    case "yellow": .yellow
-    case "mint": .mint
-    case "teal": .teal
-    case "indigo": .indigo
-    case "brown": .brown
-    case "gray": .gray
-    default: .secondary
-    }
+    Self.colorsByName[name] ?? .secondary
   }
 }
 
@@ -72,6 +73,7 @@ struct AgentIconView: View {
         Image(systemName: "apple.terminal")
           .resizable()
           .scaledToFit()
+          .accessibilityLabel("Shell session")
       }
     }
     .frame(width: size, height: size)

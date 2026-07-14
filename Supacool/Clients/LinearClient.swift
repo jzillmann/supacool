@@ -19,27 +19,27 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   var stateName: String?
   /// Workflow state category, one of Linear's state types: `backlog`,
   /// `unstarted`, `started`, `completed`, `canceled`. Drives "done".
-  var stateType: String? = nil
+  var stateType: String?
   /// Assignee display name, or nil when unassigned.
   var assigneeName: String?
   /// True when the current API-key holder is the assignee.
   var assignedToMe: Bool
   /// Display name of whoever filed the issue, or nil when unknown.
-  var creatorName: String? = nil
+  var creatorName: String?
   /// Canonical web URL for the issue.
   var url: String?
   /// When the issue was created in Linear. Drives the inbox's per-row age.
-  var createdAt: Date? = nil
+  var createdAt: Date?
   /// When Linear marked the issue completed / canceled. Drives the
   /// inbox's auto-drop of stale done tickets.
-  var completedAt: Date? = nil
-  var canceledAt: Date? = nil
+  var completedAt: Date?
+  var canceledAt: Date?
   /// Parent issue's human key (e.g. `CEN-7735`) when this issue is a
   /// sub-issue, else nil. Lets the inbox bundle siblings under one row.
-  var parentIdentifier: String? = nil
+  var parentIdentifier: String?
   /// Parent issue's title, cached for the group header so the inbox needn't
   /// fetch the parent separately.
-  var parentTitle: String? = nil
+  var parentTitle: String?
 }
 
 /// Minimal Linear API client. Originally just fetched a single issue title

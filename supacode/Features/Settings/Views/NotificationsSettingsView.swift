@@ -7,7 +7,7 @@ struct NotificationsSettingsView: View {
   /// Opt-in for Phase-3 PR auto-resume. Board-local behaviour, so it lives in
   /// UserDefaults (read by `AutoResumeSettings.load()`) rather than the
   /// persisted GlobalSettings file. Off by default.
-  @AppStorage(AutoResumeSettings.masterDefaultsKey) private var autoResumeOnPRReturn: Bool = false
+  @AppStorage(AutoResumeSettings.globalEnabledDefaultsKey) private var autoResumeOnPRReturn: Bool = false
 
   var body: some View {
     Form {

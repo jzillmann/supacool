@@ -198,7 +198,7 @@ extension BoardFeature {
   /// not by cancellation — see the `cancelInFlight: false` note below for
   /// why tearing a batch down mid-flight would strand in-flight keys.
   func prRefreshEffect(
-    batch: [(refKey: String, owner: String, repo: String, number: Int)],
+    batch: [PRRefreshCandidate],
     previousSnapshots: [String: PullRequestSnapshot]
   ) -> Effect<Action> {
     .run { [githubCLI, prMonitor, clock] send in

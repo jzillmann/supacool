@@ -2,6 +2,7 @@ strict: true
 
 included:
   - supacode
+  - Supacool
   - supacodeTests
 excluded:
   - ThirdParty/ghostty
@@ -28,6 +29,23 @@ cyclomatic_complexity:
   warning: 15
   error: 20
 
+# Codebase idioms, codified when Supacool/ joined the lint scope
+# (2026-07-08, approved): the persistence convention's
+# `let c = decoder.container(…)` and similar short locals; reducer
+# helpers that thread 6–9 state params; multi-member effect tuples in
+# TCA helpers. Everything else stays at SwiftLint defaults.
+identifier_name:
+  min_length: 1
+  allowed_symbols: ["_"]  # TCA `._privateEffectAction` naming convention
+
+function_parameter_count:
+  warning: 9
+  error: 12
+
+large_tuple:
+  warning: 3
+  error: 5
+
 # The forward-compatible Codable convention (docs/agent-guides/persistence.md)
 # requires a nested CodingKeys enum inside every persisted struct, including
 # structs already nested one level — so persisted types legitimately nest two
@@ -48,4 +66,4 @@ custom_rules:
     regex: "\\bstore\\.[A-Za-z0-9_]+\\s*(?:\\+=|-=|\\*=|/=|=(?!=))"
     message: "Do not mutate store state directly in views. Send actions instead."
     severity: error
-    included: "supacode/.*/Views/.*\\.swift"
+    included: "(supacode|Supacool)/.*/Views/.*\\.swift"

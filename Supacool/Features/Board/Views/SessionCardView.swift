@@ -7,25 +7,25 @@ import SwiftUI
 struct SessionCardView: View {
   let session: AgentSession
   let repositoryName: String?
-  var pullRequest: GithubPullRequest? = nil
+  var pullRequest: GithubPullRequest?
   let status: BoardSessionStatus
-  var serverLifecycle: BoardFeature.ServerLifecycleViewState? = nil
-  var onServerLifecycleRefresh: (() -> Void)? = nil
-  var onServerLifecycleStart: (() -> Void)? = nil
-  var onServerLifecycleStop: (() -> Void)? = nil
+  var serverLifecycle: BoardFeature.ServerLifecycleViewState?
+  var onServerLifecycleRefresh: (() -> Void)?
+  var onServerLifecycleStart: (() -> Void)?
+  var onServerLifecycleStop: (() -> Void)?
   /// True for Standby (formerly "Park as Active"): the user parked this
   /// session with intent to come back to it. Persisted on the session,
   /// so after a crash/relaunch the card still reads as Standby even
   /// though no live PTY/tab exists yet.
   var isActiveParked: Bool = false
-  var debugLinkTitle: String? = nil
-  var onDebugLinkTap: (() -> Void)? = nil
+  var debugLinkTitle: String?
+  var onDebugLinkTap: (() -> Void)?
   let onTap: () -> Void
   let onRemove: () -> Void
   var onRename: (() -> Void)?
-  var onTogglePriority: (() -> Void)? = nil
+  var onTogglePriority: (() -> Void)?
   /// Sets the session's manual status override. Pass `nil` to clear.
-  var onSetStatusOverride: ((BoardSessionStatus?) -> Void)? = nil
+  var onSetStatusOverride: ((BoardSessionStatus?) -> Void)?
   var onRerun: (() -> Void)?
   var onResume: (() -> Void)?
   /// Resume without setting the focused session — used by the dormant-card
@@ -142,6 +142,7 @@ struct SessionCardView: View {
     // The card hosts its own info/unpark buttons, so a giant outer Button
     // makes macOS click routing flaky. Keep the card tap as a gesture instead.
     .onTapGesture(perform: onTap)
+    .accessibilityAddTraits(.isButton)
     .overlay {
       // Show the hover overlay for ANY dormant card — parked, idle (detached),
       // interrupted, or disconnected. The play icon (when available) resumes
@@ -241,6 +242,7 @@ struct SessionCardView: View {
       Image(systemName: session.isPriority ? "flag.fill" : "flag")
         .font(.caption)
         .foregroundStyle(session.isPriority ? priorityColor : .secondary)
+        .accessibilityLabel(session.isPriority ? "Remove priority" : "Mark session as priority")
     }
     .buttonStyle(.plain)
     .help(
@@ -261,6 +263,7 @@ struct SessionCardView: View {
       Image(systemName: "info.circle")
         .font(.caption)
         .foregroundStyle(.secondary)
+        .accessibilityLabel("Show session details")
     }
     .buttonStyle(.plain)
     .help("Show session details")
@@ -283,6 +286,9 @@ struct SessionCardView: View {
       Image(systemName: "sparkles")
         .font(.caption)
         .foregroundStyle(session.autoObserver ? Color.accentColor : Color.secondary)
+        .accessibilityLabel(
+          session.autoObserver ? "Auto-responder is on — configure" : "Configure auto-responder"
+        )
     }
     .buttonStyle(.plain)
     .help("Auto-responder: auto-answer obvious prompts (click to configure)")
@@ -304,6 +310,7 @@ struct SessionCardView: View {
     return HStack(spacing: 2) {
       Image(systemName: "terminal.fill")
         .font(.system(size: 9, weight: .semibold))
+        .accessibilityLabel("Auxiliary shell tabs")
       Text("+\(count)")
         .font(.caption2.weight(.semibold).monospacedDigit())
     }
@@ -325,6 +332,9 @@ struct SessionCardView: View {
     Image(systemName: captured ? "bookmark.fill" : "bookmark")
       .font(.caption2)
       .foregroundStyle(sessionIDIndicatorColor(captured: captured))
+      .accessibilityLabel(
+        captured ? "Session id captured" : "No session id captured yet"
+      )
       .help(
         captured
           ? "Session id captured — resume is one click"
@@ -401,6 +411,7 @@ struct SessionCardView: View {
         .font(.system(size: 44, weight: .semibold))
         .foregroundStyle(.primary, .background)
         .symbolRenderingMode(.palette)
+        .accessibilityLabel(help)
     }
     .buttonStyle(.plain)
     .help(help)
@@ -425,6 +436,7 @@ struct SessionCardView: View {
     HStack(spacing: 4) {
       Image(systemName: status.systemImage)
         .font(.caption2)
+        .accessibilityHidden(true)
       Text(status.label)
         .font(.caption2.weight(.semibold))
         .lineLimit(1)
@@ -474,6 +486,7 @@ struct SessionCardView: View {
     HStack(spacing: 3) {
       Image(systemName: ball.systemImage)
         .font(.caption2)
+        .accessibilityLabel(ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status")
       if let label = ball.reasonLabel {
         Text(label)
           .font(.caption2.weight(.semibold))
@@ -508,6 +521,7 @@ struct SessionCardView: View {
       HStack(spacing: 4) {
         Image(systemName: lifecycle.status.systemImage)
           .font(.caption2)
+          .accessibilityHidden(true)
         Text(lifecycle.status.label)
           .font(.caption2.weight(.semibold))
           .lineLimit(1)
@@ -577,6 +591,7 @@ struct SessionCardView: View {
       HStack(spacing: 4) {
         Image(systemName: "ladybug.fill")
           .font(.caption2)
+          .accessibilityHidden(true)
         Text(title)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
@@ -706,17 +721,17 @@ struct SessionCardView: View {
 struct ReferenceChip: View {
   let reference: SessionReference
   let linearOrgSlug: String
-  var onTap: (() -> Void)? = nil
+  var onTap: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
-  var onRemove: (() -> Void)? = nil
+  var onRemove: (() -> Void)?
   /// Latest checks/Greptile snapshot for a PR reference. Nil (and ignored
   /// for tickets) hides the CI glyph and score badge.
-  var prSnapshot: PullRequestSnapshot? = nil
+  var prSnapshot: PullRequestSnapshot?
 
   /// When set (ticket chips only), hovering the chip reveals a preview
   /// popover with the ticket's title + markdown description. Click still
   /// deep-links to Linear, so the preview is purely additive.
-  var ticketPreview: LinearTicket? = nil
+  var ticketPreview: LinearTicket?
 
   /// Hover state machine. The preview shows while the pointer is over the
   /// chip *or* the popover, with a short reveal delay and an even shorter
@@ -739,6 +754,7 @@ struct ReferenceChip: View {
           Image(systemName: state.systemImage)
             .font(.caption2)
             .foregroundStyle(prStateColor(state))
+            .accessibilityLabel("Pull request \(state.rawValue)")
         }
         Text(reference.chipLabel)
           .font(.caption2.weight(.medium))
@@ -843,6 +859,7 @@ private struct TicketPreviewCard: View {
         Image(systemName: "tag.fill")
           .font(.caption)
           .foregroundStyle(.blue)
+          .accessibilityHidden(true)
         Text(ticket.identifier)
           .font(.caption.monospaced().weight(.semibold))
         if let state = ticket.stateName {
@@ -898,9 +915,9 @@ private struct TicketPreviewCard: View {
 /// with a dropdown list so PR-heavy sessions do not flood the layout.
 struct SessionReferenceSummaryChips: View {
   let references: [SessionReference]
-  var onPullRequestsPopoverOpened: (() -> Void)? = nil
+  var onPullRequestsPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
-  var onRemoveReference: ((SessionReference) -> Void)? = nil
+  var onRemoveReference: ((SessionReference) -> Void)?
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on chips and popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
@@ -1057,9 +1074,9 @@ private struct ReferenceStackChip: View {
   let kind: Kind
   let references: [SessionReference]
   let linearOrgSlug: String
-  var onPopoverOpened: (() -> Void)? = nil
+  var onPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
-  var onRemoveReference: ((SessionReference) -> Void)? = nil
+  var onRemoveReference: ((SessionReference) -> Void)?
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on the popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
@@ -1245,6 +1262,7 @@ private struct ReferenceStackChip: View {
           .font(.caption)
           .foregroundStyle(prStateColor(state))
           .frame(width: 14)
+          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 1) {
           Text("\(count) \(label) pull requests")
             .font(.caption.weight(.medium))
@@ -1259,6 +1277,7 @@ private struct ReferenceStackChip: View {
           .font(.caption2.weight(.semibold))
           .foregroundStyle(.tertiary)
           .rotationEffect(.degrees(isExpanded.wrappedValue ? 90 : 0))
+          .accessibilityHidden(true)
       }
       .contentShape(Rectangle())
       .padding(.vertical, 4)
@@ -1276,6 +1295,7 @@ private struct ReferenceStackChip: View {
           .font(.caption)
           .foregroundStyle(rowTint(for: reference))
           .frame(width: 14)
+          .accessibilityHidden(true)
         VStack(alignment: .leading, spacing: 1) {
           Text(rowTitle(for: reference))
             .font(.caption.weight(.medium))
@@ -1302,6 +1322,7 @@ private struct ReferenceStackChip: View {
         Image(systemName: "arrow.up.forward")
           .font(.caption2)
           .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
       }
       .contentShape(Rectangle())
       .padding(.vertical, 4)

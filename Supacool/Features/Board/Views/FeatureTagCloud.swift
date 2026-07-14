@@ -86,6 +86,7 @@ struct FeatureTag: View {
         Image(systemName: systemImage)
           .font(.caption.weight(.medium))
           .symbolVariant(isOn ? .fill : .none)
+          .accessibilityHidden(true)
         Text(title)
           .font(.callout)
       }

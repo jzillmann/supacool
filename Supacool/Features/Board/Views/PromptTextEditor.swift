@@ -345,7 +345,9 @@ final class PlaceholderTextView: NSTextView {
       return
     }
     let triggerString = String(activeSkillState.triggerCharacter)
-    guard content.substring(with: NSRange(location: activeSkillState.triggerLocation, length: 1)) == triggerString else {
+    guard
+      content.substring(with: NSRange(location: activeSkillState.triggerLocation, length: 1)) == triggerString
+    else {
       cancelActiveSkillQuery()
       return
     }

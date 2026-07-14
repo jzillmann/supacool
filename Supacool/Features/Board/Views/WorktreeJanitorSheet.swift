@@ -91,6 +91,7 @@ struct WorktreeJanitorSheet: View {
       Image(systemName: "person.crop.circle.badge.exclamationmark.fill")
         .font(.title3)
         .foregroundStyle(.orange)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(orphanBannerTitle)
           .font(.callout.weight(.semibold))
@@ -109,6 +110,7 @@ struct WorktreeJanitorSheet: View {
       } label: {
         Image(systemName: "xmark")
           .font(.caption)
+          .accessibilityLabel("Hide this banner")
       }
       .buttonStyle(.plain)
       .help("Hide this banner")
@@ -155,6 +157,7 @@ struct WorktreeJanitorSheet: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(.title)
         .foregroundStyle(.orange)
+        .accessibilityHidden(true)
       Text("Scan failed")
         .font(.headline)
       Text(message)
@@ -385,6 +388,7 @@ struct WorktreeJanitorSheet: View {
         Image(systemName: store.expandedRowID == row.id ? "chevron.down" : "chevron.right")
           .font(.caption.weight(.semibold))
           .foregroundStyle(.secondary)
+          .accessibilityLabel(store.expandedRowID == row.id ? "Collapse" : "Show diff vs \(store.baseRef)")
       }
       .buttonStyle(.plain)
       .help(store.expandedRowID == row.id ? "Collapse" : "Show diff vs \(store.baseRef)")
@@ -478,6 +482,7 @@ struct WorktreeJanitorSheet: View {
     HStack(alignment: .top, spacing: 6) {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundStyle(.orange)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text("\(store.deleteErrors.count) delete\(store.deleteErrors.count == 1 ? "" : "s") failed")
           .font(.caption.weight(.semibold))
@@ -611,6 +616,7 @@ private struct SelectionToggle: View {
         Image(systemName: isSelected ? "checkmark.square.fill" : "square")
           .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
           .contentShape(Rectangle())
+          .accessibilityLabel(isSelected ? "Deselect" : "Select for deletion")
       }
       .buttonStyle(.plain)
       .help(isSelected ? "Deselect" : "Select for deletion")
@@ -618,6 +624,7 @@ private struct SelectionToggle: View {
       Image(systemName: "square")
         .foregroundStyle(.tertiary)
         .opacity(0.35)
+        .accessibilityHidden(true)
     }
   }
 }
@@ -631,6 +638,7 @@ private struct StatusBadge: View {
     HStack(spacing: 6) {
       Image(systemName: icon)
         .foregroundStyle(tint)
+        .accessibilityHidden(true)
       Text(label)
         .font(.caption.weight(.medium))
         .lineLimit(1)

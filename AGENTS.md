@@ -202,7 +202,7 @@ The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA.
 
 - 2-space indentation, 120 character line length (enforced by `.swift-format.json`)
 - Trailing commas are mandatory (enforced by `.swiftlint.yml`)
-- SwiftLint runs in strict mode; never disable lint rules without permission
+- SwiftLint runs in strict mode over `supacode`, `Supacool`, and `supacodeTests` (Supacool/ joined the lint scope 2026-07-08); never disable lint rules without permission
 - Custom SwiftLint rule: `store_state_mutation_in_views` — do not mutate `store.*` directly in view files; send actions instead
 
 ### UX standards

@@ -362,12 +362,16 @@ struct NewTerminalSheet: View {
           VStack(alignment: .leading, spacing: 2) {
             ForEach(remoteWorkspaceSuggestions, id: \.id) { ws in
               Button {
-                store.remoteWorkingDirectoryDraft = ws.remoteWorkingDirectory
+                // Route through the same @Bindable binding as the TextField
+                // above (an explicit `.binding(.set(\.…)))` send trips Swift
+                // 6's Sendable check on the key path).
+                $store.remoteWorkingDirectoryDraft.wrappedValue = ws.remoteWorkingDirectory
               } label: {
                 HStack {
                   Image(systemName: "clock.arrow.circlepath")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                   Text(ws.remoteWorkingDirectory)
                     .font(.caption.monospaced())
                     .lineLimit(1)
@@ -491,6 +495,7 @@ struct NewTerminalSheet: View {
         .onTapGesture {
           store.send(.workspaceSelected(suggestion.selection))
         }
+        .accessibilityAddTraits(.isButton)
         // The suggestion list is part of the Workspace row, not its own
         // section — drop the auto-rendered divider above so the field +
         // matches read as one unit.
@@ -661,6 +666,7 @@ struct NewTerminalSheet: View {
             store.send(.suggestBranchNameTapped)
           } label: {
             Image(systemName: "wand.and.stars")
+              .accessibilityLabel("Generate branch name from prompt")
           }
           .buttonStyle(.plain)
           .foregroundStyle(
@@ -983,6 +989,7 @@ private struct WorkspaceSuggestionRow: View {
       Image(systemName: suggestion.systemImage)
         .frame(width: 18)
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 1) {
         Text(suggestion.title)
           .font(.callout)
@@ -1000,6 +1007,7 @@ private struct WorkspaceSuggestionRow: View {
         Image(systemName: "checkmark")
           .font(.caption.weight(.semibold))
           .foregroundStyle(Color.accentColor)
+          .accessibilityLabel("Selected")
       }
     }
     .padding(.vertical, 2)
@@ -1022,6 +1030,7 @@ private struct PullRequestBannerView: View {
         .font(.callout)
         .foregroundStyle(iconColor)
         .frame(width: 18)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(headline)
           .font(.callout)
@@ -1046,6 +1055,7 @@ private struct PullRequestBannerView: View {
         Image(systemName: "xmark.circle.fill")
           .font(.callout)
           .foregroundStyle(.secondary)
+          .accessibilityLabel("Drop the pull request association")
       }
       .buttonStyle(.plain)
       .help("Drop the PR association — keeps the prompt text unchanged")
@@ -1134,6 +1144,7 @@ private struct LinearTicketBannerView: View {
         .font(.callout)
         .foregroundStyle(iconColor)
         .frame(width: 18)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 2) {
         Text(headline)
           .font(.callout)

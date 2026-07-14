@@ -23,47 +23,15 @@ extension NewTerminalFeature {
       return .none
     }
 
-    var selection = state.selectedWorkspace
-    switch selection {
-    case .repoRoot:
-      break
-    case .existingWorktree(let id):
-      guard repository.worktrees.contains(where: { $0.id == id }) else {
-        state.validationMessage = "Picked worktree no longer exists."
-        return .none
-      }
-    case .existingBranch(let name):
-      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty else {
-        state.validationMessage = "Pick a branch."
-        return .none
-      }
-      guard !trimmed.contains(where: \.isWhitespace) else {
-        state.validationMessage = "Branch names can't contain spaces."
-        return .none
-      }
-    case .newBranch(let name):
-      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmed.isEmpty else {
-        state.validationMessage = "Branch name required."
-        return .none
-      }
-      guard !trimmed.contains(where: \.isWhitespace) else {
-        state.validationMessage = "Branch names can't contain spaces."
-        return .none
-      }
-    }
-    if state.agent != nil && trimmedPrompt.isEmpty {
-      state.validationMessage = "Prompt required."
+    if let message = Self.localCreateValidationMessage(
+      state: state,
+      repository: repository,
+      trimmedPrompt: trimmedPrompt
+    ) {
+      state.validationMessage = message
       return .none
     }
-    if state.saveAsBookmark {
-      let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmedName.isEmpty else {
-        state.validationMessage = "Bookmark name required."
-        return .none
-      }
-    }
+    var selection = state.selectedWorkspace
     state.validationMessage = nil
     // Sheet dismisses immediately on Create (parent flips
     // `state.newTerminalSheet = nil` upon receiving `.spawnRequested`),
@@ -137,51 +105,8 @@ extension NewTerminalFeature {
       suggestedDisplayName
       ?? AgentSession.deriveDisplayName(from: trimmedPrompt, fallbackID: sessionID)
 
-    let bookmarkToSave: Bookmark? = {
-      guard state.saveAsBookmark else { return nil }
-      let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
-      guard !trimmedName.isEmpty else { return nil }
-      let worktreeMode: Bookmark.WorktreeMode = {
-        switch selection {
-        case .repoRoot: return .repoRoot
-        case .newBranch, .existingBranch, .existingWorktree: return .newWorktree
-        }
-      }()
-      return Bookmark(
-        id: state.editingBookmarkID ?? UUID(),
-        repositoryID: repoID,
-        name: trimmedName,
-        prompt: trimmedPrompt,
-        agent: agent,
-        worktreeMode: worktreeMode,
-        planMode: planMode,
-        remoteControl: remoteControl,
-        model: model
-      )
-    }()
-
-    // Capture a `Draft`-shaped snapshot of the submitted values so the
-    // parent can attach it to the failure tray card on spawn error.
-    // Tap on that card resurrects the sheet via the same path drafts
-    // use (`NewTerminalFeature.State(availableRepositories:, resuming:)`).
-    // Preserving `editingDraftID` here means a reopened-then-Save-Draft
-    // cycle upserts the same Draft instead of leaving an orphan.
-    let now = Date()
-    let draftSnapshot = Draft(
-      id: state.editingDraftID ?? UUID(),
-      repositoryID: state.selectedRepositoryID,
-      prompt: state.prompt,
-      agent: state.agent,
-      workspaceQuery: state.workspaceQuery,
-      planMode: state.planMode,
-      remoteControl: state.remoteControl,
-      model: model,
-      createdAt: now,
-      updatedAt: now
-    )
-
     var effects: [Effect<Action>] = []
-    if let bookmark = bookmarkToSave {
+    if let bookmark = Self.bookmarkToSave(state: state, request: request) {
       effects.append(.send(.delegate(.bookmarkSaved(bookmark))))
     }
     if let draftID = state.editingDraftID {
@@ -197,12 +122,106 @@ extension NewTerminalFeature {
           .spawnRequested(
             request,
             displayName: placeholderDisplayName,
-            draftSnapshot: draftSnapshot
+            draftSnapshot: Self.draftSnapshot(state: state)
           )
         )
       )
     )
     return .merge(effects)
+  }
+
+  /// Form validation for the local create path: workspace selection,
+  /// prompt, and bookmark-name rules. Returns the message to surface,
+  /// or nil when the submission is valid.
+  private static func localCreateValidationMessage(
+    state: State,
+    repository: Repository,
+    trimmedPrompt: String
+  ) -> String? {
+    switch state.selectedWorkspace {
+    case .repoRoot:
+      break
+    case .existingWorktree(let id):
+      guard repository.worktrees.contains(where: { $0.id == id }) else {
+        return "Picked worktree no longer exists."
+      }
+    case .existingBranch(let name):
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else {
+        return "Pick a branch."
+      }
+      guard !trimmed.contains(where: \.isWhitespace) else {
+        return "Branch names can't contain spaces."
+      }
+    case .newBranch(let name):
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmed.isEmpty else {
+        return "Branch name required."
+      }
+      guard !trimmed.contains(where: \.isWhitespace) else {
+        return "Branch names can't contain spaces."
+      }
+    }
+    if state.agent != nil && trimmedPrompt.isEmpty {
+      return "Prompt required."
+    }
+    if state.saveAsBookmark {
+      let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !trimmedName.isEmpty else {
+        return "Bookmark name required."
+      }
+    }
+    return nil
+  }
+
+  /// The bookmark to persist alongside the spawn when "Save as bookmark"
+  /// was ticked; nil otherwise. Mirrors the submitted request's values.
+  private static func bookmarkToSave(
+    state: State,
+    request: SessionSpawner.LocalRequest
+  ) -> Bookmark? {
+    guard state.saveAsBookmark else { return nil }
+    let trimmedName = state.bookmarkName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmedName.isEmpty else { return nil }
+    let worktreeMode: Bookmark.WorktreeMode = {
+      switch request.selection {
+      case .repoRoot: return .repoRoot
+      case .newBranch, .existingBranch, .existingWorktree: return .newWorktree
+      }
+    }()
+    return Bookmark(
+      id: state.editingBookmarkID ?? UUID(),
+      repositoryID: request.repository.id,
+      name: trimmedName,
+      prompt: request.prompt,
+      agent: request.agent,
+      worktreeMode: worktreeMode,
+      planMode: request.planMode,
+      remoteControl: request.remoteControl,
+      model: request.model
+    )
+  }
+
+  /// A `Draft`-shaped snapshot of the submitted values so the parent can
+  /// attach it to the failure tray card on spawn error. Tap on that card
+  /// resurrects the sheet via the same path drafts use
+  /// (`NewTerminalFeature.State(availableRepositories:, resuming:)`).
+  /// Preserving `editingDraftID` here means a reopened-then-Save-Draft
+  /// cycle upserts the same Draft instead of leaving an orphan.
+  private static func draftSnapshot(state: State) -> Draft {
+    let now = Date()
+    return Draft(
+      id: state.editingDraftID ?? UUID(),
+      repositoryID: state.selectedRepositoryID,
+      prompt: state.prompt,
+      agent: state.agent,
+      workspaceQuery: state.workspaceQuery,
+      planMode: state.planMode,
+      remoteControl: state.remoteControl,
+      model: state.normalizedModel,
+      createdAt: now,
+      updatedAt: now
+    )
   }
 
   // MARK: - Remote create
@@ -262,6 +281,33 @@ extension NewTerminalFeature {
       $remoteWorkspaces.withLock { $0.append(workspace) }
     }
 
+    return spawnRemoteSessionEffect(
+      state: state,
+      host: host,
+      workspace: workspace,
+      trimmedPath: trimmedPath,
+      trimmedPrompt: trimmedPrompt,
+      localSocketPath: localSocketPath,
+      repositoryIDOverride: repositoryIDOverride,
+      repositoryRemoteTargetID: repositoryRemoteTargetID
+    )
+  }
+
+  /// Assembly half of the remote create path: builds the agent command,
+  /// the ssh + tmux spawn invocation, the shim `Worktree`, and the
+  /// `AgentSession`, then returns the effect that creates the remote
+  /// tab. All validation and state mutation happened in
+  /// `handleRemoteCreate` before delegating here.
+  private func spawnRemoteSessionEffect(
+    state: State,
+    host: RemoteHost,
+    workspace: RemoteWorkspace,
+    trimmedPath: String,
+    trimmedPrompt: String,
+    localSocketPath: String,
+    repositoryIDOverride: Repository.ID?,
+    repositoryRemoteTargetID: RepositoryRemoteTarget.ID?
+  ) -> Effect<Action> {
     let sessionID = UUID()
     let tmuxSessionName = "supacool-\(sessionID.uuidString.lowercased())"
     let worktreeKey = "remote:\(host.sshAlias):\(trimmedPath)"
@@ -347,7 +393,7 @@ extension NewTerminalFeature {
       references: seededReferences,
       referencesScannedAt: seededReferences.isEmpty ? nil : Date(),
       remoteWorkspaceID: workspace.id,
-      remoteHostID: hostID,
+      remoteHostID: host.id,
       repositoryRemoteTargetID: repositoryRemoteTargetID,
       tmuxSessionName: tmuxSessionName
     )

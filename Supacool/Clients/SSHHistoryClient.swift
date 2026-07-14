@@ -46,7 +46,7 @@ extension SSHHistoryClient: DependencyKey {
   ) -> SSHHistoryClient {
     SSHHistoryClient(
       listCandidates: {
-        try await readCandidates(
+        try readCandidates(
           zshHistoryURL: zshHistoryURL,
           bashHistoryURL: bashHistoryURL
         )
@@ -76,7 +76,7 @@ extension DependencyValues {
 nonisolated func readCandidates(
   zshHistoryURL: URL,
   bashHistoryURL: URL
-) async throws -> [SSHHistoryCandidate] {
+) throws -> [SSHHistoryCandidate] {
   var observations: [RawObservation] = []
 
   if let zshContents = try? readHistoryFile(at: zshHistoryURL) {
@@ -90,12 +90,13 @@ nonisolated func readCandidates(
 }
 
 /// zsh history files occasionally contain bytes that aren't valid UTF-8
-/// (pastes, Unicode corruption). Fall back to a lossy decode so one
-/// broken line doesn't prevent the whole scan from running.
+/// (pastes, Unicode corruption). Fall back to a Latin-1 decode (every
+/// byte sequence is valid, ASCII maps identically) so one broken line
+/// doesn't prevent the whole scan from running.
 private nonisolated func readHistoryFile(at url: URL) throws -> String {
   let data = try Data(contentsOf: url)
   if let utf8 = String(data: data, encoding: .utf8) { return utf8 }
-  return String(decoding: data, as: UTF8.self)
+  return String(bytes: data, encoding: .isoLatin1) ?? ""
 }
 
 // MARK: - Parsing
@@ -169,8 +170,43 @@ nonisolated func parseSSHCommand(_ command: String, timestamp: Date?) -> RawObse
   var hostname: String?
   var port: Int?
   var identityFile: String?
-  var idx = sshIndex + 1
+  let idx = parseSSHFlags(tokens, startingAt: sshIndex + 1, user: &user, port: &port, identityFile: &identityFile)
 
+  // After options, the next token should be the destination.
+  guard idx < tokens.count else { return nil }
+  let destination = tokens[idx]
+  let (destUser, destHost) = splitUserAtHost(destination)
+  guard let destHost, !destHost.isEmpty else { return nil }
+
+  // Reject obvious non-host destinations.
+  if destHost.contains("/") { return nil }
+  if destHost.contains("$") { return nil }
+
+  // `-l user` wins if both forms were given; otherwise the `user@` form.
+  user = user ?? destUser
+  hostname = destHost
+
+  return RawObservation(
+    raw: command,
+    user: user?.isEmpty == true ? nil : user,
+    hostname: hostname ?? destHost,
+    port: port,
+    identityFile: identityFile,
+    timestamp: timestamp
+  )
+}
+
+/// Walks the option tokens after `ssh`, filling in the flags we care
+/// about. Returns the index of the first non-option token — the
+/// destination, when the command has one.
+private nonisolated func parseSSHFlags(
+  _ tokens: [String],
+  startingAt start: Int,
+  user: inout String?,
+  port: inout Int?,
+  identityFile: inout String?
+) -> Int {
+  var idx = start
   while idx < tokens.count {
     let token = tokens[idx]
     // End-of-options separator; remaining non-flag token is the target.
@@ -210,29 +246,7 @@ nonisolated func parseSSHCommand(_ command: String, timestamp: Date?) -> RawObse
     }
     idx += 1
   }
-
-  // After options, the next token should be the destination.
-  guard idx < tokens.count else { return nil }
-  let destination = tokens[idx]
-  let (destUser, destHost) = splitUserAtHost(destination)
-  guard let destHost, !destHost.isEmpty else { return nil }
-
-  // Reject obvious non-host destinations.
-  if destHost.contains("/") { return nil }
-  if destHost.contains("$") { return nil }
-
-  // `-l user` wins if both forms were given; otherwise the `user@` form.
-  user = user ?? destUser
-  hostname = destHost
-
-  return RawObservation(
-    raw: command,
-    user: user?.isEmpty == true ? nil : user,
-    hostname: hostname ?? destHost,
-    port: port,
-    identityFile: identityFile,
-    timestamp: timestamp
-  )
+  return idx
 }
 
 /// Flags that consume the next argument. Mirrors OpenSSH's `ssh(1)` man
@@ -324,7 +338,7 @@ private nonisolated func isEnvAssignmentToken(_ token: String) -> Bool {
 nonisolated func shellTokens(from command: String) -> [String] {
   var tokens: [String] = []
   var current = ""
-  var quote: Character? = nil
+  var quote: Character?
   var escape = false
 
   for char in command {

@@ -1915,6 +1915,10 @@ struct BoardFeature {
         state.trayCards.removeAll(where: { $0.id == alert.sessionID })
         // Keep pendingRerunSessionID intact so the original session
         // card stays put.
+        //
+        // Abandoning recovery means the stamped session will never spawn —
+        // revert the originating inbox ticket (if any) to "Start session".
+        LinearInboxFeature.clearStartedStamp(forSessionID: alert.sessionID)
         return .none
 
       case .newTerminalSheet(.presented(.delegate(.bookmarkSaved(let bookmark)))):

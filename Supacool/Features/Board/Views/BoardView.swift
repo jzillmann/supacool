@@ -625,25 +625,13 @@ struct BoardView: View {
     } else {
       VStack(alignment: .leading, spacing: 12) {
         if !hidesHeader {
-          HStack(spacing: 10) {
-            Label {
-              Text(title)
-                .font(.headline)
-                .foregroundStyle(.secondary)
-              Text("(\(headerCount ?? sessions.count))")
-                .font(.subheadline)
-                .foregroundStyle(.tertiary)
-                .monospacedDigit()
-            } icon: {
-              Image(systemName: systemImage)
-                .foregroundStyle(color)
-                .accessibilityHidden(true)
-            }
-            if let onRestackFrozenDeck {
-              RestackFrozenDeckButton(action: onRestackFrozenDeck)
-            }
-            Spacer(minLength: 0)
-          }
+          sectionHeader(
+            title: title,
+            systemImage: systemImage,
+            color: color,
+            count: headerCount ?? sessions.count,
+            onRestackFrozenDeck: onRestackFrozenDeck
+          )
         }
 
         if sessions.isEmpty, frozenDeck.isEmpty, emptyMessage != nil {
@@ -740,6 +728,38 @@ struct BoardView: View {
           }
         }
       }
+    }
+  }
+
+  /// The bucket header row: icon + title + count, the optional restack
+  /// button, and the trailing spacer. Split out of `section` purely to
+  /// keep that function under the length limit.
+  @ViewBuilder
+  private func sectionHeader(
+    title: String,
+    systemImage: String,
+    color: Color,
+    count: Int,
+    onRestackFrozenDeck: (() -> Void)?
+  ) -> some View {
+    HStack(spacing: 10) {
+      Label {
+        Text(title)
+          .font(.headline)
+          .foregroundStyle(.secondary)
+        Text("(\(count))")
+          .font(.subheadline)
+          .foregroundStyle(.tertiary)
+          .monospacedDigit()
+      } icon: {
+        Image(systemName: systemImage)
+          .foregroundStyle(color)
+          .accessibilityHidden(true)
+      }
+      if let onRestackFrozenDeck {
+        RestackFrozenDeckButton(action: onRestackFrozenDeck)
+      }
+      Spacer(minLength: 0)
     }
   }
 

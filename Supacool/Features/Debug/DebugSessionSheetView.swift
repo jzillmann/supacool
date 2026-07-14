@@ -168,6 +168,7 @@ struct DebugSessionSheetView: View {
       Image(systemName: "exclamationmark.triangle.fill")
         .font(.title2)
         .foregroundStyle(.orange)
+        .accessibilityHidden(true)
       VStack(alignment: .leading, spacing: 6) {
         Text("Supacool repo isn't registered")
           .font(.headline)

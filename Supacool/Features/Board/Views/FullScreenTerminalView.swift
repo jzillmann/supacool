@@ -96,7 +96,7 @@ struct FullScreenTerminalView: View {
   let onReferencesPopoverOpened: (() -> Void)?
 
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
-  var onRemoveReference: ((SessionReference) -> Void)? = nil
+  var onRemoveReference: ((SessionReference) -> Void)?
 
   /// Latest checks/Greptile snapshot per PR reference of this session.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
@@ -237,6 +237,7 @@ struct FullScreenTerminalView: View {
       Button(action: onBackToBoard) {
         HStack(spacing: 4) {
           Image(systemName: "chevron.left")
+            .accessibilityHidden(true)
           Text("Board")
         }
       }
@@ -300,6 +301,7 @@ struct FullScreenTerminalView: View {
     } label: {
       Image(systemName: "ellipsis.circle")
         .font(.body)
+        .accessibilityLabel("More session actions")
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
@@ -323,6 +325,7 @@ struct FullScreenTerminalView: View {
       HStack(spacing: 4) {
         Image(systemName: lifecycle.status.systemImage)
           .font(.caption)
+          .accessibilityHidden(true)
         Text(lifecycle.name)
           .font(.caption.weight(.medium))
           .lineLimit(1)
@@ -397,6 +400,7 @@ struct FullScreenTerminalView: View {
             Image(systemName: "folder.fill")
               .font(.caption2)
               .foregroundStyle(.yellow)
+              .accessibilityHidden(true)
             Text(repo.name)
               .font(.caption)
               .foregroundStyle(.secondary)
@@ -444,6 +448,7 @@ struct FullScreenTerminalView: View {
       HStack(spacing: 3) {
         Image(systemName: "arrow.triangle.branch")
           .font(.caption2)
+          .accessibilityHidden(true)
         Text(worktreeLabel)
           .font(.caption.weight(.medium))
           .lineLimit(1)
@@ -690,6 +695,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "info.circle")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
+        .accessibilityLabel("Show session details")
     }
     .buttonStyle(.plain)
     .help("Show session details")
@@ -715,6 +721,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: session.isPriority ? "flag.fill" : "flag")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconTintStyle(tint: session.isPriority ? .pink : .secondary))
+        .accessibilityLabel(session.isPriority ? "Remove priority from session" : "Mark session as priority")
     }
     .buttonStyle(.plain)
     .help(
@@ -735,6 +742,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "text.line.first.and.arrowtriangle.forward")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
+        .accessibilityLabel("Jump to a recent prompt")
     }
     .buttonStyle(.plain)
     .help("Jump to a recent prompt")
@@ -770,6 +778,7 @@ struct FullScreenTerminalView: View {
           Image(systemName: "pause.fill")
             .font(.system(size: 13, weight: .medium))
             .modifier(HeaderIconStyle())
+            .accessibilityLabel("Park session and stop the terminal")
         } primaryAction: {
           onPark()
         }
@@ -781,6 +790,7 @@ struct FullScreenTerminalView: View {
           Image(systemName: "pause.fill")
             .font(.system(size: 13, weight: .medium))
             .modifier(HeaderIconStyle())
+            .accessibilityLabel("Park session")
         }
         .buttonStyle(.plain)
         .help("Park session")
@@ -790,6 +800,7 @@ struct FullScreenTerminalView: View {
         Image(systemName: "play.fill")
           .font(.system(size: 13, weight: .medium))
           .modifier(HeaderIconStyle())
+          .accessibilityLabel("Unpark session")
       }
       .buttonStyle(.plain)
       .help("Unpark session")
@@ -807,6 +818,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "trash")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
+        .accessibilityLabel("Delete this session")
     }
     .buttonStyle(.plain)
     .help("Delete this session")
@@ -832,6 +844,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "sparkles")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconTintStyle(tint: session.autoObserver ? .accentColor : .secondary))
+        .accessibilityLabel(session.autoObserver ? "Auto-responder is on" : "Auto-responder is off")
     }
     .buttonStyle(.plain)
     .help("Auto-responder: auto-answer obvious prompts (click to configure)")
@@ -853,6 +866,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "ladybug")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
+        .accessibilityLabel("Debug session")
     }
     .buttonStyle(.plain)
     .help("Debug session…")
@@ -872,6 +886,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
         .font(.system(size: 13, weight: .medium))
         .modifier(HeaderIconStyle())
+        .accessibilityLabel(isSplit ? "Close the shell split" : "Open a shell split in this session")
     }
     .buttonStyle(.plain)
     .disabled(worktree == nil)
@@ -1064,6 +1079,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "bolt.slash.fill")
         .font(.system(size: 48))
         .foregroundStyle(.red)
+        .accessibilityHidden(true)
       Text("Disconnected from remote")
         .font(.title3.weight(.medium))
       Text("""
@@ -1123,6 +1139,7 @@ struct FullScreenTerminalView: View {
       Image(systemName: "moon.zzz.fill")
         .font(.system(size: 48))
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text("Session detached")
         .font(.title3.weight(.medium))
       Text(detachedDescription)
@@ -1189,7 +1206,10 @@ struct FullScreenTerminalView: View {
         } else if let onResumePicker {
           Button("Resume…", systemImage: "play.circle", action: onResumePicker)
             .help(
-              "No session id was captured. Launches \(AgentType.displayName(for: session.agent))'s built-in session picker for this directory."
+              """
+              No session id was captured. Launches \
+              \(AgentType.displayName(for: session.agent))'s built-in session picker for this directory.
+              """
             )
         }
         Button("Back to Board", action: onBackToBoard)

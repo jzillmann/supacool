@@ -48,6 +48,7 @@ struct SessionInfoPopover: View {
     HStack(spacing: 6) {
       Image(systemName: "info.circle")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
       Text(session.displayName)
         .font(.headline)
         .fixedSize(horizontal: false, vertical: true)
@@ -67,6 +68,7 @@ struct SessionInfoPopover: View {
             copyPrompt()
           } label: {
             Image(systemName: didCopyPrompt ? "checkmark" : "doc.on.doc")
+              .accessibilityLabel(didCopyPrompt ? "Prompt copied" : "Copy prompt")
           }
           .buttonStyle(.plain)
           .controlSize(.small)

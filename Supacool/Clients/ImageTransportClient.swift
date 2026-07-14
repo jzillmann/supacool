@@ -29,7 +29,7 @@ extension ImageTransportClient: DependencyKey {
       drop: { sourceURL, context in
         switch context {
         case .local:
-          return try await copyLocally(sourceURL: sourceURL)
+          return try copyLocally(sourceURL: sourceURL)
         case .remote(let alias, let tmpdir):
           return try await uploadViaSCP(sourceURL: sourceURL, alias: alias, tmpdir: tmpdir, shell: shell)
         }
@@ -57,7 +57,7 @@ extension DependencyValues {
 /// Writes the image into a Supacool-owned subdirectory of NSTemporaryDirectory
 /// with a fresh UUID — never the user's original path, so repeated drops of
 /// the same screenshot don't clobber each other.
-nonisolated func copyLocally(sourceURL: URL) async throws -> String {
+nonisolated func copyLocally(sourceURL: URL) throws -> String {
   let ext = sourceURL.pathExtension.isEmpty ? "png" : sourceURL.pathExtension
   let destinationDir = URL(fileURLWithPath: NSTemporaryDirectory())
     .appending(path: "supacool", directoryHint: .isDirectory)

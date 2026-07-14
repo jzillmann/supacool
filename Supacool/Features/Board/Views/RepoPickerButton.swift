@@ -34,12 +34,14 @@ struct RepoPickerButton: View {
       HStack(spacing: 6) {
         Image(systemName: repositories.isEmpty ? "folder.badge.plus" : "folder.fill")
           .foregroundStyle(repositories.isEmpty ? .blue : .yellow)
+          .accessibilityHidden(true)
         Text(summary)
           .lineLimit(1)
         if !repositories.isEmpty {
           Image(systemName: "chevron.down")
             .font(.caption2.weight(.semibold))
             .foregroundStyle(.secondary)
+            .accessibilityHidden(true)
         }
       }
     }
@@ -86,6 +88,9 @@ struct RepoPickerButton: View {
         HStack {
           Image(systemName: filters.showsAllRepositories ? "checkmark.circle.fill" : "circle")
             .foregroundStyle(filters.showsAllRepositories ? Color.accentColor : Color.secondary)
+            .accessibilityLabel(
+              filters.showsAllRepositories ? "Showing all repositories" : "Show all repositories"
+            )
           Text("All repositories")
             .font(.callout.weight(.medium))
           Spacer()
@@ -166,6 +171,7 @@ struct RepoPickerButton: View {
         HStack {
           Image(systemName: "folder.badge.plus")
             .foregroundStyle(.blue)
+            .accessibilityHidden(true)
           Text("Add Repository…")
             .font(.callout.weight(.medium))
           Spacer()
@@ -185,6 +191,7 @@ struct RepoPickerButton: View {
           HStack {
             Image(systemName: "gearshape")
               .foregroundStyle(.secondary)
+              .accessibilityHidden(true)
             Text("Configure Repositories…")
               .font(.callout.weight(.medium))
             Spacer()

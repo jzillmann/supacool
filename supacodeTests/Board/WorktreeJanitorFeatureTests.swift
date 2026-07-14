@@ -268,7 +268,7 @@ struct WorktreeJanitorFeatureTests {
       .init(
         id: "/r/wt", name: "wt", branch: "feat", head: "a",
         status: .owned(sessionID: UUID(), displayName: "Live session")
-      )
+      ),
     ]
     let store = TestStore(initialState: state) {
       WorktreeJanitorFeature()
@@ -348,7 +348,7 @@ struct WorktreeJanitorFeatureTests {
       .init(
         id: "/r/wt", name: "wt", branch: "feat", head: "a",
         status: .orphanDirty, sizeBytes: UInt64(1_024 * 1_024)
-      )
+      ),
     ]
     state.selectedIDs = ["/r/wt"]
     let store = TestStore(initialState: state) {

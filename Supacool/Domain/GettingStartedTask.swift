@@ -26,7 +26,8 @@ nonisolated enum GettingStartedTask: String, Codable, CaseIterable, Sendable, Ha
     case .setupRepo:
       "Pick a project folder to work on. Sessions, worktrees, and coding agents all attach to a repository."
     case .installHooks:
-      "Claude Code and Codex talk to Supacool through a small hook in each agent's settings. Without it, cards can't flip when an agent needs you."
+      "Claude Code and Codex talk to Supacool through a small hook in each agent's settings. "
+        + "Without it, cards can't flip when an agent needs you."
     case .setupRemoteHost:
       "Spawn terminals on any machine in your ~/.ssh/config. Import a host to run sessions over SSH."
     }
