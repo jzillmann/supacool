@@ -189,7 +189,21 @@ extension BoardFeature {
       state.focusedSessionID = id
     }
     let command = resumeCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    let repoRoot = repository.rootURL
+    let ownsWorktree = Self.ownsWorktree(session)
+    return .run { [terminalClient, piSettingsClient, gitClient, agent] send in
+      // A restored session's worktree may have been deleted on trash. Rebuild
+      // it before resuming — `--resume` is cwd-scoped, so resuming from a
+      // fallback directory can't find the conversation.
+      if let failure = await Self.recreateWorktreeIfMissing(
+        worktree: worktree,
+        ownsWorktree: ownsWorktree,
+        repoRoot: repoRoot,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -248,7 +262,21 @@ extension BoardFeature {
     }
     state.focusedSessionID = id
     let command = pickerCommand + "\r"
-    return .run { [terminalClient, piSettingsClient, agent] _ in
+    let repoRoot = repository.rootURL
+    let ownsWorktree = Self.ownsWorktree(session)
+    return .run { [terminalClient, piSettingsClient, gitClient, agent] send in
+      // Same cwd sensitivity as the captured-id path: the resume picker only
+      // lists conversations belonging to the current directory's project, so a
+      // missing worktree would show an empty (or wrong) picker.
+      if let failure = await Self.recreateWorktreeIfMissing(
+        worktree: worktree,
+        ownsWorktree: ownsWorktree,
+        repoRoot: repoRoot,
+        gitClient: gitClient
+      ) {
+        await send(.resumeFailed(id: id, message: failure))
+        return
+      }
       if agent.id == "pi" {
         do {
           try await piSettingsClient.install()
@@ -620,6 +648,56 @@ extension BoardFeature {
       }
     }
     return jobs
+  }
+
+  /// Rebuilds the session's worktree directory when it has gone missing.
+  ///
+  /// Trashing a worktree-owning session `git worktree remove`s its directory
+  /// immediately — the trash entry keeps only session metadata — so a session
+  /// that is later restored can point at a path that no longer exists. That
+  /// matters because `<agent> --resume <id>` is scoped to the *current
+  /// directory's* project (Claude looks for the conversation under
+  /// `~/.claude/projects/<hashed-cwd>/<id>.jsonl`). Resuming in a shell that
+  /// fell back to some other worktree makes the agent search the wrong project
+  /// and report the cryptic "No conversation found with session ID".
+  ///
+  /// The conversation history itself survives the worktree removal — it's keyed
+  /// by the original path, not stored in the worktree — so recreating the
+  /// worktree at that exact path makes resume resolve again with zero loss.
+  ///
+  /// Returns `nil` when the directory is present (or was rebuilt), or a
+  /// user-facing message when it's gone and can't be rebuilt.
+  nonisolated static func recreateWorktreeIfMissing(
+    worktree: Worktree,
+    ownsWorktree: Bool,
+    repoRoot: URL,
+    gitClient: GitClientDependency
+  ) async -> String? {
+    let workingDirectory = worktree.workingDirectory
+    guard ownsWorktree,
+      !FileManager.default.fileExists(atPath: workingDirectory.path(percentEncoded: false))
+    else { return nil }
+    // Supacool lays worktrees out as `<baseDirectory>/<branch>`, so the branch
+    // is the path's last component and re-adding it reconstructs the identical
+    // path the captured session id was recorded under.
+    let branchName = workingDirectory.lastPathComponent
+    let baseDirectory = workingDirectory.deletingLastPathComponent()
+    do {
+      _ = try await gitClient.createWorktreeForExistingBranch(branchName, repoRoot, baseDirectory)
+      return nil
+    } catch {
+      return "The worktree for this session was deleted and couldn't be recreated "
+        + "(branch \"\(branchName)\" may be gone): \(error.localizedDescription). "
+        + "Use Rerun to start fresh."
+    }
+  }
+
+  /// True when the session backs onto a worktree it owns, rather than running
+  /// straight in the repository root. Mirrors `cleanupPlan`, which only ever
+  /// `git worktree remove`s when `worktreeID != repositoryID` — so this is
+  /// exactly the set of sessions whose directory can vanish under them.
+  nonisolated static func ownsWorktree(_ session: AgentSession) -> Bool {
+    session.worktreeID != session.repositoryID
   }
 
   static func resumeWorktree(

@@ -2413,6 +2413,175 @@ struct BoardFeatureTests {
     await store.finish()
   }
 
+  // Trashing a worktree-owning session deletes its directory immediately, so a
+  // restored + resumed session can point at a path that no longer exists.
+  // `<agent> --resume <id>` is cwd-scoped, so resuming in a fallback shell
+  // finds no conversation. The resume path must recreate the worktree at the
+  // exact original path first.
+  @Test(.dependencies) func resumeRecreatesMissingWorktreeBeforeResuming() async throws {
+    let sessionID = UUID()
+    let repositoryID = "/tmp/repo"
+    // A distinct worktree path that does NOT exist on disk.
+    let worktreeID = "/tmp/repo/ghost-worktree-\(UUID().uuidString)"
+    var session = Self.sampleSession(id: sessionID, repositoryID: repositoryID, worktreeID: worktreeID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "native-session-123" }
+    session.parked = true
+    let repo = Repository(
+      id: repositoryID,
+      rootURL: URL(fileURLWithPath: repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let recreatedBranches = LockIsolated<[String]>([])
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.gitClient.createWorktreeForExistingBranch = { branchName, repoRoot, baseDirectory in
+        recreatedBranches.withValue { $0.append(branchName) }
+        let path = baseDirectory.appending(path: branchName).path(percentEncoded: false)
+        return Worktree(
+          id: path,
+          name: branchName,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: path),
+          repositoryRootURL: repoRoot,
+          createdAt: Date(),
+          branch: branchName
+        )
+      }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repo]))
+    await store.finish()
+
+    // The worktree was recreated for the branch matching the path's last
+    // component, so `claude --resume` lands in the original project directory.
+    #expect(recreatedBranches.value == [URL(fileURLWithPath: worktreeID).lastPathComponent])
+    // Resume still proceeded once the directory was back.
+    let didCreateTab = sentCommands.value.contains { command in
+      if case .createTabWithInput(_, let input, _, let id) = command {
+        return input.contains("native-session-123") && id == sessionID
+      }
+      return false
+    }
+    #expect(didCreateTab)
+  }
+
+  // If the worktree is gone AND can't be recreated (e.g. the branch was also
+  // deleted), we must fail loudly instead of injecting `claude --resume` into
+  // whatever directory the shell fell back to — which is what produced the
+  // cryptic "No conversation found with session ID".
+  @Test(.dependencies) func resumeFailsWhenMissingWorktreeCannotBeRecreated() async throws {
+    struct BranchGone: Error {}
+    let sessionID = UUID()
+    let repositoryID = "/tmp/repo"
+    let worktreeID = "/tmp/repo/ghost-worktree-\(UUID().uuidString)"
+    var session = Self.sampleSession(id: sessionID, repositoryID: repositoryID, worktreeID: worktreeID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "native-session-123" }
+    session.parked = true
+    let repo = Repository(
+      id: repositoryID,
+      rootURL: URL(fileURLWithPath: repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.gitClient.createWorktreeForExistingBranch = { _, _, _ in throw BranchGone() }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repo]))
+    await store.finish()
+
+    // No tab was spawned — we didn't inject the doomed resume command.
+    let didCreateTab = sentCommands.value.contains { command in
+      if case .createTabWithInput = command { return true }
+      return false
+    }
+    #expect(!didCreateTab)
+    // `resumeFailed` cleared the reinitializing flag the send had set.
+    #expect(store.state.reinitializingSessionIDs.isEmpty)
+    // And surfaced a tray card instead of failing silently.
+    let card = try #require(store.state.trayCards[id: sessionID])
+    guard case .sessionResumeFailed(let cardSessionID, _, let message) = card.kind else {
+      Issue.record("Expected sessionResumeFailed tray card, got \(card.kind)")
+      return
+    }
+    #expect(cardSessionID == sessionID)
+    #expect(message.contains("couldn't be recreated"))
+  }
+
+  // The resume picker only lists conversations belonging to the current
+  // directory's project, so it has the same missing-worktree sensitivity as
+  // the captured-id path.
+  @Test(.dependencies) func resumePickerRecreatesMissingWorktreeBeforeResuming() async throws {
+    let sessionID = UUID()
+    let repositoryID = "/tmp/repo"
+    let worktreeID = "/tmp/repo/ghost-worktree-\(UUID().uuidString)"
+    var session = Self.sampleSession(id: sessionID, repositoryID: repositoryID, worktreeID: worktreeID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = nil }
+    session.parked = true
+    let repo = Repository(
+      id: repositoryID,
+      rootURL: URL(fileURLWithPath: repositoryID),
+      name: "Repo",
+      worktrees: []
+    )
+    let recreatedBranches = LockIsolated<[String]>([])
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.gitClient.createWorktreeForExistingBranch = { branchName, repoRoot, baseDirectory in
+        recreatedBranches.withValue { $0.append(branchName) }
+        let path = baseDirectory.appending(path: branchName).path(percentEncoded: false)
+        return Worktree(
+          id: path,
+          name: branchName,
+          detail: "",
+          workingDirectory: URL(fileURLWithPath: path),
+          repositoryRootURL: repoRoot,
+          createdAt: Date(),
+          branch: branchName
+        )
+      }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSessionWithPicker(id: sessionID, repositories: [repo]))
+    await store.finish()
+
+    #expect(recreatedBranches.value == [URL(fileURLWithPath: worktreeID).lastPathComponent])
+    let didCreateTab = sentCommands.value.contains { command in
+      if case .createTabWithInput = command { return true }
+      return false
+    }
+    #expect(didCreateTab)
+  }
+
   @Test(.dependencies) func resumePickerMarksReinitializingUntilTabExists() async throws {
     let sessionID = UUID()
     var session = Self.sampleSession(id: sessionID)

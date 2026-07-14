@@ -258,6 +258,14 @@ private struct TrayCardView: View {
           ? "Tap to dismiss."
           : "Tap to reopen the New Terminal sheet with your values pre-filled."
       )
+    case .sessionResumeFailed(_, let displayName, let message):
+      return TrayCardPresentation(
+        icon: "xmark.octagon.fill",
+        tint: .red,
+        title: "Couldn't resume \(displayName)",
+        subtitle: message,
+        helpText: "Tap to open the session — use Rerun to start it fresh."
+      )
     }
   }
 
