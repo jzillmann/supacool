@@ -62,9 +62,21 @@ nonisolated enum BoardResumeEligibility {
   ) -> [BoardSelectedResumeRoute] {
     guard selectedIDs.count > 1 else { return [] }
 
-    return sessions.compactMap { session in
-      guard selectedIDs.contains(session.id) else { return nil }
+    return resumeRoutes(
+      sessions: sessions.filter { selectedIDs.contains($0.id) },
+      classify: classify,
+      tabExists: tabExists
+    )
+  }
 
+  /// Resume route per session, skipping the ones no automatic resume can
+  /// revive. Order follows `sessions`.
+  static func resumeRoutes(
+    sessions: [AgentSession],
+    classify: (AgentSession) -> BoardSessionStatus,
+    tabExists: (AgentSession) -> Bool
+  ) -> [BoardSelectedResumeRoute] {
+    sessions.compactMap { session in
       let status = classify(session)
       let hasTab = tabExists(session)
       if canDirectResume(session, status: status, tabExists: hasTab, includingParked: true) {
