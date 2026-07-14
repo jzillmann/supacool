@@ -194,6 +194,7 @@ struct LinearInboxSheet: View {
     Toggle(isOn: Binding(get: { isOn }, set: { _ in onToggle() })) {
       HStack(spacing: 4) {
         Image(systemName: systemImage)
+          .accessibilityHidden(true)
         Text(title)
         if count > 0 {
           Text("\(count)")
@@ -278,6 +279,7 @@ struct LinearInboxSheet: View {
     } label: {
       Image(systemName: systemImage)
         .frame(width: 22, height: 18)
+        .accessibilityLabel(mode == .list ? "List view" : "Focus view")
     }
     .buttonStyle(.borderless)
     .foregroundStyle(isSelected ? .primary : .secondary)
@@ -325,6 +327,7 @@ struct LinearInboxSheet: View {
     HStack(alignment: .firstTextBaseline, spacing: 8) {
       Image(systemName: "exclamationmark.triangle.fill")
         .foregroundStyle(.orange)
+        .accessibilityLabel("Error")
       Text(message)
         .font(.callout)
         .foregroundStyle(.secondary)
@@ -333,6 +336,7 @@ struct LinearInboxSheet: View {
         store.send(.clearError)
       } label: {
         Image(systemName: "xmark")
+          .accessibilityLabel("Dismiss")
       }
       .buttonStyle(.borderless)
       .help("Dismiss")
@@ -424,7 +428,7 @@ struct LinearInboxSheet: View {
       isExpanded: store.expandedTicketIDs.contains(ticket.identifier),
       isFetching: store.fetchingTicketIDs.contains(ticket.identifier),
       isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
-      hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
+      sessionStatus: store.state.sessionStatus(for: ticket, now: Date()),
       onToggleExpanded: { store.send(.toggleExpanded(ticketID: ticket.identifier)) },
       onToggleIgnored: { store.send(.toggleIgnoreTapped(ticketID: ticket.identifier)) },
       onAssignToMe: { store.send(.assignToMeTapped(ticketID: ticket.identifier)) },
@@ -451,7 +455,7 @@ struct LinearInboxSheet: View {
         position: store.focusIndexClamped + 1,
         total: store.visibleTickets.count,
         isAssigning: store.assigningTicketIDs.contains(ticket.identifier),
-        hasLiveSession: store.state.liveLinkedSessionID(for: ticket) != nil,
+        sessionStatus: store.state.sessionStatus(for: ticket, now: Date()),
         canRetreat: store.focusIndexClamped > 0,
         onStartSession: { store.send(.startSessionTapped(ticketID: ticket.identifier)) },
         onOpenSession: { store.send(.openSessionTapped(ticketID: ticket.identifier)) },
@@ -483,9 +487,11 @@ private struct LinearGroupRow: View {
       Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
         .font(.caption)
         .foregroundStyle(.secondary)
+        .accessibilityLabel(isExpanded ? "Expanded" : "Collapsed")
 
       Image(systemName: "square.stack.3d.up.fill")
         .foregroundStyle(.secondary)
+        .accessibilityHidden(true)
 
       Text(group.parentIdentifier)
         .font(.system(.body, design: .monospaced))
@@ -507,6 +513,7 @@ private struct LinearGroupRow: View {
     .padding(.vertical, 4)
     .contentShape(Rectangle())
     .onTapGesture(perform: onToggleExpanded)
+    .accessibilityAddTraits(.isButton)
     .help("Show the \(group.children.count) sub-issues of \(group.parentIdentifier)")
   }
 }
@@ -518,9 +525,10 @@ private struct LinearTicketRow: View {
   let isExpanded: Bool
   let isFetching: Bool
   let isAssigning: Bool
-  /// True while the session spawned from this ticket still exists on the
-  /// board — swaps "Start session" for "Open session".
-  let hasLiveSession: Bool
+  /// Drives the session action: "Start session" (idle), a disabled
+  /// "Starting…" while the spawn is in flight — so a second click can't
+  /// create a duplicate session — and "Open session" once it's live.
+  let sessionStatus: LinearInboxFeature.TicketSessionStatus
   let onToggleExpanded: () -> Void
   let onToggleIgnored: () -> Void
   let onAssignToMe: () -> Void
@@ -540,6 +548,7 @@ private struct LinearTicketRow: View {
     .padding(.vertical, 4)
     .contentShape(Rectangle())
     .onTapGesture(perform: onToggleExpanded)
+    .accessibilityAddTraits(.isButton)
     .onHover { isHovering = $0 }
   }
 
@@ -548,6 +557,7 @@ private struct LinearTicketRow: View {
       Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
         .font(.caption)
         .foregroundStyle(.secondary)
+        .accessibilityLabel(isExpanded ? "Expanded" : "Collapsed")
 
       Text(ticket.identifier)
         .font(.system(.body, design: .monospaced))
@@ -565,10 +575,19 @@ private struct LinearTicketRow: View {
       if isFetching {
         ProgressView().controlSize(.small)
       }
-      if hasLiveSession {
+      switch sessionStatus {
+      case .live:
         Image(systemName: "checkmark.seal.fill")
           .foregroundStyle(.green)
+          .accessibilityLabel("A session for this ticket is running on the board")
           .help("A session for this ticket is running on the board")
+      case .starting:
+        Image(systemName: "hourglass")
+          .foregroundStyle(.orange)
+          .accessibilityLabel("A session for this ticket is starting")
+          .help("A session for this ticket is spawning — it appears on the board in a moment")
+      case .idle:
+        EmptyView()
       }
       if let creator = ticket.creatorName, !creator.isEmpty {
         Label(creator, systemImage: "square.and.pencil")
@@ -599,6 +618,7 @@ private struct LinearTicketRow: View {
         } label: {
           Image(systemName: "person.crop.circle.badge.checkmark")
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Assign this ticket to you in Linear")
         }
         .buttonStyle(.borderless)
         .help("Assign this ticket to you in Linear")
@@ -618,6 +638,7 @@ private struct LinearTicketRow: View {
       } label: {
         Image(systemName: ticket.isHidden ? "eye" : "eye.slash")
           .foregroundStyle(.secondary)
+          .accessibilityLabel(ticket.isHidden ? "Un-ignore this ticket" : "Ignore this ticket")
       }
       .buttonStyle(.borderless)
       .help(ticket.isHidden ? "Un-ignore this ticket" : "Ignore this ticket (kept in the inbox)")
@@ -627,6 +648,7 @@ private struct LinearTicketRow: View {
       } label: {
         Image(systemName: "xmark")
           .foregroundStyle(.secondary)
+          .accessibilityLabel("Remove this ticket from the inbox")
       }
       .buttonStyle(.borderless)
       .help("Remove this ticket from the inbox")
@@ -687,14 +709,22 @@ private struct LinearTicketRow: View {
       .frame(maxWidth: .infinity, alignment: .leading)
 
       HStack(spacing: 8) {
-        if hasLiveSession {
+        switch sessionStatus {
+        case .live:
           Button {
             onOpenSession()
           } label: {
             Label("Open session", systemImage: "terminal")
           }
           .help("Jump to the session already running for this ticket")
-        } else {
+        case .starting:
+          Button {
+          } label: {
+            Label("Starting…", systemImage: "hourglass")
+          }
+          .disabled(true)
+          .help("A session for this ticket is spawning — it appears on the board in a moment")
+        case .idle:
           Button {
             onStartSession()
           } label: {
@@ -709,7 +739,10 @@ private struct LinearTicketRow: View {
           if isAssigning {
             ProgressView().controlSize(.small)
           } else {
-            Label(ticket.assignedToMe ? "Assigned to you" : "Assign to me", systemImage: "person.crop.circle.badge.checkmark")
+            Label(
+              ticket.assignedToMe ? "Assigned to you" : "Assign to me",
+              systemImage: "person.crop.circle.badge.checkmark"
+            )
           }
         }
         .help("Assign this ticket to you in Linear")
@@ -738,6 +771,7 @@ private struct LinearTicketRow: View {
       // The action row is its own tap target — don't let taps bubble up to
       // the row's expand/collapse gesture.
       .onTapGesture {}
+      .accessibilityAddTraits(.isButton)
     }
     .padding(.leading, 22)
   }
@@ -747,7 +781,7 @@ private struct LinearTicketRow: View {
 /// `https://linear.app/…` URL becomes a deep link by swapping the prefix.
 /// Falls back to the browser when the desktop app isn't installed. Shared
 /// between the list row's expanded content and the focus card's action bar.
-fileprivate func openInLinear(webURL: URL) {
+private func openInLinear(webURL: URL) {
   let deepLink = URL(string: webURL.absoluteString.replacing("https://linear.app/", with: "linear://"))
   if let deepLink, deepLink != webURL, NSWorkspace.shared.urlForApplication(toOpen: deepLink) != nil {
     NSWorkspace.shared.open(deepLink)
@@ -765,7 +799,11 @@ private struct FocusTicketCard: View {
   let position: Int
   let total: Int
   let isAssigning: Bool
-  let hasLiveSession: Bool
+  /// Drives the primary (⏎) action: Start session / disabled Starting… /
+  /// Open session. The disabled middle state is load-bearing — it keeps a
+  /// second Enter press during the spawn window from creating a duplicate
+  /// session.
+  let sessionStatus: LinearInboxFeature.TicketSessionStatus
   let canRetreat: Bool
   let onStartSession: () -> Void
   let onOpenSession: () -> Void
@@ -829,6 +867,7 @@ private struct FocusTicketCard: View {
       } label: {
         Image(systemName: justCopiedIdentifier ? "checkmark" : "doc.on.doc")
           .foregroundStyle(justCopiedIdentifier ? AnyShapeStyle(.green) : AnyShapeStyle(.secondary))
+          .accessibilityLabel(justCopiedIdentifier ? "Ticket number copied" : "Copy the ticket number")
       }
       .buttonStyle(.borderless)
       .keyboardShortcut(".", modifiers: .command)
@@ -857,10 +896,19 @@ private struct FocusTicketCard: View {
           .help("Created \(createdAt.formatted(date: .abbreviated, time: .shortened))")
       }
 
-      if hasLiveSession {
+      switch sessionStatus {
+      case .live:
         Image(systemName: "checkmark.seal.fill")
           .foregroundStyle(.green)
+          .accessibilityLabel("A session for this ticket is running on the board")
           .help("A session for this ticket is running on the board")
+      case .starting:
+        Image(systemName: "hourglass")
+          .foregroundStyle(.orange)
+          .accessibilityLabel("A session for this ticket is starting")
+          .help("A session for this ticket is spawning — it appears on the board in a moment")
+      case .idle:
+        EmptyView()
       }
 
       Spacer(minLength: 0)
@@ -896,7 +944,8 @@ private struct FocusTicketCard: View {
 
   private var actionBar: some View {
     HStack(spacing: 8) {
-      if hasLiveSession {
+      switch sessionStatus {
+      case .live:
         Button {
           onOpenSession()
         } label: {
@@ -904,7 +953,14 @@ private struct FocusTicketCard: View {
         }
         .keyboardShortcut(.defaultAction)
         .help("Jump to the session already running for this ticket (⏎)")
-      } else {
+      case .starting:
+        Button {
+        } label: {
+          Label("Starting…", systemImage: "hourglass")
+        }
+        .disabled(true)
+        .help("A session for this ticket is spawning — it appears on the board in a moment")
+      case .idle:
         Button {
           onStartSession()
         } label: {
