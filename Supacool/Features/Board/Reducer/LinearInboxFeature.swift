@@ -22,8 +22,8 @@ struct LinearInboxFeature {
     /// The selected source view (recent vs pasted), persisted so reopening the
     /// inbox restores the same view. Stored as a raw string because
     /// `@Shared(.appStorage(...))` bridges scalars more reliably than enums.
-    // Dot-free key: dotted keys break efficient cross-process KVO (matters for
-    // the isolated preview instance), matching `prPulseIgnoredPRKeys` etc.
+    /// Dot-free key: dotted keys break efficient cross-process KVO (matters for
+    /// the isolated preview instance), matching `prPulseIgnoredPRKeys` etc.
     @Shared(.appStorage("linearInboxSource"))
     var inboxSourceRaw: String = LinearTicketSource.recent.rawValue
 
@@ -286,6 +286,44 @@ struct LinearInboxFeature {
       }
       return sessions.first(where: { $0.primaryTicketID == ticket.identifier })?.id
     }
+
+    /// Where this ticket sits in the session lifecycle. `.starting` covers the
+    /// spawn window: the ticket was stamped `startedSessionID` at submit, but
+    /// the session hasn't landed on the board yet (worktree creation takes
+    /// seconds). During that window the ticket must NOT offer "Start session"
+    /// again — a second submit spawns a full duplicate session that silently
+    /// adopts the first one's worktree. The window is time-bounded so a stamp
+    /// orphaned by a crash mid-spawn can't wedge the ticket in "Starting…"
+    /// forever; a *failed* spawn clears the stamp immediately
+    /// (``LinearInboxFeature/clearStartedStamp(forSessionID:)``).
+    func sessionStatus(for ticket: LinearTicket, now: Date) -> LinearInboxFeature.TicketSessionStatus {
+      if let sessionID = liveLinkedSessionID(for: ticket) {
+        return .live(sessionID: sessionID)
+      }
+      if ticket.startedSessionID != nil,
+        let startedAt = ticket.startedAt,
+        now.timeIntervalSince(startedAt) < LinearInboxFeature.spawnGraceWindow
+      {
+        return .starting
+      }
+      return .idle
+    }
+  }
+
+  /// How long a started-but-not-yet-live ticket is treated as `.starting`
+  /// before falling back to `.idle`. Generous: local spawns fetch origin and
+  /// run worktree-init commands, which can take a while on slow networks.
+  nonisolated static let spawnGraceWindow: TimeInterval = 120
+
+  /// A ticket's relationship to board sessions, driving the Start / Starting… /
+  /// Open session action in both the list row and the focus card.
+  nonisolated enum TicketSessionStatus: Equatable, Sendable {
+    /// No session — "Start session" is offered.
+    case idle
+    /// Stamped as started, session not on the board yet — spawn in flight.
+    case starting
+    /// The session is live on the board — "Open session" is offered.
+    case live(sessionID: UUID)
   }
 
   nonisolated enum Tab: String, Equatable, Sendable, CaseIterable {
@@ -525,6 +563,19 @@ struct LinearInboxFeature {
       case let .startSessionTapped(ticketID):
         guard let ticket = state.tickets.first(where: { $0.identifier == ticketID }) else {
           return .none
+        }
+        // Idempotency guard. The action buttons already swap to
+        // "Starting…"/"Open session", but a queued Enter press (focus mode
+        // binds ⏎ to Start) or a stale row can still land here during the
+        // spawn window — without this, each landing spawned a complete
+        // duplicate session into the same worktree.
+        switch state.sessionStatus(for: ticket, now: date.now) {
+        case .live(let sessionID):
+          return .send(.delegate(.openSession(sessionID: sessionID)))
+        case .starting:
+          return .none
+        case .idle:
+          break
         }
         state.pendingSessionTicketID = ticketID
         var newTerminal = NewTerminalFeature.State(availableRepositories: state.availableRepositories)
@@ -766,6 +817,25 @@ struct LinearInboxFeature {
     }
     .ifLet(\.$newTerminal, action: \.newTerminal) {
       NewTerminalFeature()
+    }
+  }
+
+  /// Un-stamps the ticket that started `sessionID`, reverting it to
+  /// "Start session". Called by BoardFeature when a spawn fails or the user
+  /// abandons its worktree-conflict recovery — the session named by the stamp
+  /// will never reach the board, so without this the ticket would sit in
+  /// "Starting…" until ``spawnGraceWindow`` runs out. Works on the shared
+  /// store directly because the inbox sheet may already be closed by the time
+  /// the spawn result arrives.
+  static func clearStartedStamp(forSessionID sessionID: UUID) {
+    @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
+    $inbox.withLock { buckets in
+      for (repoID, tickets) in buckets {
+        for index in tickets.indices where tickets[index].startedSessionID == sessionID {
+          buckets[repoID]?[index].startedAt = nil
+          buckets[repoID]?[index].startedSessionID = nil
+        }
+      }
     }
   }
 

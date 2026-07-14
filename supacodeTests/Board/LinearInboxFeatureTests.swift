@@ -729,6 +729,8 @@ struct LinearInboxFeatureTests {
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_000))
     }
     store.exhaustivity = .off
 
@@ -748,6 +750,8 @@ struct LinearInboxFeatureTests {
 
     let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
       LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_000))
     }
     store.exhaustivity = .off
 
@@ -755,6 +759,132 @@ struct LinearInboxFeatureTests {
     #expect(store.state.newTerminal?.prompt == "Fix CEN-2")
     // No title yet — nothing to derive a branch name from.
     #expect(store.state.newTerminal?.workspaceQuery.isEmpty == true)
+  }
+
+  @Test(.dependencies) func startSessionIsIgnoredWhileASpawnIsInFlight() async {
+    // Regression: between submitting the embedded New Terminal and the
+    // spawned session landing on the board (worktree creation takes seconds),
+    // the ticket is stamped started but has no live session. A second start —
+    // queued Enter press or stale row — used to spawn a complete duplicate
+    // session into the same worktree.
+    let now = Date(timeIntervalSince1970: 5_000)
+    resetInbox([
+      LinearTicket(
+        identifier: "CEN-1",
+        title: "Do thing",
+        startedAt: now.addingTimeInterval(-5),
+        startedSessionID: UUID()
+      ),
+    ])
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.sessionStatus(for: store.state.tickets[0], now: now) == .starting)
+    await store.send(.startSessionTapped(ticketID: "CEN-1"))
+    #expect(store.state.newTerminal == nil)
+    #expect(store.state.pendingSessionTicketID == nil)
+    #expect(store.state.selectedTab == .inbox)
+  }
+
+  @Test(.dependencies) func startSessionOnALiveTicketJumpsToTheSessionInstead() async {
+    // Same guard, other side of the window: once the session is live the row
+    // shows "Open session", but a raced Start must also resolve to opening —
+    // never to a duplicate spawn.
+    let now = Date(timeIntervalSince1970: 5_000)
+    let session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Fix CEN-1"
+    )
+    resetInbox([
+      LinearTicket(
+        identifier: "CEN-1",
+        title: "Do thing",
+        startedAt: now.addingTimeInterval(-30),
+        startedSessionID: session.id
+      ),
+    ])
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startSessionTapped(ticketID: "CEN-1"))
+    await store.receive(\.delegate.openSession)
+    #expect(store.state.newTerminal == nil)
+  }
+
+  @Test(.dependencies) func startSessionIsAllowedAgainOnceTheGraceWindowExpires() async {
+    // A stamp orphaned by a crash mid-spawn (no session ever landed, no
+    // failure event to clear it) must not wedge the ticket — after the grace
+    // window it reverts to a plain start.
+    let now = Date(timeIntervalSince1970: 5_000)
+    resetInbox([
+      LinearTicket(
+        identifier: "CEN-1",
+        title: "Do thing",
+        startedAt: now.addingTimeInterval(-LinearInboxFeature.spawnGraceWindow - 1),
+        startedSessionID: UUID()
+      ),
+    ])
+    @Shared(.agentSessions) var sessions: [AgentSession]
+    $sessions.withLock { $0 = [] }
+
+    let store = TestStore(initialState: LinearInboxFeature.State(availableRepositories: [Self.repo])) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    #expect(store.state.sessionStatus(for: store.state.tickets[0], now: now) == .idle)
+    await store.send(.startSessionTapped(ticketID: "CEN-1"))
+    #expect(store.state.newTerminal != nil)
+    #expect(store.state.selectedTab == .newTerminal)
+  }
+
+  @Test(.dependencies) func clearStartedStampRevertsTheTicketToStartable() {
+    // BoardFeature calls this when a spawn fails or its worktree-conflict
+    // recovery is abandoned: the stamped session will never reach the board,
+    // so the ticket must immediately offer "Start session" again.
+    let sessionID = UUID()
+    let now = Date(timeIntervalSince1970: 5_000)
+    resetInbox([
+      LinearTicket(
+        identifier: "CEN-1",
+        title: "Do thing",
+        startedAt: now.addingTimeInterval(-5),
+        startedSessionID: sessionID
+      ),
+      LinearTicket(
+        identifier: "CEN-2",
+        title: "Untouched",
+        startedAt: now.addingTimeInterval(-5),
+        startedSessionID: UUID()
+      ),
+    ])
+
+    LinearInboxFeature.clearStartedStamp(forSessionID: sessionID)
+
+    @Shared(.linearInbox) var inbox: [String: [LinearTicket]]
+    let tickets = inbox[Self.repo.id] ?? []
+    #expect(tickets[0].startedAt == nil)
+    #expect(tickets[0].startedSessionID == nil)
+    // Only the failed spawn's ticket reverts; other in-flight stamps stay.
+    #expect(tickets[1].startedSessionID != nil)
   }
 
   @Test(.dependencies) func spawnDelegateStampsTicketStartedAndForwardsUp() async {
