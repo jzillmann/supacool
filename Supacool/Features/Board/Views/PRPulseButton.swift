@@ -130,6 +130,8 @@ struct PRPulseButton: View {
         .accessibilityHidden(true)
       Text("\(totalCount)")
         .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
       if greenCount > 0 {
         countDot(greenCount, color: .green)
       }
@@ -149,6 +151,8 @@ struct PRPulseButton: View {
         .frame(width: 6, height: 6)
       Text("\(count)")
         .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
         .foregroundStyle(.secondary)
     }
   }

@@ -36,6 +36,8 @@ struct FootprintChip: View {
           .accessibilityLabel("Memory footprint")
         Text(displayTotal)
           .font(.caption.monospacedDigit())
+          .lineLimit(1)
+          .fixedSize()
       }
       .padding(.horizontal, 2)
       .foregroundStyle(tint)
