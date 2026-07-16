@@ -372,8 +372,49 @@ struct BoardFeature {
     var name: String
     var status: ServerLifecycleStatus
     var detail: String?
+    /// Everything the last status/start script said was listening, in the order
+    /// it printed them. Carried across busy transitions so the chip's link does
+    /// not blink out on every poll.
+    var endpoints: [ServerEndpoint] = []
 
     var id: String { workspacePath }
+
+    /// Endpoints worth offering a link to. A stopped or broken server has none,
+    /// whatever its last run happened to print.
+    var linkableEndpoints: [ServerEndpoint] {
+      switch status {
+      case .running, .starting, .checking, .stopping: endpoints
+      case .stopped, .unknown, .failed: []
+      }
+    }
+
+    var primaryEndpoint: ServerEndpoint? {
+      ServerEndpointScanner.primary(of: linkableEndpoints)
+    }
+
+    /// Shared by the card chip and the full-screen toolbar control, which
+    /// otherwise drift apart.
+    var tooltip: String {
+      var parts = ["\(name): \(status.label)"]
+      if let detail, !detail.isEmpty {
+        parts.append(detail)
+      }
+      let listening = linkableEndpoints.map(\.label)
+      if !listening.isEmpty {
+        parts.append("Listening on \(listening.joined(separator: ", "))")
+      }
+      switch status {
+      case .running:
+        parts.append("Click to stop.")
+      case .stopped:
+        parts.append("Click to start.")
+      case .unknown, .failed:
+        parts.append("Click to refresh status.")
+      case .checking, .starting, .stopping:
+        break
+      }
+      return parts.joined(separator: "\n")
+    }
   }
 
   /// One-shot summary shown after a prune attempt. Identifiable so we
@@ -490,7 +531,8 @@ struct BoardFeature {
       workspacePath: String,
       name: String,
       status: ServerLifecycleStatus,
-      detail: String?
+      detail: String?,
+      endpoints: [ServerEndpoint]
     )
     /// Internal removal path after dirty preflight has passed or the user
     /// confirmed the dirty-worktree warning.
@@ -1151,12 +1193,17 @@ struct BoardFeature {
         }
         return runServerLifecycleCommand(&state, session: session, kind: .stop)
 
-      case ._serverLifecycleResponse(let workspacePath, let name, let status, let detail):
+      case ._serverLifecycleResponse(let workspacePath, let name, let status, let detail, let endpoints):
         state.serverLifecycleByWorkspace[workspacePath] = ServerLifecycleViewState(
           workspacePath: workspacePath,
           name: name,
           status: status,
-          detail: detail
+          detail: detail,
+          // A stop script prints nothing about ports; keep the last known set so
+          // a later start/status has something to show while it runs.
+          endpoints: endpoints.isEmpty
+            ? state.serverLifecycleByWorkspace[workspacePath]?.endpoints ?? []
+            : endpoints
         )
         return .none
 
@@ -2638,7 +2685,8 @@ struct BoardFeature {
       workspacePath: configuration.workspacePath,
       name: configuration.name,
       status: .checking,
-      detail: nil
+      detail: nil,
+      endpoints: state.serverLifecycleByWorkspace[configuration.workspacePath]?.endpoints ?? []
     )
     return serverLifecycleScriptEffect(
       configuration: configuration,
@@ -2684,7 +2732,8 @@ struct BoardFeature {
       workspacePath: configuration.workspacePath,
       name: configuration.name,
       status: busyStatus,
-      detail: nil
+      detail: nil,
+      endpoints: state.serverLifecycleByWorkspace[configuration.workspacePath]?.endpoints ?? []
     )
     return serverLifecycleScriptEffect(
       configuration: configuration,
@@ -2722,7 +2771,8 @@ struct BoardFeature {
       workspacePath: configuration.workspacePath,
       name: configuration.name,
       status: .stopping,
-      detail: nil
+      detail: nil,
+      endpoints: state.serverLifecycleByWorkspace[configuration.workspacePath]?.endpoints ?? []
     )
     return serverLifecycleScriptEffect(
       configuration: configuration,
@@ -2749,7 +2799,8 @@ struct BoardFeature {
       workspacePath: configuration.workspacePath,
       name: configuration.name,
       status: .starting,
-      detail: nil
+      detail: nil,
+      endpoints: state.serverLifecycleByWorkspace[configuration.workspacePath]?.endpoints ?? []
     )
     return serverLifecycleScriptEffect(
       configuration: configuration,
@@ -2795,19 +2846,24 @@ struct BoardFeature {
                 status: .failed(
                   result.firstOutputLine ?? "\(kind.rawValue.capitalized) script failed"
                 ),
-                detail: result.firstOutputLine
+                detail: result.firstOutputLine,
+                endpoints: []
               )
             )
             return
           }
           status = successFallbackStatus ?? .unknown
         }
+        // A stop run reports teardown, not what is listening — scanning it would
+        // resurrect the ports it just took down.
+        let endpoints = kind == .stop ? [] : ServerEndpointScanner.scan(result.combinedOutput)
         await send(
           ._serverLifecycleResponse(
             workspacePath: configuration.workspacePath,
             name: configuration.name,
             status: status,
-            detail: result.firstOutputLine
+            detail: result.firstOutputLine,
+            endpoints: endpoints
           )
         )
       } catch {
@@ -2816,7 +2872,8 @@ struct BoardFeature {
             workspacePath: configuration.workspacePath,
             name: configuration.name,
             status: .failed(error.localizedDescription),
-            detail: nil
+            detail: nil,
+            endpoints: []
           )
         )
       }

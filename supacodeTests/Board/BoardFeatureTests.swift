@@ -719,7 +719,8 @@ struct BoardFeatureTests {
         workspacePath: worktreeID,
         name: "Dev server",
         status: .running,
-        detail: "listening"
+        detail: "listening",
+        endpoints: []
       )
     ) {
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
@@ -739,6 +740,125 @@ struct BoardFeatureTests {
         ),
       ]
     )
+  }
+
+  @Test(.dependencies) func serverLifecycleStatusSurfacesPortsFromScriptOutput() async {
+    let repositoryID = "/tmp/repo-lifecycle-ports-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API Server"
+    )
+    Self.configureServerLifecycle(repositoryID: repositoryID, statusScript: "status")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.serverLifecycleClient.run = { _, _, _, _ in
+        ServerLifecycleScriptResult(
+          exitCode: 0,
+          stdout: "backend :8686 running\nfrontend :3606 running",
+          stderr: ""
+        )
+      }
+    }
+
+    let expected = [ServerEndpoint(port: 8686), ServerEndpoint(port: 3606)]
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .checking,
+        detail: nil
+      )
+    }
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "backend :8686 running",
+        endpoints: expected
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .running,
+        detail: "backend :8686 running",
+        endpoints: expected
+      )
+    }
+
+    let lifecycle = store.state.serverLifecycleByWorkspace[worktreeID]
+    #expect(lifecycle?.primaryEndpoint?.port == 3606)
+    #expect(lifecycle?.tooltip.contains("Listening on :8686, :3606") == true)
+  }
+
+  // A stop script talks about teardown, so scanning it would resurrect the very
+  // ports it just took down. The set is kept (for a later start) but a stopped
+  // server offers no links.
+  @Test(.dependencies) func serverLifecycleStopKeepsPortsButOffersNoLinks() async {
+    let repositoryID = "/tmp/repo-lifecycle-stop-ports-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API Server"
+    )
+    Self.configureServerLifecycle(repositoryID: repositoryID, stopScript: "stop")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let known = [ServerEndpoint(port: 3606)]
+    state.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+      workspacePath: worktreeID,
+      name: "Dev server",
+      status: .running,
+      detail: nil,
+      endpoints: known
+    )
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.serverLifecycleClient.run = { _, _, _, _ in
+        ServerLifecycleScriptResult(exitCode: 0, stdout: "stopping :3606", stderr: "")
+      }
+    }
+
+    await store.send(.serverLifecycleStopTapped(sessionID: session.id)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopping,
+        detail: nil,
+        endpoints: known
+      )
+    }
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopping :3606",
+        endpoints: []
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "stopping :3606",
+        endpoints: known
+      )
+    }
+
+    let lifecycle = store.state.serverLifecycleByWorkspace[worktreeID]
+    #expect(lifecycle?.linkableEndpoints.isEmpty == true)
+    #expect(lifecycle?.primaryEndpoint == nil)
   }
 
   @Test(.dependencies) func serverLifecycleStartTappedRunsStartScriptWithManualEvent() async {
@@ -781,7 +901,8 @@ struct BoardFeatureTests {
         workspacePath: worktreeID,
         name: "Dev server",
         status: .running,
-        detail: "started"
+        detail: "started",
+        endpoints: []
       )
     ) {
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
@@ -870,7 +991,8 @@ struct BoardFeatureTests {
         workspacePath: worktreeID,
         name: "Dev server",
         status: .stopped,
-        detail: "stopped"
+        detail: "stopped",
+        endpoints: []
       )
     ) {
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
@@ -1014,7 +1136,8 @@ struct BoardFeatureTests {
         workspacePath: worktreeID,
         name: "Dev server",
         status: .stopped,
-        detail: "stopped"
+        detail: "stopped",
+        endpoints: []
       )
     ) {
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
@@ -1087,7 +1210,8 @@ struct BoardFeatureTests {
         workspacePath: worktreeID,
         name: "Dev server",
         status: .running,
-        detail: "started"
+        detail: "started",
+        endpoints: []
       )
     ) {
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(

@@ -24,11 +24,31 @@ nonisolated struct ServerLifecycleScriptResult: Equatable, Sendable {
   let stdout: String
   let stderr: String
 
+  /// Both streams together, in the order a human reading the terminal would
+  /// see them. The scanner wants the whole thing, not just the first line —
+  /// a `dev status` prints its ports well below its header.
+  var combinedOutput: String {
+    [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+  }
+
   var firstOutputLine: String? {
-    (stdout + "\n" + stderr)
+    combinedOutput
       .split(whereSeparator: \.isNewline)
       .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
       .first { !$0.isEmpty }
+  }
+}
+
+// `nonisolated` so the lifecycle script runner, which is off the main actor,
+// can strip without awaiting — global `@MainActor` isolation would otherwise
+// claim this extension.
+nonisolated extension String {
+  /// Lifecycle scripts run under a login shell, so tools that colourise their
+  /// output do so here too — the codes then travel intact into any UI that
+  /// shows the text. (`dev status` bolds its header, which surfaced in the
+  /// board chip's tooltip as a literal `[1mService Status[0m`.)
+  var strippingANSIEscapeCodes: String {
+    replacing(/\u{1B}\[[0-9;?]*[a-zA-Z]/, with: "")
   }
 }
 
@@ -127,7 +147,7 @@ nonisolated private func runServerLifecycleScript(
   let stderr = String(data: try await stderrData, encoding: .utf8) ?? ""
   return ServerLifecycleScriptResult(
     exitCode: terminationStatus.value,
-    stdout: stdout.trimmingCharacters(in: .whitespacesAndNewlines),
-    stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+    stdout: stdout.strippingANSIEscapeCodes.trimmingCharacters(in: .whitespacesAndNewlines),
+    stderr: stderr.strippingANSIEscapeCodes.trimmingCharacters(in: .whitespacesAndNewlines)
   )
 }

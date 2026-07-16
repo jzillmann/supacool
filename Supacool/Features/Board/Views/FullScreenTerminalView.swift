@@ -311,6 +311,13 @@ struct FullScreenTerminalView: View {
   }
 
   private func serverLifecycleControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
+    HStack(spacing: 4) {
+      serverLifecycleStatusControl(lifecycle)
+      ServerEndpointLinkChip(endpoints: lifecycle.linkableEndpoints)
+    }
+  }
+
+  private func serverLifecycleStatusControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
     Button {
       switch lifecycle.status {
       case .running:
@@ -342,26 +349,8 @@ struct FullScreenTerminalView: View {
     }
     .buttonStyle(.plain)
     .disabled(lifecycle.status.isBusy)
-    .help(serverLifecycleHelp(lifecycle))
+    .help(lifecycle.tooltip)
     .fixedSize()
-  }
-
-  private func serverLifecycleHelp(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> String {
-    var parts = ["\(lifecycle.name): \(lifecycle.status.label)"]
-    if let detail = lifecycle.detail, !detail.isEmpty {
-      parts.append(detail)
-    }
-    switch lifecycle.status {
-    case .running:
-      parts.append("Click to stop.")
-    case .stopped:
-      parts.append("Click to start.")
-    case .unknown, .failed:
-      parts.append("Click to refresh status.")
-    case .checking, .starting, .stopping:
-      break
-    }
-    return parts.joined(separator: "\n")
   }
 
   private func serverLifecycleColor(_ status: BoardFeature.ServerLifecycleStatus) -> Color {

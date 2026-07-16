@@ -143,6 +143,44 @@ Never read `process.terminationStatus` from the main flow after the wait. Audite
 `ServerLifecycleClient` and `ShellClient` are fixed; `BackgroundInferenceClient` already
 read it inside its handler. See `ServerLifecycleClientTests` for the regression coverage.
 
+## 9. `Regex` is not Sendable — no `static let` patterns
+
+**Symptom**:
+```
+static property 'urlPattern' is not concurrency-safe because non-'Sendable'
+type 'Regex<Substring>' may have shared mutable state
+```
+
+The obvious way to hoist a regex literal out of a function is a `static let`, and under
+Swift 6 that is an error anywhere: `Regex` carries a mutable engine and is not `Sendable`.
+
+**Fix**: make it a computed `static var`, which builds a fresh `Regex` per access and keeps
+the name and the documentation:
+
+```swift
+private static var barePortPattern: Regex<(Substring, Substring)> { /:(\d{2,5})\b/ }
+```
+
+The construction cost is trivial next to whatever produced the text you're scanning. Live
+example: `Supacool/Domain/ServerEndpoint.swift`.
+
+## 10. Global `@MainActor` also claims your `extension String`
+
+**Symptom**: a plain-looking String helper is suddenly `async` at the call site —
+`expression is 'async' but is not marked with 'await'` — from a `nonisolated` context.
+
+Global `@MainActor` isolation applies to extensions on stdlib types too, so
+`extension String { var foo: String }` is MainActor-isolated and unreachable from an
+off-actor client without an `await`. Mark the **extension** `nonisolated`:
+
+```swift
+nonisolated extension String {
+  var strippingANSIEscapeCodes: String { ... }
+}
+```
+
+Live example: `Supacool/Clients/ServerLifecycleClient.swift`.
+
 ---
 
 If you hit an isolation error not listed here, the first debugging moves that usually work:

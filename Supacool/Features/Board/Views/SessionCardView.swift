@@ -475,6 +475,13 @@ struct SessionCardView: View {
   }
 
   private func serverLifecycleChip(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
+    HStack(spacing: 4) {
+      serverLifecycleStatusChip(lifecycle)
+      ServerEndpointLinkChip(endpoints: lifecycle.linkableEndpoints)
+    }
+  }
+
+  private func serverLifecycleStatusChip(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
     Button {
       switch lifecycle.status {
       case .running:
@@ -503,28 +510,10 @@ struct SessionCardView: View {
     }
     .buttonStyle(.plain)
     .disabled(lifecycle.status.isBusy)
-    .help(serverLifecycleHelp(lifecycle))
+    .help(lifecycle.tooltip)
     // Truncatable for the same reason as the status/reason chips: a wide label
     // must not push the card past its column and collapse the neighbor gap.
     .fixedSize(horizontal: false, vertical: true)
-  }
-
-  private func serverLifecycleHelp(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> String {
-    var parts = ["\(lifecycle.name): \(lifecycle.status.label)"]
-    if let detail = lifecycle.detail, !detail.isEmpty {
-      parts.append(detail)
-    }
-    switch lifecycle.status {
-    case .running:
-      parts.append("Click to stop.")
-    case .stopped:
-      parts.append("Click to start.")
-    case .unknown, .failed:
-      parts.append("Click to refresh status.")
-    case .checking, .starting, .stopping:
-      break
-    }
-    return parts.joined(separator: "\n")
   }
 
   private func serverLifecycleColor(_ status: BoardFeature.ServerLifecycleStatus) -> Color {
@@ -1423,6 +1412,20 @@ private struct ReferenceStackChip: View {
       session: session,
       repositoryName: "my-repo",
       status: .waitingOnMe,
+      // A fleet of ports: the scanner picks the web-like one for the link and
+      // parks the rest in the chip's context menu.
+      serverLifecycle: BoardFeature.ServerLifecycleViewState(
+        workspacePath: "/tmp/repo",
+        name: "Dev server",
+        status: .running,
+        detail: "Service Status",
+        endpoints: [
+          ServerEndpoint(port: 8688),
+          ServerEndpoint(port: 8686),
+          ServerEndpoint(port: 3606),
+          ServerEndpoint(port: 5433),
+        ]
+      ),
       onTap: {},
       onRemove: {},
       onTogglePriority: {}
@@ -1431,6 +1434,14 @@ private struct ReferenceStackChip: View {
       session: session,
       repositoryName: "my-repo",
       status: .detached,
+      // Stopped: the ports are remembered but must not be offered as links.
+      serverLifecycle: BoardFeature.ServerLifecycleViewState(
+        workspacePath: "/tmp/repo",
+        name: "Dev server",
+        status: .stopped,
+        detail: nil,
+        endpoints: [ServerEndpoint(port: 3606)]
+      ),
       onTap: {},
       onRemove: {},
       onTogglePriority: {}

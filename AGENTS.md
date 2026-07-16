@@ -30,10 +30,16 @@ make run-app                         # Build + launch with log stream
 make test                            # Run full test suite
 
 # Only the Supacool tests (faster iteration)
+# Keep -derivedDataPath AND PRODUCT_BUNDLE_IDENTIFIER: together they stop the test
+# host colliding with your installed/running Supacool. Drop either one and the run
+# dies with "Could not launch supacoolTests … LaunchServices launcher returned an
+# error" — which reads like a signing problem and is not. Same pair `make test` uses.
 xcodebuild test -project supacool.xcodeproj -scheme supacool \
-  -destination "platform=macOS" \
+  -destination "platform=macOS" -derivedDataPath build/dd-tests \
+  PRODUCT_BUNDLE_IDENTIFIER=io.morethan.supacool.tests \
   -only-testing:supacoolTests/BoardFeatureTests \
   -only-testing:supacoolTests/NewTerminalFeatureTests \
+  -parallel-testing-enabled NO \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
   -skipMacroValidation
 ```

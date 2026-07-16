@@ -56,6 +56,36 @@ struct ServerLifecycleClientTests {
     #expect(result.stdout.contains("start"))
   }
 
+  // Scripts run under a login shell, so a colourising tool (`dev status` bolds
+  // its header) used to land its escape codes verbatim in the board chip's
+  // tooltip as `[1mService Status[0m`.
+  @Test func runStripsANSIEscapeCodesFromBothStreams() async throws {
+    let dir = try makeTemporaryDirectory("ansi")
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    let result = try await ServerLifecycleClient.liveValue.run(
+      makeWorktree(workingDirectory: dir),
+      .status,
+      "printf '\\033[1mService Status\\033[0m\\n'; printf '\\033[31mred\\033[0m\\n' 1>&2",
+      ServerLifecycleScriptContext(event: "test")
+    )
+
+    #expect(result.stdout == "Service Status")
+    #expect(result.stderr == "red")
+    #expect(result.firstOutputLine == "Service Status")
+  }
+
+  @Test func combinedOutputJoinsBothStreamsAndSkipsEmptyOnes() {
+    let both = ServerLifecycleScriptResult(exitCode: 0, stdout: "out", stderr: "err")
+    #expect(both.combinedOutput == "out\nerr")
+
+    let stdoutOnly = ServerLifecycleScriptResult(exitCode: 0, stdout: "out", stderr: "")
+    #expect(stdoutOnly.combinedOutput == "out")
+
+    let neither = ServerLifecycleScriptResult(exitCode: 0, stdout: "", stderr: "")
+    #expect(neither.combinedOutput == "")
+  }
+
   @Test func runShortCircuitsEmptyScript() async throws {
     let dir = try makeTemporaryDirectory("empty")
     defer { try? FileManager.default.removeItem(at: dir) }
