@@ -249,6 +249,7 @@ struct FullScreenTerminalView: View {
 
       repoChip
       pullRequestStatus
+      reasonChip
       referenceChips
       Text(session.displayName)
         .font(.headline)
@@ -423,6 +424,18 @@ struct FullScreenTerminalView: View {
       PullRequestStatusButton(model: model)
         .font(.caption)
         .padding(.leading, 2)
+    }
+  }
+
+  /// Mirrors the board card's PR ball-court annotation ("Conflicts", "CI
+  /// failed", …) off the same `prReferenceSnapshots` source, so a conflict
+  /// visible on the card doesn't vanish once the session is opened full-screen.
+  /// Unlike the card there's no status gating — you're looking at this one
+  /// session directly, so any ball-in-your-court reason is always worth showing.
+  @ViewBuilder
+  private var reasonChip: some View {
+    if let reason = prReferenceSnapshots.actionableReason(for: session) {
+      PRReasonChip(ball: reason)
     }
   }
 

@@ -88,7 +88,7 @@ struct SessionCardView: View {
           serverLifecycleChip(serverLifecycle)
         }
         if let prReason, showsReasonChip {
-          reasonChip(prReason)
+          PRReasonChip(ball: prReason)
         }
         statusChip
       }
@@ -472,37 +472,6 @@ struct SessionCardView: View {
     case .waitingOnMe, .awaitingInput, .waitingForChecks, .detached, .interrupted, .disconnected:
       true
     }
-  }
-
-  private func reasonColor(_ severity: PRBallState.Severity) -> Color {
-    switch severity {
-    case .attention: .red
-    case .info: .secondary
-    case .positive: .green
-    }
-  }
-
-  private func reasonChip(_ ball: PRBallState) -> some View {
-    HStack(spacing: 3) {
-      Image(systemName: ball.systemImage)
-        .font(.caption2)
-        .accessibilityLabel(ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status")
-      if let label = ball.reasonLabel {
-        Text(label)
-          .font(.caption2.weight(.semibold))
-          .lineLimit(1)
-      }
-    }
-    .foregroundStyle(reasonColor(ball.severity))
-    .padding(.horizontal, 6)
-    .padding(.vertical, 2)
-    .background(reasonColor(ball.severity).opacity(0.12))
-    .clipShape(Capsule())
-    // Truncatable so a long reason ("Ready to merge") can't push the card past
-    // its 280pt column and collapse the gap to its neighbor. Full text stays
-    // on hover via the help below.
-    .fixedSize(horizontal: false, vertical: true)
-    .help(ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status")
   }
 
   private func serverLifecycleChip(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
