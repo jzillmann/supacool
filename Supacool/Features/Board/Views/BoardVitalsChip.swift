@@ -53,6 +53,8 @@ struct BoardVitalsChip: View {
         .accessibilityHidden(true)
       Text("\(count)")
         .font(.caption.monospacedDigit())
+        .lineLimit(1)
+        .fixedSize()
     }
     .foregroundStyle(count == 0 ? AnyShapeStyle(.tertiary) : AnyShapeStyle(color))
   }
