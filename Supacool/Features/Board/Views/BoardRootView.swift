@@ -261,6 +261,7 @@ struct BoardRootView: View {
     ) {
       TrashSheet(store: store, repositories: repositories)
     }
+    .modifier(ScriptTerminalSheetModifier(store: store, terminalManager: terminalManager))
   }
 
   @ViewBuilder
@@ -1174,6 +1175,29 @@ private struct DirtySessionRemovalConfirmationModifier: ViewModifier {
 /// ViewModifier. The root view's modifier chain was long enough to push
 /// the Swift type-checker past its "reasonable time" budget; extracting
 /// this branch keeps body compilable without changing behaviour.
+/// Presents a blocking script's terminal tab over the board. Extracted
+/// into a ViewModifier for the same reason as the alert modifiers above —
+/// the body's chain is already at the type-checker's limit.
+private struct ScriptTerminalSheetModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+  let terminalManager: WorktreeTerminalManager
+
+  func body(content: Content) -> some View {
+    content.sheet(
+      item: Binding(
+        get: { store.scriptTerminal },
+        set: { if $0 == nil { store.send(.dismissScriptTerminal) } }
+      )
+    ) { presentation in
+      ScriptTerminalSheet(
+        presentation: presentation,
+        terminalManager: terminalManager,
+        onDismiss: { store.send(.dismissScriptTerminal) }
+      )
+    }
+  }
+}
+
 private struct PruneAlertModifier: ViewModifier {
   @Bindable var store: StoreOf<BoardFeature>
 

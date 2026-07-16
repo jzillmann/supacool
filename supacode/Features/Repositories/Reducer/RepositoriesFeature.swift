@@ -79,6 +79,16 @@ struct RepositoriesFeature {
     var runScriptWorktreeIDs: Set<Worktree.ID> = []
     var archivingWorktreeIDs: Set<Worktree.ID> = []
     var deleteScriptWorktreeIDs: Set<Worktree.ID> = []
+    /// Owning repository for each worktree with an archive/delete script
+    /// in flight, recorded when the script is dispatched.
+    ///
+    /// Required because `loadRepositoriesData` keeps only the *main*
+    /// worktree in `repositories`, so `repositoryID(containing:)` never
+    /// resolves a session-backed worktree. Re-deriving it after the
+    /// script returned silently skipped the delete and leaked the
+    /// worktree on disk. The dispatch sites are handed the repository
+    /// id, so carry it across the round trip instead.
+    var blockingScriptRepositoryByWorktreeID: [Worktree.ID: Repository.ID] = [:]
     var deletingWorktreeIDs: Set<Worktree.ID> = []
     var removingRepositoryIDs: Set<Repository.ID> = []
     var pinnedWorktreeIDs: [Worktree.ID] = []
@@ -290,7 +300,12 @@ struct RepositoriesFeature {
     case confirmDeleteWorktree(Worktree.ID, Repository.ID)
     case confirmDeleteWorktrees([DeleteWorktreeTarget])
     case confirmRemoveRepository(Repository.ID)
-    case viewTerminalTab(Worktree.ID, tabId: TerminalTabID)
+    case viewTerminalTab(
+      Worktree.ID,
+      repositoryID: Repository.ID?,
+      kind: BlockingScriptKind,
+      tabId: TerminalTabID
+    )
   }
 
   enum PullRequestAction: Equatable {
@@ -311,7 +326,12 @@ struct RepositoriesFeature {
     case openRepositorySettings(Repository.ID)
     case worktreeCreated(Worktree)
     case runBlockingScript(Worktree, repositoryID: Repository.ID, kind: BlockingScriptKind, script: String)
-    case selectTerminalTab(Worktree.ID, tabId: TerminalTabID)
+    case selectTerminalTab(
+      Worktree.ID,
+      repositoryID: Repository.ID?,
+      kind: BlockingScriptKind,
+      tabId: TerminalTabID
+    )
     /// `git worktree remove` failed for this worktree. Emitted from
     /// `deleteWorktreeFailed` so AppFeature/Supacool can surface the
     /// error (the legacy alert path is invisible on the Matrix Board).
@@ -1515,7 +1535,12 @@ struct RepositoriesFeature {
         state.runScriptWorktreeIDs.remove(worktreeID)
         guard let exitCode, exitCode != 0 else { return .none }
         state.alert = blockingScriptFailureAlert(
-          kind: .run, exitCode: exitCode, worktreeID: worktreeID, tabId: tabId, state: state
+          kind: .run,
+          exitCode: exitCode,
+          worktreeID: worktreeID,
+          repositoryID: nil,
+          tabId: tabId,
+          state: state
         )
         return .none
 
@@ -1537,6 +1562,7 @@ struct RepositoriesFeature {
           return .send(.archiveWorktreeApply(worktreeID, repositoryID))
         }
         state.archivingWorktreeIDs.insert(worktreeID)
+        state.blockingScriptRepositoryByWorktreeID[worktreeID] = repositoryID
         return .send(
           .delegate(.runBlockingScript(worktree, repositoryID: repositoryID, kind: .archive, script: script)))
 
@@ -1546,9 +1572,10 @@ struct RepositoriesFeature {
           return .none
         }
         state.archivingWorktreeIDs.remove(worktreeID)
+        let archiveRepositoryID = state.blockingScriptRepositoryByWorktreeID.removeValue(forKey: worktreeID)
         switch exitCode {
         case 0:
-          guard let repositoryID = state.repositoryID(containing: worktreeID) else {
+          guard let repositoryID = archiveRepositoryID ?? state.repositoryID(containing: worktreeID) else {
             repositoriesLogger.warning(
               "Archive script succeeded but repository not found for worktree \(worktreeID)"
             )
@@ -1565,7 +1592,12 @@ struct RepositoriesFeature {
           return .none
         case let code?:
           state.alert = blockingScriptFailureAlert(
-            kind: .archive, exitCode: code, worktreeID: worktreeID, tabId: tabId, state: state
+            kind: .archive,
+            exitCode: code,
+            worktreeID: worktreeID,
+            repositoryID: archiveRepositoryID,
+            tabId: tabId,
+            state: state
           )
           return .none
         }
@@ -1807,6 +1839,7 @@ struct RepositoriesFeature {
           return .send(.deleteWorktreeApply(worktreeID, repositoryID))
         }
         state.deleteScriptWorktreeIDs.insert(worktree.id)
+        state.blockingScriptRepositoryByWorktreeID[worktree.id] = repositoryID
         return .send(
           .delegate(.runBlockingScript(worktree, repositoryID: repositoryID, kind: .delete, script: script)))
 
@@ -1816,9 +1849,10 @@ struct RepositoriesFeature {
           return .none
         }
         state.deleteScriptWorktreeIDs.remove(worktreeID)
+        let deleteRepositoryID = state.blockingScriptRepositoryByWorktreeID.removeValue(forKey: worktreeID)
         switch exitCode {
         case 0:
-          guard let repositoryID = state.repositoryID(containing: worktreeID) else {
+          guard let repositoryID = deleteRepositoryID ?? state.repositoryID(containing: worktreeID) else {
             repositoriesLogger.warning(
               "Delete script succeeded but repository not found for worktree \(worktreeID)"
             )
@@ -1835,7 +1869,12 @@ struct RepositoriesFeature {
           return .none
         case let code?:
           state.alert = blockingScriptFailureAlert(
-            kind: .delete, exitCode: code, worktreeID: worktreeID, tabId: tabId, state: state
+            kind: .delete,
+            exitCode: code,
+            worktreeID: worktreeID,
+            repositoryID: deleteRepositoryID,
+            tabId: tabId,
+            state: state
           )
           return .none
         }
@@ -1913,6 +1952,7 @@ struct RepositoriesFeature {
           state.deletingWorktreeIDs.remove(worktreeID)
           state.deleteScriptWorktreeIDs.remove(worktreeID)
           state.archivingWorktreeIDs.remove(worktreeID)
+          state.blockingScriptRepositoryByWorktreeID.removeValue(forKey: worktreeID)
           state.pendingWorktrees.removeAll { $0.id == worktreeID }
           state.pendingSetupScriptWorktreeIDs.remove(worktreeID)
           state.pendingTerminalFocusWorktreeIDs.remove(worktreeID)
@@ -2882,10 +2922,21 @@ struct RepositoriesFeature {
       case .openRepositorySettings(let repositoryID):
         return .send(.delegate(.openRepositorySettings(repositoryID)))
 
-      case .alert(.presented(.viewTerminalTab(let worktreeID, let tabId))):
+      case .alert(.presented(.viewTerminalTab(let worktreeID, let repositoryID, let kind, let tabId))):
+        // `selectWorktree` only drives the sidebar, which Supacool doesn't
+        // render — the board needs an explicit route to the script's tab.
         return .merge(
           .send(.selectWorktree(worktreeID, focusTerminal: true)),
-          .send(.delegate(.selectTerminalTab(worktreeID, tabId: tabId)))
+          .send(
+            .delegate(
+              .selectTerminalTab(
+                worktreeID,
+                repositoryID: repositoryID ?? state.repositoryID(containing: worktreeID),
+                kind: kind,
+                tabId: tabId
+              )
+            )
+          )
         )
 
       case .alert(.dismiss):
@@ -3159,22 +3210,34 @@ struct RepositoriesFeature {
     kind: BlockingScriptKind,
     exitCode: Int,
     worktreeID: Worktree.ID,
+    repositoryID: Repository.ID?,
     tabId: TerminalTabID?,
     state: State
   ) -> AlertState<Alert> {
-    let worktreeName = state.worktree(for: worktreeID)?.name
-    let repoName = state.repositoryID(containing: worktreeID)
-      .flatMap { state.repositories[id: $0]?.name }
-    let parts = [repoName, worktreeName].compactMap(\.self)
-    if parts.isEmpty {
-      repositoriesLogger.debug("blockingScriptFailureAlert: worktree \(worktreeID) not found in state")
-    }
-    let subtitle = parts.isEmpty ? "Unknown worktree" : parts.joined(separator: " — ")
+    // Session-backed worktrees are absent from `repositories` by design
+    // (`loadRepositoriesData` keeps only the main worktree), so neither
+    // lookup below can be trusted. Fall back to the caller-supplied
+    // repository id and to the worktree's own directory name — the alert
+    // used to render a bare "Unknown worktree" for every board session.
+    let resolvedRepositoryID = repositoryID ?? state.repositoryID(containing: worktreeID)
+    let repoName = resolvedRepositoryID.flatMap { state.repositories[id: $0]?.name }
+    let worktreeName =
+      state.worktree(for: worktreeID)?.name
+      ?? URL(fileURLWithPath: worktreeID).standardizedFileURL.lastPathComponent
+    let parts = [repoName, worktreeName].compactMap(\.self).filter { !$0.isEmpty }
+    let subtitle = parts.isEmpty ? worktreeID : parts.joined(separator: " — ")
     return AlertState {
       TextState("\(kind.tabTitle) failed")
     } actions: {
       if let tabId {
-        ButtonState(action: .viewTerminalTab(worktreeID, tabId: tabId)) {
+        ButtonState(
+          action: .viewTerminalTab(
+            worktreeID,
+            repositoryID: resolvedRepositoryID,
+            kind: kind,
+            tabId: tabId
+          )
+        ) {
           TextState("View Terminal")
         }
       }
@@ -3833,6 +3896,7 @@ private func cleanupWorktreeState(
   state.pendingTerminalFocusWorktreeIDs.remove(worktreeID)
   state.archivingWorktreeIDs.remove(worktreeID)
   state.deleteScriptWorktreeIDs.remove(worktreeID)
+  state.blockingScriptRepositoryByWorktreeID.removeValue(forKey: worktreeID)
   state.deletingWorktreeIDs.remove(worktreeID)
   state.worktreeInfoByID.removeValue(forKey: worktreeID)
   let didUpdatePinned = state.pinnedWorktreeIDs.contains(worktreeID)

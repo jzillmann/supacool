@@ -271,11 +271,33 @@ struct AppFeature {
           await terminalClient.send(.runBlockingScript(worktree, kind: kind, script: script))
         }
 
-      case .repositories(.delegate(.selectTerminalTab(let worktreeID, let tabId))):
-        guard let worktree = state.repositories.worktree(for: worktreeID) else { return .none }
-        return .run { _ in
-          await terminalClient.send(.selectTab(worktree, tabID: tabId))
-        }
+      case .repositories(.delegate(.selectTerminalTab(let worktreeID, let repositoryID, let kind, let tabId))):
+        // Never gate on `worktree(for:)` — Supacool's repository load keeps
+        // only the main worktree in state, so that lookup misses for every
+        // board session and this used to silently return `.none` (the
+        // "View Terminal" button did nothing). A shim carries everything
+        // both the terminal manager and the board need.
+        let scriptWorktree = resolveBoardSessionWorktree(
+          repositoryID: repositoryID ?? worktreeID,
+          worktreeID: worktreeID,
+          state: state.repositories
+        )
+        return .merge(
+          .send(
+            .board(
+              .scriptTerminalRequested(
+                ScriptTerminalPresentation(
+                  worktree: scriptWorktree,
+                  tabID: tabId,
+                  title: kind.tabTitle
+                )
+              )
+            )
+          ),
+          .run { [scriptWorktree] _ in
+            await terminalClient.send(.selectTab(scriptWorktree, tabID: tabId))
+          }
+        )
 
       case .repositories(.delegate(.worktreeDeleteFailed(let worktreeID, let message))):
         // Surface the failure to the user — RepositoriesFeature also

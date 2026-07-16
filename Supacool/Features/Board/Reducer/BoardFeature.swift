@@ -51,6 +51,11 @@ struct BoardFeature {
     /// Whether the trash sheet is open (browse + restore + permanent delete).
     var isTrashSheetPresented: Bool = false
 
+    /// When non-nil, a blocking script's terminal tab is shown over the
+    /// board so the user can read why the script failed. See
+    /// `ScriptTerminalPresentation`.
+    var scriptTerminal: ScriptTerminalPresentation?
+
     /// When non-nil, the root view shows this session's terminal full-screen
     /// instead of the board. Not persisted — fresh launches always land on
     /// the board.
@@ -493,6 +498,10 @@ struct BoardFeature {
     /// Browse / manage trashed sessions. Opens the trash sheet.
     case openTrashSheet
     case dismissTrashSheet
+    /// Show a blocking script's terminal tab over the board (from the
+    /// script-failed alert's "View Terminal").
+    case scriptTerminalRequested(ScriptTerminalPresentation)
+    case dismissScriptTerminal
     /// User picked Restore on a trashed entry. Re-adds the AgentSession
     /// to `state.sessions` (no live PTY — user picks Rerun/Resume to
     /// reanimate) and removes it from trash. `repositories` lets restore
@@ -1161,6 +1170,14 @@ struct BoardFeature {
       case .dismissTrashSheet:
         state.isTrashSheetPresented = false
         state.worktreeJanitor = nil
+        return .none
+
+      case .scriptTerminalRequested(let presentation):
+        state.scriptTerminal = presentation
+        return .none
+
+      case .dismissScriptTerminal:
+        state.scriptTerminal = nil
         return .none
 
       case .restoreFromTrash(let id, let repositories):

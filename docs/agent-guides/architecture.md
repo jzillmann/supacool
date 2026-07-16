@@ -49,6 +49,45 @@ SessionTerminal (Codable, embedded in AgentSession.terminals)
 
 `AgentSession` exposes read-only forwarders (`session.agent`, `session.initialPrompt`, `session.lastKnownBusy`, `session.lastActivityAt`, …) that delegate to the primary terminal so the broad read surface stays terse. Writes must go through `session.updatePrimaryTerminal { … }` or `session.updateTerminal(id:) { … }` — there are no setters on the forwarders. Status (in-progress / waiting on me) is derived from the PRIMARY terminal only; shells in the composition appear as a `+N sh` pill on the card but never promote status.
 
+## Only the main worktree is in state
+
+`RepositoriesFeature.State.repositories[].worktrees` holds **only the repo's
+main worktree**, never the session-backed ones. `loadRepositoriesData` filters
+`wt ls` down to the entry whose `workingDirectory == root` (a deliberate
+Supacool change — the board, not the sidebar, is the worktree list). For a repo
+with 240 worktrees, exactly 1 reaches state.
+
+Consequences, and they are absolute — not races:
+
+- `state.worktree(for: sessionWorktreeID)` → **always nil**
+- `state.repositoryID(containing: sessionWorktreeID)` → **always nil**
+
+Any inherited supacode code that re-derives worktree or repository identity from
+that list is therefore dead on arrival for every board session. This is a
+recurring trap: the delete-script round trip re-derived the owning repository
+after the script exited, hit nil, and **silently skipped the deletion** — the
+card disappeared while the checkout stayed on disk (~49 GB leaked before it was
+caught in July 2026). It only ever fired for repos with a `deleteScript`
+configured, because the empty-script path passes the id straight through.
+
+The rules:
+
+1. **Never gate behaviour on `worktree(for:)` / `repositoryID(containing:)`** for
+   a session-backed worktree. Use `Self.shimWorktree` /
+   `AppFeature.resolveBoardSessionWorktree` — a shim carries everything the
+   terminal manager (which keys by `worktree.id`) and the board need.
+2. **Carry the `Repository.ID` you were handed**; don't re-derive it later. The
+   dispatch sites already receive it — see `blockingScriptRepositoryByWorktreeID`.
+3. **Tests must model this.** A test whose fixture repository contains the
+   feature worktree is testing a shape the app never produces, and will pass
+   while production silently breaks.
+
+Also note `Worktree.ID` is filesystem-state-dependent:
+`URL(fileURLWithPath:).standardizedFileURL.path(percentEncoded: false)` appends a
+trailing slash only when the directory **exists**. The same worktree therefore
+stringifies differently before and after its directory is removed — another
+reason not to key decisions off freshly re-derived ids.
+
 ## State hierarchy (TCA)
 
 ```

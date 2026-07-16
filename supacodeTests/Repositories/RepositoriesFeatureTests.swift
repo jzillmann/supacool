@@ -1724,6 +1724,7 @@ struct RepositoriesFeatureTests {
 
     await store.send(.archiveWorktreeConfirmed(featureWorktree.id, repository.id)) {
       $0.archivingWorktreeIDs = [featureWorktree.id]
+      $0.blockingScriptRepositoryByWorktreeID = [featureWorktree.id: repository.id]
     }
     await store.receive(\.delegate.runBlockingScript)
   }
@@ -1802,6 +1803,7 @@ struct RepositoriesFeatureTests {
         kind: .run,
         exitMessage: "Script failed (exit code 1).",
         worktreeID: worktree.id,
+        repositoryID: repository.id,
         tabId: tabId,
         repoName: repository.name,
         worktreeName: "feature"
@@ -1809,7 +1811,13 @@ struct RepositoriesFeatureTests {
     }
 
     // Tap "View Terminal".
-    await store.send(.alert(.presented(.viewTerminalTab(worktree.id, tabId: tabId))))
+    await store.send(
+      .alert(
+        .presented(
+          .viewTerminalTab(worktree.id, repositoryID: repository.id, kind: .run, tabId: tabId)
+        )
+      )
+    )
     await store.receive(\.selectWorktree)
     await store.receive(\.delegate.selectTerminalTab)
     await store.receive(\.delegate.selectedWorktreeChanged)
@@ -1837,6 +1845,7 @@ struct RepositoriesFeatureTests {
         kind: .archive,
         exitMessage: "Script failed (exit code 1).",
         worktreeID: featureWorktree.id,
+        repositoryID: repository.id,
         tabId: tabId,
         repoName: "repo",
         worktreeName: "feature"
@@ -1866,6 +1875,7 @@ struct RepositoriesFeatureTests {
         kind: .delete,
         exitMessage: "Script failed (exit code 1).",
         worktreeID: featureWorktree.id,
+        repositoryID: repository.id,
         tabId: tabId,
         repoName: "repo",
         worktreeName: "feature"
@@ -2200,6 +2210,7 @@ struct RepositoriesFeatureTests {
 
     await store.send(.deleteWorktreeConfirmed(featureWorktree.id, repository.id)) {
       $0.deleteScriptWorktreeIDs = [featureWorktree.id]
+      $0.blockingScriptRepositoryByWorktreeID = [featureWorktree.id: repository.id]
     }
     await store.receive(\.delegate.runBlockingScript)
   }
@@ -2240,6 +2251,93 @@ struct RepositoriesFeatureTests {
     await store.receive(\.repositoriesLoaded) {
       $0.isInitialLoadComplete = true
     }
+  }
+
+  /// Supacool's `loadRepositoriesData` keeps only the *main* worktree in
+  /// `repositories`, so a board session's worktree is never in that list.
+  /// The delete-script round trip used to re-derive the repository from it
+  /// and gave up when the lookup missed: the script ran, the card was
+  /// gone, but `deleteWorktreeApply` never fired and the worktree stayed
+  /// on disk forever. The repository id must survive the round trip.
+  @Test(.dependencies) func deleteScriptCompletedAppliesWhenWorktreeIsAbsentFromRepositoriesList() async {
+    let repoRoot = "/tmp/repo"
+    let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
+    let sessionWorktree = makeWorktree(
+      id: "/tmp/elsewhere/session-worktree",
+      name: "session-worktree",
+      repoRoot: repoRoot
+    )
+    // Only the main worktree — exactly what the real loader produces.
+    let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree])
+    var state = makeState(repositories: [repository])
+    state.deleteScriptWorktreeIDs = [sessionWorktree.id]
+    state.blockingScriptRepositoryByWorktreeID = [sessionWorktree.id: repository.id]
+    let store = TestStore(initialState: state) {
+      RepositoriesFeature()
+    } withDependencies: {
+      $0.gitClient.removeWorktree = { worktree, _ in await MainActor.run { worktree.workingDirectory } }
+      $0.gitClient.worktrees = { _ in [mainWorktree] }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteScriptCompleted(worktreeID: sessionWorktree.id, exitCode: 0, tabId: nil)) {
+      $0.deleteScriptWorktreeIDs = []
+      $0.blockingScriptRepositoryByWorktreeID = [:]
+    }
+    // The delete must actually be applied, not silently dropped.
+    await store.receive(\.deleteWorktreeApply) {
+      $0.deletingWorktreeIDs = [sessionWorktree.id]
+    }
+    await store.receive(\.delegate.worktreeDeleteStarted)
+  }
+
+  /// The dispatch site is handed the repository id; it must record it so
+  /// the completion above can find it.
+  @Test(.dependencies) func deleteWorktreeConfirmedRecordsRepositoryForScriptRoundTrip() async {
+    let repoRoot = "/tmp/repo"
+    let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
+    let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree])
+    let state = makeState(repositories: [repository])
+    @Shared(.repositorySettings(repository.rootURL)) var repositorySettings
+    $repositorySettings.withLock { $0.deleteScript = "echo cleaning" }
+    let store = TestStore(initialState: state) {
+      RepositoriesFeature()
+    }
+    store.exhaustivity = .off
+
+    // A session-backed worktree absent from `repository.worktrees`.
+    await store.send(.deleteWorktreeConfirmed("/tmp/elsewhere/session-worktree", repository.id)) {
+      $0.deleteScriptWorktreeIDs = ["/tmp/elsewhere/session-worktree"]
+      $0.blockingScriptRepositoryByWorktreeID = ["/tmp/elsewhere/session-worktree": repository.id]
+    }
+    await store.receive(\.delegate.runBlockingScript)
+  }
+
+  /// The failure alert must name the worktree even though it isn't in
+  /// `repositories` — it used to render a bare "Unknown worktree".
+  @Test(.dependencies) func scriptFailureAlertNamesWorktreeAbsentFromRepositoriesList() async {
+    let repoRoot = "/tmp/repo"
+    let mainWorktree = makeWorktree(id: repoRoot, name: "main", repoRoot: repoRoot)
+    let repository = makeRepository(id: repoRoot, worktrees: [mainWorktree])
+    var state = makeState(repositories: [repository])
+    let tabId = TerminalTabID()
+    state.deleteScriptWorktreeIDs = ["/tmp/elsewhere/session-worktree"]
+    state.blockingScriptRepositoryByWorktreeID = ["/tmp/elsewhere/session-worktree": repository.id]
+    let store = TestStore(initialState: state) {
+      RepositoriesFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .deleteScriptCompleted(
+        worktreeID: "/tmp/elsewhere/session-worktree",
+        exitCode: 127,
+        tabId: tabId
+      )
+    )
+    let message = store.state.alert?.message.map { String(state: $0) } ?? ""
+    #expect(!message.contains("Unknown worktree"))
+    #expect(message.contains("repo — session-worktree"))
   }
 
   @Test(.dependencies) func deleteScriptCompletedFailureShowsAlert() async {
@@ -4299,6 +4397,7 @@ struct RepositoriesFeatureTests {
     kind: BlockingScriptKind,
     exitMessage: String,
     worktreeID: Worktree.ID,
+    repositoryID: Repository.ID? = nil,
     tabId: TerminalTabID? = nil,
     repoName: String,
     worktreeName: String
@@ -4307,7 +4406,14 @@ struct RepositoriesFeatureTests {
       TextState("\(kind.tabTitle) failed")
     } actions: {
       if let tabId {
-        ButtonState(action: .viewTerminalTab(worktreeID, tabId: tabId)) {
+        ButtonState(
+          action: .viewTerminalTab(
+            worktreeID,
+            repositoryID: repositoryID,
+            kind: kind,
+            tabId: tabId
+          )
+        ) {
           TextState("View Terminal")
         }
       }
