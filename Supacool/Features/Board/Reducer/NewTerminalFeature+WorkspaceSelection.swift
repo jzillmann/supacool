@@ -158,7 +158,7 @@ extension NewTerminalFeature {
     if case .resolved(let context) = state.pullRequestLookup {
       return "PR #\(context.parsed.number): \(context.metadata.title)"
     }
-    if let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased(),
+    if let ticketID = state.activeLinearTicketID,
       let title = state.linearTitleCache[ticketID], !title.isEmpty
     {
       return displayNameFromLinearTitle(ticketID: ticketID, title: title)

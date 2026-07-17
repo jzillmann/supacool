@@ -234,11 +234,29 @@ struct NewTerminalFeature {
     /// lookup is healthy (scanning or resolved). Surfaced by the sheet's
     /// Linear status chip.
     var linearLookupMessage: String?
+    /// Ticket id the user explicitly dropped via the banner's close button.
+    /// The id is still in the prompt, but while it matches we suppress the
+    /// status chip and every ticket-driven derivation (display name, branch
+    /// suggestion, workspace auto-fill) — so pasting a log that mentions a
+    /// ticket doesn't hijack the session's identity. Cleared the moment the
+    /// prompt's first ticket id changes or disappears, so removing and
+    /// re-pasting the id re-arms the association. Mirrors PR `.dismissed`.
+    var dismissedLinearTicketID: String?
     /// True the first time the user has manually edited the workspace
     /// query field. Used to decide whether to overwrite the field with
     /// a freshly-fetched ticket-derived branch name (we won't, once the
     /// user has signalled intent).
     var workspaceQueryUserEdited: Bool = false
+
+    /// The Linear ticket id currently governing the sheet: the first id in
+    /// the prompt, unless the user dismissed that exact id via the banner's
+    /// close button. Returns nil when dismissed so display name, branch
+    /// suggestion, auto-fill, and the status chip all treat the id as a
+    /// passing mention rather than the session's subject.
+    var activeLinearTicketID: String? {
+      guard let id = firstLinearTicketID(in: prompt)?.uppercased() else { return nil }
+      return id == dismissedLinearTicketID ? nil : id
+    }
 
     init(
       availableRepositories: IdentifiedArrayOf<Repository>,
@@ -497,6 +515,11 @@ struct NewTerminalFeature {
     /// failure for the current prompt ticket and re-runs the lookup
     /// immediately (no debounce).
     case linearLookupRetryTapped
+    /// User tapped the close button on the Linear status chip. Drops the
+    /// ticket association for the id currently in the prompt without making
+    /// the user edit the (possibly log-pasted) prompt text. Mirrors
+    /// `pullRequestDismissTapped`.
+    case linearDismissTapped
 
     /// User flipped the destination segmented picker. `.local` reverts
     /// to the git-backed flow; `.remote(hostID:)` replaces the repo /
@@ -713,7 +736,7 @@ struct NewTerminalFeature {
         // have its title cached, derive the branch name from the title
         // directly. The LLM round-trip would just paraphrase the title
         // anyway, badly.
-        if let ticketID = firstLinearTicketID(in: prompt)?.uppercased(),
+        if let ticketID = state.activeLinearTicketID,
           let title = state.linearTitleCache[ticketID], !title.isEmpty
         {
           let derived = branchNameFromLinear(
@@ -926,6 +949,15 @@ struct NewTerminalFeature {
         state.linearBranchNameCache[ticketID] = nil
         state.linearTransientFailureIDs.remove(ticketID)
         return startLinearLookup(state: &state, ticketID: ticketID, debounce: false)
+
+      case .linearDismissTapped:
+        guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
+          return .none
+        }
+        state.dismissedLinearTicketID = ticketID
+        state.pendingLinearTicketID = nil
+        state.linearLookupMessage = nil
+        return .cancel(id: CancelID.linearTicketLookup)
 
       case .pullRequestDismissTapped:
         let parsed: ParsedPullRequestURL

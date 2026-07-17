@@ -65,12 +65,23 @@ extension NewTerminalFeature {
       // Genuine not-found entries stay cached so a typo doesn't re-hit
       // the API on every keystroke.
       state.pendingLinearTicketID = nil
+      state.dismissedLinearTicketID = nil
       for id in state.linearTransientFailureIDs {
         state.linearTitleCache[id] = nil
         state.linearBranchNameCache[id] = nil
       }
       state.linearTransientFailureIDs.removeAll()
       state.linearLookupMessage = nil
+      return .cancel(id: CancelID.linearTicketLookup)
+    }
+    // A different ticket id now leads the prompt — re-arm any prior
+    // dismissal (it only ever suppresses the one id the user dropped).
+    if let dismissed = state.dismissedLinearTicketID, dismissed != ticketID {
+      state.dismissedLinearTicketID = nil
+    }
+    // Still dismissed: treat this id as a passing mention — no fetch, no
+    // auto-fill. Re-pasting a different id (above) or removing it re-arms.
+    if state.dismissedLinearTicketID == ticketID {
       return .cancel(id: CancelID.linearTicketLookup)
     }
     if let cached = state.linearTitleCache[ticketID] {
@@ -163,7 +174,7 @@ extension NewTerminalFeature {
     state: inout State
   ) -> Effect<Action> {
     guard !state.workspaceQueryUserEdited else { return .none }
-    guard let ticketID = firstLinearTicketID(in: state.prompt)?.uppercased() else {
+    guard let ticketID = state.activeLinearTicketID else {
       return .none
     }
     guard let title = state.linearTitleCache[ticketID], !title.isEmpty else {

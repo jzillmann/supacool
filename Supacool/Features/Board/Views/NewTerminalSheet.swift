@@ -46,7 +46,8 @@ struct NewTerminalSheet: View {
         if let linearStatus {
           LinearTicketBannerView(
             status: linearStatus,
-            onRetry: { store.send(.linearLookupRetryTapped) }
+            onRetry: { store.send(.linearLookupRetryTapped) },
+            onDismiss: { store.send(.linearDismissTapped) }
           )
         }
       } header: {
@@ -264,11 +265,11 @@ struct NewTerminalSheet: View {
   /// that a pasted ticket is being recognised and named — the flow used to
   /// be silent, so a slow or failed lookup looked like nothing happened.
   private var linearStatus: LinearTicketBannerView.Status? {
-    if let pending = store.pendingLinearTicketID {
-      return .scanning(id: pending)
-    }
-    guard let id = firstLinearTicketID(in: store.prompt)?.uppercased() else {
+    guard let id = store.activeLinearTicketID else {
       return nil
+    }
+    if store.pendingLinearTicketID == id {
+      return .scanning(id: id)
     }
     if let title = store.linearTitleCache[id], !title.isEmpty {
       return .resolved(
@@ -1137,6 +1138,8 @@ private struct LinearTicketBannerView: View {
   let status: Status
   /// Invoked when the user taps Retry on a failure note.
   var onRetry: () -> Void = {}
+  /// Invoked when the user taps the close button to drop the association.
+  var onDismiss: () -> Void = {}
 
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
@@ -1167,6 +1170,19 @@ private struct LinearTicketBannerView: View {
       case .resolved:
         EmptyView()
       }
+      // Always offer a close button so a ticket id that only appears
+      // incidentally (e.g. in a pasted log) can be dropped without editing
+      // the prompt. Re-typing the id re-arms the association.
+      Button {
+        onDismiss()
+      } label: {
+        Image(systemName: "xmark.circle.fill")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .accessibilityLabel("Drop the Linear ticket association")
+      }
+      .buttonStyle(.plain)
+      .help("Drop the Linear ticket association")
     }
     .padding(.vertical, 6)
     .padding(.horizontal, 10)

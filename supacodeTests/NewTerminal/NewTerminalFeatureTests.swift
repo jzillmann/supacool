@@ -412,6 +412,45 @@ struct NewTerminalFeatureTests {
     #expect(store.state.workspaceQuery == "cen-6690-streamline-the-foobar-pipeline")
   }
 
+  /// Dismissing the Linear chip drops the association without editing the
+  /// prompt: the status chip goes quiet and `activeLinearTicketID` clears
+  /// while the same id lingers. Re-typing the id (removing it, then pasting
+  /// again) re-arms the association and re-fetches — mirrors PR dismiss.
+  @Test(.dependencies) func linearDismissKeepsAssociationDroppedEvenIfIDLingers() async {
+    let state = Self.makeState()
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      NewTerminalFeature()
+    } withDependencies: {
+      $0.continuousClock = clock
+      $0.linearClient.fetchIssueNaming = { _ in "Streamline the foobar pipeline" }
+    }
+    store.exhaustivity = .off
+
+    // Paste a log that embeds a ticket id.
+    await store.send(\.binding.prompt, "logs mention CEN-6690 in passing")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+    #expect(store.state.activeLinearTicketID == "CEN-6690")
+
+    // User dismisses the chip.
+    await store.send(.linearDismissTapped)
+    #expect(store.state.dismissedLinearTicketID == "CEN-6690")
+    #expect(store.state.activeLinearTicketID == nil)
+
+    // Same id still in the prompt after more typing — stays dismissed.
+    await store.send(\.binding.prompt, "logs mention CEN-6690 in passing, plus more")
+    #expect(store.state.activeLinearTicketID == nil)
+
+    // Remove the id, then paste a fresh one — the association re-arms.
+    await store.send(\.binding.prompt, "back to a clean slate")
+    #expect(store.state.dismissedLinearTicketID == nil)
+    await store.send(\.binding.prompt, "now working CEN-7000")
+    await clock.advance(by: .milliseconds(400))
+    await store.receive(\.linearTicketTitleResolved)
+    #expect(store.state.activeLinearTicketID == "CEN-7000")
+  }
+
   /// Picking a concrete existing worktree/branch from autocomplete IS a
   /// deliberate branch choice — it marks the field user-edited so a Linear
   /// title resolving afterwards leaves the explicit selection alone.
@@ -780,6 +819,19 @@ struct NewTerminalFeatureTests {
   @Test func suggestedDisplayNameIsNilWithoutSignal() {
     var state = Self.makeState()
     state.prompt = "Just a quick task"
+    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == nil)
+  }
+
+  /// Dismissing the ticket association drops it from `suggestedDisplayName`
+  /// even though the id is still sitting in the prompt — the whole point is
+  /// that a log-pasted ticket mention stops naming the session.
+  @Test func suggestedDisplayNameIgnoresDismissedTicket() {
+    var state = Self.makeState()
+    state.prompt = "Investigate these logs: CEN-8255 leaves no cause log"
+    state.linearTitleCache["CEN-8255"] = "gRPC ExecuteQuery 500s"
+    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == "CEN-8255 · gRPC ExecuteQuery 500s")
+
+    state.dismissedLinearTicketID = "CEN-8255"
     #expect(NewTerminalFeature.suggestedDisplayName(state: state) == nil)
   }
 
