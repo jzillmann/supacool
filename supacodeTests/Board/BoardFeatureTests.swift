@@ -180,6 +180,71 @@ struct BoardFeatureTests {
     }
   }
 
+  @Test(.dependencies) func addReferencesParsesRawTextAndClearsDismissal() async {
+    let existing = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 1, state: .open, title: nil
+    )
+    // The user previously unlinked this PR; a manual re-add must override that.
+    let relinked = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 2, state: nil, title: nil
+    )
+    var session = Self.sampleSession()
+    session.references = [existing]
+    session.dismissedReferenceKeys = [relinked.dedupeKey]
+    session.referencesScannedAt = Date()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date())
+      $0.continuousClock = TestClock()
+      // Use the real regex parser so the test exercises the same extraction
+      // the scanner uses in production.
+      $0.sessionReferenceScannerClient.scanText = { text, prefixes in
+        SessionReferenceScannerLive.scanText(text, allowedPrefixes: prefixes)
+      }
+      // The add triggers a follow-up `refreshPRReferences`; give it a stub so
+      // the newly-linked PR resolves deterministically instead of shelling out.
+      $0.githubCLI.viewPullRequest = { _, _, _ in
+        PullRequestSnapshot(state: .open, title: "Add widgets")
+      }
+    }
+    // The follow-up refresh mutates PR state asynchronously; assert on the
+    // reference identity (dedupe keys) and dismissal rather than exhaustively.
+    store.exhaustivity = .off
+
+    await store.send(
+      .addReferences(id: session.id, rawText: "https://github.com/acme/widgets/pull/2")
+    )
+    await store.skipReceivedActions()
+    await store.finish()
+
+    let refs = store.state.sessions.first?.references ?? []
+    #expect(refs.map(\.dedupeKey) == [existing.dedupeKey, relinked.dedupeKey])
+    #expect(store.state.sessions.first?.dismissedReferenceKeys.contains(relinked.dedupeKey) == false)
+  }
+
+  @Test(.dependencies) func addReferencesIgnoresTextWithNoMatch() async {
+    var session = Self.sampleSession()
+    session.references = []
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.sessionReferenceScannerClient.scanText = { text, prefixes in
+        SessionReferenceScannerLive.scanText(text, allowedPrefixes: prefixes)
+      }
+    }
+
+    // Nothing parseable → no state change and no follow-up effect.
+    await store.send(.addReferences(id: session.id, rawText: "just some prose"))
+    await store.finish()
+
+    #expect(store.state.sessions.first?.references.isEmpty == true)
+  }
+
   @Test(.dependencies) func dismissedReferenceDoesNotReturnOnRescan() async {
     let kept = SessionReference.pullRequest(
       owner: "acme", repo: "widgets", number: 1, state: .open, title: nil

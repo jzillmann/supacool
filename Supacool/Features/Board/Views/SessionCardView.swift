@@ -54,6 +54,10 @@ struct SessionCardView: View {
   var onReferencesPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
+  /// Manually link a work item: the raw text (a pasted PR URL or a typed
+  /// ticket id) is parsed by the board reducer and merged into the session's
+  /// references.
+  var onAddReference: ((String) -> Void)?
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey), from
   /// `BoardFeature.State.prReferenceSnapshots`. Callers pass the subset
   /// for this session's references so unrelated PR updates don't re-render
@@ -63,6 +67,8 @@ struct SessionCardView: View {
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
   @State private var isAutoObserverPopoverShown: Bool = false
+  @State private var isAddLinkPromptShown: Bool = false
+  @State private var addLinkText: String = ""
   @Environment(\.sessionFootprintStore) private var footprintStore
 
   var body: some View {
@@ -233,7 +239,23 @@ struct SessionCardView: View {
         Button("Debug session…", systemImage: "ladybug", action: onDebug)
         Divider()
       }
+      if onAddReference != nil {
+        Button("Add link…", systemImage: "link.badge.plus") {
+          addLinkText = ""
+          isAddLinkPromptShown = true
+        }
+        Divider()
+      }
       Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
+    }
+    .alert("Link a work item", isPresented: $isAddLinkPromptShown) {
+      TextField("Ticket id or GitHub PR URL", text: $addLinkText)
+      Button("Cancel", role: .cancel) {}
+      Button("Add") {
+        onAddReference?(addLinkText)
+      }
+    } message: {
+      Text("Paste a GitHub pull-request URL or type a ticket id (e.g. CEN-1234) to attach it to this session.")
     }
   }
 
@@ -534,6 +556,12 @@ struct SessionCardView: View {
       references: session.references,
       onPullRequestsPopoverOpened: onReferencesPopoverOpened,
       onRemoveReference: onRemoveReference,
+      onAddLink: onAddReference == nil
+        ? nil
+        : {
+          addLinkText = ""
+          isAddLinkPromptShown = true
+        },
       prReferenceSnapshots: prReferenceSnapshots
     )
   }
@@ -682,6 +710,8 @@ struct ReferenceChip: View {
   var onTap: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemove: (() -> Void)?
+  /// Manually attach another work item. Nil hides the affordance.
+  var onAddLink: (() -> Void)?
   /// Latest checks/Greptile snapshot for a PR reference. Nil (and ignored
   /// for tickets) hides the CI glyph and score badge.
   var prSnapshot: PullRequestSnapshot?
@@ -746,6 +776,11 @@ struct ReferenceChip: View {
       }
     }
     .contextMenu {
+      if let onAddLink {
+        Button(action: onAddLink) {
+          Label("Add link…", systemImage: "link.badge.plus")
+        }
+      }
       if let onRemove {
         Button(role: .destructive, action: onRemove) {
           Label("Remove link", systemImage: "link.badge.minus")
@@ -876,6 +911,10 @@ struct SessionReferenceSummaryChips: View {
   var onPullRequestsPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)?
+  /// Manually attach a work item. Surfaced as "Add link…" in each chip's
+  /// context menu, beside "Remove link", so the add affordance sits where
+  /// the user already right-clicks. Nil hides it.
+  var onAddLink: (() -> Void)?
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on chips and popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
@@ -916,6 +955,7 @@ struct SessionReferenceSummaryChips: View {
           reference: ticket,
           linearOrgSlug: linearOrgSlug,
           onRemove: onRemoveReference.map { remove in { remove(ticket) } },
+          onAddLink: onAddLink,
           ticketPreview: ticketPreview(for: ticket)
         )
       }
@@ -924,7 +964,8 @@ struct SessionReferenceSummaryChips: View {
           kind: .tickets,
           references: Array(tickets.dropFirst()),
           linearOrgSlug: linearOrgSlug,
-          onRemoveReference: onRemoveReference
+          onRemoveReference: onRemoveReference,
+          onAddLink: onAddLink
         )
       }
       if pullRequests.count == 1, let pullRequest = pullRequests.first {
@@ -933,6 +974,7 @@ struct SessionReferenceSummaryChips: View {
           linearOrgSlug: linearOrgSlug,
           onTap: onPullRequestsPopoverOpened,
           onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
+          onAddLink: onAddLink,
           prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey]
         )
       } else if pullRequests.count > 1 {
@@ -942,6 +984,7 @@ struct SessionReferenceSummaryChips: View {
           linearOrgSlug: linearOrgSlug,
           onPopoverOpened: onPullRequestsPopoverOpened,
           onRemoveReference: onRemoveReference,
+          onAddLink: onAddLink,
           prReferenceSnapshots: prReferenceSnapshots
         )
       }
@@ -1035,6 +1078,8 @@ private struct ReferenceStackChip: View {
   var onPopoverOpened: (() -> Void)?
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)?
+  /// Manually attach another work item. Nil hides the affordance.
+  var onAddLink: (() -> Void)?
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on the popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
@@ -1288,6 +1333,14 @@ private struct ReferenceStackChip: View {
     .buttonStyle(.plain)
     .help(rowHelp(for: reference))
     .contextMenu {
+      if let onAddLink {
+        Button {
+          onAddLink()
+          isPopoverShown = false
+        } label: {
+          Label("Add link…", systemImage: "link.badge.plus")
+        }
+      }
       if let onRemoveReference {
         Button(role: .destructive) {
           onRemoveReference(reference)

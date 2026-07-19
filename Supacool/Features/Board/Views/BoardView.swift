@@ -905,6 +905,9 @@ struct BoardView: View {
       onRemoveReference: { reference in
         store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
       },
+      onAddReference: { rawText in
+        store.send(.addReferences(id: session.id, rawText: rawText))
+      },
       prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
         of: session,
         pulseFallback: store.state.prPulseSnapshots
@@ -1291,6 +1294,7 @@ private struct SessionCardContainer: View {
   let onAppear: (() -> Void)?
   let onReferencesPopoverOpened: (() -> Void)?
   let onRemoveReference: ((SessionReference) -> Void)?
+  let onAddReference: ((String) -> Void)?
   /// Latest checks/Greptile snapshot per PR reference of this session.
   let prReferenceSnapshots: [String: PullRequestSnapshot]
   /// When true, render a small repo caption above the card (outside the
@@ -1360,6 +1364,7 @@ private struct SessionCardContainer: View {
       onAppear: onAppear,
       onReferencesPopoverOpened: onReferencesPopoverOpened,
       onRemoveReference: onRemoveReference,
+      onAddReference: onAddReference,
       prReferenceSnapshots: prReferenceSnapshots
     )
     .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)

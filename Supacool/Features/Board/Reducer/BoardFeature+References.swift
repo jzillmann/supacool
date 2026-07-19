@@ -88,6 +88,25 @@ extension BoardFeature {
     return .none
   }
 
+  /// Parse a user-supplied string (a pasted GitHub PR URL or a typed ticket
+  /// id) and attach any references it yields to the session. Manual entry is
+  /// deliberate, so ticket matches are *not* scoped to the repo's Linear team
+  /// keys, and any matched key is cleared from `dismissedReferenceKeys` so an
+  /// explicit add overrides an earlier unlink. Newly-added PRs get their state
+  /// filled in by the follow-up refresh.
+  func reduceAddReferences(state: inout State, id: AgentSession.ID, rawText: String) -> Effect<Action> {
+    let parsed = scannerClient.scanText(rawText, [])
+    guard !parsed.isEmpty else { return .none }
+    state.$sessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+      sessions[index].references = Self.mergeReferences(sessions[index].references, with: parsed)
+      for ref in parsed {
+        sessions[index].dismissedReferenceKeys.remove(ref.dedupeKey)
+      }
+    }
+    return .send(.refreshPRReferences(id: id))
+  }
+
   func reduceRefreshPRReferences(state: inout State, id: AgentSession.ID) -> Effect<Action> {
     let batch = Self.pickPRRefreshCandidates(
       sessions: state.sessions,

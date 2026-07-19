@@ -783,6 +783,11 @@ struct BoardFeature {
     /// from `references` and records its dedupe key in `dismissedReferenceKeys`
     /// so a later transcript rescan does not re-surface it.
     case removeReference(id: AgentSession.ID, dedupeKey: String)
+    /// User manually linked a work item to a card via "Add link…". The raw
+    /// text is run through the same ticket/PR regex the scanner uses; any
+    /// parsed references are merged in and cleared from `dismissedReferenceKeys`
+    /// so a manual add overrides a prior unlink.
+    case addReferences(id: AgentSession.ID, rawText: String)
     /// Legacy one-session fetch path for a pull-request reference via
     /// `gh pr view`. The scheduler path below is preferred because it
     /// dedupes and fans out by PR key.
@@ -2089,6 +2094,9 @@ struct BoardFeature {
 
       case .removeReference(let id, let dedupeKey):
         return reduceRemoveReference(state: &state, id: id, dedupeKey: dedupeKey)
+
+      case .addReferences(let id, let rawText):
+        return reduceAddReferences(state: &state, id: id, rawText: rawText)
 
       case .refreshPRReferences(let id):
         return reduceRefreshPRReferences(state: &state, id: id)
