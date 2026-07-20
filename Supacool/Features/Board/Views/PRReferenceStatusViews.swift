@@ -29,6 +29,24 @@ struct PRChecksGlyph: View {
   }
 }
 
+/// One-glyph merge-conflict marker for the inline reference chip. Hidden
+/// unless GitHub reports the PR can't merge cleanly. Uses the same
+/// `arrow.triangle.branch` icon as `PRBallState.mergeConflict` so a conflict
+/// reads identically wherever it appears. Sits beside `PRChecksGlyph` — a
+/// PR can fail CI *and* conflict, and both are worth seeing at a glance.
+struct PRConflictGlyph: View {
+  let snapshot: PullRequestSnapshot
+
+  var body: some View {
+    if snapshot.hasMergeConflict {
+      Image(systemName: "arrow.triangle.branch")
+        .font(.caption2)
+        .foregroundStyle(.red)
+        .accessibilityLabel("Merge conflict")
+    }
+  }
+}
+
 /// Worded CI summary for popover rows: the failing/running count when
 /// something needs attention, otherwise the total. Hidden without checks.
 struct PRChecksSummaryText: View {
@@ -146,6 +164,9 @@ extension PullRequestSnapshot {
     case .completed(let allPassed):
       let breakdown = PullRequestCheckBreakdown(checks: statusChecks)
       parts.append(allPassed ? "checks passed" : "\(breakdown.failed) checks failed")
+    }
+    if hasMergeConflict {
+      parts.append("merge conflict")
     }
     if let greptileScore {
       parts.append("Greptile \(greptileScore)/5")

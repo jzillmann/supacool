@@ -764,6 +764,7 @@ struct ReferenceChip: View {
         if case .pullRequest(_, _, _, let state, _) = reference, let prSnapshot,
           state?.showsLiveStatus ?? true {
           PRChecksGlyph(checks: prSnapshot.statusChecks)
+          PRConflictGlyph(snapshot: prSnapshot)
           GreptileScoreBadge(score: prSnapshot.greptileScore)
         }
       }
@@ -1121,6 +1122,7 @@ private struct ReferenceStackChip: View {
         // is known, so non-PR stacks stay clean.
         if let featuredSnapshot {
           PRChecksGlyph(checks: featuredSnapshot.statusChecks)
+          PRConflictGlyph(snapshot: featuredSnapshot)
           GreptileScoreBadge(score: featuredSnapshot.greptileScore)
         }
       }
@@ -1334,6 +1336,7 @@ private struct ReferenceStackChip: View {
           let snapshot = prReferenceSnapshots[reference.dedupeKey]
         {
           PRChecksSummaryText(checks: snapshot.statusChecks)
+          PRConflictGlyph(snapshot: snapshot)
           GreptileScoreBadge(score: snapshot.greptileScore)
         }
         Image(systemName: "arrow.up.forward")

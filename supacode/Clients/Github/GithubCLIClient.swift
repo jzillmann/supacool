@@ -360,6 +360,14 @@ nonisolated struct PullRequestSnapshot: Equatable, Sendable {
     self.mergeable = mergeable
     self.mergeStateStatus = mergeStateStatus
   }
+
+  /// True when GitHub reports the PR can't merge cleanly — either
+  /// `mergeable == CONFLICTING` or `mergeStateStatus == DIRTY`. Same signal
+  /// `PRBallState.mergeConflict` keys off; surfaced inline on the reference
+  /// chip so a conflict reads beside the CI glyph, not only via the reason chip.
+  var hasMergeConflict: Bool {
+    mergeable?.uppercased() == "CONFLICTING" || mergeStateStatus?.uppercased() == "DIRTY"
+  }
 }
 
 nonisolated private func viewPullRequestFetcher(
