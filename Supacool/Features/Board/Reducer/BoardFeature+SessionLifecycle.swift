@@ -689,9 +689,23 @@ extension BoardFeature {
   /// `cleanupPlan`, which only ever removes a worktree when
   /// `worktreeID != repositoryID`) and when the directory already exists.
   ///
-  /// Returns `nil` when the directory is present (or was rebuilt), or a
-  /// user-facing message when it's gone and can't be rebuilt (e.g. the branch
-  /// was deleted too).
+  /// Recovery ladder, from most faithful to last-resort:
+  /// 1. **Local branch** — re-add the exact branch at the exact path. The
+  ///    trash-then-restore case; content comes back verbatim.
+  /// 2. **Remote branch** — the local ref was pruned but the branch still
+  ///    lives on a remote (e.g. an open PR branch). A targeted refspec fetch
+  ///    pulls it down, then step 1 retries so the *original* content returns.
+  /// 3. **Fresh branch** — the branch is gone everywhere (deleted locally,
+  ///    never pushed under that name, or merged-and-deleted). The original
+  ///    content is unrecoverable, but the agent transcript is keyed by the
+  ///    worktree *path*, not the branch — so re-creating a checkout at the
+  ///    exact original path still lets `--resume` find the conversation. We
+  ///    spin up a fresh branch of the same name off the repo's default base
+  ///    rather than dead-ending the user with "Use Rerun to start fresh"
+  ///    (which would throw the conversation away too).
+  ///
+  /// Returns `nil` when the directory is present (or was rebuilt by any step),
+  /// or a user-facing message only when every step fails.
   static func recreateWorktreeIfMissing(
     at worktreeURL: URL,
     repository: Repository,
@@ -706,11 +720,49 @@ extension BoardFeature {
     // is the path's last component and re-adding it reconstructs the identical
     // path the captured session id was recorded under.
     let branchName = standardized.lastPathComponent
-    do {
-      _ = try await gitClient.createWorktreeForExistingBranch(
+    let baseDirectory = standardized.deletingLastPathComponent()
+
+    // 1. Branch still resolves locally.
+    if (try? await gitClient.createWorktreeForExistingBranch(
+      branchName,
+      repository.rootURL,
+      baseDirectory
+    )) != nil {
+      return nil
+    }
+
+    // 2. Branch may live on a remote but not be fetched yet — pull it down and
+    //    retry the exact-branch checkout so the real content, not a fresh tree,
+    //    is what comes back.
+    if let remote = (try? await gitClient.remoteNames(repository.rootURL))?.first {
+      try? await gitClient.fetchBranchRefspec(branchName, remote, repository.rootURL)
+      if (try? await gitClient.createWorktreeForExistingBranch(
         branchName,
         repository.rootURL,
-        standardized.deletingLastPathComponent()
+        baseDirectory
+      )) != nil {
+        return nil
+      }
+    }
+
+    // 3. Branch is gone everywhere — recreate a fresh checkout at the exact
+    //    path so the conversation still resumes.
+    let baseRef = await gitClient.automaticWorktreeBaseRef(repository.rootURL) ?? ""
+    do {
+      _ = try await gitClient.createWorktree(
+        branchName,
+        repository.rootURL,
+        baseDirectory,
+        false,
+        false,
+        baseRef
+      )
+      boardLogger.warning(
+        """
+        Resume: original branch "\(branchName)" was gone, recreated a fresh checkout \
+        at \(standardized.path(percentEncoded: false)) so the conversation could resume \
+        (working tree starts from \(baseRef.isEmpty ? "the default base" : baseRef)).
+        """
       )
       return nil
     } catch {

@@ -2002,7 +2002,12 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      // Branch gone everywhere: local checkout, remote fetch, and the
+      // fresh-branch fallback all fail — only then does resume surface an error.
       $0.gitClient.createWorktreeForExistingBranch = { _, _, _ in throw RecreateFailed() }
+      $0.gitClient.remoteNames = { _ in [] }
+      $0.gitClient.automaticWorktreeBaseRef = { _ in nil }
+      $0.gitClient.createWorktree = { _, _, _, _, _, _ in throw RecreateFailed() }
       $0.terminalClient.send = { command in
         sentCommands.withValue { $0.append(command) }
       }
@@ -2024,6 +2029,78 @@ struct BoardFeatureTests {
     }
     #expect(cardSessionID == sessionID)
     #expect(message.contains("couldn't be recreated"))
+  }
+
+  @Test(.dependencies) func resumeRecreatesFreshCheckoutWhenBranchIsGone() async throws {
+    // Branch was deleted and never lived on a remote (local scratch branch, or
+    // its PR merged under a different name). The exact content is gone, but the
+    // agent transcript is keyed by the worktree *path* — so we recreate a fresh
+    // checkout at the exact original path and let `--resume` find the
+    // conversation instead of dead-ending the user.
+    let sessionID = UUID()
+    let repoRoot = "/tmp/supacool-fresh-recreate-\(UUID().uuidString)"
+    let worktreePath = "\(repoRoot)-wt/busyTab"
+    var session = Self.sampleSession(
+      id: sessionID,
+      repositoryID: repoRoot,
+      worktreeID: worktreePath,
+      removeBackingWorktreeOnDelete: true
+    )
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "native-session-777" }
+    let repository = Repository(
+      id: repoRoot,
+      rootURL: URL(fileURLWithPath: repoRoot),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let freshBranches = LockIsolated<[String]>([])
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      // Exact-branch checkout fails (branch gone locally and on the remote),
+      // so the fresh-branch fallback takes over and succeeds.
+      $0.gitClient.createWorktreeForExistingBranch = { _, _, _ in throw CancellationError() }
+      $0.gitClient.remoteNames = { _ in [] }
+      $0.gitClient.automaticWorktreeBaseRef = { _ in "origin/main" }
+      $0.gitClient.createWorktree = { name, root, base, _, _, _ in
+        freshBranches.withValue { $0.append(name) }
+        return Worktree(
+          id: worktreePath,
+          name: name,
+          detail: "",
+          workingDirectory: base.appending(path: name).standardizedFileURL,
+          repositoryRootURL: root
+        )
+      }
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repository]))
+    await store.finish()
+
+    // Recreated a fresh branch of the same name…
+    #expect(freshBranches.value == ["busyTab"])
+    // …and actually launched the resume into the recreated directory, keyed to
+    // the captured native session id — no failure tray card.
+    #expect(store.state.trayCards[id: sessionID] == nil)
+    let command = try #require(sentCommands.value.first)
+    guard case .createTabWithInput(let worktree, let input, _, let id) = command else {
+      Issue.record("Expected createTabWithInput command, got \(command)")
+      return
+    }
+    #expect(
+      worktree.workingDirectory.standardizedFileURL
+        == URL(fileURLWithPath: worktreePath).standardizedFileURL
+    )
+    #expect(input.contains("native-session-777"))
+    #expect(id == sessionID)
   }
 
   @Test(.dependencies) func resumePickerRecreatesMissingWorktreeThenLaunches() async throws {
