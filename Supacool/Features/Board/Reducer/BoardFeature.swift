@@ -995,6 +995,7 @@ struct BoardFeature {
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(PRMonitorClient.self) var prMonitor
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
+  @Dependency(PortReachabilityClient.self) var portReachabilityClient
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
   @Dependency(\.continuousClock) var clock
@@ -2841,10 +2842,13 @@ struct BoardFeature {
           script,
           context
         )
+        // A stop run reports teardown, not what is listening — scanning it would
+        // resurrect the ports it just took down.
+        let endpoints = kind == .stop ? [] : ServerEndpointScanner.scan(result.combinedOutput)
         let status: ServerLifecycleStatus
         switch kind {
         case .status:
-          status = result.exitCode == 0 ? .running : .stopped
+          status = await resolvedStatus(exitCode: result.exitCode, endpoints: endpoints)
         case .start, .stop:
           guard result.exitCode == 0 else {
             await send(
@@ -2862,9 +2866,6 @@ struct BoardFeature {
           }
           status = successFallbackStatus ?? .unknown
         }
-        // A stop run reports teardown, not what is listening — scanning it would
-        // resurrect the ports it just took down.
-        let endpoints = kind == .stop ? [] : ServerEndpointScanner.scan(result.combinedOutput)
         await send(
           ._serverLifecycleResponse(
             workspacePath: configuration.workspacePath,
@@ -2890,6 +2891,26 @@ struct BoardFeature {
       id: ServerLifecycleCancelID(workspacePath: configuration.workspacePath),
       cancelInFlight: true
     )
+  }
+
+  /// Turns a `status` script's result into a truthful running/stopped verdict.
+  ///
+  /// The exit code alone can't be trusted: a `dev status` reports its fleet and
+  /// exits 0 whether anything is up or not, which used to light the chip green
+  /// over a dead server. So when the output names ports, we believe reality over
+  /// the exit code — the server is running only if one of those ports actually
+  /// accepts a connection. When the script names no ports there's nothing to
+  /// probe, and its exit code is the only signal we have.
+  fileprivate func resolvedStatus(
+    exitCode: Int32,
+    endpoints: [ServerEndpoint]
+  ) async -> ServerLifecycleStatus {
+    guard exitCode == 0 else { return .stopped }
+    guard !endpoints.isEmpty else { return .running }
+    for endpoint in endpoints where await portReachabilityClient.isReachable(endpoint.host, endpoint.port) {
+      return .running
+    }
+    return .stopped
   }
 
   fileprivate func removeSessionFromState(

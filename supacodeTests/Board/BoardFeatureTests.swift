@@ -829,6 +829,9 @@ struct BoardFeatureTests {
           stderr: ""
         )
       }
+      // The status script's exit code is not trusted on its own; the ports it
+      // named have to actually accept a connection for the server to read as up.
+      $0.portReachabilityClient.isReachable = { _, _ in true }
     }
 
     let expected = [ServerEndpoint(port: 8686), ServerEndpoint(port: 3606)]
@@ -861,6 +864,64 @@ struct BoardFeatureTests {
     let lifecycle = store.state.serverLifecycleByWorkspace[worktreeID]
     #expect(lifecycle?.primaryEndpoint?.port == 3606)
     #expect(lifecycle?.tooltip.contains("Listening on :8686, :3606") == true)
+  }
+
+  // The regression: a `dev status` that prints its whole fleet as `stopped` still
+  // exits 0. Trusting that exit code lit the chip green over a dead server; now a
+  // status whose named ports refuse every connection reads as stopped.
+  @Test(.dependencies) func serverLifecycleStatusReportsStoppedWhenNoPortIsListening() async {
+    let repositoryID = "/tmp/repo-lifecycle-down-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API Server"
+    )
+    Self.configureServerLifecycle(repositoryID: repositoryID, statusScript: "status")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.serverLifecycleClient.run = { _, _, _, _ in
+        ServerLifecycleScriptResult(
+          exitCode: 0,
+          stdout: "backend :8672 stopped\nfrontend :3592 stopped",
+          stderr: ""
+        )
+      }
+      $0.portReachabilityClient.isReachable = { _, _ in false }
+    }
+
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .checking,
+        detail: nil
+      )
+    }
+    await store.receive(
+      ._serverLifecycleResponse(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "backend :8672 stopped",
+        endpoints: [ServerEndpoint(port: 8672), ServerEndpoint(port: 3592)]
+      )
+    ) {
+      $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
+        workspacePath: worktreeID,
+        name: "Dev server",
+        status: .stopped,
+        detail: "backend :8672 stopped",
+        endpoints: [ServerEndpoint(port: 8672), ServerEndpoint(port: 3592)]
+      )
+    }
+
+    // A stopped server offers no link, whatever ports its status happened to name.
+    #expect(store.state.serverLifecycleByWorkspace[worktreeID]?.linkableEndpoints.isEmpty == true)
   }
 
   // A stop script talks about teardown, so scanning it would resurrect the very
