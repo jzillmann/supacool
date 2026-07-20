@@ -187,29 +187,43 @@ struct SessionCardView: View {
         Divider()
       }
       if let onSetStatusOverride {
-        Menu("Set Status", systemImage: "circle.dashed") {
-          Button("Working", systemImage: BoardSessionStatus.inProgress.systemImage) {
-            onSetStatusOverride(.inProgress)
-          }
-          Button("Waiting", systemImage: BoardSessionStatus.waitingOnMe.systemImage) {
-            onSetStatusOverride(.waitingOnMe)
-          }
-          Button("Wants Input", systemImage: BoardSessionStatus.awaitingInput.systemImage) {
-            onSetStatusOverride(.awaitingInput)
-          }
-          Button(
+        // Deliberately NOT a nested `Menu`. The board body is wired to live
+        // terminal state, so this builder re-runs constantly; every re-run
+        // re-populates the NSMenu and collapses any open submenu — which
+        // yanked "Set Status" out from under the cursor mid-travel. An inline
+        // Picker renders as a flat labelled section: nothing to collapse, and
+        // the active override is visible without opening anything.
+        Picker(
+          "Set Status",
+          selection: Binding(
+            get: { session.manualStatusOverride },
+            set: { onSetStatusOverride($0) }
+          )
+        ) {
+          Label("Automatic", systemImage: "circle.dashed")
+            .tag(BoardSessionStatus?.none)
+          Label(
+            BoardSessionStatus.inProgress.label,
+            systemImage: BoardSessionStatus.inProgress.systemImage
+          )
+          .tag(BoardSessionStatus?.some(.inProgress))
+          Label(
+            BoardSessionStatus.waitingOnMe.label,
+            systemImage: BoardSessionStatus.waitingOnMe.systemImage
+          )
+          .tag(BoardSessionStatus?.some(.waitingOnMe))
+          Label(
+            BoardSessionStatus.awaitingInput.label,
+            systemImage: BoardSessionStatus.awaitingInput.systemImage
+          )
+          .tag(BoardSessionStatus?.some(.awaitingInput))
+          Label(
             BoardSessionStatus.waitingForChecks.label,
             systemImage: BoardSessionStatus.waitingForChecks.systemImage
-          ) {
-            onSetStatusOverride(.waitingForChecks)
-          }
-          if session.manualStatusOverride != nil {
-            Divider()
-            Button("Clear Override", systemImage: "xmark.circle") {
-              onSetStatusOverride(nil)
-            }
-          }
+          )
+          .tag(BoardSessionStatus?.some(.waitingForChecks))
         }
+        .pickerStyle(.inline)
         Divider()
       }
       if let onResume {

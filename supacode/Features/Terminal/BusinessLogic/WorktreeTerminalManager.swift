@@ -52,7 +52,7 @@ private let defaultIsProcessAlive: @Sendable (Int32) -> Bool = { pid in
 @MainActor
 @Observable
 final class WorktreeTerminalManager {
-  private struct AwaitingInputTracker {
+  private struct AwaitingInputTracker: Equatable {
     let worktreeID: Worktree.ID
     var rawActive = false
     var presented = false
@@ -1557,7 +1557,15 @@ final class WorktreeTerminalManager {
       scheduleAwaitingInputExpiry(for: tabID)
     }
     tracker.lastScreenFingerprint = newFingerprint
-    awaitingInputByTab[tabID] = tracker
+    // Observation fires on *write*, not on change. This is the steady-state
+    // keep-alive path — the fingerprint is normally identical tick after tick
+    // — so an unconditional store would invalidate every observer of
+    // `awaitingInputByTab` once per second per waiting tab. That reaches the
+    // whole board (BoardView reads it via `classify`) and takes any open
+    // context menu with it. Only write when something actually changed.
+    if awaitingInputByTab[tabID] != tracker {
+      awaitingInputByTab[tabID] = tracker
+    }
   }
 
   private func scheduleAwaitingInputPresentationReconciliation(
