@@ -74,6 +74,33 @@ struct BoardFeatureTests {
     // before calling infer because displayName != deriveDisplayName(prompt).
   }
 
+  // MARK: - sanitizeSessionTitle
+
+  @Test func sanitizeSessionTitleAcceptsWellFormedTitles() {
+    #expect(sanitizeSessionTitle("Fix Failing Unit Tests") == "Fix Failing Unit Tests")
+    #expect(sanitizeSessionTitle("Fix Board Clipping.") == "Fix Board Clipping")
+    #expect(sanitizeSessionTitle("\"Fix Board Clipping\"") == "Fix Board Clipping")
+    #expect(sanitizeSessionTitle("**Fix `BoardView` Clipping**") == "Fix BoardView Clipping")
+    #expect(sanitizeSessionTitle("## Fix Board Clipping") == "Fix Board Clipping")
+    #expect(sanitizeSessionTitle("\n\nFix Board Clipping\nExtra explanation line") == "Fix Board Clipping")
+  }
+
+  @Test func sanitizeSessionTitleRejectsAnswersThatIgnoredTheBrief() {
+    // Regression: claudeCLI-mode inference once returned a full agent
+    // report instead of a title; first-line + prefix(60) turned it into
+    // the card title "The fix is built and ready. One honesty note: a
+    // fresh **isol". Essay-shaped answers must be rejected outright so
+    // the deterministic prompt-derived name survives.
+    let essay = """
+      The fix is built and ready. One honesty note: a fresh **isolated \
+      preview starts with an empty board**, so it can't reproduce the overflow.
+      """
+    #expect(sanitizeSessionTitle(essay) == "")
+    #expect(sanitizeSessionTitle("One Two Three Four Five Six Seven Eight Nine") == "")
+    #expect(sanitizeSessionTitle("") == "")
+    #expect(sanitizeSessionTitle("\"\"") == "")
+  }
+
   // MARK: - Linear inbox
 
   @Test(.dependencies) func linearInboxOpenSessionClosesTheInboxAndFocuses() async {

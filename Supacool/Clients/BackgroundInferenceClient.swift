@@ -149,14 +149,48 @@ private nonisolated enum BackgroundInferenceLive {
 
   // MARK: CLI mode
 
+  /// Hard ceiling on a single CLI inference call. These are one-shot text
+  /// completions (titles, branch names) that normally finish in seconds;
+  /// anything running minutes means headless claude has gone agentic on a
+  /// task-shaped prompt and must be killed, not awaited.
+  private static let cliTimeoutSeconds: TimeInterval = 60
+
   static func runCLI(prompt: String, model: String?) async throws -> String {
     let claudeURL = try await resolveClaudePath()
-    var arguments = ["-p", prompt, "--output-format", "text"]
+    // `claude -p` is a full agent, not a text API: by default it has tools,
+    // inherits our cwd, and loads that directory's CLAUDE.md. Fed a prompt
+    // whose body is itself a coding task, it has *executed* the task instead
+    // of summarizing it — a 9-minute "session-title" call that came back
+    // with a mission report. Pin it down to pure inference: no tools, no
+    // MCP servers, one turn, and an empty scratch cwd so no repository or
+    // project context is reachable.
+    var arguments = [
+      "-p", prompt,
+      "--output-format", "text",
+      "--max-turns", "1",
+      "--strict-mcp-config",
+      "--disallowedTools",
+      "Bash,Read,Edit,Write,Glob,Grep,Task,WebFetch,WebSearch,NotebookEdit,TodoWrite",
+    ]
     if let model {
       arguments += ["--model", model]
     }
     inferenceLogger.debug("Running claude CLI for inference")
-    return try await runViaLoginShell(executableURL: claudeURL, arguments: arguments)
+    return try await runViaLoginShell(
+      executableURL: claudeURL,
+      arguments: arguments,
+      currentDirectory: scratchDirectory(),
+      timeoutSeconds: cliTimeoutSeconds
+    )
+  }
+
+  /// Empty directory the inference subprocess runs in — keeps it away from
+  /// any repository and prevents a project CLAUDE.md from loading.
+  private static func scratchDirectory() -> URL {
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("supacool-inference", isDirectory: true)
+    try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    return url
   }
 
   /// Resolves the absolute path to the `claude` binary by running
@@ -202,7 +236,9 @@ private nonisolated enum BackgroundInferenceLive {
   /// requiring a ShellClient dependency.
   private static func runViaLoginShell(
     executableURL: URL,
-    arguments: [String]
+    arguments: [String],
+    currentDirectory: URL? = nil,
+    timeoutSeconds: TimeInterval? = nil
   ) async throws -> String {
     let shellURL = URL(fileURLWithPath: loginShellPath())
     // Run: loginShell -l -c 'exec "$@"' -- <executableURL> <arguments...>
@@ -213,13 +249,35 @@ private nonisolated enum BackgroundInferenceLive {
     let process = Process()
     process.executableURL = shellURL
     process.arguments = shellArgs
+    if let currentDirectory {
+      process.currentDirectoryURL = currentDirectory
+    }
     let outputPipe = Pipe()
     let errorPipe = Pipe()
     process.standardOutput = outputPipe
     process.standardError = errorPipe
 
+    // Shared between the timeout task and the termination handler. The
+    // `exec` in the shell script means the shell's pid IS the target
+    // binary's, so the SIGKILL below reaches claude itself. `finished`
+    // closes the race where the process exits right as the timeout fires —
+    // without it the kill could hit a recycled pid.
+    struct TimeoutFlags: Sendable {
+      var finished = false
+      var timedOut = false
+    }
+    let flags = LockIsolated(TimeoutFlags())
+
     return try await withCheckedThrowingContinuation { continuation in
       process.terminationHandler = { p in
+        let timedOut = flags.withValue { f in
+          f.finished = true
+          return f.timedOut
+        }
+        if timedOut {
+          continuation.resume(throwing: BackgroundInferenceError.timeout)
+          return
+        }
         let stdout = String(bytes: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
           .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if p.terminationStatus == 0 {
@@ -241,6 +299,22 @@ private nonisolated enum BackgroundInferenceLive {
         try process.run()
       } catch {
         continuation.resume(throwing: error)
+        return
+      }
+      if let timeoutSeconds {
+        let pid = process.processIdentifier
+        Task {
+          try? await Task.sleep(for: .seconds(timeoutSeconds))
+          let shouldKill = flags.withValue { f in
+            guard !f.finished else { return false }
+            f.timedOut = true
+            return true
+          }
+          if shouldKill {
+            inferenceLogger.warning("Inference CLI call exceeded \(Int(timeoutSeconds))s — killing pid \(pid)")
+            kill(pid, SIGKILL)
+          }
+        }
       }
     }
   }
