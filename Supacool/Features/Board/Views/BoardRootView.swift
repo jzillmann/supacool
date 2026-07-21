@@ -1010,9 +1010,7 @@ struct BoardRootView: View {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: tabExists,
-      awaitingInput: terminalManager.isAwaitingInput(worktreeID: session.worktreeID, tabID: tabID),
-      busy: terminalManager.isAgentBusy(worktreeID: session.worktreeID, tabID: tabID),
-      deferredWork: terminalManager.isDeferredWorkActive(worktreeID: session.worktreeID, tabID: tabID),
+      activity: terminalManager.agentActivity(worktreeID: session.worktreeID, tabID: tabID),
       waitingExternally: waitingExternally(for: session)
     )
     if !tabExists, store.reinitializingSessionIDs.contains(session.id) {

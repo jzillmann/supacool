@@ -17,6 +17,17 @@ private let awaitingInputOffDebounceDefault: Duration = .milliseconds(250)
 private let awaitingInputActivityPollIntervalDefault: Duration = .seconds(1)
 private let awaitingInputFingerprintLineCount = 12
 private let awaitingInputPromptStableSamples = 2
+/// Consecutive scan ticks the agent's interrupt hint may be missing before
+/// the screen-working lease drops. Absorbs the odd tick where the footer is
+/// mid-repaint, so the card doesn't strobe between Working and Waiting.
+private let screenWorkingMissGraceDefault = 3
+/// Consecutive scan ticks a tab may show neither a hook signal nor an
+/// interrupt hint before it stops being screen-scanned for working state.
+/// At the 1s poll interval that's ~2 minutes of confirmed quiet. Bounds the
+/// per-tick screen reads to tabs that plausibly have a live agent, so a
+/// board full of long-idle cards costs nothing; the next hook (or the user
+/// hitting Enter) re-arms the scan via `noteAgentSignal`.
+private let screenWorkingQuietTickLimitDefault = 120
 private let agentPIDSweepIntervalDefault: Duration = .seconds(30)
 private let ownedProcessRefreshIntervalDefault: Duration = .seconds(60)
 private let optimisticBusyTTLDefault: Duration = .seconds(15)
@@ -73,6 +84,17 @@ final class WorktreeTerminalManager {
     let worktreeID: Worktree.ID
   }
 
+  /// Supacool-only. Per-tab lease asserting "the agent's own UI says it is
+  /// working", set from the interrupt hint it paints for the whole turn.
+  /// This is the only busy signal that survives a hook-silent stretch of
+  /// pure model thinking. See `isAgentWorkingScreen`.
+  private struct ScreenWorkingTracker {
+    let worktreeID: Worktree.ID
+    /// Consecutive scan ticks the hint has been absent. Cleared at
+    /// `screenWorkingMissGrace`; see `relaxScreenWorking`.
+    var missedSamples = 0
+  }
+
   /// Supacool-only. Per-tab registration of the agent process PID so a
   /// background sweep can clear stale busy/awaiting state if the agent
   /// crashes (SIGKILL, OOM) before a clean `Stop`/`SessionEnd` hook fires.
@@ -106,6 +128,8 @@ final class WorktreeTerminalManager {
   private let deferredWorkLeaseBuffer: Duration
   private let firstHookDeadmanDelay: Duration
   private let stuckBusyStaleSweepThreshold: Int
+  private let screenWorkingMissGrace: Int
+  private let screenWorkingQuietTickLimit: Int
   private let isProcessAlive: @Sendable (Int32) -> Bool
   /// Tracker that attributes orphaned (`ppid == 1`) processes whose cwd
   /// is under `~/.supacool/repos/` to their owning worktree. Refresh is
@@ -131,6 +155,14 @@ final class WorktreeTerminalManager {
   private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var optimisticBusyByTab: [UUID: OptimisticBusyTracker] = [:]
   private var optimisticBusyExpiryTasks: [UUID: Task<Void, Never>] = [:]
+  /// Supacool-only. Tabs whose agent is currently painting its interrupt
+  /// hint. Refreshed by the 1s screen scan; no expiry task — the scan is
+  /// the clock.
+  private var screenWorkingByTab: [UUID: ScreenWorkingTracker] = [:]
+  /// Consecutive scan ticks a tab has produced neither a hook signal nor an
+  /// interrupt hint. Past `screenWorkingQuietTickLimit` the tab drops out of
+  /// the working-screen scan until a hook or a submit wakes it.
+  private var screenWorkingQuietTicks: [UUID: Int] = [:]
   /// Per-tab one-shot timer that snapshots the surface and writes a
   /// synthetic lifecycle event when no agent hook lands within
   /// `firstHookDeadmanDelay`. Cancelled the moment any hook is observed
@@ -175,6 +207,8 @@ final class WorktreeTerminalManager {
     deferredWorkLeaseBuffer: Duration = deferredWorkLeaseBufferDefault,
     firstHookDeadmanDelay: Duration = firstHookDeadmanDelayDefault,
     stuckBusyStaleSweepThreshold: Int = stuckBusyStaleSweepThresholdDefault,
+    screenWorkingMissGrace: Int = screenWorkingMissGraceDefault,
+    screenWorkingQuietTickLimit: Int = screenWorkingQuietTickLimitDefault,
     isProcessAlive: @escaping @Sendable (Int32) -> Bool = defaultIsProcessAlive,
     ownedProcessTracker: WorktreeOwnedProcessTracker? = nil,
     startPromptScreenScanning: Bool = true,
@@ -193,6 +227,8 @@ final class WorktreeTerminalManager {
     self.deferredWorkLeaseBuffer = deferredWorkLeaseBuffer
     self.firstHookDeadmanDelay = firstHookDeadmanDelay
     self.stuckBusyStaleSweepThreshold = stuckBusyStaleSweepThreshold
+    self.screenWorkingMissGrace = screenWorkingMissGrace
+    self.screenWorkingQuietTickLimit = screenWorkingQuietTickLimit
     self.isProcessAlive = isProcessAlive
     self.ownedProcessTracker = ownedProcessTracker
     self.sleep = { duration in
@@ -536,6 +572,41 @@ final class WorktreeTerminalManager {
     return nil
   }
 
+  /// Whether the rendered screen shows the agent asserting that it owns the
+  /// turn — the interrupt hint (`esc to interrupt`) that claude and codex
+  /// paint for the *entire* duration of a turn.
+  ///
+  /// This exists because the hook stream cannot answer "is it working?" on
+  /// its own. `UserPromptSubmit` and `PreToolUse` are the only busy-on edges
+  /// (see docs/agent-guides/hook-protocol.md), so a turn spent thinking with
+  /// no tool call emits **nothing** — for minutes. In trace D5AF6FE4 a
+  /// blocking-tool Notification cleared the busy latch, the awaiting lease
+  /// expired 8s later, and the card sat in Waiting for 2.5 minutes while the
+  /// screen plainly read "thinking more". The agent's own footer was the one
+  /// signal that never lied.
+  ///
+  /// Deliberately *not* a generic "did the screen change" diff: a repaint
+  /// also fires for cursor blinks, scrollback movement and window focus, none
+  /// of which mean the agent is working — and a user scrolling an idle card
+  /// would flip it green. The interrupt hint is the agent stating it owns the
+  /// turn, which is precisely the question being asked.
+  ///
+  /// False-positive cost is bounded and self-correcting: an agent that merely
+  /// *prints* the phrase holds the card green until the hint leaves the
+  /// 12-line tail, and `relaxScreenWorking` drops the lease a few ticks later.
+  /// Note the hint list is *interrupt*, never *cancel*: Claude's approval
+  /// prompt footers read "Esc to cancel", so matching cancel would classify
+  /// a permission prompt — the exact opposite state — as working.
+  nonisolated static func isAgentWorkingScreen(_ screen: String) -> Bool {
+    let normalized = screen.lowercased()
+    let interruptHints = [
+      "esc to interrupt",
+      "ctrl+c to interrupt",
+      "ctrl-c to interrupt",
+    ]
+    return interruptHints.contains(where: { normalized.contains($0) })
+  }
+
   /// Screen-based fallback for hook misses *and* discriminator for the
   /// activity-resumed heuristic. Matches the inline approval UI used by
   /// Claude's edit / permission prompts and Codex's `Would you like to
@@ -652,6 +723,9 @@ final class WorktreeTerminalManager {
   private func handleInputObserved(worktreeID: Worktree.ID, tabID: TerminalTabID, text: String) {
     unparkSessionIfNeeded(tabID: tabID)
     guard Self.isSubmittedInput(text) else { return }
+    // A submitted prompt wakes a tab whose scan had backed off — the agent is
+    // about to start a turn that may never emit a busy hook.
+    noteAgentSignal(tabID: tabID.rawValue)
     markOptimisticBusy(worktreeID: worktreeID, tabID: tabID)
   }
 
@@ -683,6 +757,9 @@ final class WorktreeTerminalManager {
   /// has actually loaded its hook config, instead of guessing from a
   /// fixed launch delay.
   private func markInitialAgentEventObserved(tabID: UUID) {
+    // Every hook (busy or notification) funnels through here, which makes it
+    // the one place that re-arms the working-screen scan for this tab.
+    noteAgentSignal(tabID: tabID)
     $agentSessions.withLock { sessions in
       guard let (sessionIndex, terminalIndex) =
         Self.indices(for: tabID, in: sessions) else { return }
@@ -703,7 +780,23 @@ final class WorktreeTerminalManager {
   /// @Observable tracking so callers re-render when state changes.
   func isAgentBusy(worktreeID: Worktree.ID, tabID: TerminalTabID) -> Bool {
     if states[worktreeID]?.isTabBusy(tabID) == true { return true }
+    // The agent's own interrupt hint. Third source, and the only one that
+    // survives a turn spent thinking with no tool call — the hook stream is
+    // silent there, sometimes for minutes. See `isAgentWorkingScreen`.
+    if screenWorkingByTab[tabID.rawValue]?.worktreeID == worktreeID { return true }
     return optimisticBusyByTab[tabID.rawValue]?.worktreeID == worktreeID
+  }
+
+  /// The single live-activity value the board classifies against. Collapses
+  /// the busy / awaiting / deferred latches into one answer so callers can't
+  /// fuse them inconsistently — and so "the agent is working" has exactly one
+  /// definition. Precedence mirrors the boolean order this replaced: a
+  /// pending prompt outranks busy, which outranks a deferred lease.
+  func agentActivity(worktreeID: Worktree.ID, tabID: TerminalTabID) -> AgentActivity {
+    if isAwaitingInput(worktreeID: worktreeID, tabID: tabID) { return .wantsInput }
+    if isAgentBusy(worktreeID: worktreeID, tabID: tabID) { return .working }
+    if isDeferredWorkActive(worktreeID: worktreeID, tabID: tabID) { return .deferredWork }
+    return .idle
   }
 
   /// Whether the agent in this tab is paused on user input (permission
@@ -1484,6 +1577,49 @@ final class WorktreeTerminalManager {
     optimisticBusyByTab.removeValue(forKey: tabID)
   }
 
+  // MARK: - Screen-working lease
+
+  /// Any evidence that an agent is alive in this tab — a hook, a submitted
+  /// prompt, or its own interrupt hint. Re-arms the working-screen scan,
+  /// which backs off after `screenWorkingQuietTickLimit` quiet ticks so a
+  /// board of long-idle cards costs no screen reads.
+  private func noteAgentSignal(tabID: UUID) {
+    screenWorkingQuietTicks[tabID] = 0
+  }
+
+  /// True once a tab has gone quiet long enough to drop out of the
+  /// working-screen scan. `noteAgentSignal` is the only way back in.
+  private func isScreenWorkingScanQuiet(tabID: UUID) -> Bool {
+    (screenWorkingQuietTicks[tabID] ?? 0) >= screenWorkingQuietTickLimit
+  }
+
+  private func markScreenWorking(worktreeID: Worktree.ID, tabID: UUID) {
+    noteAgentSignal(tabID: tabID)
+    screenWorkingByTab[tabID] = ScreenWorkingTracker(worktreeID: worktreeID)
+    // The agent is visibly working, so it is not blocked on the user: a
+    // still-raised awaiting lease is stale (the prompt it belonged to has
+    // been answered) and would otherwise pin the card in "Wants Input".
+    clearAwaitingInput(tabID: tabID, reason: "working-screen")
+  }
+
+  /// The hint wasn't on screen this tick. Drop the lease only after
+  /// `screenWorkingMissGrace` consecutive misses so a single mid-repaint
+  /// frame can't strobe the card between Working and Waiting.
+  private func relaxScreenWorking(tabID: UUID) {
+    screenWorkingQuietTicks[tabID, default: 0] += 1
+    guard var tracker = screenWorkingByTab[tabID] else { return }
+    tracker.missedSamples += 1
+    if tracker.missedSamples >= screenWorkingMissGrace {
+      screenWorkingByTab.removeValue(forKey: tabID)
+      return
+    }
+    screenWorkingByTab[tabID] = tracker
+  }
+
+  private func clearScreenWorking(tabID: UUID) {
+    screenWorkingByTab.removeValue(forKey: tabID)
+  }
+
   private func scheduleAwaitingInputActivityPolling(for tabID: UUID) {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
     let sleep = self.sleep
@@ -1610,25 +1746,38 @@ final class WorktreeTerminalManager {
   // readScreenContents call is serialized on the same thread that drives
   // the UI. With many surfaces accumulated, scanning them all in one
   // tick can saturate the main thread long enough to feel like a freeze.
-  // Two mitigations:
-  //   1. Skip tabs that already get busy/idle from the hook stream
-  //      (Claude / Codex with hooks installed) — the screen fingerprint
-  //      is a fallback for hookless agents (pi, plain shell, broken or
-  //      missing hook config), not the primary signal.
-  //   2. `await Task.yield()` between tabs that we DO scan, so queued
+  // Three mitigations keep the read set small:
+  //   1. Skip tabs the hooks currently report *busy*. While that latch is on
+  //      the hook stream is authoritative and a read tells us nothing new.
+  //      (A latch that never turns off is the stuck-busy watchdog's job.)
+  //   2. Back off tabs that have been quiet for `screenWorkingQuietTickLimit`
+  //      ticks with neither a hook nor an interrupt hint — they are genuinely
+  //      idle, and the next hook or submit re-arms them via `noteAgentSignal`.
+  //   3. `await Task.yield()` between tabs that we DO scan, so queued
   //      main-thread work (input handling, layout, animation ticks)
   //      interleaves instead of waiting for the entire sweep.
+  //
+  // Note what is *not* a mitigation any more: hooked tabs used to be skipped
+  // outright, on the theory that the hook stream told us everything. It does
+  // not — a turn spent thinking emits no busy hook at all — so hooked agent
+  // tabs are now scanned for the interrupt hint whenever they are not
+  // hook-busy. The awaiting-*prompt* fallback below stays hookless-only.
   private func sampleAwaitingInputPromptScreens() async {
     await tickAgentPIDSweepIfNeeded()
     await tickOwnedProcessRefreshIfNeeded()
     var openTabIDs = Set<UUID>()
 
-    // Tabs that have ever received a hook event. These get accurate
-    // busy/idle from the hook layer; the (expensive) fingerprint scan
-    // would be redundant work — and ~80ms × N-tabs / second of it on
-    // the main thread translates directly into UI lag.
+    // Tabs that have ever received a hook event. Their awaiting state comes
+    // from the hook layer, so they are excluded from the prompt fallback.
     let hookedTabIDs: Set<UUID> = Set(
       agentSessions.compactMap { $0.hasObservedInitialAgentEvent ? $0.id : nil }
+    )
+    // Tabs running an actual agent. A plain shell has no interrupt hint to
+    // find, and we must never promote arbitrary shell output to "Working".
+    let agentTabIDs: Set<UUID> = Set(
+      agentSessions.flatMap { session in
+        session.terminals.compactMap { $0.agent == nil ? nil : $0.id }
+      }
     )
 
     // Snapshot the tab list up-front so the iteration is stable across
@@ -1641,14 +1790,34 @@ final class WorktreeTerminalManager {
       let rawTabID = tabID.rawValue
       openTabIDs.insert(rawTabID)
 
-      // Hooked tabs get busy/idle from the hook stream — skip the
-      // screen-content read entirely.
-      if hookedTabIDs.contains(rawTabID) {
+      // Hooks say it's busy: authoritative, and no read needed. Keep the tab
+      // armed so the scan is live the moment that latch drops.
+      if states[worktreeID]?.isTabBusy(tabID) == true {
+        noteAgentSignal(tabID: rawTabID)
+        clearScreenWorking(tabID: rawTabID)
         awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
         continue
       }
 
-      guard let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tabID),
+      let scanForWorking = agentTabIDs.contains(rawTabID) && !isScreenWorkingScanQuiet(tabID: rawTabID)
+      let scanForPrompt = !hookedTabIDs.contains(rawTabID)
+      guard scanForWorking || scanForPrompt else {
+        awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
+        continue
+      }
+
+      let fingerprint = screenFingerprint(worktreeID: worktreeID, tabID: tabID)
+
+      if scanForWorking {
+        if let fingerprint, Self.isAgentWorkingScreen(fingerprint) {
+          markScreenWorking(worktreeID: worktreeID, tabID: rawTabID)
+        } else {
+          relaxScreenWorking(tabID: rawTabID)
+        }
+      }
+
+      guard scanForPrompt,
+        let fingerprint,
         Self.isAwaitingInputPromptScreen(fingerprint)
       else {
         awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
@@ -1690,6 +1859,8 @@ final class WorktreeTerminalManager {
       .union(deferredWorkByTab.keys)
       .union(agentPIDByTab.keys)
       .union(optimisticBusyByTab.keys)
+      .union(screenWorkingByTab.keys)
+      .union(screenWorkingQuietTicks.keys)
     cleanupAwaitingInputTracking(closedTabIDs: trackedTabIDs.subtracting(openTabIDs))
     awaitingInputPromptCandidates = awaitingInputPromptCandidates.filter { openTabIDs.contains($0.key) }
   }
@@ -1718,6 +1889,8 @@ final class WorktreeTerminalManager {
       awaitingInputPromptCandidates.removeValue(forKey: tabID)
       optimisticBusyExpiryTasks.removeValue(forKey: tabID)?.cancel()
       optimisticBusyByTab.removeValue(forKey: tabID)
+      screenWorkingByTab.removeValue(forKey: tabID)
+      screenWorkingQuietTicks.removeValue(forKey: tabID)
       // Trace: if the tab is being cleaned up while raw-active, record
       // the implicit clear so the session file shows the true→false
       // edge with a meaningful reason rather than a phantom stuck-on.
@@ -1823,6 +1996,10 @@ final class WorktreeTerminalManager {
         clearOptimisticBusy(tabID: tabID)
         clearAwaitingInput(tabID: tabID, reason: "pid-gone")
         clearDeferredWork(tabID: tabID)
+        // The process is gone, so whatever is still painted on the surface is
+        // a corpse — including its interrupt hint. Drop the lease outright
+        // rather than let a frozen footer hold the card in "Working".
+        clearScreenWorking(tabID: tabID)
       }
       guard let state = states[registration.worktreeID] else { continue }
       // Trace the synthesized clear so the session JSONL shows the

@@ -9,8 +9,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: true,
+      activity: .working,
       now: Date(timeIntervalSinceReferenceDate: 100)
     )
     #expect(status == .inProgress)
@@ -21,9 +20,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
-      deferredWork: true,
+      activity: .deferredWork,
       now: Date(timeIntervalSinceReferenceDate: 100)
     )
     #expect(status == .inProgress)
@@ -39,8 +36,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .inProgress)
@@ -57,8 +53,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .fresh)
@@ -74,8 +69,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .fresh)
@@ -91,8 +85,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .waitingOnMe)
@@ -108,8 +101,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .waitingOnMe)
@@ -125,8 +117,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       now: now
     )
     #expect(status == .waitingOnMe)
@@ -142,8 +133,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       waitingExternally: true,
       now: now
     )
@@ -160,8 +150,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       waitingExternally: true,
       now: now
     )
@@ -174,8 +163,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: session,
         tabExists: true,
-        awaitingInput: false,
-        busy: true,
+        activity: .working,
         waitingExternally: true
       ) == .inProgress
     )
@@ -183,8 +171,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: session,
         tabExists: true,
-        awaitingInput: true,
-        busy: true,
+        activity: .wantsInput,
         waitingExternally: true
       ) == .awaitingInput
     )
@@ -195,8 +182,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: true,
-      busy: true
+      activity: .wantsInput
     )
     #expect(status == .awaitingInput)
   }
@@ -207,8 +193,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: interrupted,
         tabExists: false,
-        awaitingInput: false,
-        busy: false
+        activity: .idle
       ) == .interrupted
     )
 
@@ -217,8 +202,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: detached,
         tabExists: false,
-        awaitingInput: false,
-        busy: false
+        activity: .idle
       ) == .detached
     )
 
@@ -228,8 +212,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: parked,
         tabExists: true,
-        awaitingInput: false,
-        busy: true
+        activity: .working
       ) == .parked
     )
   }
@@ -239,8 +222,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: false,
-      awaitingInput: false,
-      busy: false,
+      activity: .idle,
       waitingExternally: true
     )
     #expect(status == .detached)
@@ -255,8 +237,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: remote,
         tabExists: false,
-        awaitingInput: false,
-        busy: false
+        activity: .idle
       ) == .disconnected
     )
   }
@@ -270,8 +251,7 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: remote,
         tabExists: false,
-        awaitingInput: false,
-        busy: false
+        activity: .idle
       ) == .disconnected
     )
   }
@@ -282,8 +262,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: true
+      activity: .working
     )
     #expect(status == .waitingOnMe)
   }
@@ -294,8 +273,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: true,
-      busy: false
+      activity: .wantsInput
     )
     #expect(status == .inProgress)
   }
@@ -306,8 +284,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: false,
-      awaitingInput: false,
-      busy: false
+      activity: .idle
     )
     // Tab is gone → interrupted/detached path runs, override is irrelevant.
     #expect(status == .interrupted)
@@ -320,8 +297,7 @@ struct BoardSessionStatusTests {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: true,
-      awaitingInput: false,
-      busy: false
+      activity: .idle
     )
     #expect(status == .parked)
   }
