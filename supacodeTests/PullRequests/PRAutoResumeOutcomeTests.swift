@@ -123,7 +123,7 @@ struct PRAutoResumeOutcomeTests {
 
   @Test func exhaustedBudgetResurfacesWithBreadcrumb() {
     let result = outcome(previous: running, next: failed, enabled: true, priorAttempts: 3)
-    guard case .notify(.pullRequestReturnedToCourt(_, let body)) = result else {
+    guard case .notify(.pullRequestReturnedToCourt(_, _, let body)) = result else {
       Issue.record("expected notify at cap, got \(result)")
       return
     }

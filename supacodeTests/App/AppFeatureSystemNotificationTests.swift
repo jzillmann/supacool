@@ -119,16 +119,17 @@ struct AppFeatureSystemNotificationTests {
   @Test(.dependencies) func notificationReceivedSendsSystemNotificationWhenEnabled() async {
     var globalSettings = GlobalSettings.default
     globalSettings.systemNotificationsEnabled = true
-    let sends = LockIsolated<[(String, String)]>([])
-    let store = TestStore(
-      initialState: AppFeature.State(
-        settings: SettingsFeature.State(settings: globalSettings)
-      )
-    ) {
+    let session = Self.sampleSession(worktreeID: "/tmp/repo/wt-1")
+    let sends = LockIsolated<[(String, String, UUID?)]>([])
+    let initialState = AppFeature.State(
+      settings: SettingsFeature.State(settings: globalSettings)
+    )
+    initialState.board.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: initialState) {
       AppFeature()
     } withDependencies: {
-      $0.systemNotificationClient.send = { title, body in
-        sends.withValue { $0.append((title, body)) }
+      $0.systemNotificationClient.send = { title, body, sessionID in
+        sends.withValue { $0.append((title, body, sessionID)) }
       }
     }
     store.exhaustivity = .off
@@ -147,6 +148,9 @@ struct AppFeatureSystemNotificationTests {
     #expect(sends.value.count == 1)
     #expect(sends.value.first?.0 == "Done")
     #expect(sends.value.first?.1 == "Build succeeded")
+    // The hook notification's worktree resolves to the board session, so a
+    // click on it can deep-link back.
+    #expect(sends.value.first?.2 == session.id)
   }
 
   @Test(.dependencies) func notificationReceivedSkipsLocalSoundWhenSystemNotificationsEnabled() async {
@@ -197,7 +201,7 @@ struct AppFeatureSystemNotificationTests {
       $0.notificationSoundClient.play = {
         plays.withValue { $0 += 1 }
       }
-      $0.systemNotificationClient.send = { _, _ in
+      $0.systemNotificationClient.send = { _, _, _ in
         sends.withValue { $0 += 1 }
       }
     }
@@ -221,7 +225,8 @@ struct AppFeatureSystemNotificationTests {
   @Test(.dependencies) func priorityTerminationSendsSystemNotificationWhenBackgrounded() async {
     var globalSettings = GlobalSettings.default
     globalSettings.systemNotificationsEnabled = true
-    let sends = LockIsolated<[(String, String)]>([])
+    let sessionID = UUID()
+    let sends = LockIsolated<[(String, String, UUID?)]>([])
     var initialState = AppFeature.State(
       settings: SettingsFeature.State(settings: globalSettings)
     )
@@ -229,8 +234,8 @@ struct AppFeatureSystemNotificationTests {
     let store = TestStore(initialState: initialState) {
       AppFeature()
     } withDependencies: {
-      $0.systemNotificationClient.send = { title, body in
-        sends.withValue { $0.append((title, body)) }
+      $0.systemNotificationClient.send = { title, body, sessionID in
+        sends.withValue { $0.append((title, body, sessionID)) }
       }
     }
     store.exhaustivity = .off
@@ -239,6 +244,7 @@ struct AppFeatureSystemNotificationTests {
       .board(
         .delegate(
           .prioritySessionTerminated(
+            sessionID: sessionID,
             title: "Priority session terminated",
             body: "Deploy fix finished and its terminal exited."
           )
@@ -250,5 +256,41 @@ struct AppFeatureSystemNotificationTests {
     #expect(sends.value.count == 1)
     #expect(sends.value.first?.0 == "Priority session terminated")
     #expect(sends.value.first?.1 == "Deploy fix finished and its terminal exited.")
+    #expect(sends.value.first?.2 == sessionID)
+  }
+
+  @Test(.dependencies) func notificationClickFocusesSession() async {
+    let session = Self.sampleSession(worktreeID: "/tmp/repo/wt-1")
+    let initialState = AppFeature.State()
+    initialState.board.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: initialState) {
+      AppFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.notificationSessionClicked(session.id))
+    await store.receive(\.board.focusSession) {
+      $0.board.focusedSessionID = session.id
+    }
+  }
+
+  @Test(.dependencies) func notificationClickIgnoresUnknownSession() async {
+    let initialState = AppFeature.State()
+    let store = TestStore(initialState: initialState) {
+      AppFeature()
+    }
+
+    // Session was removed between notification and click — no routing.
+    await store.send(.notificationSessionClicked(UUID()))
+  }
+
+  private static func sampleSession(worktreeID: String) -> AgentSession {
+    AgentSession(
+      id: UUID(),
+      repositoryID: "/tmp/repo",
+      worktreeID: worktreeID,
+      agent: .claude,
+      initialPrompt: "Fix the failing tests"
+    )
   }
 }

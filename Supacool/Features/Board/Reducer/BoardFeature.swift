@@ -942,11 +942,14 @@ struct BoardFeature {
 
   @CasePathable
   enum Delegate: Equatable {
-    case prioritySessionTerminated(title: String, body: String)
+    /// `sessionID` lets AppFeature deep-link a notification click back to the
+    /// terminated session's full-screen terminal.
+    case prioritySessionTerminated(sessionID: AgentSession.ID, title: String, body: String)
     /// A PR-backed session's pull request just bounced back into the user's
     /// court (CI failed, review came in, merge-ready, …). AppFeature fires a
     /// system notification so the user doesn't have to watch the board.
-    case pullRequestReturnedToCourt(title: String, body: String)
+    /// `sessionID` is nil when no board session references the PR.
+    case pullRequestReturnedToCourt(sessionID: AgentSession.ID?, title: String, body: String)
     /// Emitted when a tray card asks to open the Settings window on a
     /// specific section (e.g. the stale-hooks card routes to Coding Agents).
     /// AppFeature listens and forwards to SettingsFeature.
@@ -1342,7 +1345,9 @@ struct BoardFeature {
           status: status
         )
         state.priorityTerminationAlert = alert
-        return .send(.delegate(.prioritySessionTerminated(title: alert.title, body: alert.message)))
+        return .send(
+          .delegate(.prioritySessionTerminated(sessionID: id, title: alert.title, body: alert.message))
+        )
 
       case .dismissPriorityTerminationAlert:
         state.priorityTerminationAlert = nil

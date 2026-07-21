@@ -599,7 +599,7 @@ extension BoardFeature {
     func notification(suffix: String = "") -> Delegate {
       let title = session?.displayName ?? prLabel
       let body = (session?.displayName == nil ? reason : "\(prLabel): \(reason)") + suffix
-      return .pullRequestReturnedToCourt(title: title, body: body)
+      return .pullRequestReturnedToCourt(sessionID: session?.id, title: title, body: body)
     }
 
     // Auto-resume only mechanical reasons, only when armed, only for a session

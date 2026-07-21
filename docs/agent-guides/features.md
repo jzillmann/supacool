@@ -29,6 +29,7 @@ feature or materially reshape one, update its row here in the same commit (see
 | Skill autocomplete | `/skill` autocomplete in the prompt editor from the repo's skill catalog | `Supacool/Domain/SkillCatalog.swift`, `SkillAutocompletePopover.swift` | — |
 | Getting started | First-run onboarding task carousel on the board | `GettingStartedState.swift`, `Supacool/Domain/GettingStartedTask.swift`, `GettingStartedCarouselView.swift` | — |
 | Quick diff | Per-session diff sheet | `QuickDiffSheet.swift` | — |
+| Notification deep-link | System notifications (hook events, priority terminations, PR bounces) carry the session id in `userInfo`; clicking one focuses that session's full-screen terminal. Clicks flow out of the UN delegate over an `AsyncStream` that `AppFeature` subscribes to at launch (`notificationSessionClicked` → `board.focusSession`); a click whose session is gone just raises the window. | `SystemNotificationClient.swift`, `AppFeature.swift` (`notificationSessionClicked`) | — |
 | Single-instance guard | `flock` on `~/.supacool/.instance.lock` blocks a second non-isolated instance; preview via `scripts/preview-isolated.sh` | `Supacool/Services/SingleInstanceGuard.swift` | `AGENTS.md` § previewing |
 | Command palette / Settings / Updates | Inherited supacode features, still live (palette actions, settings panes incl. Linear + Remote Hosts, Sparkle) | `supacode/Features/CommandPalette/`, `supacode/Features/Settings/`, `supacode/Features/Updates/` | — |
 

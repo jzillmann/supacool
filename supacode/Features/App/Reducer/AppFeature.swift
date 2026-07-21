@@ -69,6 +69,7 @@ struct AppFeature {
     case navigateSearchPrevious
     case endSearch
     case systemNotificationsPermissionFailed(errorMessage: String?)
+    case notificationSessionClicked(AgentSession.ID)
     case deeplinkReceived(URL)
     case deeplink(Deeplink)
     case deeplinkCheatsheetOpened
@@ -115,6 +116,11 @@ struct AppFeature {
           .run { send in
             for await event in await worktreeInfoWatcher.events() {
               await send(.repositories(.worktreeInfoEvent(event)))
+            }
+          },
+          .run { send in
+            for await sessionID in await systemNotificationClient.sessionClicks() {
+              await send(.notificationSessionClicked(sessionID))
             }
           },
           checkStaleHooksEffect(),
@@ -325,22 +331,29 @@ struct AppFeature {
       case .repositories(.delegate(.worktreeDeleteSucceeded(let worktreeID))):
         return .send(.board(.trayNoteWorktreeDeleteResolved(worktreeID: worktreeID)))
 
-      case .board(.delegate(.prioritySessionTerminated(let title, let body))):
+      case .board(.delegate(.prioritySessionTerminated(let sessionID, let title, let body))):
         guard state.scenePhase != .active, state.settings.systemNotificationsEnabled else {
           return .none
         }
         return .run { _ in
-          await systemNotificationClient.send(title, body)
+          await systemNotificationClient.send(title, body, sessionID)
         }
 
       // Unlike a priority termination, fire even when the app is foreground:
       // the user is often heads-down in another session's terminal, and the
       // whole point is to pull attention to a PR that just needs them.
-      case .board(.delegate(.pullRequestReturnedToCourt(let title, let body))):
+      case .board(.delegate(.pullRequestReturnedToCourt(let sessionID, let title, let body))):
         guard state.settings.systemNotificationsEnabled else { return .none }
         return .run { _ in
-          await systemNotificationClient.send(title, body)
+          await systemNotificationClient.send(title, body, sessionID)
         }
+
+      case .notificationSessionClicked(let sessionID):
+        // Deep-link a notification click to the session's full-screen
+        // terminal. The session may be gone by click time (trashed, removed);
+        // the UN delegate has already raised the main window, so just stop.
+        guard state.board.sessions.contains(where: { $0.id == sessionID }) else { return .none }
+        return .send(.board(.focusSession(id: sessionID)))
 
       case .board(.delegate(.openSettingsRequested(let section))):
         return .send(.settings(.setSelection(section)))
@@ -955,9 +968,12 @@ struct AppFeature {
           .send(.repositories(.worktreeNotificationReceived(worktreeID)))
         ]
         if state.settings.systemNotificationsEnabled {
+          // Board sessions key their terminal state by `worktreeID`, so it
+          // identifies the session a hook notification belongs to.
+          let sessionID = state.board.sessions.first { $0.worktreeID == worktreeID }?.id
           effects.append(
             .run { _ in
-              await systemNotificationClient.send(title, body)
+              await systemNotificationClient.send(title, body, sessionID)
             }
           )
         }

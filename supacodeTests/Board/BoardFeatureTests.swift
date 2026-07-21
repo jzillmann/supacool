@@ -2315,6 +2315,7 @@ struct BoardFeatureTests {
     await store.receive(
       .delegate(
         .prioritySessionTerminated(
+          sessionID: session.id,
           title: "Priority session terminated",
           body: "Deploy fix stopped while the agent was still working."
         )

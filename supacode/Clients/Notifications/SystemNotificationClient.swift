@@ -3,6 +3,15 @@ import ComposableArchitecture
 import Foundation
 import UserNotifications
 
+/// `userInfo` key carrying the `AgentSession.ID` a notification is about, so a
+/// click can deep-link to that session's full-screen terminal.
+private let sessionIDUserInfoKey = "supacoolSessionID"
+
+/// Click events flow out of the UN delegate through this stream; AppFeature
+/// subscribes at launch (same pattern as `TerminalClient.events`). Created
+/// eagerly so clicks that land before the subscription starts are buffered.
+private nonisolated let sessionClickStream = AsyncStream.makeStream(of: UUID.self)
+
 private final class ForegroundSystemNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
   func userNotificationCenter(
     _ center: UNUserNotificationCenter,
@@ -23,6 +32,10 @@ private final class ForegroundSystemNotificationDelegate: NSObject, UNUserNotifi
     didReceive response: UNNotificationResponse
   ) async {
     await Task.yield()
+    if let raw = response.notification.request.content.userInfo[sessionIDUserInfoKey] as? String,
+      let sessionID = UUID(uuidString: raw) {
+      sessionClickStream.continuation.yield(sessionID)
+    }
     let app = NSApplication.shared
     let window =
       app.windows.first { $0.identifier?.rawValue == WindowID.main }
@@ -62,8 +75,12 @@ struct SystemNotificationClient {
 
   var authorizationStatus: @MainActor @Sendable () async -> AuthorizationStatus
   var requestAuthorization: @MainActor @Sendable () async -> AuthorizationRequestResult
-  var send: @MainActor @Sendable (_ title: String, _ body: String) async -> Void
+  /// `sessionID` (when known) rides along in `userInfo` so a click on the
+  /// notification can focus that session's terminal via `sessionClicks`.
+  var send: @MainActor @Sendable (_ title: String, _ body: String, _ sessionID: UUID?) async -> Void
   var openSettings: @MainActor @Sendable () async -> Void
+  /// Session IDs of clicked notifications that carried one.
+  var sessionClicks: @Sendable () -> AsyncStream<UUID>
 }
 
 extension SystemNotificationClient: DependencyKey {
@@ -96,12 +113,15 @@ extension SystemNotificationClient: DependencyKey {
         )
       }
     },
-    send: { title, body in
+    send: { title, body, sessionID in
       let center = configuredNotificationCenter()
       let content = UNMutableNotificationContent()
       content.title = title
       content.body = body
       content.sound = .default
+      if let sessionID {
+        content.userInfo[sessionIDUserInfoKey] = sessionID.uuidString
+      }
       let request = UNNotificationRequest(
         identifier: UUID().uuidString,
         content: content,
@@ -114,14 +134,16 @@ extension SystemNotificationClient: DependencyKey {
         return
       }
       _ = NSWorkspace.shared.open(url)
-    }
+    },
+    sessionClicks: { sessionClickStream.stream }
   )
 
   static let testValue = SystemNotificationClient(
     authorizationStatus: { .notDetermined },
     requestAuthorization: { AuthorizationRequestResult(granted: false, errorMessage: nil) },
-    send: { _, _ in },
-    openSettings: {}
+    send: { _, _, _ in },
+    openSettings: {},
+    sessionClicks: { AsyncStream { $0.finish() } }
   )
 }
 
