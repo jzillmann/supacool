@@ -1052,6 +1052,17 @@ struct BoardView: View {
       return
     }
 
+    // When the highlight IS the leading card (no frozen deck ahead of it),
+    // pin it flush to `.leading` so the rail rests at zero. An *overflowing*
+    // rail never fires the `onScrollGeometryChange` leading-pin, so without
+    // this a nil-anchor `scrollTo` on the first card nudges it a few points
+    // right — `.viewAligned` doesn't re-snap programmatic scrolls — clipping
+    // its left edge/ring at the window edge. This is the common on-appear
+    // case (highlight defaults to the first waiting card).
+    let anchor: UnitPoint? = (extraCards == 0 && sessions.first?.id == highlightedSessionID)
+      ? .leading
+      : nil
+
     // Nil anchor scrolls the *minimal* amount needed to make the card
     // visible — so an already-visible highlight (e.g. card 2 on appear)
     // doesn't scroll at all. A `.center` anchor here re-centered the
@@ -1060,10 +1071,10 @@ struct BoardView: View {
     // highlighted.
     if animated {
       withAnimation(.easeOut(duration: 0.18)) {
-        proxy.scrollTo(highlightedSessionID)
+        proxy.scrollTo(highlightedSessionID, anchor: anchor)
       }
     } else {
-      proxy.scrollTo(highlightedSessionID)
+      proxy.scrollTo(highlightedSessionID, anchor: anchor)
     }
   }
 
