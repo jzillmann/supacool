@@ -90,9 +90,6 @@ struct SessionCardView: View {
         if onAutoObserverToggle != nil {
           autoObserverButton
         }
-        if let serverLifecycle {
-          serverLifecycleChip(serverLifecycle)
-        }
         if let prReason, showsReasonChip {
           PRReasonChip(ball: prReason)
         }
@@ -457,6 +454,11 @@ struct SessionCardView: View {
     HStack(spacing: 8) {
       if let footprint = footprintStore?.footprint(for: session.id) {
         footprintBadge(footprint: footprint)
+      }
+      // Lives in the footer, not the header: the header row already carries the
+      // status/reason chips and was overflowing on PR-backed cards.
+      if let serverLifecycle {
+        serverLifecycleChip(serverLifecycle)
       }
       Spacer(minLength: 8)
       Text(relativeTimestamp)
