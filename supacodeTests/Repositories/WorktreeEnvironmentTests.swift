@@ -135,4 +135,62 @@ struct WorktreeEnvironmentTests {
     #expect(launch.commandInput.starts(with: "'") == true)
     #expect(process.terminationStatus == 1)
   }
+
+  @Test func directPtyInputLimitStaysUnderMacOSCanonicalLineCap() {
+    // MAX_CANON on macOS: a canonical-mode tty line is capped at 1024
+    // bytes; the excess — including the newline — is silently dropped.
+    #expect(maxDirectPtyInputBytes < 1024)
+  }
+
+  @Test func wrappedInputLaunchWritesExecutableRunnerAndShortInput() throws {
+    let prompt = String(repeating: "long dictated prompt ", count: 70)
+    let command = "bash -c 'go run ./cmd/dev worktree init'; claude --dangerously-skip-permissions '\(prompt)'\n"
+    #expect(command.utf8.count > 1024)
+
+    let launch = try #require(try makeWrappedInputLaunch(command: command))
+    defer {
+      try? FileManager.default.removeItem(at: launch.directoryURL)
+    }
+
+    let runnerContents = try String(contentsOf: launch.runnerURL, encoding: .utf8)
+    #expect(runnerContents == "#!/bin/bash\n" + command.trimmingCharacters(in: .whitespacesAndNewlines) + "\n")
+    #expect(FileManager.default.isExecutableFile(atPath: launch.runnerURL.path(percentEncoded: false)))
+    #expect(launch.commandInput == shellSingleQuoted(launch.runnerURL.path(percentEncoded: false)) + "\n")
+    #expect(launch.commandInput.utf8.count < maxDirectPtyInputBytes)
+  }
+
+  @Test func wrappedInputLaunchReturnsNilForWhitespaceOnlyCommands() throws {
+    #expect(try makeWrappedInputLaunch(command: " \n ") == nil)
+  }
+
+  @Test func wrappedInputLaunchRunnerPreservesOversizedArgumentsInZsh() throws {
+    let fileManager = FileManager.default
+    let outputURL = fileManager.temporaryDirectory.appending(
+      path: "supacool-wrapped-input-\(UUID().uuidString.lowercased()).out",
+      directoryHint: .notDirectory
+    )
+    let payload = String(repeating: "x", count: 1500)
+    let launch = try #require(
+      try makeWrappedInputLaunch(
+        command: "printf '%s' '\(payload)' > \(shellSingleQuoted(outputURL.path(percentEncoded: false)))\n"
+      )
+    )
+    defer {
+      try? fileManager.removeItem(at: launch.directoryURL)
+      try? fileManager.removeItem(at: outputURL)
+    }
+
+    // Drive it the way the terminal does: the interactive shell receives
+    // the short quoted runner path as typed input.
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+    process.arguments = ["-c", launch.commandInput]
+
+    try process.run()
+    process.waitUntilExit()
+
+    #expect(process.terminationStatus == 0)
+    let written = try String(contentsOf: outputURL, encoding: .utf8)
+    #expect(written == payload)
+  }
 }

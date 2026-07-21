@@ -31,7 +31,11 @@ final class WorktreeTerminalState {
   var socketPath: String?
   private(set) var shouldHideTabBar = false
   private var blockingScripts: [TerminalTabID: BlockingScriptKind] = [:]
-  private var blockingScriptLaunchDirectories: [TerminalTabID: URL] = [:]
+  /// Temp directories holding a tab's generated launch runner — blocking
+  /// scripts always, agent launches only when the composed line was too
+  /// long to type directly (see `maxDirectPtyInputBytes`). Removed when
+  /// the tab closes.
+  private var launchScriptDirectories: [TerminalTabID: URL] = [:]
   private var lastBlockingScriptTabByKind: [BlockingScriptKind: TerminalTabID] = [:]
   private var pendingSetupScript: Bool
   private var isEnsuringInitialTab = false
@@ -253,13 +257,35 @@ final class WorktreeTerminalState {
       effectiveCommand = nil
       effectiveInput = resolvedInput
     }
+    // Ghostty types `initial_input` into the pty at surface spawn, before
+    // the shell has switched the tty to raw mode. macOS caps a
+    // canonical-mode line at 1024 bytes (MAX_CANON) and silently drops
+    // the excess — including the terminating newline — so an oversized
+    // launch line ends up stranded, truncated, at the shell prompt.
+    // Route long lines through a self-executing wrapper file; the typed
+    // line becomes a short runner path.
+    var wrappedLaunch: WrappedInputLaunch?
+    var typedInput = effectiveInput
+    if let input = effectiveInput, input.utf8.count > maxDirectPtyInputBytes {
+      do {
+        wrappedLaunch = try makeWrappedInputLaunch(command: input)
+        if let wrappedLaunch {
+          typedInput = wrappedLaunch.commandInput
+        }
+      } catch {
+        terminalStateLogger.warning(
+          "Failed to wrap oversized launch input (\(input.utf8.count) bytes), sending directly: \(error)"
+        )
+      }
+    }
     let tabId = createTab(
       TabCreation(
         title: title,
         icon: "terminal",
         isTitleLocked: false,
         command: effectiveCommand,
-        initialInput: effectiveInput,
+        initialInput: typedInput,
+        transcriptInput: effectiveInput,
         focusing: focusing,
         inheritingFromSurfaceId: resolvedInheritanceSurfaceId,
         context: context,
@@ -267,6 +293,13 @@ final class WorktreeTerminalState {
         surfaceID: surfaceID,
       )
     )
+    if let wrappedLaunch {
+      if let tabId {
+        launchScriptDirectories[tabId] = wrappedLaunch.directoryURL
+      } else {
+        cleanupLaunchScriptDirectory(at: wrappedLaunch.directoryURL)
+      }
+    }
     if shouldConsumeSetupScript, tabId != nil {
       onSetupScriptConsumed?()
     }
@@ -317,13 +350,13 @@ final class WorktreeTerminalState {
       )
     )
     guard let tabId else {
-      cleanupBlockingScriptLaunchDirectory(at: launch.directoryURL)
+      cleanupLaunchScriptDirectory(at: launch.directoryURL)
       blockingScriptLogger.warning("Failed to create \(kind.tabTitle) tab for worktree \(worktree.id)")
       onBlockingScriptCompleted?(kind, 1, nil)
       return nil
     }
     blockingScripts[tabId] = kind
-    blockingScriptLaunchDirectories[tabId] = launch.directoryURL
+    launchScriptDirectories[tabId] = launch.directoryURL
     lastBlockingScriptTabByKind[kind] = tabId
     tabManager.updateDirty(tabId, isDirty: true)
     emitTaskStatusIfChanged()
@@ -339,6 +372,10 @@ final class WorktreeTerminalState {
     var tintColor: TerminalTabTintColor?
     let command: String?
     let initialInput: String?
+    /// What the transcript should record as the launch input when it
+    /// differs from `initialInput` — i.e. when the typed line is a
+    /// wrapper-runner path and the logical command lives in the file.
+    var transcriptInput: String?
     let focusing: Bool
     let inheritingFromSurfaceId: UUID?
     let context: ghostty_surface_context_e
@@ -358,9 +395,12 @@ final class WorktreeTerminalState {
     // GhosttySurfaceView.sendText and therefore bridge.onInputTap. Log it
     // here so the transcript reflects the launch command — without this
     // the trace shows nothing at all when a hookless agent (pi, plain
-    // shell) crashes before producing visible output.
-    if let initialInput = creation.initialInput, !initialInput.isEmpty {
-      TranscriptRecorder.shared.appendInput(tabID: tabId, text: initialInput)
+    // shell) crashes before producing visible output. Prefer
+    // `transcriptInput` (the logical command) over the typed line, which
+    // may be just a wrapper-runner path.
+    let transcriptText = creation.transcriptInput ?? creation.initialInput
+    if let transcriptText, !transcriptText.isEmpty {
+      TranscriptRecorder.shared.appendInput(tabID: tabId, text: transcriptText)
     }
     let tree = splitTree(
       for: tabId,
@@ -711,7 +751,7 @@ final class WorktreeTerminalState {
 
   func closeTab(_ tabId: TerminalTabID) {
     let closedBlockingKind = blockingScripts.removeValue(forKey: tabId)
-    cleanupBlockingScriptLaunchDirectory(for: tabId)
+    cleanupLaunchScriptDirectory(for: tabId)
     // Clear lingering tab tracking for completed or non-blocking tabs.
     for (kind, tracked) in lastBlockingScriptTabByKind where tracked == tabId {
       lastBlockingScriptTabByKind.removeValue(forKey: kind)
@@ -932,7 +972,7 @@ final class WorktreeTerminalState {
     for surface in surfaces.values {
       surface.closeSurface()
     }
-    cleanupBlockingScriptLaunchDirectories()
+    cleanupLaunchScriptDirectories()
     surfaces.removeAll()
     trees.removeAll()
     focusedSurfaceIdByTab.removeAll()
@@ -1253,25 +1293,25 @@ final class WorktreeTerminalState {
     makeCommandInput(script: script)
   }
 
-  private func cleanupBlockingScriptLaunchDirectory(for tabId: TerminalTabID) {
-    guard let directoryURL = blockingScriptLaunchDirectories.removeValue(forKey: tabId) else { return }
-    cleanupBlockingScriptLaunchDirectory(at: directoryURL)
+  private func cleanupLaunchScriptDirectory(for tabId: TerminalTabID) {
+    guard let directoryURL = launchScriptDirectories.removeValue(forKey: tabId) else { return }
+    cleanupLaunchScriptDirectory(at: directoryURL)
   }
 
-  private func cleanupBlockingScriptLaunchDirectories() {
-    let directoryURLs = blockingScriptLaunchDirectories.values
-    blockingScriptLaunchDirectories.removeAll()
+  private func cleanupLaunchScriptDirectories() {
+    let directoryURLs = launchScriptDirectories.values
+    launchScriptDirectories.removeAll()
     for directoryURL in directoryURLs {
-      cleanupBlockingScriptLaunchDirectory(at: directoryURL)
+      cleanupLaunchScriptDirectory(at: directoryURL)
     }
   }
 
-  private func cleanupBlockingScriptLaunchDirectory(at directoryURL: URL) {
+  private func cleanupLaunchScriptDirectory(at directoryURL: URL) {
     do {
       try FileManager.default.removeItem(at: directoryURL)
     } catch {
       blockingScriptLogger.warning(
-        "Failed to remove blocking script launch directory \(directoryURL.path(percentEncoded: false)): \(error)"
+        "Failed to remove launch script directory \(directoryURL.path(percentEncoded: false)): \(error)"
       )
     }
   }
@@ -1799,7 +1839,7 @@ final class WorktreeTerminalState {
       trees.removeValue(forKey: tabId)
       focusedSurfaceIdByTab.removeValue(forKey: tabId)
       tabIsRunningById.removeValue(forKey: tabId)
-      cleanupBlockingScriptLaunchDirectory(for: tabId)
+      cleanupLaunchScriptDirectory(for: tabId)
       tabManager.closeTab(tabId)
       updateShouldHideTabBar()
       if let kind = blockingScripts.removeValue(forKey: tabId) {
@@ -1922,6 +1962,57 @@ nonisolated func composeSetupAndCommand(
 /// newlines (preserved inside single quotes).
 private nonisolated func singleQuoteShell(_ value: String) -> String {
   "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+/// Longest launch line we'll type into a fresh pty directly. macOS caps a
+/// canonical-mode tty line at 1024 bytes (`MAX_CANON` in sys/syslimits.h),
+/// and the launch input reaches the pty before the shell has switched the
+/// tty to raw mode — anything past the cap is silently dropped by the
+/// line discipline, *including* the terminating newline, leaving a
+/// truncated command stranded at the prompt. Keep a healthy margin.
+nonisolated let maxDirectPtyInputBytes = 900
+
+nonisolated struct WrappedInputLaunch {
+  let directoryURL: URL
+  let runnerURL: URL
+  let commandInput: String
+}
+
+/// Wrap an oversized launch command in a self-executing runner file so the
+/// line actually typed into the pty stays far below `MAX_CANON`. The
+/// runner is invoked *by* the tab's interactive shell, so it inherits the
+/// interactive environment (exported PATH and friends); only shell
+/// aliases are lost, which generated agent commands don't use.
+nonisolated func makeWrappedInputLaunch(
+  command: String,
+  baseDirectoryURL: URL = FileManager.default.temporaryDirectory
+) throws -> WrappedInputLaunch? {
+  let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+  guard !trimmed.isEmpty else { return nil }
+
+  let fileManager = FileManager.default
+  let directoryURL = baseDirectoryURL.appending(
+    path: "supacool-launch-\(UUID().uuidString.lowercased())",
+    directoryHint: .isDirectory
+  )
+  let runnerURL = directoryURL.appending(path: "run", directoryHint: .notDirectory)
+  do {
+    try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+    try Data(("#!/bin/bash\n" + trimmed + "\n").utf8).write(to: runnerURL, options: [.atomic])
+    try fileManager.setAttributes(
+      [.posixPermissions: 0o700],
+      ofItemAtPath: runnerURL.path(percentEncoded: false)
+    )
+  } catch {
+    try? fileManager.removeItem(at: directoryURL)
+    throw error
+  }
+
+  return WrappedInputLaunch(
+    directoryURL: directoryURL,
+    runnerURL: runnerURL,
+    commandInput: shellSingleQuoted(runnerURL.path(percentEncoded: false)) + "\n"
+  )
 }
 
 nonisolated struct BlockingScriptLaunch {
