@@ -3270,15 +3270,28 @@ nonisolated func sanitizeSessionTitle(_ raw: String) -> String {
     .first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty })
     ?? raw
   var result = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-  while let first = result.first, ["\"", "'", "`"].contains(first) {
+  // Strip markdown dressing a chatty model may wrap the title in.
+  result = result.replacing("**", with: "")
+  result = result.replacing("`", with: "")
+  while result.hasPrefix("#") { result.removeFirst() }
+  result = result.trimmingCharacters(in: .whitespaces)
+  while let first = result.first, ["\"", "'"].contains(first) {
     result.removeFirst()
   }
-  while let last = result.last, ["\"", "'", "`"].contains(last) {
+  while let last = result.last, ["\"", "'"].contains(last) {
     result.removeLast()
   }
   result = result.trimmingCharacters(in: .whitespaces)
   while result.hasSuffix(".") { result.removeLast() }
-  return String(result.prefix(60))
+  // Plausibility gate: we asked for 3–6 Title Case words. An answer that
+  // doesn't remotely look like that means the model ignored the brief —
+  // claudeCLI mode once returned a multi-paragraph agent report, and
+  // prefix-chopping it produced "…a fresh **isol" card titles. Reject
+  // instead of truncating; the caller then keeps the deterministic
+  // prompt-derived name, which beats a mid-word chop.
+  let wordCount = result.split(whereSeparator: \.isWhitespace).count
+  guard !result.isEmpty, result.count <= 60, wordCount <= 8 else { return "" }
+  return result
 }
 
 /// When the toolbar filter is narrowed to exactly one repo, prefer that
