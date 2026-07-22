@@ -107,6 +107,11 @@ single primary terminal from the legacy top-level keys. Old files thus
 upgrade in place; new writes drop the legacy keys. The legacy keys remain
 in `CodingKeys` solely so the read path can find them — do not delete.
 
+`SessionTerminal.hostTabID` (2026-07, multi-agent tracking) is a plain
+additive optional following the standard convention: absent decodes to nil
+("this terminal is a tab", the old meaning); non-nil marks a hook-adopted
+split-pane terminal whose `id` is a surface UUID.
+
 ## On-disk location
 
 All app data lives under `~/.supacool/` via `SupacoolPaths.baseDirectory`. Stock upstream supacode uses `~/.supacode/`; the two are cleanly separate now, so both apps can coexist without clobbering each other's files. An older Supacool install (pre-rename) kept data in `~/.supacode/`; the one-time migration is documented in `RELEASING.md`.

@@ -88,6 +88,12 @@ final class WorktreeTerminalState {
   /// the user is engaging with again and to optimistically mark submitted
   /// prompts as busy while waiting for agent hooks to catch up.
   var onInputObserved: ((TerminalTabID, String) -> Void)?
+  /// Fires when the user explicitly closes a split surface whose process
+  /// is still alive, and the host tab survives it. Supacool prunes the
+  /// matching adopted pane terminal — closing a live pane is the explicit
+  /// "I'm done with this agent" gesture. Process-exit closes and tab
+  /// teardown do NOT fire this: those panes stay resumable.
+  var onSurfaceClosed: ((TerminalTabID, UUID) -> Void)?
 
   init(
     runtime: GhosttyRuntime,
@@ -1900,7 +1906,7 @@ final class WorktreeTerminalState {
     }
   }
 
-  private func handleCloseRequest(for view: GhosttySurfaceView, processAlive _: Bool) {
+  private func handleCloseRequest(for view: GhosttySurfaceView, processAlive: Bool) {
     guard surfaces[view.id] != nil else { return }
     guard let tabId = tabId(containing: view.id), let tree = trees[tabId] else {
       view.closeSurface()
@@ -1919,6 +1925,9 @@ final class WorktreeTerminalState {
     let newTree = tree.removing(node)
     view.closeSurface()
     cleanupSurfaceState(for: view.id)
+    if !newTree.isEmpty, processAlive {
+      onSurfaceClosed?(tabId, view.id)
+    }
     if newTree.isEmpty {
       trees.removeValue(forKey: tabId)
       focusedSurfaceIdByTab.removeValue(forKey: tabId)

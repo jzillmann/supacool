@@ -12,6 +12,9 @@ struct TerminalSplitTreeView: View {
   // and `unfocused-split-opacity` config values. Fill is nil when the config
   // is unreadable; callers must skip the overlay in that case.
   let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
+  // Supacool: optional per-pane chip (agent icon + activity) rendered on
+  // each leaf. Nil result = no chip for that surface (plain shell panes).
+  var paneBadge: ((UUID) -> AnyView?)?
   let action: (Operation) -> Void
 
   private static let dragType = UTType(exportedAs: "io.morethan.supacool.ghosttySurfaceId")
@@ -35,6 +38,7 @@ struct TerminalSplitTreeView: View {
         isRoot: node == tree.root,
         activeSurfaceID: activeSurfaceID,
         unfocusedSplitOverlay: unfocusedSplitOverlay,
+        paneBadge: paneBadge,
         action: action
       )
       .id(node.structuralIdentity)
@@ -52,6 +56,7 @@ struct TerminalSplitTreeView: View {
     var isRoot: Bool = false
     let activeSurfaceID: UUID?
     let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
+    var paneBadge: ((UUID) -> AnyView?)?
     let action: (Operation) -> Void
 
     var body: some View {
@@ -62,6 +67,7 @@ struct TerminalSplitTreeView: View {
           isSplit: !isRoot,
           activeSurfaceID: activeSurfaceID,
           unfocusedSplitOverlay: unfocusedSplitOverlay,
+          paneBadge: paneBadge,
           action: action
         )
       case .split(let split):
@@ -86,6 +92,7 @@ struct TerminalSplitTreeView: View {
               node: split.left,
               activeSurfaceID: activeSurfaceID,
               unfocusedSplitOverlay: unfocusedSplitOverlay,
+              paneBadge: paneBadge,
               action: action
             )
           },
@@ -94,6 +101,7 @@ struct TerminalSplitTreeView: View {
               node: split.right,
               activeSurfaceID: activeSurfaceID,
               unfocusedSplitOverlay: unfocusedSplitOverlay,
+              paneBadge: paneBadge,
               action: action
             )
           },
@@ -110,6 +118,7 @@ struct TerminalSplitTreeView: View {
     let isSplit: Bool
     let activeSurfaceID: UUID?
     let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
+    var paneBadge: ((UUID) -> AnyView?)?
     let action: (Operation) -> Void
 
     @State private var dropState: DropState = .idle
@@ -138,6 +147,15 @@ struct TerminalSplitTreeView: View {
           .overlay(alignment: .topTrailing) {
             if surfaceView.bridge.state.searchNeedle != nil {
               GhosttySurfaceSearchOverlay(surfaceView: surfaceView)
+            }
+          }
+          .overlay(alignment: .bottomTrailing) {
+            // Supacool: per-pane agent chip. Bottom-trailing keeps it
+            // clear of the search overlay and the top drag handle.
+            if let badge = paneBadge?(surfaceView.id) {
+              badge
+                .padding(6)
+                .allowsHitTesting(false)
             }
           }
           .overlay(alignment: .top) {
@@ -331,6 +349,7 @@ struct TerminalSplitTreeAXContainer: NSViewRepresentable {
   let tree: SplitTree<GhosttySurfaceView>
   let activeSurfaceID: UUID?
   let unfocusedSplitOverlay: (fill: Color?, opacity: Double)
+  var paneBadge: ((UUID) -> AnyView?)?
   let action: (TerminalSplitTreeView.Operation) -> Void
 
   func makeNSView(context: Context) -> TerminalSplitAXContainerView {
@@ -344,6 +363,7 @@ struct TerminalSplitTreeAXContainer: NSViewRepresentable {
           tree: tree,
           activeSurfaceID: activeSurfaceID,
           unfocusedSplitOverlay: unfocusedSplitOverlay,
+          paneBadge: paneBadge,
           action: action
         )
       ),

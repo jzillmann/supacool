@@ -281,7 +281,6 @@ struct FullScreenTerminalView: View {
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
       }
-      agentChip
       overflowMenu
       parkControl
       removeButton
@@ -364,22 +363,9 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  private var agentChip: some View {
-    HStack(spacing: 4) {
-      AgentIconView(agent: session.agent, size: 12)
-      Text(AgentType.displayName(for: session.agent))
-        .font(.caption.weight(.medium))
-        .foregroundStyle(agentColor)
-    }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 3)
-    .background(agentColor.opacity(0.12))
-    .clipShape(Capsule())
-  }
-
-  private var agentColor: Color {
-    AgentType.tintColor(for: session.agent)
-  }
+  // The agent chip moved from the session header to each terminal: see
+  // `paneBadgeView(for:)` (per-pane chip) and the tab-strip labels — a
+  // session can run several agents, so a single header chip would lie.
 
   @ViewBuilder
   private var repoChip: some View {
@@ -881,7 +867,7 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var splitButton: some View {
     let worktree = resolveWorktree()
-    let isSplit = currentLeafCount(worktree: worktree) > 1
+    let isSplit = hasUntrackedLeaf(worktree: worktree)
     Button {
       toggleShellSplit()
     } label: {
@@ -897,9 +883,12 @@ struct FullScreenTerminalView: View {
     .task(id: session.id) { captureAgentSurfaceIfNeeded() }
   }
 
-  /// Toggle the shell split beside the agent surface. With 2+ leaves,
-  /// close every non-agent leaf so the toolbar always returns to the
-  /// single-pane state. With 1 leaf, split to the right.
+  /// Toggle the shell split beside the agent surface. With untracked
+  /// (plain shell) leaves present, close them so the toolbar always
+  /// returns to the tracked-panes-only state. Otherwise split to the
+  /// right. Tracked = the tab's own (creation) surface plus every
+  /// hook-adopted agent pane — a second agent's pane is never closed by
+  /// ⌘E, only its plain shell siblings are.
   private func toggleShellSplit() {
     guard let worktree = resolveWorktree() else { return }
     let state = terminalManager.state(for: worktree) { false }
@@ -907,8 +896,9 @@ struct FullScreenTerminalView: View {
     guard state.containsTabTree(tabID) else { return }
     let leaves = state.splitTree(for: tabID).leaves()
     captureAgentSurfaceIfNeeded(leaves: leaves)
-    if leaves.count > 1 {
-      for leaf in leaves where leaf.id != agentSurfaceID {
+    let untracked = leaves.filter { !isTrackedSurface($0.id, in: state, tabID: tabID) }
+    if !untracked.isEmpty {
+      for leaf in untracked {
         _ = state.closeSurface(id: leaf.id)
       }
     } else {
@@ -916,12 +906,75 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  private func currentLeafCount(worktree: Worktree?) -> Int {
-    guard let worktree else { return 0 }
+  /// Whether a surface backs a tracked terminal: the tab's own creation
+  /// surface (falling back to the legacy single-leaf capture) or an
+  /// adopted agent pane's persisted terminal.
+  private func isTrackedSurface(
+    _ surfaceID: UUID,
+    in state: WorktreeTerminalState,
+    tabID: TerminalTabID
+  ) -> Bool {
+    if let pane = session.terminal(id: surfaceID), pane.hostTabID != nil { return true }
+    if let creationSurfaceID = state.creationSurfaceID(for: tabID) {
+      return surfaceID == creationSurfaceID
+    }
+    return surfaceID == agentSurfaceID
+  }
+
+  /// True when the session's primary tab has at least one plain-shell
+  /// leaf — i.e. something ⌘E would close. Adopted agent panes don't
+  /// count; they belong to the composition, not the toggle.
+  private func hasUntrackedLeaf(worktree: Worktree?) -> Bool {
+    guard let worktree else { return false }
     let state = terminalManager.state(for: worktree) { false }
     let tabID = TerminalTabID(rawValue: session.id)
-    guard state.containsTabTree(tabID) else { return 0 }
-    return state.splitTree(for: tabID).leaves().count
+    guard state.containsTabTree(tabID) else { return false }
+    return state.splitTree(for: tabID).leaves().contains {
+      !isTrackedSurface($0.id, in: state, tabID: tabID)
+    }
+  }
+
+  /// Resolve the chip shown on a split leaf: an adopted agent pane's own
+  /// terminal, or — on the tab's creation surface (single leaf for legacy
+  /// tabs) — the active tab terminal when it runs an agent. Plain shell
+  /// panes get nothing.
+  private func paneBadgeView(for surfaceID: UUID) -> AnyView? {
+    guard let terminal = badgeTerminal(for: surfaceID) else { return nil }
+    return AnyView(
+      SessionTerminalBadge(agent: terminal.agent, activity: liveActivity(for: terminal))
+    )
+  }
+
+  private func badgeTerminal(for surfaceID: UUID) -> SessionTerminal? {
+    if let pane = session.terminal(id: surfaceID), pane.hostTabID != nil, pane.role == .agent {
+      return pane
+    }
+    guard let active = session.terminal(id: activeTerminalID), active.role == .agent,
+      let worktree = resolveWorktree()
+    else { return nil }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: activeTerminalID)
+    guard state.containsTabTree(tabID) else { return nil }
+    if let creationSurfaceID = state.creationSurfaceID(for: tabID) {
+      return creationSurfaceID == surfaceID ? active : nil
+    }
+    // Legacy tab without creation tracking: chip only when unambiguous.
+    return state.splitTree(for: tabID).leaves().count == 1 ? active : nil
+  }
+
+  /// Live activity for one terminal's chip: pane terminals read their own
+  /// surface's busy latch; tab terminals read the tab's fused activity.
+  private func liveActivity(for terminal: SessionTerminal) -> AgentActivity {
+    if terminal.hostTabID != nil {
+      return terminalManager.isAgentSurfaceBusy(
+        worktreeID: session.worktreeID,
+        surfaceID: terminal.id
+      ) ? .working : .idle
+    }
+    return terminalManager.agentActivity(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: terminal.id)
+    )
   }
 
   private func captureAgentSurfaceIfNeeded(leaves: [GhosttySurfaceView]? = nil) {
@@ -1047,11 +1100,16 @@ struct FullScreenTerminalView: View {
       // Supacool; each card is one session, and clicking one should
       // show only that session's terminal tree.
       VStack(spacing: 0) {
-        if session.terminals.count > 1 {
+        // Pane terminals render inside their host tab's split tree, so
+        // the strip shows tab terminals only.
+        if session.tabTerminals.count > 1 {
           SessionTerminalTabStrip(
-            terminals: session.terminals,
+            terminals: session.tabTerminals,
             primaryTerminalID: session.primaryTerminalID,
             activeTerminalID: activeTerminalID,
+            activity: { terminal in
+              terminal.role == .agent ? liveActivity(for: terminal) : nil
+            },
             onSelect: onSelectTerminal,
             onClose: onCloseTerminal,
             onAdd: onAddShellTerminal
@@ -1060,7 +1118,8 @@ struct FullScreenTerminalView: View {
         SingleSessionTerminalView(
           worktree: worktree,
           tabID: TerminalTabID(rawValue: activeTerminalID),
-          manager: terminalManager
+          manager: terminalManager,
+          paneBadge: { surfaceID in paneBadgeView(for: surfaceID) }
         )
         .id(activeTerminalID)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -319,7 +319,7 @@ extension BoardFeature {
     }
     for job in jobs {
       guard let hostTabID = job.hostTabID else { continue }
-      if await terminalClient.tabExists(worktree.id, TerminalTabID(rawValue: hostTabID)) {
+      if terminalClient.tabExists(worktree.id, TerminalTabID(rawValue: hostTabID)) {
         await terminalClient.send(
           .splitTabWithInput(
             worktree,

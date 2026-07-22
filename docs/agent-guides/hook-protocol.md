@@ -118,11 +118,37 @@ does the *identical* `nc -U $SUPACOOL_SOCKET_PATH`. Key choices (details and rat
 
 `WorktreeTerminalManager.configureSocketServer` owns both callbacks:
 
-- `onBusy` updates the per-tab busy flag; `BoardRootView.classify(_:)` reads it on every
-  render to bucket cards (see [`architecture.md`](./architecture.md) § busy-state wiring
-  and the card status classifier).
+- `onBusy` updates the per-surface busy latch; `BoardRootView.classify(_:)` reads the
+  session-merged activity on every render to bucket cards (see
+  [`architecture.md`](./architecture.md) § busy-state wiring and the card status
+  classifier).
 - `onNotification` posts the system notification and calls
-  `captureAgentNativeSessionID(tabID:notification:)`.
+  `captureAgentNativeSessionID(worktreeID:tabID:surfaceID:notification:)`.
+
+### Surface-keyed resolution & auto-adoption (multi-agent, since 2026-07)
+
+Hooks resolve to a `SessionTerminal` in this order:
+
+1. a **pane terminal** whose `id` equals the reporting `SUPACOOL_SURFACE_ID`,
+2. else the **tab terminal** (`terminal.id == tabID`) — but only when the hook came from
+   the tab's *creation surface* (`WorktreeTerminalState.creationSurfaceIDByTab`; unknown
+   creation surface ⇒ legacy fallback to the tab terminal),
+3. else the hook comes from an untracked split pane of a session-owned tab →
+   **auto-adoption**: a new `.agent` pane terminal (`id = surfaceID`,
+   `hostTabID = tabID`) is appended with the hook's agent and `session_id`. This is how
+   an agent hand-typed into a ⌘E split becomes tracked and resumable. A `.shell` tab
+   terminal that emits agent hooks is instead *promoted* in place.
+
+Guards: a tab terminal registered to a different agent still drops foreign hook ids
+(exiting claude and running codex in the same pane keeps the claude resume id); pane
+terminals are user-driven, so there the latest agent wins. This also fixed a real bug:
+before surface keying, a hand-typed same-type agent in a split silently **overwrote** the
+primary's captured resume id (splits share `SUPACOOL_TAB_ID`).
+
+Busy clearing is surface-scoped: an awaiting/Stop hook clears only the reporting
+surface's latch, and a busy edge from one surface never clears an awaiting prompt raised
+by a *different* surface — so a working sibling keeps the tab In Progress (working wins)
+while another pane's permission prompt is pending.
 
 ### The hooks alone cannot answer "is it working?"
 

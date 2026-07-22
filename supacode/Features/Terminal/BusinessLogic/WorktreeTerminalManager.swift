@@ -820,6 +820,19 @@ final class WorktreeTerminalManager {
     return nil
   }
 
+  /// Drop the adopted pane terminal backing an explicitly-closed split
+  /// surface, so the session's composition matches reality. Tab terminals
+  /// and the primary are never touched (their ids never match a pane's
+  /// surface UUID / `paneIndices` requires `hostTabID != nil`).
+  private func prunePaneTerminal(surfaceID: UUID) {
+    $agentSessions.withLock { sessions in
+      guard let (sessionIndex, terminalIndex) =
+        Self.paneIndices(forSurfaceID: surfaceID, in: sessions) else { return }
+      sessions[sessionIndex].terminals.remove(at: terminalIndex)
+      terminalLogger.info("Pruned pane terminal \(surfaceID) after its split was closed")
+    }
+  }
+
   /// Locate the (session, terminal) index pair for a PANE terminal by its
   /// surface UUID. Pane terminals carry `hostTabID != nil` and use the
   /// surface UUID as their id.
@@ -1265,6 +1278,9 @@ final class WorktreeTerminalManager {
     }
     state.onInputObserved = { [weak self] tabID, text in
       self?.handleInputObserved(worktreeID: worktree.id, tabID: tabID, text: text)
+    }
+    state.onSurfaceClosed = { [weak self] _, surfaceID in
+      self?.prunePaneTerminal(surfaceID: surfaceID)
     }
     states[worktree.id] = state
     terminalLogger.info("Created terminal state for worktree \(worktree.id)")
