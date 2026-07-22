@@ -68,6 +68,19 @@ final class WorktreeTerminalManager {
     var rawActive = false
     var presented = false
     var lastScreenFingerprint: String?
+    /// True when an authoritative awaiting-input HOOK raised this tracker
+    /// (vs the screen-scan fallback). A hook-sourced awaiting has already
+    /// cleared its own surface's busy latch, so any latch still set in the
+    /// tab belongs to a *sibling* agent pane that is mid-turn — which lets
+    /// `agentActivity` apply "working wins" without regressing the
+    /// stuck-latch case the screen fallback exists for.
+    var hookSourced = false
+    /// The surface whose hook raised this tracker. Busy transitions from
+    /// OTHER surfaces of the tab (a sibling agent pane resuming or
+    /// finishing) must not clear a prompt this surface is still showing.
+    /// Nil for screen-fallback awaiting — any busy edge clears it, as
+    /// before multi-agent tabs existed.
+    var hookSurfaceID: UUID?
   }
 
   private struct AwaitingInputPromptCandidate {
@@ -265,7 +278,7 @@ final class WorktreeTerminalManager {
         event: .hookBusy(active: active, pid: pid, source: nil, surfaceID: surfaceID, at: Date()),
         tabID: wrappedTabID
       )
-      self?.markInitialAgentEventObserved(tabID: tabID)
+      self?.markInitialAgentEventObserved(tabID: tabID, surfaceID: surfaceID)
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped busy update for unknown worktree \(decoded)")
         return
@@ -297,7 +310,7 @@ final class WorktreeTerminalManager {
       // supersedes local optimistic state and a prior "awaiting input"
       // signal for this tab.
       self?.clearOptimisticBusy(tabID: tabID)
-      self?.clearAwaitingInput(tabID: tabID, reason: "busy-changed")
+      self?.clearAwaitingInput(tabID: tabID, reason: "busy-changed", onlyIfRaisedBy: surfaceID)
       if active {
         self?.clearDeferredWork(tabID: tabID)
       }
@@ -349,7 +362,7 @@ final class WorktreeTerminalManager {
         ),
         tabID: wrappedTabID
       )
-      self?.markInitialAgentEventObserved(tabID: tabID)
+      self?.markInitialAgentEventObserved(tabID: tabID, surfaceID: surfaceID)
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
         return
@@ -357,7 +370,12 @@ final class WorktreeTerminalManager {
       let title = notification.title ?? notification.agent
       let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
-      self?.captureAgentNativeSessionID(tabID: tabID, notification: notification)
+      self?.captureAgentNativeSessionID(
+        worktreeID: decoded,
+        tabID: tabID,
+        surfaceID: surfaceID,
+        notification: notification
+      )
       if awaiting {
         // Claude's generic 60s idle reminder while a deferred-work lease
         // is live is expected noise, not evidence the agent needs the
@@ -389,9 +407,13 @@ final class WorktreeTerminalManager {
         // correcting on a classifier false positive: the agent's next
         // busy hook re-sets busy and clears awaiting within seconds.
         self?.clearOptimisticBusy(tabID: tabID)
-        state.clearAgentBusy(tabID: wrappedTabID)
+        // Surface-scoped: a sibling agent split into the same tab keeps
+        // its busy latch when THIS pane's agent yields (working wins).
+        state.clearAgentBusy(surfaceID: surfaceID, tabID: wrappedTabID)
         self?.clearDeferredWork(tabID: tabID)
-        self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID, source: "hook")
+        self?.markAwaitingInputSignal(
+          worktreeID: decoded, tabID: tabID, source: "hook", surfaceID: surfaceID
+        )
       } else if let duration = self?.deferredWorkLeaseDuration(for: notification) {
         self?.markDeferredWork(worktreeID: decoded, tabID: tabID, duration: duration)
       } else if notification.event == "Stop" {
@@ -409,7 +431,8 @@ final class WorktreeTerminalManager {
         // agent resumes, its next busy=1 hook re-sets busy within seconds.
         self?.clearDeferredWork(tabID: tabID)
         self?.clearOptimisticBusy(tabID: tabID)
-        state.clearAgentBusy(tabID: wrappedTabID)
+        // Surface-scoped for the same reason as the awaiting branch above.
+        state.clearAgentBusy(surfaceID: surfaceID, tabID: wrappedTabID)
       }
     }
   }
@@ -662,26 +685,96 @@ final class WorktreeTerminalManager {
   }
 
   /// Persists the agent-native session identifier from a hook payload onto
-  /// the matching `AgentSession` (by tabID). Silently no-ops when no session
-  /// exists for the tab yet, or when the payload carried no session id.
+  /// the matching `SessionTerminal`, creating one when the hook comes from
+  /// an untracked split pane (auto-adoption). Silently no-ops when no
+  /// session owns the tab, or when the payload carried no session id.
   ///
-  /// Hook ids from a *different* agent than the session was registered with
-  /// are dropped — without this guard, a user who exits claude and runs codex
-  /// in the same tab would have codex's UUIDv7 silently overwrite claude's
-  /// captured id, leaving Resume to issue `claude --resume <codex-uuid>` and
-  /// fail. The session "is" what it was launched as; foreign hooks shouldn't
-  /// mutate its identity.
+  /// Resolution order (see `resolveTerminalIndices`):
+  ///   1. a pane terminal whose `id` matches the reporting surface,
+  ///   2. the tab terminal — but only when the hook came from the tab's
+  ///      creation surface (or the creation surface is unknown),
+  ///   3. neither ⇒ the hook comes from an untracked pane of a session tab
+  ///      → ADOPT: append a new `.agent` pane terminal with the hook's
+  ///      agent and session id. This is how hand-typed agents in ⌘E splits
+  ///      become tracked, resumable terminals.
+  ///
+  /// On a TAB terminal, hook ids from a *different* agent than registered
+  /// are dropped — without this guard, a user who exits claude and runs
+  /// codex in the same pane would have codex's UUIDv7 silently overwrite
+  /// claude's captured id, leaving Resume to issue `claude --resume
+  /// <codex-uuid>` and fail. A `.shell` tab terminal (aux shell tab where
+  /// the user hand-typed an agent) is instead PROMOTED to `.agent`. On a
+  /// PANE terminal the latest agent wins — panes are user-driven, and the
+  /// pane record only exists because a hook created it.
   private func captureAgentNativeSessionID(
+    worktreeID: Worktree.ID,
     tabID: UUID,
+    surfaceID: UUID,
     notification: AgentHookNotification
   ) {
     guard let sessionID = notification.sessionID, !sessionID.isEmpty else { return }
+    let creationSurfaceID = states[worktreeID]?
+      .creationSurfaceID(for: TerminalTabID(rawValue: tabID))
+    let hookAgentID = notification.agent.lowercased()
     $agentSessions.withLock { sessions in
+      // 1. Pane terminal for this surface.
+      if let (sessionIndex, terminalIndex) =
+        Self.paneIndices(forSurfaceID: surfaceID, in: sessions)
+      {
+        let terminalID = sessions[sessionIndex].terminals[terminalIndex].id
+        let storedAgentID = sessions[sessionIndex].terminals[terminalIndex].agent?.id.lowercased()
+        if storedAgentID != hookAgentID {
+          terminalLogger.warning(
+            "Pane terminal \(terminalID) re-adopted from \(storedAgentID ?? "shell") "
+              + "to \(hookAgentID)"
+          )
+        }
+        guard sessions[sessionIndex].terminals[terminalIndex].agentNativeSessionID != sessionID
+          || storedAgentID != hookAgentID
+        else { return }
+        sessions[sessionIndex].updateTerminal(id: terminalID) {
+          if storedAgentID != hookAgentID {
+            $0.agent = AgentRegistry.lookupOrPlaceholder(for: notification.agent)
+            $0.hasCompletedAtLeastOnce = false
+          }
+          $0.agentNativeSessionID = sessionID
+          $0.lastActivityAt = Date()
+        }
+        terminalLogger.info(
+          "Captured \(notification.agent) session id \(sessionID) for pane \(terminalID)"
+        )
+        return
+      }
+
       guard let (sessionIndex, terminalIndex) =
         Self.indices(for: tabID, in: sessions) else { return }
+
+      // 3. Unknown surface inside a session-owned tab → adopt a pane
+      // terminal. Only when we positively know the tab's creation surface
+      // and this isn't it; with an unknown creation surface we fall back
+      // to attributing the hook to the tab terminal (legacy behavior).
+      if let creationSurfaceID, creationSurfaceID != surfaceID {
+        let pane = SessionTerminal(
+          id: surfaceID,
+          role: .agent,
+          hostTabID: tabID,
+          agent: AgentRegistry.lookupOrPlaceholder(for: notification.agent),
+          agentNativeSessionID: sessionID,
+          hasObservedInitialAgentEvent: true
+        )
+        sessions[sessionIndex].terminals.append(pane)
+        terminalLogger.info(
+          "Adopted \(notification.agent) agent in pane \(surfaceID) of tab \(tabID) "
+            + "(session id \(sessionID))"
+        )
+        return
+      }
+
+      // 2. The tab terminal itself.
       let storedAgentID = sessions[sessionIndex].terminals[terminalIndex].agent?.id.lowercased()
-      let hookAgentID = notification.agent.lowercased()
-      guard storedAgentID == hookAgentID else {
+      let isShellPromotion = sessions[sessionIndex].terminals[terminalIndex].role == .shell
+        && storedAgentID == nil
+      guard storedAgentID == hookAgentID || isShellPromotion else {
         terminalLogger.warning(
           "Ignoring \(hookAgentID) hook session id for tab \(tabID) — "
             + "session terminal is registered as \(storedAgentID ?? "shell")"
@@ -689,14 +782,26 @@ final class WorktreeTerminalManager {
         return
       }
       guard sessions[sessionIndex].terminals[terminalIndex].agentNativeSessionID != sessionID
+        || isShellPromotion
       else { return }
       sessions[sessionIndex].updateTerminal(id: tabID) {
+        if isShellPromotion {
+          $0.role = .agent
+          $0.agent = AgentRegistry.lookupOrPlaceholder(for: notification.agent)
+        }
         $0.agentNativeSessionID = sessionID
         $0.lastActivityAt = Date()
       }
-      terminalLogger.info(
-        "Captured \(notification.agent) session id \(sessionID) for tab \(tabID)"
-      )
+      if isShellPromotion {
+        terminalLogger.info(
+          "Promoted shell terminal \(tabID) to \(notification.agent) agent "
+            + "(session id \(sessionID))"
+        )
+      } else {
+        terminalLogger.info(
+          "Captured \(notification.agent) session id \(sessionID) for tab \(tabID)"
+        )
+      }
     }
   }
 
@@ -709,6 +814,23 @@ final class WorktreeTerminalManager {
   ) -> (sessionIndex: Int, terminalIndex: Int)? {
     for (sessionIndex, session) in sessions.enumerated() {
       if let terminalIndex = session.terminals.firstIndex(where: { $0.id == tabID }) {
+        return (sessionIndex, terminalIndex)
+      }
+    }
+    return nil
+  }
+
+  /// Locate the (session, terminal) index pair for a PANE terminal by its
+  /// surface UUID. Pane terminals carry `hostTabID != nil` and use the
+  /// surface UUID as their id.
+  private static func paneIndices(
+    forSurfaceID surfaceID: UUID,
+    in sessions: [AgentSession]
+  ) -> (sessionIndex: Int, terminalIndex: Int)? {
+    for (sessionIndex, session) in sessions.enumerated() {
+      if let terminalIndex = session.terminals.firstIndex(where: {
+        $0.id == surfaceID && $0.hostTabID != nil
+      }) {
         return (sessionIndex, terminalIndex)
       }
     }
@@ -756,16 +878,22 @@ final class WorktreeTerminalManager {
   /// This lets the board keep a new session in "Starting" until the CLI
   /// has actually loaded its hook config, instead of guessing from a
   /// fixed launch delay.
-  private func markInitialAgentEventObserved(tabID: UUID) {
+  private func markInitialAgentEventObserved(tabID: UUID, surfaceID: UUID) {
     // Every hook (busy or notification) funnels through here, which makes it
     // the one place that re-arms the working-screen scan for this tab.
     noteAgentSignal(tabID: tabID)
     $agentSessions.withLock { sessions in
-      guard let (sessionIndex, terminalIndex) =
-        Self.indices(for: tabID, in: sessions) else { return }
+      // Pane terminals resolve by surface; anything else attributes to the
+      // tab terminal (incl. pre-adoption pane hooks — harmless, the bit
+      // means "hooks are live in this tab").
+      let resolved =
+        Self.paneIndices(forSurfaceID: surfaceID, in: sessions)
+        ?? Self.indices(for: tabID, in: sessions)
+      guard let (sessionIndex, terminalIndex) = resolved else { return }
       guard !sessions[sessionIndex].terminals[terminalIndex].hasObservedInitialAgentEvent
       else { return }
-      sessions[sessionIndex].updateTerminal(id: tabID) {
+      let terminalID = sessions[sessionIndex].terminals[terminalIndex].id
+      sessions[sessionIndex].updateTerminal(id: terminalID) {
         $0.hasObservedInitialAgentEvent = true
         $0.lastActivityAt = Date()
       }
@@ -793,10 +921,66 @@ final class WorktreeTerminalManager {
   /// definition. Precedence mirrors the boolean order this replaced: a
   /// pending prompt outranks busy, which outranks a deferred lease.
   func agentActivity(worktreeID: Worktree.ID, tabID: TerminalTabID) -> AgentActivity {
-    if isAwaitingInput(worktreeID: worktreeID, tabID: tabID) { return .wantsInput }
+    if isAwaitingInput(worktreeID: worktreeID, tabID: tabID) {
+      // Working wins (multi-agent): a hook-sourced awaiting has already
+      // cleared its own surface's busy latch, so any latch still set in
+      // this tab belongs to a sibling agent pane that is mid-turn — the
+      // tab is still working. Screen-fallback awaiting deliberately keeps
+      // outranking a latch: its whole job is surfacing prompts whose hook
+      // was missed while the latch is stuck on (single-agent case).
+      if awaitingInputByTab[tabID.rawValue]?.hookSourced == true,
+        states[worktreeID]?.hasAgentBusyLatch(tabID) == true
+      {
+        return .working
+      }
+      return .wantsInput
+    }
     if isAgentBusy(worktreeID: worktreeID, tabID: tabID) { return .working }
     if isDeferredWorkActive(worktreeID: worktreeID, tabID: tabID) { return .deferredWork }
     return .idle
+  }
+
+  /// Per-surface busy for an adopted agent pane. Narrower than
+  /// `isAgentBusy` (no screen-working / optimistic leases — those are
+  /// tab-scoped and attributed to the tab terminal).
+  func isAgentSurfaceBusy(worktreeID: Worktree.ID, surfaceID: UUID) -> Bool {
+    states[worktreeID]?.isSurfaceBusy(surfaceID) == true
+  }
+
+  /// Session-level busy: any agent-hosting tab busy. Fallback to the
+  /// primary tab for sessions without agent terminals (plain shells) —
+  /// preserving single-terminal behavior.
+  func isSessionBusy(for session: AgentSession) -> Bool {
+    let hostTabIDs = session.agentHostTabIDs
+    guard !hostTabIDs.isEmpty else {
+      return isAgentBusy(
+        worktreeID: session.worktreeID,
+        tabID: TerminalTabID(rawValue: session.primaryTerminalID)
+      )
+    }
+    return hostTabIDs.contains {
+      isAgentBusy(worktreeID: session.worktreeID, tabID: TerminalTabID(rawValue: $0))
+    }
+  }
+
+  /// Session-level activity: the merge of every agent-hosting tab's
+  /// activity under "working wins" — the card stays In Progress while ANY
+  /// agent works, and only surfaces to the user when no agent is mid-turn.
+  /// Sessions without agent terminals (plain shell sessions) fall back to
+  /// the primary tab, preserving single-terminal behavior.
+  func sessionActivity(for session: AgentSession) -> AgentActivity {
+    let hostTabIDs = session.agentHostTabIDs
+    guard !hostTabIDs.isEmpty else {
+      return agentActivity(
+        worktreeID: session.worktreeID,
+        tabID: TerminalTabID(rawValue: session.primaryTerminalID)
+      )
+    }
+    return AgentActivity.mergedWorkingWins(
+      hostTabIDs.map {
+        agentActivity(worktreeID: session.worktreeID, tabID: TerminalTabID(rawValue: $0))
+      }
+    )
   }
 
   /// Whether the agent in this tab is paused on user input (permission
@@ -897,6 +1081,20 @@ final class WorktreeTerminalManager {
       }
       guard let input, !input.isEmpty else { break }
       terminal.focusAndInsertText(input + "\r")
+    case .splitTabWithInput(let worktree, let tabID, let direction, let input, let id):
+      let terminal = state(for: worktree)
+      terminal.selectTab(tabID)
+      let ghosttyDirection: GhosttySplitAction.NewDirection = direction == .vertical ? .down : .right
+      guard terminal.splitFocusedSurface(in: tabID, direction: ghosttyDirection, newSurfaceID: id) != nil
+      else {
+        terminalLogger.warning(
+          "splitTabWithInput: failed to split tab \(tabID.rawValue) in worktree \(worktree.id)."
+        )
+        break
+      }
+      if let input, !input.isEmpty {
+        terminal.focusAndInsertText(input + "\r")
+      }
     case .destroyTab(let worktree, let tabID):
       let terminal = state(for: worktree)
       guard terminal.tabManager.tabs.contains(where: { $0.id == tabID }) else {
@@ -934,7 +1132,7 @@ final class WorktreeTerminalManager {
       state(for: worktree).performBindingActionOnFocusedSurface("end_search")
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
-      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune,
+      .selectTab, .focusSurface, .splitSurface, .splitTabWithInput, .destroyTab, .destroySurface, .prune,
       .releaseOwnedProcesses, .setNotificationsEnabled, .setSelectedWorktreeID,
       .refreshTabBarVisibility, .sendText, .sendPrompt:
       return false
@@ -949,7 +1147,8 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .startSearch,
       .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch, .selectTab,
-      .focusSurface, .splitSurface, .destroyTab, .destroySurface, .prune, .releaseOwnedProcesses,
+      .focusSurface, .splitSurface, .splitTabWithInput, .destroyTab, .destroySurface, .prune,
+      .releaseOwnedProcesses,
       .setNotificationsEnabled, .setSelectedWorktreeID, .refreshTabBarVisibility, .sendText,
       .sendPrompt:
       return false
@@ -980,8 +1179,8 @@ final class WorktreeTerminalManager {
     case .createTab, .createTabWithInput, .createRemoteTab, .restoreShellLayout, .ensureInitialTab,
       .stopRunScript, .runBlockingScript, .closeFocusedTab, .closeFocusedSurface, .performBindingAction,
       .startSearch, .searchSelection, .navigateSearchNext, .navigateSearchPrevious, .endSearch,
-      .selectTab, .focusSurface, .splitSurface, .destroyTab, .destroySurface, .sendText,
-      .sendPrompt:
+      .selectTab, .focusSurface, .splitSurface, .splitTabWithInput, .destroyTab, .destroySurface,
+      .sendText, .sendPrompt:
       assertionFailure("Unhandled terminal command reached management handler: \(command)")
     }
   }
@@ -1330,13 +1529,15 @@ final class WorktreeTerminalManager {
   private func markAwaitingInputSignal(
     worktreeID: Worktree.ID,
     tabID: UUID,
-    source: String
+    source: String,
+    surfaceID: UUID? = nil
   ) {
     markAwaitingInputSignal(
       worktreeID: worktreeID,
       tabID: tabID,
       fingerprint: screenFingerprint(worktreeID: worktreeID, tabID: TerminalTabID(rawValue: tabID)),
-      source: source
+      source: source,
+      surfaceID: surfaceID
     )
   }
 
@@ -1344,12 +1545,19 @@ final class WorktreeTerminalManager {
     worktreeID: Worktree.ID,
     tabID: UUID,
     fingerprint: String?,
-    source: String
+    source: String,
+    surfaceID: UUID? = nil
   ) {
     var tracker = awaitingInputByTab[tabID] ?? AwaitingInputTracker(worktreeID: worktreeID)
     let wasActive = tracker.rawActive
     tracker.rawActive = true
     tracker.lastScreenFingerprint = fingerprint
+    // Sticky until cleared: a later screen-scan re-confirmation must not
+    // demote a hook-sourced awaiting back to fallback status.
+    tracker.hookSourced = tracker.hookSourced || source == "hook"
+    if source == "hook", let surfaceID {
+      tracker.hookSurfaceID = surfaceID
+    }
     awaitingInputByTab[tabID] = tracker
     // Edge-triggered: don't spam the trace on every 1s screen-scan tick
     // that merely re-confirms an already-active awaiting state.
@@ -1366,7 +1574,21 @@ final class WorktreeTerminalManager {
     scheduleAwaitingInputPresentationReconciliation(for: tabID, desiredState: true)
   }
 
-  private func clearAwaitingInput(tabID: UUID, reason: String) {
+  private func clearAwaitingInput(
+    tabID: UUID,
+    reason: String,
+    onlyIfRaisedBy surfaceID: UUID? = nil
+  ) {
+    // A busy edge from a SIBLING pane must not clear a prompt another
+    // surface's agent is still showing. Screen-fallback awaiting
+    // (hookSurfaceID == nil) keeps clearing on any edge, as before.
+    if let surfaceID,
+      let tracker = awaitingInputByTab[tabID],
+      let hookSurfaceID = tracker.hookSurfaceID,
+      hookSurfaceID != surfaceID
+    {
+      return
+    }
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
     awaitingInputActivityTasks.removeValue(forKey: tabID)?.cancel()
     awaitingInputPromptCandidates.removeValue(forKey: tabID)
@@ -1375,6 +1597,8 @@ final class WorktreeTerminalManager {
     let wasActive = tracker.rawActive
     tracker.rawActive = false
     tracker.lastScreenFingerprint = nil
+    tracker.hookSourced = false
+    tracker.hookSurfaceID = nil
 
     // Edge-triggered: only emit on true → false transitions.
     if wasActive {

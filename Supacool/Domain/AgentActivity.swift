@@ -35,4 +35,25 @@ nonisolated enum AgentActivity: String, Equatable, Sendable {
 
   /// Nobody is working and nothing is pending — the next move is the user's.
   case idle
+
+  /// Merge the activities of a session's agent terminals under "working
+  /// wins": the session reads In Progress while ANY agent is mid-turn, and
+  /// only lands in Wants Input / Waiting on Me once no agent is working.
+  /// Identity for a single element, so single-agent sessions are unchanged.
+  static func mergedWorkingWins(_ activities: some Sequence<AgentActivity>) -> AgentActivity {
+    var merged = AgentActivity.idle
+    for activity in activities {
+      switch activity {
+      case .working:
+        return .working
+      case .deferredWork:
+        merged = .deferredWork
+      case .wantsInput:
+        if merged != .deferredWork { merged = .wantsInput }
+      case .idle:
+        break
+      }
+    }
+    return merged
+  }
 }

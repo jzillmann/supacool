@@ -570,7 +570,7 @@ struct BoardFeature {
     case setManualStatusOverride(id: AgentSession.ID, status: BoardSessionStatus?)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
-    case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
+    case updateSessionBusyState(id: AgentSession.ID, terminalID: UUID, busy: Bool)
     /// Fired by `SessionStateWatcher` on mount + status transitions.
     /// Used as a fallback to clear "Starting session" cards when a
     /// session is already live but never emits busy=true (e.g. shell).
@@ -656,6 +656,10 @@ struct BoardFeature {
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
+    /// Internal: a multi-agent Resume couldn't restore a pane terminal's
+    /// host tab and flattened the pane into its own tab — fix the record
+    /// so hooks and future resumes treat it as a tab terminal.
+    case _paneTerminalPromotedToTab(id: AgentSession.ID, terminalID: UUID)
     /// User confirmed the "convert to worktree" popover on the repo-root
     /// pill in the focused terminal header. Creates the worktree on disk
     /// via git-wt and types `cd '<path>'` into the session's focused
@@ -1348,11 +1352,13 @@ struct BoardFeature {
         state.priorityTerminationAlert = nil
         return .none
 
-      case .updateSessionBusyState(let id, let busy):
+      case .updateSessionBusyState(let id, let terminalID, let busy):
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          guard sessions[index].lastKnownBusy != busy else { return }
-          sessions[index].updatePrimaryTerminal {
+          guard let terminal = sessions[index].terminal(id: terminalID),
+            terminal.lastKnownBusy != busy
+          else { return }
+          sessions[index].updateTerminal(id: terminalID) {
             $0.lastKnownBusy = busy
             $0.lastBusyTransitionAt = Date()
             $0.lastActivityAt = Date()
@@ -1790,6 +1796,13 @@ struct BoardFeature {
 
       case .restoreShellSessionLayout(let id, let repositories):
         return reduceRestoreShellSessionLayout(state: &state, id: id, repositories: repositories)
+
+      case ._paneTerminalPromotedToTab(let id, let terminalID):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].updateTerminal(id: terminalID) { $0.hostTabID = nil }
+        }
+        return .none
 
       case .resumeFailed(let id, let message):
         state.reinitializingSessionIDs.remove(id)

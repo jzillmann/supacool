@@ -1010,7 +1010,9 @@ struct BoardRootView: View {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: tabExists,
-      activity: terminalManager.agentActivity(worktreeID: session.worktreeID, tabID: tabID),
+      // Merged across every agent terminal (working wins) — a second agent
+      // split into the session keeps the card In Progress until BOTH yield.
+      activity: terminalManager.sessionActivity(for: session),
       waitingExternally: waitingExternally(for: session)
     )
     if !tabExists, store.reinitializingSessionIDs.contains(session.id) {
@@ -1092,8 +1094,8 @@ struct BoardRootView: View {
         session: session,
         terminalManager: terminalManager,
         classify: { classify($0) },
-        onBusyStateChange: { newBusy in
-          store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
+        onBusyStateChange: { terminalID, newBusy in
+          store.send(.updateSessionBusyState(id: session.id, terminalID: terminalID, busy: newBusy))
         },
         onBusyToIdleTransition: {
           store.send(.markSessionCompletedOnce(id: session.id))

@@ -313,6 +313,83 @@ struct AgentSessionMigrationTests {
     #expect(session.primaryTerminal.id == sessionID)
   }
 
+  // MARK: Pane terminals (hostTabID)
+
+  @Test func terminalWithoutHostTabIDDecodesAsTabTerminal() throws {
+    // Pre-hostTabID terminal JSON must decode with hostTabID == nil so
+    // every existing terminal keeps meaning "I am a tab".
+    let terminalID = UUID()
+    let json = """
+    {
+      "id": "\(terminalID.uuidString)",
+      "role": "agent",
+      "agent": "claude",
+      "initialPrompt": "p",
+      "createdAt": 1750000000,
+      "lastActivityAt": 1750000000
+    }
+    """
+    let terminal = try JSONDecoder().decode(SessionTerminal.self, from: Data(json.utf8))
+    #expect(terminal.hostTabID == nil)
+  }
+
+  @Test func paneTerminalRoundTrips() throws {
+    let hostTabID = UUID()
+    let pane = SessionTerminal(
+      id: UUID(),
+      role: .agent,
+      hostTabID: hostTabID,
+      agent: .claude,
+      agentNativeSessionID: "claude-pane-1"
+    )
+    let data = try JSONEncoder().encode(pane)
+    let decoded = try JSONDecoder().decode(SessionTerminal.self, from: data)
+    #expect(decoded.hostTabID == hostTabID)
+    #expect(decoded.role == .agent)
+    #expect(decoded.agentNativeSessionID == "claude-pane-1")
+  }
+
+  @Test func multiAgentAccessorsAggregateAcrossTerminals() {
+    let sessionID = UUID()
+    let auxTabID = UUID()
+    let paneID = UUID()
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Work"
+    )
+    // A shell aux tab, an agent aux tab, and an adopted pane inside the
+    // primary tab.
+    session.terminals.append(SessionTerminal(id: UUID(), role: .shell))
+    session.terminals.append(
+      SessionTerminal(id: auxTabID, role: .agent, agent: .codex, lastKnownBusy: true)
+    )
+    session.terminals.append(
+      SessionTerminal(id: paneID, role: .agent, hostTabID: sessionID, agent: .claude)
+    )
+
+    #expect(session.agentTerminals.map(\.id) == [sessionID, auxTabID, paneID])
+    // Panes are not tabs — the strip must not show them.
+    #expect(session.tabTerminals.map(\.id).contains(paneID) == false)
+    #expect(session.tabTerminals.count == 3)
+    // The pane's host tab dedupes against the primary tab itself.
+    #expect(session.agentHostTabIDs == [sessionID, auxTabID])
+    #expect(session.anyAgentTerminalKnownBusy == true)
+  }
+
+  @Test func anyAgentTerminalKnownBusyIgnoresShells() {
+    var session = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "Work"
+    )
+    session.terminals.append(SessionTerminal(id: UUID(), role: .shell, lastKnownBusy: true))
+    #expect(session.anyAgentTerminalKnownBusy == false)
+  }
+
   // MARK: Busy-state aggregation
 
   /// `session.lastKnownBusy` is the read forwarder used by the board

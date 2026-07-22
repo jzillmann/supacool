@@ -21,12 +21,21 @@ nonisolated enum SessionTerminalRole: String, Codable, Sendable {
 /// (shells or even secondary agents) live behind a session-scoped tab strip.
 ///
 /// `id` doubles as the Ghostty `TerminalTabID` for the tab that hosts this
-/// terminal. For backward compatibility with single-terminal sessions
-/// created before the composition feature, the primary terminal's `id` is
-/// the same UUID as the session's `id`.
+/// terminal — unless `hostTabID` is set, in which case this terminal is a
+/// split PANE and `id` is the pane's Ghostty SURFACE UUID instead. For
+/// backward compatibility with single-terminal sessions created before the
+/// composition feature, the primary terminal's `id` is the same UUID as the
+/// session's `id`.
 nonisolated struct SessionTerminal: Identifiable, Hashable, Codable, Sendable {
   let id: UUID
   var role: SessionTerminalRole
+
+  /// Non-nil ⇒ this terminal is a split pane inside the Ghostty tab
+  /// `hostTabID`, and `id` is the pane's surface UUID (stable across
+  /// relaunch — the layout snapshot restores surfaces under their original
+  /// UUIDs). Nil ⇒ `id` is the `TerminalTabID`, as before. Pane terminals
+  /// are created by hook auto-adoption when an agent starts in a split.
+  var hostTabID: UUID?
 
   /// The coding-agent CLI this terminal was spawned with. `nil` for a
   /// `.shell` terminal, and only meaningful when `role == .agent`.
@@ -75,6 +84,7 @@ nonisolated struct SessionTerminal: Identifiable, Hashable, Codable, Sendable {
   init(
     id: UUID = UUID(),
     role: SessionTerminalRole,
+    hostTabID: UUID? = nil,
     agent: AgentType? = nil,
     initialPrompt: String = "",
     agentNativeSessionID: String? = nil,
@@ -89,6 +99,7 @@ nonisolated struct SessionTerminal: Identifiable, Hashable, Codable, Sendable {
   ) {
     self.id = id
     self.role = role
+    self.hostTabID = hostTabID
     self.agent = agent
     self.initialPrompt = initialPrompt
     self.agentNativeSessionID = agentNativeSessionID
@@ -105,7 +116,7 @@ nonisolated struct SessionTerminal: Identifiable, Hashable, Codable, Sendable {
   // Forward-compatible Codable — convention documented in
   // docs/agent-guides/persistence.md.
   enum CodingKeys: String, CodingKey {
-    case id, role, agent, initialPrompt, agentNativeSessionID
+    case id, role, hostTabID, agent, initialPrompt, agentNativeSessionID
     case displayName, workingDirectoryHint
     case createdAt, lastActivityAt
     case lastKnownBusy, hasObservedInitialAgentEvent, hasCompletedAtLeastOnce
@@ -116,6 +127,7 @@ nonisolated struct SessionTerminal: Identifiable, Hashable, Codable, Sendable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     id = try c.decode(UUID.self, forKey: .id)
     role = try c.decodeIfPresent(SessionTerminalRole.self, forKey: .role) ?? .shell
+    hostTabID = try c.decodeIfPresent(UUID.self, forKey: .hostTabID)
     agent = try c.decodeIfPresent(AgentType.self, forKey: .agent)
     initialPrompt = try c.decodeIfPresent(String.self, forKey: .initialPrompt) ?? ""
     agentNativeSessionID = try c.decodeIfPresent(String.self, forKey: .agentNativeSessionID)

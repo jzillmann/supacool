@@ -10,18 +10,40 @@ struct SessionStateWatcher: View {
   let session: AgentSession
   let terminalManager: WorktreeTerminalManager
   let classify: (AgentSession) -> BoardSessionStatus
-  let onBusyStateChange: (Bool) -> Void
+  /// Per-terminal busy persistence: (terminalID, newBusy). Fired for each
+  /// tracked terminal whose live busy state changed, so every agent keeps
+  /// its own `lastKnownBusy` for the relaunch detached/interrupted split.
+  let onBusyStateChange: (UUID, Bool) -> Void
   let onBusyToIdleTransition: () -> Void
   let onAwaitingInputEntered: () -> Void
   let onPriorityTermination: (BoardSessionStatus) -> Void
   let onStatusObserved: (BoardSessionStatus) -> Void
   let onTabPresenceObserved: (Bool) -> Void
 
+  /// Session-level busy (any agent tab busy) — drives the busy→idle
+  /// completion edge, not persistence.
   private var isBusyNow: Bool {
-    terminalManager.isAgentBusy(
-      worktreeID: session.worktreeID,
-      tabID: TerminalTabID(rawValue: session.id)
-    )
+    terminalManager.isSessionBusy(for: session)
+  }
+
+  /// Live busy per busy-tracked terminal. Tab terminals read the tab's
+  /// fused busy; adopted pane terminals read their own surface's latch.
+  private var busyByTerminal: [UUID: Bool] {
+    var result: [UUID: Bool] = [:]
+    for terminal in session.busyTrackedTerminals {
+      if terminal.hostTabID != nil {
+        result[terminal.id] = terminalManager.isAgentSurfaceBusy(
+          worktreeID: session.worktreeID,
+          surfaceID: terminal.id
+        )
+      } else {
+        result[terminal.id] = terminalManager.isAgentBusy(
+          worktreeID: session.worktreeID,
+          tabID: TerminalTabID(rawValue: terminal.id)
+        )
+      }
+    }
+    return result
   }
 
   private var status: BoardSessionStatus { classify(session) }
@@ -38,11 +60,15 @@ struct SessionStateWatcher: View {
       .frame(width: 0, height: 0)
       .accessibilityHidden(true)
       .onChange(of: isBusyNow) { oldValue, newValue in
-        // Persist the new busy state so relaunches can tell .detached
-        // (was idle) from .interrupted (was working).
-        onBusyStateChange(newValue)
         if oldValue && !newValue {
           onBusyToIdleTransition()
+        }
+      }
+      .onChange(of: busyByTerminal) { oldValue, newValue in
+        // Persist per-terminal busy so relaunches can tell .detached
+        // (was idle) from .interrupted (was working) for EACH agent.
+        for (terminalID, busy) in newValue where oldValue[terminalID] != busy {
+          onBusyStateChange(terminalID, busy)
         }
       }
       .onChange(of: status) { oldValue, newValue in
@@ -61,10 +87,13 @@ struct SessionStateWatcher: View {
       .onAppear {
         onTabPresenceObserved(tabExistsNow)
         onStatusObserved(status)
-        // Reconcile: if our stored busy flag doesn't match reality at
-        // mount time (e.g. freshly loaded), sync it once.
-        if session.lastKnownBusy != isBusyNow {
-          onBusyStateChange(isBusyNow)
+        // Reconcile: if a stored busy flag doesn't match reality at
+        // mount time (e.g. freshly loaded), sync it once — per terminal.
+        let live = busyByTerminal
+        for terminal in session.busyTrackedTerminals {
+          if let liveBusy = live[terminal.id], terminal.lastKnownBusy != liveBusy {
+            onBusyStateChange(terminal.id, liveBusy)
+          }
         }
       }
   }

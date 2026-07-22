@@ -59,6 +59,13 @@ struct TerminalClient {
     case splitSurface(
       Worktree, tabID: TerminalTabID, surfaceID: UUID, direction: SplitDirection,
       input: String?, id: UUID? = nil)
+    /// Supacool: split the given tab's FOCUSED surface (no anchor surface
+    /// required — reducers don't know one) and type `input` into the new
+    /// pane. Used by multi-agent Resume to recreate adopted agent panes;
+    /// `id` becomes the new surface's UUID so hook events re-attach to the
+    /// pane's persisted `SessionTerminal`.
+    case splitTabWithInput(
+      Worktree, tabID: TerminalTabID, direction: SplitDirection, input: String?, id: UUID)
     case destroyTab(Worktree, tabID: TerminalTabID)
     case destroySurface(Worktree, tabID: TerminalTabID, surfaceID: UUID)
     case prune(Set<Worktree.ID>)
