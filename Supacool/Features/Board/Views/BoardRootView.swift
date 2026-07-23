@@ -376,7 +376,7 @@ struct BoardRootView: View {
         },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
         onNextInCurrentState: { focusNextSessionInCurrentState() },
-        onPreviousInCurrentState: { focusPreviousSessionInCurrentState() },
+        onPreviousInCurrentState: { store.send(.focusPreviousInHistory) },
         nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
         previousInCurrentStateShortcut: AppShortcuts.previousTerminalInState.effective(from: shortcutOverrides),
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
@@ -644,43 +644,24 @@ struct BoardRootView: View {
     }
   }
 
+  /// ⌘. — step to the next session in the same bucket. Sends `.focusForward`
+  /// so the outgoing card is recorded on the back-stack (⌘⇧. returns to it).
+  /// When there's no next card the destination is `nil`, which drops back to
+  /// the board — the vim-safe way out of a full-screen terminal.
   private func focusNextSessionInCurrentState() {
-    focusSessionInCurrentState(direction: .forward)
-  }
-
-  private func focusPreviousSessionInCurrentState() {
-    focusSessionInCurrentState(direction: .backward)
-  }
-
-  private func focusSessionInCurrentState(direction: StateNavigationDirection) {
-    // Read focus at invocation time; rapid ⌘/ repeats can arrive while SwiftUI still holds
+    // Read focus at invocation time; rapid ⌘. repeats can arrive while SwiftUI still holds
     // an older shortcut closure.
     guard let currentID = store.focusedSessionID else { return }
     let currentStatusOverride = nextInStateAnchor?.sessionID == currentID
       ? nextInStateAnchor?.status
       : nil
-    let destination = switch direction {
-    case .forward:
-      BoardNavOrder.nextInSameState(
-        after: currentID,
-        visibleSessions: store.visibleSessions,
-        currentStatusOverride: currentStatusOverride,
-        classify: classify
-      )
-    case .backward:
-      BoardNavOrder.previousInSameState(
-        before: currentID,
-        visibleSessions: store.visibleSessions,
-        currentStatusOverride: currentStatusOverride,
-        classify: classify
-      )
-    }
-    store.send(.focusSession(id: destination))
-  }
-
-  private enum StateNavigationDirection {
-    case forward
-    case backward
+    let destination = BoardNavOrder.nextInSameState(
+      after: currentID,
+      visibleSessions: store.visibleSessions,
+      currentStatusOverride: currentStatusOverride,
+      classify: classify
+    )
+    store.send(.focusForward(to: destination))
   }
 
   /// Where focus should land after removing the focused card `id`. Mirrors

@@ -2415,6 +2415,106 @@ struct BoardFeatureTests {
     }
   }
 
+  @Test(.dependencies) func focusForwardRecordsHistoryAndPreviousWalksBack() async {
+    // ⌘. forward hops push the outgoing card onto the back-stack; ⌘⇧.
+    // (previous) pops it, returning to the exact card you came from —
+    // independent of any status/bucket churn that acting on a card causes.
+    let a = Self.sampleSession(displayName: "A")
+    let b = Self.sampleSession(displayName: "B")
+    let c = Self.sampleSession(displayName: "C")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a, b, c] }
+    state.focusedSessionID = a.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusForward(to: b.id)) {
+      $0.focusHistory = [a.id]
+      $0.focusedSessionID = b.id
+    }
+    await store.send(.focusForward(to: c.id)) {
+      $0.focusHistory = [a.id, b.id]
+      $0.focusedSessionID = c.id
+    }
+    await store.send(.focusPreviousInHistory) {
+      $0.focusHistory = [a.id]
+      $0.focusedSessionID = b.id
+    }
+    await store.send(.focusPreviousInHistory) {
+      $0.focusHistory = []
+      $0.focusedSessionID = a.id
+    }
+    // Trail exhausted → stay put, no mutation.
+    await store.send(.focusPreviousInHistory)
+  }
+
+  @Test(.dependencies) func focusForwardToNilReturnsToBoardAndClearsHistory() async {
+    // Stepping past the last card in a bucket lands on the board (id == nil)
+    // and wipes the trail so the next full-screen run starts clean.
+    let a = Self.sampleSession(displayName: "A")
+    let b = Self.sampleSession(displayName: "B")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a, b] }
+    state.focusedSessionID = a.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusForward(to: b.id)) {
+      $0.focusHistory = [a.id]
+      $0.focusedSessionID = b.id
+    }
+    await store.send(.focusForward(to: nil)) {
+      $0.focusHistory = []
+      $0.focusedSessionID = nil
+    }
+  }
+
+  @Test(.dependencies) func focusPreviousInHistorySkipsMissingSessions() async {
+    // A stale trail entry (session no longer visible) is skipped, landing on
+    // the most recent card that still exists.
+    let a = Self.sampleSession(displayName: "A")
+    let c = Self.sampleSession(displayName: "C")
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a, c] }
+    state.focusedSessionID = c.id
+    state.focusHistory = [a.id, ghost]
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusPreviousInHistory) {
+      $0.focusHistory = []
+      $0.focusedSessionID = a.id
+    }
+  }
+
+  @Test(.dependencies) func removingSessionPurgesItFromFocusHistory() async {
+    let a = Self.sampleSession(displayName: "A")
+    let b = Self.sampleSession(displayName: "B")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a, b] }
+    state.focusedSessionID = b.id
+    state.focusHistory = [a.id]
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+    }
+    store.exhaustivity = .off
+
+    await store.send(.requestRemoveSession(id: a.id))
+    await store.skipReceivedActions()
+
+    #expect(store.state.focusHistory.isEmpty)
+  }
+
   // MARK: - Repo filter
 
   @Test(.dependencies) func toggleRepositoryAddsThenRemoves() async {

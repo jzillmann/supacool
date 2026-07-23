@@ -166,10 +166,13 @@ struct FullScreenTerminalView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(
-      // ⌘. is macOS's canonical "cancel/dismiss" and — unlike Esc — isn't
-      // swallowed by vim/readline inside the terminal surface.
+      // ⌘/ is the "in/out" toggle — press it here to return to the board
+      // (the board binds the same ⌘/ to enter a card). ⌘. now steps to the
+      // next session and, at the end of a bucket, also drops back to the
+      // board — so spamming ⌘. remains a vim-safe way out. ⌘B / ⌘W below
+      // are additional escape hatches.
       Button("Back to Board") { onBackToBoard() }
-        .keyboardShortcut(".", modifiers: .command)
+        .keyboardShortcut("/", modifiers: .command)
         .hidden()
     )
     .background(

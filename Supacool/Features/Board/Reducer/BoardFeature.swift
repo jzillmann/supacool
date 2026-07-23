@@ -61,6 +61,16 @@ struct BoardFeature {
     /// the board.
     var focusedSessionID: AgentSession.ID?
 
+    /// Visit trail for full-screen focus, most-recently-left session last.
+    /// Drives ⌘⇧. ("previous") as a temporal back-stack — return to the card
+    /// you were literally just on — instead of re-deriving a spatial position
+    /// inside a live bucket. That re-derivation was the bug: acting on a card
+    /// re-classifies it into another bucket, so "previous" would compute a
+    /// different neighbour than the one you came from. History is immune to
+    /// that churn. Only ⌘. forward hops record onto it; returning to the board
+    /// clears it so each full-screen run gets a fresh trail. Not persisted.
+    var focusHistory: [AgentSession.ID] = []
+
     /// Where to land when the *focused* session is removed. Set by the
     /// full-screen "Remove" affordance so deleting an unwanted card while
     /// stepping through a bucket (⌘/) advances to the next card instead of
@@ -614,6 +624,12 @@ struct BoardFeature {
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
+    /// Forward navigation (⌘.) that records the outgoing session onto
+    /// `focusHistory` before focusing `id`, so ⌘⇧. can walk back to it.
+    case focusForward(to: AgentSession.ID?)
+    /// Back navigation (⌘⇧.) — pop `focusHistory` to the most recent still
+    /// visible session. No-op (stay put) when the trail is empty.
+    case focusPreviousInHistory
 
     // MARK: Repo filter
     case toggleRepository(id: String)
@@ -1400,7 +1416,42 @@ struct BoardFeature {
         return .none
 
       case .focusSession(let id):
+        // Returning to the board ends the current full-screen run — drop the
+        // back-stack so the next run starts fresh.
+        if id == nil { state.focusHistory.removeAll() }
         state.focusedSessionID = id
+        return .none
+
+      case .focusForward(let id):
+        guard let id else {
+          state.focusHistory.removeAll()
+          state.focusedSessionID = nil
+          return .none
+        }
+        if let outgoing = state.focusedSessionID, outgoing != id {
+          // Avoid consecutive duplicates; cap the trail so it can't grow
+          // unbounded over a long session.
+          if state.focusHistory.last != outgoing {
+            state.focusHistory.append(outgoing)
+          }
+          let cap = 50
+          if state.focusHistory.count > cap {
+            state.focusHistory.removeFirst(state.focusHistory.count - cap)
+          }
+        }
+        state.focusedSessionID = id
+        return .none
+
+      case .focusPreviousInHistory:
+        // Unwind to the most recent session that still exists and is visible
+        // under the current repo filter — skip stale entries (removed cards,
+        // filtered-out repos) rather than focusing a ghost.
+        while let candidate = state.focusHistory.popLast() {
+          guard candidate != state.focusedSessionID else { continue }
+          guard state.visibleSessions.contains(where: { $0.id == candidate }) else { continue }
+          state.focusedSessionID = candidate
+          return .none
+        }
         return .none
 
       // MARK: - Session lifecycle (park) — handlers live in BoardFeature+SessionLifecycle.swift
@@ -2952,6 +3003,7 @@ struct BoardFeature {
     }
     state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
     state.reinitializingSessionIDs.remove(id)
+    state.focusHistory.removeAll { $0 == id }
     // Consume any one-shot advance target recorded by the full-screen
     // "Remove" affordance. If the removed card was focused, hand focus to
     // the next card in the same bucket (so ⌘/-style stepping survives a

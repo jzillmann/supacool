@@ -100,8 +100,8 @@ nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresenta
     case .commandPalette: "Command Palette"
     case .openSettings: "Open Settings"
     case .checkForUpdates: "Check For Updates"
-    case .nextTerminalInState: "Next Terminal in State"
-    case .previousTerminalInState: "Previous Terminal in State"
+    case .nextTerminalInState: "Next Session in State"
+    case .previousTerminalInState: "Previous Session (Back)"
     case .toggleLeftSidebar: "Toggle Left Sidebar"
     case .revealInSidebar: "Reveal in Sidebar"
     case .newWorktree: "New Worktree"
@@ -275,10 +275,10 @@ enum AppShortcuts {
   static let commandPalette = AppShortcut(id: .commandPalette, key: "p", modifiers: .command)
   static let openSettings = AppShortcut(id: .openSettings, key: ",", modifiers: .command)
   static let checkForUpdates = AppShortcut(id: .checkForUpdates, key: "u", modifiers: .command)
-  static let nextTerminalInState = AppShortcut(id: .nextTerminalInState, key: "/", modifiers: .command)
+  static let nextTerminalInState = AppShortcut(id: .nextTerminalInState, key: ".", modifiers: .command)
   static let previousTerminalInState = AppShortcut(
     id: .previousTerminalInState,
-    key: "/",
+    key: ".",
     modifiers: [.command, .shift]
   )
 

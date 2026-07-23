@@ -103,9 +103,9 @@ struct BoardView: View {
       .onChange(of: visibleSessionIDSet) { _, visibleIDs in
         selectedSessionIDs.formIntersection(visibleIDs)
       }
-      // Symmetric to the full-screen terminal's ⌘. / ⌘B shortcut that
-      // returns to the board: press ⌘. on the board to enter the
-      // highlighted card's terminal.
+      // ⌘/ is the "in/out" toggle: press it on the board to enter the
+      // highlighted card's terminal; the full-screen view binds the same
+      // ⌘/ to return here. (⌘. is reserved for next-session stepping.)
       .background(
         Button("Enter Session") {
           if let id = highlightedSessionID {
@@ -113,7 +113,7 @@ struct BoardView: View {
             store.send(.focusSession(id: id))
           }
         }
-        .keyboardShortcut(".", modifiers: .command)
+        .keyboardShortcut("/", modifiers: .command)
         .hidden()
         .disabled(highlightedSessionID == nil)
       )
