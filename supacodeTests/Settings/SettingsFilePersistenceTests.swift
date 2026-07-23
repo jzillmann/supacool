@@ -206,6 +206,28 @@ struct SettingsFilePersistenceTests {
     #expect(reloaded.global.mergedWorktreeAction == .delete)
   }
 
+  @Test(.dependencies) func roundTripsPreferredBrowserBundleID() throws {
+    let storage = SettingsTestStorage()
+
+    withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      $settings.withLock {
+        $0.global.preferredBrowserBundleID = "com.google.Chrome"
+      }
+    }
+
+    let reloaded: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var reloaded: SettingsFile
+      return reloaded
+    }
+
+    #expect(reloaded.global.preferredBrowserBundleID == "com.google.Chrome")
+  }
+
   @Test(.dependencies) func decodesMissingInAppNotificationsEnabled() throws {
     let legacy = LegacySettingsFile(
       global: LegacyGlobalSettings(
@@ -241,6 +263,7 @@ struct SettingsFilePersistenceTests {
     #expect(settings.global.promptForWorktreeCreation == true)
     #expect(settings.global.defaultWorktreeBaseDirectoryPath == nil)
     #expect(settings.global.defaultEditorID == OpenWorktreeAction.automaticSettingsID)
+    #expect(settings.global.preferredBrowserBundleID == nil)
     #expect(settings.repositoryRoots.isEmpty)
     #expect(settings.pinnedWorktreeIDs.isEmpty)
   }

@@ -2582,7 +2582,7 @@ struct RepositoriesFeature {
             )
           }
           return .run { @MainActor _ in
-            NSWorkspace.shared.open(url)
+            WebBrowser.open(url)
           }
 
         case .copyFailingJobURL:
@@ -2612,7 +2612,7 @@ struct RepositoriesFeature {
             )
           }
           return .run { @MainActor _ in
-            NSWorkspace.shared.open(url)
+            WebBrowser.open(url)
           }
 
         case .markReadyForReview:

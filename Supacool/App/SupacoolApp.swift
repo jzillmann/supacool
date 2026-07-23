@@ -282,6 +282,7 @@ struct SupacoolApp: App {
         ContentView(store: store, terminalManager: terminalManager)
           .environment(ghosttyShortcuts)
           .environment(commandKeyObserver)
+          .environment(\.openURL, .preferredBrowser)
       }
       .openSettingsOnSelection(store: store)
       .openDeeplinkCheatsheetOnRequest(store: store)
@@ -327,7 +328,7 @@ struct SupacoolApp: App {
         Divider()
         Button("Submit GitHub Issue") {
           guard let url = URL(string: "https://github.com/jzillmann/supacool/issues/new") else { return }
-          NSWorkspace.shared.open(url)
+          WebBrowser.open(url)
         }
         .help("Submit GitHub Issue")
       }
@@ -343,6 +344,7 @@ struct SupacoolApp: App {
       SettingsView(store: store)
         .environment(ghosttyShortcuts)
         .environment(commandKeyObserver)
+        .environment(\.openURL, .preferredBrowser)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbarColorScheme(store.settings.appearanceMode.colorScheme, for: .windowToolbar)
     }

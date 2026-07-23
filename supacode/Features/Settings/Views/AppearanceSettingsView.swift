@@ -9,6 +9,10 @@ struct AppearanceSettingsView: View {
   /// `BoardFeature`).
   var onShowGettingStartedAgain: (() -> Void)?
 
+  /// Loaded once in `.task` — enumerating LaunchServices handlers on every
+  /// body render would be wasteful for a settings pane.
+  @State private var browsers: [WebBrowser] = []
+
   var body: some View {
     let openActionOptions = OpenWorktreeAction.availableCases
     Form {
@@ -67,6 +71,17 @@ struct AppearanceSettingsView: View {
           Text("Applies to Worktrees without repository overrides.")
         }
       }
+      Section("Web Links") {
+        Picker(selection: $store.preferredBrowserBundleID) {
+          Text("System Default").tag(String?.none)
+          ForEach(browsers) { browser in
+            Text(browser.name).tag(String?.some(browser.bundleID))
+          }
+        } label: {
+          Text("Open Links In")
+          Text("Where pull request, server, and ticket links open.")
+        }
+      }
       Section {
         Toggle(isOn: $store.analyticsEnabled) {
           Text("Share Analytics")
@@ -109,5 +124,8 @@ struct AppearanceSettingsView: View {
     .padding(.trailing, -6)
 
     .navigationTitle("General")
+    .task {
+      browsers = WebBrowser.installed
+    }
   }
 }

@@ -54,6 +54,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
   var allowArbitraryDeeplinkInput: Bool
   var autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod?
   var shortcutOverrides: [AppShortcutID: AppShortcutOverride]
+  /// Bundle id of the browser web links open in. `nil` = the system default handler.
+  var preferredBrowserBundleID: String?
 
   static let `default` = GlobalSettings(
     appearanceMode: .dark,
@@ -82,7 +84,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     allowArbitraryDeeplinkInput: false,
     defaultWorktreeBaseDirectoryPath: nil,
     autoDeleteArchivedWorktreesAfterDays: nil,
-    shortcutOverrides: [:]
+    shortcutOverrides: [:],
+    preferredBrowserBundleID: nil
   )
 
   init(
@@ -112,7 +115,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     allowArbitraryDeeplinkInput: Bool = false,
     defaultWorktreeBaseDirectoryPath: String? = nil,
     autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod? = nil,
-    shortcutOverrides: [AppShortcutID: AppShortcutOverride] = [:]
+    shortcutOverrides: [AppShortcutID: AppShortcutOverride] = [:],
+    preferredBrowserBundleID: String? = nil
   ) {
     self.appearanceMode = appearanceMode
     self.defaultEditorID = defaultEditorID
@@ -141,6 +145,7 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     self.defaultWorktreeBaseDirectoryPath = defaultWorktreeBaseDirectoryPath
     self.autoDeleteArchivedWorktreesAfterDays = autoDeleteArchivedWorktreesAfterDays
     self.shortcutOverrides = shortcutOverrides
+    self.preferredBrowserBundleID = preferredBrowserBundleID
   }
 
   /// Keys for reading renamed settings fields that no longer
@@ -251,5 +256,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     shortcutOverrides =
       try container.decodeIfPresent([AppShortcutID: AppShortcutOverride].self, forKey: .shortcutOverrides)
       ?? Self.default.shortcutOverrides
+    preferredBrowserBundleID =
+      try container.decodeIfPresent(String.self, forKey: .preferredBrowserBundleID)
+      ?? Self.default.preferredBrowserBundleID
   }
 }

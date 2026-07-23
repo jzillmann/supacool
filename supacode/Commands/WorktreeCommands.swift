@@ -52,7 +52,7 @@ struct WorktreeCommands: Commands {
       .disabled(openSelectedWorktreeAction == nil)
       Button("Open Pull Request", systemImage: "arrow.up.forward") {
         if let pullRequestURL {
-          NSWorkspace.shared.open(pullRequestURL)
+          WebBrowser.open(pullRequestURL)
         }
       }
       .appKeyboardShortcut(openPR)

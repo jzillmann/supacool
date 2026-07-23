@@ -786,7 +786,7 @@ private func openInLinear(webURL: URL) {
   if let deepLink, deepLink != webURL, NSWorkspace.shared.urlForApplication(toOpen: deepLink) != nil {
     NSWorkspace.shared.open(deepLink)
   } else {
-    NSWorkspace.shared.open(webURL)
+    WebBrowser.open(webURL)
   }
 }
 

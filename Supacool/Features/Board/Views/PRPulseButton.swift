@@ -322,7 +322,7 @@ struct PRPulseButton: View {
     HStack(spacing: 8) {
       Button {
         if let url = URL(string: pullRequest.url) {
-          NSWorkspace.shared.open(url)
+          WebBrowser.open(url)
         }
       } label: {
         HStack(spacing: 8) {
@@ -529,7 +529,7 @@ struct PRPulseButton: View {
 
     if let detailsUrl = check.detailsUrl, let url = URL(string: detailsUrl) {
       Button {
-        NSWorkspace.shared.open(url)
+        WebBrowser.open(url)
       } label: {
         label
       }

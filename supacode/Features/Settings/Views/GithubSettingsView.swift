@@ -136,11 +136,11 @@ struct GithubSettingsView: View {
         switch viewModel.state {
         case .unavailable:
           Button("Get GitHub CLI") {
-            NSWorkspace.shared.open(URL(string: "https://cli.github.com")!)
+            WebBrowser.open(URL(string: "https://cli.github.com")!)
           }
         case .outdated:
           Button("Update GitHub CLI") {
-            NSWorkspace.shared.open(URL(string: "https://cli.github.com")!)
+            WebBrowser.open(URL(string: "https://cli.github.com")!)
           }
         default:
           EmptyView()
