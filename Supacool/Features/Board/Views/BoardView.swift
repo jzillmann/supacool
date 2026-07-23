@@ -887,7 +887,7 @@ struct BoardView: View {
         )
       },
       onServerLifecycleRefresh: {
-        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: true))
       },
       onServerLifecycleStart: {
         store.send(.serverLifecycleStartTapped(sessionID: session.id))
@@ -897,7 +897,7 @@ struct BoardView: View {
       },
       onAppear: {
         store.send(.cardAppeared(id: session.id))
-        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false))
       },
       onReferencesPopoverOpened: {
         store.send(.refreshPRReferences(id: session.id))

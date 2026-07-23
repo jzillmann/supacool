@@ -784,6 +784,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      $0.date = .constant(Self.lifecycleTestDate)
       $0.serverLifecycleClient.run = { worktree, kind, script, context in
         let actualWorktreeID = await MainActor.run { worktree.id }
         let actualWorkingDirectory = await MainActor.run {
@@ -798,7 +799,8 @@ struct BoardFeatureTests {
       }
     }
 
-    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false)) {
+      $0.serverLifecycleLastCheckedAt[worktreeID] = Self.lifecycleTestDate
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
         workspacePath: worktreeID,
         name: "Dev server",
@@ -834,6 +836,77 @@ struct BoardFeatureTests {
     )
   }
 
+  // The status fan-out throttle: a board re-render re-requests status for every
+  // visible card, so without a cooldown dozens of (expensive `go run …`) status
+  // scripts fire at once and spike system load. A second *automatic* request
+  // within the cooldown is a no-op; a manual refresh (`force`) bypasses it.
+  @Test(.dependencies) func serverLifecycleStatusThrottlesAutomaticRequestsWithinCooldown() async {
+    let repositoryID = "/tmp/repo-lifecycle-throttle-\(UUID().uuidString)"
+    let worktreeID = "\(repositoryID)/wt"
+    let session = Self.sampleSession(
+      repositoryID: repositoryID,
+      worktreeID: worktreeID,
+      displayName: "API Server"
+    )
+    Self.configureServerLifecycle(repositoryID: repositoryID, statusScript: "status")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let callCount = LockIsolated(0)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.lifecycleTestDate)
+      $0.serverLifecycleClient.run = { _, _, _, _ in
+        callCount.withValue { $0 += 1 }
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "listening", stderr: "")
+      }
+    }
+
+    let checking = BoardFeature.ServerLifecycleViewState(
+      workspacePath: worktreeID,
+      name: "Dev server",
+      status: .checking,
+      detail: nil
+    )
+    let running = BoardFeature.ServerLifecycleViewState(
+      workspacePath: worktreeID,
+      name: "Dev server",
+      status: .running,
+      detail: "listening"
+    )
+    let response = BoardFeature.Action._serverLifecycleResponse(
+      workspacePath: worktreeID,
+      name: "Dev server",
+      status: .running,
+      detail: "listening",
+      endpoints: []
+    )
+
+    // First automatic request runs the script and stamps the check time.
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false)) {
+      $0.serverLifecycleLastCheckedAt[worktreeID] = Self.lifecycleTestDate
+      $0.serverLifecycleByWorkspace[worktreeID] = checking
+    }
+    await store.receive(response) {
+      $0.serverLifecycleByWorkspace[worktreeID] = running
+    }
+
+    // Second automatic request within the cooldown is dropped: no effect, no state change.
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false))
+
+    // A manual refresh bypasses the cooldown and runs again.
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: true)) {
+      $0.serverLifecycleByWorkspace[worktreeID] = checking
+    }
+    await store.receive(response) {
+      $0.serverLifecycleByWorkspace[worktreeID] = running
+    }
+
+    // First auto + manual force ran; the throttled one did not.
+    #expect(callCount.value == 2)
+  }
+
   @Test(.dependencies) func serverLifecycleStatusSurfacesPortsFromScriptOutput() async {
     let repositoryID = "/tmp/repo-lifecycle-ports-\(UUID().uuidString)"
     let worktreeID = "\(repositoryID)/wt"
@@ -849,6 +922,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      $0.date = .constant(Self.lifecycleTestDate)
       $0.serverLifecycleClient.run = { _, _, _, _ in
         ServerLifecycleScriptResult(
           exitCode: 0,
@@ -862,7 +936,8 @@ struct BoardFeatureTests {
     }
 
     let expected = [ServerEndpoint(port: 8686), ServerEndpoint(port: 3606)]
-    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false)) {
+      $0.serverLifecycleLastCheckedAt[worktreeID] = Self.lifecycleTestDate
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
         workspacePath: worktreeID,
         name: "Dev server",
@@ -911,6 +986,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      $0.date = .constant(Self.lifecycleTestDate)
       $0.serverLifecycleClient.run = { _, _, _, _ in
         ServerLifecycleScriptResult(
           exitCode: 0,
@@ -921,7 +997,8 @@ struct BoardFeatureTests {
       $0.portReachabilityClient.isReachable = { _, _ in false }
     }
 
-    await store.send(.serverLifecycleStatusRequested(sessionID: session.id)) {
+    await store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false)) {
+      $0.serverLifecycleLastCheckedAt[worktreeID] = Self.lifecycleTestDate
       $0.serverLifecycleByWorkspace[worktreeID] = BoardFeature.ServerLifecycleViewState(
         workspacePath: worktreeID,
         name: "Dev server",
@@ -3897,6 +3974,10 @@ struct BoardFeatureTests {
     let script: String
     let context: ServerLifecycleScriptContext
   }
+
+  /// Fixed clock for the server-lifecycle tests so the status throttle's
+  /// `serverLifecycleLastCheckedAt` stamp is assertable.
+  private static let lifecycleTestDate = Date(timeIntervalSince1970: 1_700_000_000)
 
   private static func sessionCreatingCard(for session: AgentSession) -> TrayCard {
     TrayCard(

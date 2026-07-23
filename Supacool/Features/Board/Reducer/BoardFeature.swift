@@ -155,6 +155,14 @@ struct BoardFeature {
     /// sharing a workspace show one coherent Start/Stop state.
     var serverLifecycleByWorkspace: [String: ServerLifecycleViewState] = [:]
 
+    /// When each workspace's status script last ran. Throttles the automatic
+    /// status fan-out: every board re-render re-requests status for each visible
+    /// card, and a status script can be an expensive `go run …` recompile — so
+    /// dozens firing at once spiked system load and beachballed the app. A check
+    /// within `serverLifecycleStatusCooldown` of the last is skipped (manual
+    /// refresh bypasses via `force`). Not persisted — a fresh launch rechecks.
+    var serverLifecycleLastCheckedAt: [String: Date] = [:]
+
     /// Presented when the New Terminal create flow detected that the
     /// requested branch is already checked out at a *different* path —
     /// `git worktree add` would otherwise fail. The alert lets the user
@@ -534,7 +542,9 @@ struct BoardFeature {
     )
     case confirmDirtySessionRemoval(id: AgentSession.ID)
     case dismissDirtySessionRemovalConfirmation
-    case serverLifecycleStatusRequested(sessionID: AgentSession.ID)
+    /// `force` bypasses the per-workspace status cooldown — the manual refresh
+    /// button sets it; the automatic card-appear / board-render triggers don't.
+    case serverLifecycleStatusRequested(sessionID: AgentSession.ID, force: Bool)
     case serverLifecycleStartTapped(sessionID: AgentSession.ID)
     case serverLifecycleStopTapped(sessionID: AgentSession.ID)
     case _serverLifecycleResponse(
@@ -1079,6 +1089,12 @@ struct BoardFeature {
   /// `gh`). Mirrors `prRefreshFailureCooldown` rationale.
   nonisolated static let prPulseFailureCooldown: TimeInterval = 300
 
+  /// Minimum gap between automatic server-lifecycle status checks for one
+  /// workspace. Board re-renders re-fire a status request per visible card;
+  /// without this gate that fanned dozens of concurrent `dev status` recompiles
+  /// at once (load spikes that beachballed the app). A manual refresh bypasses it.
+  nonisolated static let serverLifecycleStatusCooldown: TimeInterval = 60
+
   /// Wall-clock cap for one repo's whole snapshot fetch (PR list + score
   /// lookups). Generous: a 50-PR repo with cold scores is ~18 sequential
   /// subprocess calls in bounded-concurrency groups of three.
@@ -1200,11 +1216,11 @@ struct BoardFeature {
         state.pendingRemovalAdvanceTarget = nil
         return .none
 
-      case .serverLifecycleStatusRequested(let sessionID):
+      case .serverLifecycleStatusRequested(let sessionID, let force):
         guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
           return .none
         }
-        return requestServerLifecycleStatus(&state, session: session)
+        return requestServerLifecycleStatus(&state, session: session, force: force)
 
       case .serverLifecycleStartTapped(let sessionID):
         guard let session = state.sessions.first(where: { $0.id == sessionID }) else {
@@ -2730,10 +2746,22 @@ struct BoardFeature {
 
   fileprivate func requestServerLifecycleStatus(
     _ state: inout State,
-    session: AgentSession
+    session: AgentSession,
+    force: Bool = false
   ) -> Effect<Action> {
     guard let configuration = serverLifecycleConfiguration(for: session) else {
       state.serverLifecycleByWorkspace.removeValue(forKey: session.currentWorkspacePath)
+      return .none
+    }
+    // Throttle the automatic fan-out: a board re-render re-requests status for
+    // every visible card, and the status script can be an expensive `go run …`
+    // recompile — so skip if this workspace was checked within the cooldown.
+    // Stamping when the request is *issued* (not on the response) keeps this safe
+    // against the effect's `cancelInFlight` cancellation.
+    let workspace = configuration.workspacePath
+    if !force,
+      let last = state.serverLifecycleLastCheckedAt[workspace],
+      date.now.timeIntervalSince(last) < Self.serverLifecycleStatusCooldown {
       return .none
     }
     let script = configuration.settings.statusScript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2746,6 +2774,7 @@ struct BoardFeature {
       )
       return .none
     }
+    state.serverLifecycleLastCheckedAt[workspace] = date.now
     state.serverLifecycleByWorkspace[configuration.workspacePath] = ServerLifecycleViewState(
       workspacePath: configuration.workspacePath,
       name: configuration.name,

@@ -357,7 +357,7 @@ struct BoardRootView: View {
         onTogglePriority: { store.send(.togglePriority(id: session.id)) },
         serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
         onServerLifecycleRefresh: {
-          store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+          store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: true))
         },
         onServerLifecycleStart: {
           store.send(.serverLifecycleStartTapped(sessionID: session.id))
@@ -431,7 +431,7 @@ struct BoardRootView: View {
         store.send(.cardAppeared(id: session.id))
       }
       .task(id: session.id) {
-        store.send(.serverLifecycleStatusRequested(sessionID: session.id))
+        store.send(.serverLifecycleStatusRequested(sessionID: session.id, force: false))
       }
       .overlay {
         if isSessionSwitcherPresented {
