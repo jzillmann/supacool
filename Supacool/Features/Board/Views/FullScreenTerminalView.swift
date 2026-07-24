@@ -439,6 +439,10 @@ struct FullScreenTerminalView: View {
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
+        // The reason pill (`reasonChip`) is always shown here, so suppress the
+        // one glyph it already spells out. No status gate — you're looking at
+        // this session directly.
+        suppressedIndicator: prReferenceSnapshots.redundantIndicator(for: session),
         ticketPreviewSource: inboxTickets[session.repositoryID] ?? []
       )
     }

@@ -502,6 +502,15 @@ struct SessionCardView: View {
     prReferenceSnapshots.actionableReason(for: session)
   }
 
+  /// The one PR-chip glyph the header reason pill already spells out in words,
+  /// so the reference chip drops it and doesn't paint the same conflict / CI /
+  /// score twice. Only when the pill is actually shown (same `showsReasonChip`
+  /// gate) — a card with no pill keeps every glyph.
+  private var suppressedPRIndicator: SuppressedPRIndicator? {
+    guard showsReasonChip else { return nil }
+    return prReferenceSnapshots.redundantIndicator(for: session)
+  }
+
   /// Don't annotate cards whose agent is actively working or just starting —
   /// the PR reason only matters once the ball is back with the user.
   private var showsReasonChip: Bool {
@@ -578,7 +587,8 @@ struct SessionCardView: View {
           addLinkText = ""
           isAddLinkPromptShown = true
         },
-      prReferenceSnapshots: prReferenceSnapshots
+      prReferenceSnapshots: prReferenceSnapshots,
+      suppressedIndicator: suppressedPRIndicator
     )
   }
 
@@ -731,6 +741,10 @@ struct ReferenceChip: View {
   /// Latest checks/Greptile snapshot for a PR reference. Nil (and ignored
   /// for tickets) hides the CI glyph and score badge.
   var prSnapshot: PullRequestSnapshot?
+  /// The one glyph already spoken for by the session's triage reason pill, so
+  /// this chip drops it instead of painting the same conflict/CI/score twice.
+  /// Only fires when the chip is the exact PR the pill is calling out.
+  var suppressedIndicator: SuppressedPRIndicator?
 
   /// When set (ticket chips only), hovering the chip reveals a preview
   /// popover with the ticket's title + markdown description. Click still
@@ -765,9 +779,16 @@ struct ReferenceChip: View {
           .lineLimit(1)
         if case .pullRequest(_, _, _, let state, _) = reference, let prSnapshot,
           state?.showsLiveStatus ?? true {
-          PRChecksGlyph(checks: prSnapshot.statusChecks)
-          PRConflictGlyph(snapshot: prSnapshot)
-          GreptileScoreBadge(score: prSnapshot.greptileScore)
+          let suppressed = suppressedIndicator?.kind(for: reference.dedupeKey)
+          if suppressed != .checks {
+            PRChecksGlyph(checks: prSnapshot.statusChecks)
+          }
+          if suppressed != .conflict {
+            PRConflictGlyph(snapshot: prSnapshot)
+          }
+          if suppressed != .greptile {
+            GreptileScoreBadge(score: prSnapshot.greptileScore)
+          }
         }
       }
       .foregroundStyle(.primary.opacity(0.85))
@@ -935,6 +956,10 @@ struct SessionReferenceSummaryChips: View {
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on chips and popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+  /// The one PR-chip glyph already spoken for by the caller's triage reason
+  /// pill, so the matching inline chip drops it instead of duplicating the
+  /// conflict/CI/score. Nil when the caller shows no pill (or nothing overlaps).
+  var suppressedIndicator: SuppressedPRIndicator?
 
   /// Cached Linear inbox records used to hover-preview the primary ticket
   /// chip's title + description. Empty (the default) disables the preview —
@@ -992,7 +1017,8 @@ struct SessionReferenceSummaryChips: View {
           onTap: onPullRequestsPopoverOpened,
           onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
           onAddLink: onAddLink,
-          prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey]
+          prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey],
+          suppressedIndicator: suppressedIndicator
         )
       } else if pullRequests.count > 1 {
         ReferenceStackChip(
@@ -1002,7 +1028,8 @@ struct SessionReferenceSummaryChips: View {
           onPopoverOpened: onPullRequestsPopoverOpened,
           onRemoveReference: onRemoveReference,
           onAddLink: onAddLink,
-          prReferenceSnapshots: prReferenceSnapshots
+          prReferenceSnapshots: prReferenceSnapshots,
+          suppressedIndicator: suppressedIndicator
         )
       }
     }
@@ -1100,6 +1127,11 @@ private struct ReferenceStackChip: View {
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on the popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+  /// The one glyph already spoken for by the caller's triage reason pill —
+  /// suppressed on the collapsed label only when the featured PR is the exact
+  /// PR the pill is calling out. Popover rows keep every glyph: opening the
+  /// stack is an explicit drill-in where full per-PR detail is wanted.
+  var suppressedIndicator: SuppressedPRIndicator?
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
@@ -1123,9 +1155,18 @@ private struct ReferenceStackChip: View {
         // "N/5" capsule for the score. Both hide themselves when nothing
         // is known, so non-PR stacks stay clean.
         if let featuredSnapshot {
-          PRChecksGlyph(checks: featuredSnapshot.statusChecks)
-          PRConflictGlyph(snapshot: featuredSnapshot)
-          GreptileScoreBadge(score: featuredSnapshot.greptileScore)
+          let suppressed = featuredPullRequest.flatMap {
+            suppressedIndicator?.kind(for: $0.dedupeKey)
+          }
+          if suppressed != .checks {
+            PRChecksGlyph(checks: featuredSnapshot.statusChecks)
+          }
+          if suppressed != .conflict {
+            PRConflictGlyph(snapshot: featuredSnapshot)
+          }
+          if suppressed != .greptile {
+            GreptileScoreBadge(score: featuredSnapshot.greptileScore)
+          }
         }
       }
       .foregroundStyle(.primary.opacity(0.85))

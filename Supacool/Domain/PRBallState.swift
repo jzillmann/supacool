@@ -201,14 +201,77 @@ extension [String: PullRequestSnapshot] {
     }
   }
 
+  /// The most urgent "ball is in your court" reason across `session`'s PRs
+  /// *and the PR reference it belongs to*, or `nil` when none need the user.
+  /// Shared by the reason pill and the redundant-glyph suppression so the two
+  /// surfaces never disagree about which PR / reason is being surfaced.
+  nonisolated func actionableReference(for session: AgentSession, greptileThreshold: Int = 5)
+    -> (dedupeKey: String, ball: PRBallState)?
+  {
+    session.references
+      .compactMap { reference -> (String, PRBallState)? in
+        guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
+          return nil
+        }
+        let ball = PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
+        return ball.court == .mine ? (reference.dedupeKey, ball) : nil
+      }
+      .min { $0.1.triagePriority < $1.1.triagePriority }
+      .map { (dedupeKey: $0.0, ball: $0.1) }
+  }
+
   /// The most urgent "ball is in your court" reason across `session`'s PRs, or
   /// `nil` when none need the user.
   nonisolated func actionableReason(for session: AgentSession, greptileThreshold: Int = 5)
     -> PRBallState?
   {
-    ballStates(of: session, greptileThreshold: greptileThreshold)
-      .filter { $0.court == .mine }
-      .min { $0.triagePriority < $1.triagePriority }
+    actionableReference(for: session, greptileThreshold: greptileThreshold)?.ball
+  }
+
+  /// The single inline PR-chip glyph the triage reason pill makes redundant, if
+  /// any. The pill spells out one PR's most-urgent reason in words, so the
+  /// matching glyph on that same PR's chip would just repeat it. `nil` when the
+  /// winning reason has no per-chip glyph equivalent (Changes requested, Ready
+  /// to merge, Draft, PR closed) or when no PR is in the user's court — in
+  /// those cases nothing is duplicated and every glyph stays.
+  nonisolated func redundantIndicator(for session: AgentSession, greptileThreshold: Int = 5)
+    -> SuppressedPRIndicator?
+  {
+    guard let winner = actionableReference(for: session, greptileThreshold: greptileThreshold) else {
+      return nil
+    }
+    let kind: SuppressedPRIndicator.Kind
+    switch winner.ball {
+    case .ciFailed: kind = .checks
+    case .mergeConflict: kind = .conflict
+    case .greptileLow: kind = .greptile
+    default: return nil
+    }
+    return SuppressedPRIndicator(dedupeKey: winner.dedupeKey, kind: kind)
+  }
+}
+
+/// A single inline PR-chip indicator rendered redundant by the triage reason
+/// pill. The pill already surfaces this PR's most-urgent reason as a word chip
+/// ("Conflicts", "CI failed", "Score 3/5"), so the matching glyph on the PR's
+/// own chip is suppressed — exactly that one glyph, and nothing else.
+nonisolated struct SuppressedPRIndicator: Equatable, Sendable {
+  nonisolated enum Kind: Equatable, Sendable {
+    /// The `xmark.circle.fill` CI-failed glyph (`PRChecksGlyph`).
+    case checks
+    /// The `arrow.triangle.branch` merge-conflict glyph (`PRConflictGlyph`).
+    case conflict
+    /// The "N/5" low-score badge (`GreptileScoreBadge`).
+    case greptile
+  }
+
+  let dedupeKey: String
+  let kind: Kind
+
+  /// The glyph kind to hide on the chip for `reference`, or `nil` when this
+  /// suppression doesn't apply to it (different PR, or nothing to suppress).
+  func kind(for referenceDedupeKey: String) -> Kind? {
+    dedupeKey == referenceDedupeKey ? kind : nil
   }
 }
 

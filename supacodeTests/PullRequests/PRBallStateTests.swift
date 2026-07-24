@@ -271,6 +271,84 @@ struct PRBallStateTests {
     let merged = PullRequestSnapshot(state: .merged, title: "x", greptileScore: 1)
     #expect(PRBallState.autoResumableConditions(snapshot: merged).isEmpty)
   }
+
+  // MARK: redundant-glyph suppression (reason pill vs inline chip)
+
+  private func session(references: [SessionReference]) -> AgentSession {
+    AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "x",
+      displayName: "x",
+      references: references
+    )
+  }
+
+  private static let pr1 = SessionReference.pullRequest(
+    owner: "o", repo: "r", number: 1, state: .open, title: nil
+  )
+  private static let pr2 = SessionReference.pullRequest(
+    owner: "o", repo: "r", number: 2, state: .open, title: nil
+  )
+
+  @Test func conflictReasonSuppressesTheConflictGlyph() {
+    // The pill says "Conflicts" for this PR, so its own branch glyph is the
+    // duplicate — mark exactly it, on exactly this PR.
+    let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING")]
+    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
+    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .conflict))
+  }
+
+  @Test func ciFailedReasonSuppressesTheChecksGlyph() {
+    let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.failing)]
+    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
+    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .checks))
+  }
+
+  @Test func lowGreptileReasonSuppressesTheScoreBadge() {
+    let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, greptileScore: 2)]
+    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
+    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .greptile))
+  }
+
+  @Test func glyphlessReasonSuppressesNothing() {
+    // "Ready to merge" / "Changes requested" have no per-chip glyph, so there's
+    // nothing to duplicate and every glyph stays.
+    let ready = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5)]
+    #expect(ready.redundantIndicator(for: session(references: [Self.pr1])) == nil)
+    let changes = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, reviewDecision: "CHANGES_REQUESTED")]
+    #expect(changes.redundantIndicator(for: session(references: [Self.pr1])) == nil)
+  }
+
+  @Test func theirCourtSuppressesNothing() {
+    let running = [Self.pr1.dedupeKey: snapshot(checks: Self.running)]
+    #expect(running.redundantIndicator(for: session(references: [Self.pr1])) == nil)
+  }
+
+  @Test func suppressionTargetsOnlyTheWinningPR() {
+    // Two actionable PRs: CI-failed (priority 0) outranks conflict (priority 1),
+    // so the pill speaks for pr1. Only pr1's checks glyph is suppressed; pr2's
+    // conflict glyph is separate, real information and must survive.
+    let snapshots = [
+      Self.pr1.dedupeKey: snapshot(checks: Self.failing),
+      Self.pr2.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING"),
+    ]
+    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1, Self.pr2]))
+    #expect(indicator?.kind(for: Self.pr1.dedupeKey) == .checks)
+    #expect(indicator?.kind(for: Self.pr2.dedupeKey) == nil)
+  }
+
+  @Test func actionableReferenceReportsTheWinningPRKey() {
+    let snapshots = [
+      Self.pr1.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING"),
+      Self.pr2.dedupeKey: snapshot(checks: Self.failing),
+    ]
+    let winner = snapshots.actionableReference(for: session(references: [Self.pr1, Self.pr2]))
+    // ciFailed (pr2) outranks mergeConflict (pr1).
+    #expect(winner?.dedupeKey == Self.pr2.dedupeKey)
+    #expect(winner?.ball == .ciFailed(1))
+  }
 }
 
 extension PullRequestSnapshot {
