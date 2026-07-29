@@ -7,9 +7,11 @@ import Foundation
 /// sessions vanish on whichever instance saves last. This is the failure mode
 /// behind the 2026-06-18 board wipe.
 ///
-/// Isolated preview instances redirect `$HOME` (see `scripts/preview-isolated.sh`),
-/// so their `SupacoolPaths.baseDirectory` — and therefore this lock file —
-/// differs; they are never blocked.
+/// Isolated preview instances pass `-SupacoolDataDirectory <sandbox>` (see
+/// `scripts/preview-isolated.sh`), so their `SupacoolPaths.baseDirectory` —
+/// and therefore this lock file — differs; they are never blocked. (A bare
+/// `$HOME` redirect does NOT work for this: `homeDirectoryForCurrentUser`
+/// ignores the env var, which is why previews used to hit this guard.)
 ///
 /// The lock is an `flock(2)` advisory lock held for the whole process lifetime.
 /// `flock` is released automatically when the process dies, so a crashed

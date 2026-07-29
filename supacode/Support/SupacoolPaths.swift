@@ -1,9 +1,33 @@
 import Foundation
 
 nonisolated enum SupacoolPaths {
+  /// Explicit data-directory override, resolved once per process. Set by
+  /// the isolated-preview launcher as a LAUNCH ARGUMENT
+  /// (`-SupacoolDataDirectory <path>`), which UserDefaults surfaces via
+  /// the argument domain.
+  ///
+  /// Why not the `$HOME` redirect the preview script used to rely on:
+  /// Foundation's `homeDirectoryForCurrentUser` resolves the account
+  /// record and IGNORES the `HOME` environment variable — so "isolated"
+  /// previews silently pointed at the real `~/.supacool` and were then
+  /// (correctly) blocked by `SingleInstanceGuard`. An argv-based override
+  /// actually takes effect, and — unlike an env var — is invisible to
+  /// child shells, so a real Supacool launched from inside a preview
+  /// terminal can't accidentally inherit the sandbox.
+  private static let dataDirectoryOverride: URL? = {
+    guard let raw = UserDefaults.standard.string(forKey: "SupacoolDataDirectory"),
+      !raw.isEmpty
+    else { return nil }
+    return URL(
+      filePath: NSString(string: raw).expandingTildeInPath,
+      directoryHint: .isDirectory
+    ).standardizedFileURL
+  }()
+
   static var baseDirectory: URL {
-    FileManager.default.homeDirectoryForCurrentUser
-      .appending(path: ".supacool", directoryHint: .isDirectory)
+    dataDirectoryOverride
+      ?? FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: ".supacool", directoryHint: .isDirectory)
   }
 
   static var reposDirectory: URL {
