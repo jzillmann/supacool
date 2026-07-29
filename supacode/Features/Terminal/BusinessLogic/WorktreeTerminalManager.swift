@@ -1181,8 +1181,13 @@ final class WorktreeTerminalManager {
     states[worktreeID]?.hasSurface(surfaceID, in: tabID) ?? false
   }
 
-  func readScreenContents(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
-    states[worktreeID]?.readScreenContents(tabID: tabID)
+  func readScreenContents(
+    worktreeID: Worktree.ID,
+    tabID: TerminalTabID,
+    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+  ) -> String? {
+    readScreenContentsOverride?(worktreeID, tabID)
+      ?? states[worktreeID]?.readScreenContents(tabID: tabID, scope: scope)
   }
 
   /// Foreground PID of a session's focused surface, or nil when the

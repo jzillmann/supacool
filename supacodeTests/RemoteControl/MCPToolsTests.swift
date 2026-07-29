@@ -25,13 +25,18 @@ struct MCPToolsTests {
     )
   }
 
-  private func makeToolBox() -> MCPToolBox {
+  private func makeToolBox(
+    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
+  ) -> MCPToolBox {
     let store = Store(initialState: AppFeature.State()) {
       EmptyReducer<AppFeature.State, AppFeature.Action>()
     }
     return MCPToolBox(
       store: store,
-      terminalManager: WorktreeTerminalManager(runtime: GhosttyRuntime())
+      terminalManager: WorktreeTerminalManager(
+        runtime: GhosttyRuntime(),
+        readScreenContents: readScreenContents
+      )
     )
   }
 
@@ -94,6 +99,121 @@ struct MCPToolsTests {
 
     #expect(throws: MCPError.self) {
       try makeToolBox().call(name: "no_such_tool", arguments: nil)
+    }
+  }
+
+  // MARK: - read_session
+
+  private func decodeSessionReading(_ result: CallTool.Result) throws -> MCPSessionReading {
+    guard case .text(let json, _, _) = result.content.first else {
+      throw MCPError.internalError("expected text content")
+    }
+    return try JSONDecoder().decode(MCPSessionReading.self, from: Data(json.utf8))
+  }
+
+  @Test(.dependencies) func readSessionReturnsScreenContents() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Live")
+    $sessions.withLock { $0 = [session] }
+
+    let toolBox = makeToolBox(readScreenContents: { _, _ in "❯ claude is asking a question" })
+    let result = try toolBox.call(
+      name: MCPToolBox.readSessionName,
+      arguments: ["session_id": .string(session.id.uuidString)]
+    )
+    let reading = try decodeSessionReading(result)
+    #expect(reading.screen == "❯ claude is asking a question")
+    #expect(reading.screenUnavailableReason == nil)
+    #expect(reading.transcript == nil)
+    #expect(reading.session.id == session.id.uuidString)
+  }
+
+  @Test(.dependencies) func readSessionDegradesWhenNoSurfaceExists() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Gone")
+    $sessions.withLock { $0 = [session] }
+
+    let result = try makeToolBox().call(
+      name: MCPToolBox.readSessionName,
+      arguments: ["session_id": .string(session.id.uuidString)]
+    )
+    let reading = try decodeSessionReading(result)
+    #expect(reading.screen == nil)
+    let reason = try #require(reading.screenUnavailableReason)
+    #expect(reason.contains("detached"))
+    #expect(reason.contains("transcript_tail"))
+  }
+
+  @Test(.dependencies) func readSessionReturnsTranscriptTail() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "History")
+    $sessions.withLock { $0 = [session] }
+
+    let url = try #require(TranscriptReader.transcriptURL(rawTabID: session.id))
+    try FileManager.default.createDirectory(
+      at: url.deletingLastPathComponent(), withIntermediateDirectories: true
+    )
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    let entries: [TranscriptEntry] = [
+      .input(text: "please fix the tests", at: Date(timeIntervalSince1970: 1)),
+      .outputTurn(fullText: "full", delta: "done, tests green", at: Date(timeIntervalSince1970: 2)),
+      .sessionLifecycle(kind: "parked", context: nil, at: Date(timeIntervalSince1970: 3)),
+    ]
+    let lines = try entries.map { entry in
+      try #require(String(bytes: try encoder.encode(entry), encoding: .utf8))
+    }
+    try Data(lines.joined(separator: "\n").utf8).write(to: url)
+    defer { try? FileManager.default.removeItem(at: url) }
+
+    let result = try makeToolBox().call(
+      name: MCPToolBox.readSessionName,
+      arguments: [
+        "session_id": .string(session.id.uuidString),
+        "transcript_tail": .int(2),
+      ]
+    )
+    let reading = try decodeSessionReading(result)
+    let transcript = try #require(reading.transcript)
+    #expect(transcript.count == 2)
+    #expect(transcript[0].kind == "output")
+    #expect(transcript[0].text == "done, tests green")
+    #expect(transcript[1].kind == "lifecycle")
+    #expect(transcript[1].text == "parked")
+  }
+
+  @Test(.dependencies) func readSessionRejectsBadArguments() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Args")
+    $sessions.withLock { $0 = [session] }
+    let toolBox = makeToolBox()
+
+    #expect(throws: MCPError.self) {
+      try toolBox.call(name: MCPToolBox.readSessionName, arguments: nil)
+    }
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.readSessionName,
+        arguments: ["session_id": .string(UUID().uuidString)]
+      )
+    }
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.readSessionName,
+        arguments: [
+          "session_id": .string(session.id.uuidString),
+          "scope": .string("everything"),
+        ]
+      )
+    }
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.readSessionName,
+        arguments: [
+          "session_id": .string(session.id.uuidString),
+          "transcript_tail": .int(-1),
+        ]
+      )
     }
   }
 }
