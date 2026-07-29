@@ -22,4 +22,10 @@ if [ -n "$SEED_REPO" ] && [ ! -f "$SANDBOX/.supacool/settings.json" ]; then
 fi
 
 for v in $(env | sed -n 's/^\(SUPACOOL_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done
-exec env HOME="$SANDBOX" "$APP/Contents/MacOS/Supacool"
+# -SupacoolDataDirectory is the lever that actually isolates ~/.supacool:
+# current macOS resolves NSHomeDirectory()/homeDirectoryForCurrentUser from
+# the user record and IGNORES $HOME, so the HOME redirect below doesn't move
+# the app's file data (it still helps shell-derived paths inside preview
+# terminals). A launch ARGUMENT, not an env var, on purpose: child shells in
+# preview terminals must not inherit it.
+exec env HOME="$SANDBOX" "$APP/Contents/MacOS/Supacool" -SupacoolDataDirectory "$SANDBOX/.supacool"

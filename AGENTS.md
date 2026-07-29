@@ -57,7 +57,7 @@ scripts/build-and-preview.sh [optional/repo/to/seed/on/the/board]
 It builds the current branch into an isolated DerivedData (`build/`, gitignored), then launches a **detached preview instance**. `scripts/preview-isolated.sh` does the launch alone if you've already built.
 
 Isolation matters because the app stores state in two non-obvious places, neither of which a normal launch separates:
-- **File data** (`settings.json`, sessions, bookmarks) lives at a fixed `~/.supacool/` path, *not* under a bundle-id container. The scripts redirect `$HOME` to `~/.supacool-preview-sandbox` to isolate it (delete that dir to reset the preview).
+- **File data** (`settings.json`, sessions, bookmarks) lives at a fixed `~/.supacool/` path, *not* under a bundle-id container. The scripts pass the `-SupacoolDataDirectory ~/.supacool-preview-sandbox/.supacool` launch argument to isolate it (delete that dir to reset the preview). A launch argument, not an env var, so child shells inside preview terminals can't inherit it. A plain `$HOME` redirect does NOT work: current macOS resolves `NSHomeDirectory()`/`homeDirectoryForCurrentUser` from the user record and ignores the environment, so a HOME-only preview silently shared the real app's data — the single-instance guard refusing to start was the visible symptom.
 - **UserDefaults** (repo list/order, sidebar state, the `bypassPermissions` flag, …) is keyed by **bundle id** via `cfprefsd`, which ignores `$HOME`. So the scripts re-stamp the built app's bundle id to `io.morethan.supacool.preview` (and ad-hoc re-sign) to get a separate prefs domain.
 
 Without **both** moves, a second instance silently shares — and can corrupt — your real app's repo ordering, settings, and board state. The scripts also strip inherited `SUPACOOL_*` env vars so a preview launched from inside a Supacool terminal can't cross-talk with the parent app's hook socket.
@@ -128,6 +128,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 | Cherry-pick from upstream supacode | [`docs/agent-guides/upstream-cherry-pick.md`](./docs/agent-guides/upstream-cherry-pick.md) |
 | Know what NOT to build | [`docs/agent-guides/out-of-scope.md`](./docs/agent-guides/out-of-scope.md) |
 | Change `RemoteHost` / ssh_config handling | [`docs/agent-guides/remote-hosts.md`](./docs/agent-guides/remote-hosts.md) |
+| Touch the remote-control MCP server or its tools | [`docs/agent-guides/remote-control.md`](./docs/agent-guides/remote-control.md) |
 | Cut a release (sign, notarize, Sparkle, DMG) | [`RELEASING.md`](./RELEASING.md) |
 | Add a new feature end-to-end | Skill: [`.claude/skills/add-feature/SKILL.md`](./.claude/skills/add-feature/SKILL.md) |
 | Check the docs for drift against the code | Skill: [`.claude/skills/docs-lint/SKILL.md`](./.claude/skills/docs-lint/SKILL.md) |
