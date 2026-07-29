@@ -101,7 +101,9 @@ nonisolated func mergeByNumber(
 
 /// `gh pr list --json` entry. `statusCheckRollup` is a flat array whose
 /// elements `GithubPullRequestStatusCheck` already knows how to decode
-/// (it handles both the CheckRun and StatusContext shapes).
+/// (it handles both the CheckRun and StatusContext shapes). It carries every
+/// run on the head commit, superseded ones included — `latestRunPerCheck`
+/// collapses them below, matching the `gh pr view` pipeline.
 private nonisolated struct PRListEntry: Decodable {
   struct Author: Decodable {
     let login: String?
@@ -136,7 +138,7 @@ nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPull
       reviewDecision: entry.reviewDecision,
       mergeable: entry.mergeable,
       mergeStateStatus: entry.mergeStateStatus,
-      statusChecks: entry.statusCheckRollup ?? [],
+      statusChecks: (entry.statusCheckRollup ?? []).latestRunPerCheck,
       greptileScore: nil
     )
   }

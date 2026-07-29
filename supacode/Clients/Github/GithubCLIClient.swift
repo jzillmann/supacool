@@ -402,7 +402,9 @@ nonisolated func decodePullRequestSnapshot(stdout: String) throws -> PullRequest
     let isDraft: Bool
     let title: String
     // Flat array in `gh pr view` CLI output, same element shape as
-    // `gh pr list` (PRMonitorClient decodes it identically).
+    // `gh pr list` (PRMonitorClient decodes it identically). Carries every
+    // run on the head commit, superseded ones included — see
+    // `latestRunPerCheck`, applied below.
     let statusCheckRollup: [GithubPullRequestStatusCheck]?
     let updatedAt: Date?
     let reviewDecision: String?
@@ -422,7 +424,7 @@ nonisolated func decodePullRequestSnapshot(stdout: String) throws -> PullRequest
   return PullRequestSnapshot(
     state: state,
     title: response.title,
-    statusChecks: response.statusCheckRollup ?? [],
+    statusChecks: (response.statusCheckRollup ?? []).latestRunPerCheck,
     updatedAt: response.updatedAt,
     reviewDecision: response.reviewDecision,
     mergeable: response.mergeable,

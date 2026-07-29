@@ -77,6 +77,13 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
     }
   }
 
+  /// True for a PR reference in any state (including unresolved). Distinct
+  /// from the state-matching helpers — this asks "is this a PR at all?".
+  var isPullRequestReference: Bool {
+    if case .pullRequest = self { return true }
+    return false
+  }
+
   /// Short chip label for the board card.
   var chipLabel: String {
     switch self {

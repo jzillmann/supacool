@@ -99,7 +99,7 @@ struct SessionCardView: View {
           autoObserverButton
         }
         if let prReason, showsReasonChip {
-          PRReasonChip(ball: prReason)
+          PRReasonChip(ball: prReason, pullRequestNumber: prReasonPullRequestNumber)
         }
         statusChip
       }
@@ -524,6 +524,28 @@ struct SessionCardView: View {
     prReferenceSnapshots.standaloneReason(for: session)
   }
 
+  /// `dedupeKey` of the PR the triage reason belongs to. Steers the collapsed
+  /// stack chip so it features that PR — otherwise the chip can paint a
+  /// *different* PR's green "✓ 5/5" right next to a red "2 checks failed" pill,
+  /// with nothing on the card saying they're two different PRs. Ungated by
+  /// `showsReasonChip`: featuring the PR that most needs the user is the better
+  /// default even on a card that shows no pill.
+  private var actionablePullRequestKey: String? {
+    prReferenceSnapshots.actionableReference(for: session)?.dedupeKey
+  }
+
+  /// PR number to stamp on the reason pill, so "2 checks failed" says *which*
+  /// PR failed. Only on sessions holding more than one PR — with a single PR
+  /// there's nothing to confuse it with, and the header is width-constrained.
+  private var prReasonPullRequestNumber: Int? {
+    guard session.references.count(where: { $0.isPullRequestReference }) > 1,
+      let key = actionablePullRequestKey,
+      let reference = session.references.first(where: { $0.dedupeKey == key }),
+      case .pullRequest(_, _, let number, _, _) = reference
+    else { return nil }
+    return number
+  }
+
   /// The one PR-chip glyph the header reason pill already spells out in words,
   /// so the reference chip drops it and doesn't paint the same conflict / CI
   /// state twice. Only when the pill is actually shown (same `showsReasonChip`
@@ -610,7 +632,8 @@ struct SessionCardView: View {
           isAddLinkPromptShown = true
         },
       prReferenceSnapshots: prReferenceSnapshots,
-      suppressedIndicator: suppressedPRIndicator
+      suppressedIndicator: suppressedPRIndicator,
+      actionablePullRequestKey: actionablePullRequestKey
     )
   }
 
@@ -981,6 +1004,10 @@ struct SessionReferenceSummaryChips: View {
   /// pill, so the matching inline chip drops it instead of duplicating the
   /// conflict/CI state. Nil when the caller shows no pill (or nothing overlaps).
   var suppressedIndicator: SuppressedPRIndicator?
+  /// `dedupeKey` of the PR whose ball is in the user's court. On a multi-PR
+  /// session the collapsed stack chip features this PR, so its inline CI/score
+  /// indicators describe the same PR the reason pill names.
+  var actionablePullRequestKey: String?
 
   /// Cached Linear inbox records used to hover-preview the primary ticket
   /// chip's title + description. Empty (the default) disables the preview —
@@ -1050,7 +1077,8 @@ struct SessionReferenceSummaryChips: View {
           onRemoveReference: onRemoveReference,
           onAddLink: onAddLink,
           prReferenceSnapshots: prReferenceSnapshots,
-          suppressedIndicator: suppressedIndicator
+          suppressedIndicator: suppressedIndicator,
+          actionablePullRequestKey: actionablePullRequestKey
         )
       }
     }
@@ -1098,13 +1126,31 @@ nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
     }
   }
 
-  /// The PR surfaced in the collapsed stack chip's label. An open PR is the
-  /// work in flight, so it wins over settled ones; drafts come next. With
-  /// only settled PRs the newest mention beats the oldest — `references`
-  /// keeps insertion order, so `first` would pin the chip to a long-merged
-  /// PR forever.
-  nonisolated static func featuredPullRequest(in references: [SessionReference]) -> SessionReference? {
-    references.first { $0.isPullRequest(in: .open) }
+  /// The PR surfaced in the collapsed stack chip's label.
+  ///
+  /// `preferring` is the PR whose ball is in the user's court — the one the
+  /// card's reason pill is spelling out. It wins outright, because a chip that
+  /// features a *different* PR paints that PR's CI glyph and Greptile score
+  /// beside the pill, and the two then read as a contradiction: a green
+  /// "✓ 5/5" chip sitting next to a red "2 checks failed". It also lets
+  /// `SuppressedPRIndicator` actually fire, since suppression only matches on
+  /// the featured PR's `dedupeKey`.
+  ///
+  /// Without an actionable PR the old order stands: an open PR is the work in
+  /// flight, so it wins over settled ones; drafts come next. With only settled
+  /// PRs the newest mention beats the oldest — `references` keeps insertion
+  /// order, so `first` would pin the chip to a long-merged PR forever.
+  nonisolated static func featuredPullRequest(
+    in references: [SessionReference],
+    preferring dedupeKey: String? = nil
+  ) -> SessionReference? {
+    if let dedupeKey,
+      let preferred = references.first(where: { $0.dedupeKey == dedupeKey }),
+      case .pullRequest = preferred
+    {
+      return preferred
+    }
+    return references.first { $0.isPullRequest(in: .open) }
       ?? references.first { $0.isPullRequest(in: .draft) }
       ?? references.last
   }
@@ -1153,6 +1199,10 @@ private struct ReferenceStackChip: View {
   /// PR the pill is calling out. Popover rows keep every glyph: opening the
   /// stack is an explicit drill-in where full per-PR detail is wanted.
   var suppressedIndicator: SuppressedPRIndicator?
+  /// `dedupeKey` of the PR whose ball is in the user's court, so the collapsed
+  /// label features that PR instead of whichever one happens to be open first.
+  /// Nil falls back to the open → draft → newest heuristic.
+  var actionablePullRequestKey: String?
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
@@ -1221,7 +1271,10 @@ private struct ReferenceStackChip: View {
   /// ticket stacks, where no per-item CI/score vocabulary applies.
   private var featuredPullRequest: SessionReference? {
     guard kind == .pullRequests else { return nil }
-    return ReferenceStackPopoverPresentation.featuredPullRequest(in: references)
+    return ReferenceStackPopoverPresentation.featuredPullRequest(
+      in: references,
+      preferring: actionablePullRequestKey
+    )
   }
 
   /// Latest checks/Greptile snapshot for the featured PR, used to draw the

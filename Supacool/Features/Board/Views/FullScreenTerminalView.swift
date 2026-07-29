@@ -427,8 +427,26 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var reasonChip: some View {
     if let reason = prReferenceSnapshots.standaloneReason(for: session) {
-      PRReasonChip(ball: reason)
+      PRReasonChip(ball: reason, pullRequestNumber: actionablePullRequestNumber)
     }
+  }
+
+  /// `dedupeKey` of the PR whose ball is in the user's court — steers both the
+  /// reason pill's number and the reference stack chip's featured PR, so the
+  /// header can't spell out one PR's failure beside another PR's green check.
+  private var actionablePullRequestKey: String? {
+    prReferenceSnapshots.actionableReference(for: session)?.dedupeKey
+  }
+
+  /// The actionable PR's number, shown on the pill only when the session holds
+  /// more than one PR (see `PRReasonChip.pullRequestNumber`).
+  private var actionablePullRequestNumber: Int? {
+    guard session.references.count(where: { $0.isPullRequestReference }) > 1,
+      let key = actionablePullRequestKey,
+      let reference = session.references.first(where: { $0.dedupeKey == key }),
+      case .pullRequest(_, _, let number, _, _) = reference
+    else { return nil }
+    return number
   }
 
   @ViewBuilder
@@ -443,6 +461,7 @@ struct FullScreenTerminalView: View {
         // one glyph it already spells out. No status gate — you're looking at
         // this session directly.
         suppressedIndicator: prReferenceSnapshots.redundantIndicator(for: session),
+        actionablePullRequestKey: actionablePullRequestKey,
         ticketPreviewSource: inboxTickets[session.repositoryID] ?? []
       )
     }
