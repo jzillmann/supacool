@@ -213,9 +213,9 @@ struct SupacoolApp: App {
       )
     }
     _store = State(initialValue: appStore)
-    _mcpControlServer = State(
-      initialValue: MCPControlServer(store: appStore, terminalManager: terminalManager)
-    )
+    let mcpControlServer = MCPControlServer(store: appStore, terminalManager: terminalManager)
+    mcpControlServer.startFollowingSettings()
+    _mcpControlServer = State(initialValue: mcpControlServer)
 
     // Supacool: install the image-drop coordinator BEFORE touching
     // `appDelegate` so every stored-property init is satisfied.
@@ -285,13 +285,11 @@ struct SupacoolApp: App {
 
   var body: some Scene {
     Window("Supacool", id: WindowID.main) {
-      MCPControlServerSyncView(server: mcpControlServer) {
-        GhosttyColorSchemeSyncView(ghostty: ghostty) {
-          ContentView(store: store, terminalManager: terminalManager)
-            .environment(ghosttyShortcuts)
-            .environment(commandKeyObserver)
-            .environment(\.openURL, .preferredBrowser)
-        }
+      GhosttyColorSchemeSyncView(ghostty: ghostty) {
+        ContentView(store: store, terminalManager: terminalManager)
+          .environment(ghosttyShortcuts)
+          .environment(commandKeyObserver)
+          .environment(\.openURL, .preferredBrowser)
       }
       .openSettingsOnSelection(store: store)
       .openDeeplinkCheatsheetOnRequest(store: store)
