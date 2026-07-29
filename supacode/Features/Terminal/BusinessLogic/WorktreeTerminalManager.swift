@@ -390,6 +390,7 @@ final class WorktreeTerminalManager {
         // busy hook re-sets busy and clears awaiting within seconds.
         self?.clearOptimisticBusy(tabID: tabID)
         state.clearAgentBusy(tabID: wrappedTabID)
+        self?.releaseAgentPIDRegistrations(tabID: tabID)
         self?.clearDeferredWork(tabID: tabID)
         self?.markAwaitingInputSignal(worktreeID: decoded, tabID: tabID, source: "hook")
       } else if let duration = self?.deferredWorkLeaseDuration(for: notification) {
@@ -410,6 +411,7 @@ final class WorktreeTerminalManager {
         self?.clearDeferredWork(tabID: tabID)
         self?.clearOptimisticBusy(tabID: tabID)
         state.clearAgentBusy(tabID: wrappedTabID)
+        self?.releaseAgentPIDRegistrations(tabID: tabID)
       }
     }
   }
@@ -2081,7 +2083,16 @@ final class WorktreeTerminalManager {
     if registrations.isEmpty {
       agentPIDByTab.removeValue(forKey: tabID)
       clearOptimisticBusy(tabID: tabID)
-      clearAwaitingInput(tabID: tabID, reason: "busy-stale")
+      // Deliberately does NOT clear awaiting-input. The watchdog's entire
+      // evidence is "PID alive + screen byte-stable for ~90s" — which is the
+      // signature of an agent parked at a prompt, i.e. *corroboration* that
+      // the user is being waited on, not grounds to demote the chip. Clearing
+      // it here dropped a session out of Waiting on Me 58s after the hook
+      // correctly promoted it (trace F5D06013, 19:19:00 → 19:19:58) and left
+      // it unnoticed for two hours. Awaiting has its own lifecycle — the TTL
+      // plus the 1s activity poll — and `activity-resumed` retires it the
+      // moment the user actually types. The `pid-gone` sweep still clears it,
+      // correctly: there, the process is dead and nobody is waiting.
       clearDeferredWork(tabID: tabID)
     } else {
       agentPIDByTab[tabID] = registrations
@@ -2118,6 +2129,21 @@ final class WorktreeTerminalManager {
   func registeredAgentPIDs(tabID: UUID) -> Set<Int32> {
     guard let registrations = agentPIDByTab[tabID] else { return [] }
     return Set(registrations.keys)
+  }
+
+  /// Drop every agent-PID registration on a tab, disarming both sweeps for
+  /// it until the next busy hook re-registers.
+  ///
+  /// Called from the hook paths that release the busy latch *without* a
+  /// `busy=false` edge — an awaiting-input notification or a `Stop`. Those
+  /// paths cleared the display latch (`clearAgentBusy`) but left the
+  /// registration in place, so the stuck-busy watchdog stayed armed against
+  /// a latch that was already down. It would then fire ~90s later and, until
+  /// the companion fix in `reconcileStuckBusy`, take the awaiting-input chip
+  /// with it. This mirrors what `onBusy`'s `active == false` branch already
+  /// does, and is tab-wide for the same reason `clearAgentBusy(tabID:)` is.
+  private func releaseAgentPIDRegistrations(tabID: UUID) {
+    agentPIDByTab.removeValue(forKey: tabID)
   }
 
   private func commitAwaitingInputPresentation(for tabID: UUID, desiredState: Bool) {

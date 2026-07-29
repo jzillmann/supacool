@@ -999,9 +999,24 @@ final class GhosttySurfaceView: NSView, Identifiable {
     from previous: GhosttySurfaceView? = nil,
     delay: TimeInterval? = nil
   ) {
-    let maxDelay: TimeInterval = 0.5
+    // Retry ceiling for the "view isn't in a window yet" backoff. A pane
+    // created by ⌘D / ⌘T is handed to `moveFocus` before SwiftUI has mounted
+    // it, so early attempts legitimately find `window == nil`. The previous
+    // 0.5s ceiling (~0.75s of wall clock across the backoff) is comfortably
+    // exceeded whenever the main thread is contended — a compile storm in a
+    // sibling session is enough — and the give-up was *silent*, leaving a
+    // pane that renders but never becomes first responder: keystrokes go
+    // nowhere and nothing retries. Give SwiftUI a realistic budget, and say
+    // so in the log when it still doesn't arrive.
+    let maxDelay: TimeInterval = 4.0
     let currentDelay = delay ?? 0
-    guard currentDelay < maxDelay else { return }
+    guard currentDelay < maxDelay else {
+      surfaceLogger.warning(
+        "moveFocus: surface \(view.id) never attached to a window; giving up. "
+          + "The pane will render but ignore keystrokes until it is clicked."
+      )
+      return
+    }
     let nextDelay: TimeInterval = if let delay { delay * 2 } else { 0.05 }
     Task { @MainActor in
       if let delay {
