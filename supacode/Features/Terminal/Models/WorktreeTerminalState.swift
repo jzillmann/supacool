@@ -415,6 +415,13 @@ final class WorktreeTerminalState {
     if creation.focusing, let surface = tree.root?.leftmostLeaf() {
       focusSurface(surface, in: tabId)
     }
+    // `splitTree` installs `trees[tabId]` directly instead of going through
+    // `updateTree`, so nothing has applied per-surface occlusion/focus for
+    // this tab yet — the new tab's surface keeps whatever renderer and focus
+    // state libghostty defaulted to, and the async `moveFocus` above is the
+    // only thing pointing AppKit at it. Same failure mode as the `.newSplit`
+    // path: a terminal that draws but ignores input.
+    syncFocusIfNeeded()
     onTabCreated?()
     return tabId
   }
@@ -869,6 +876,18 @@ final class WorktreeTerminalState {
         )
         updateTree(newTree, for: tabId)
         focusSurface(newSurface, in: tabId)
+        // `updateTree` already ran `applySurfaceActivity`, but it did so
+        // against the *previous* `focusedSurfaceIdByTab` — the new pane was
+        // therefore told `focusDidChange(false)` and libghostty marked it
+        // unfocused. `focusSurface` then only hands AppKit an async
+        // `moveFocus`, which gives up when the pane hasn't been mounted into
+        // a window yet (see `GhosttySurfaceView.moveFocus`). Lose that race —
+        // routine under main-thread contention — and ⌘D leaves a split that
+        // renders but ignores every keystroke, with nothing to re-sync it
+        // until the user clicks the pane. Re-apply now that the focus
+        // bookkeeping is correct, so ghostty's focus state never depends on
+        // AppKit winning a timing race. Mirrors the `.gotoSplit` branch.
+        syncFocusIfNeeded()
         return true
       } catch {
         terminalStateLogger.warning(

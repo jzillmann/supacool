@@ -122,3 +122,37 @@ Resume-session DOES focus, because reclaiming an old session implies you want to
 ## When you need the `Worktree` object but only have a `session`
 
 `FullScreenTerminalView.resolveWorktree()` is the pattern: look up `repository.worktrees` first, fall back to synthesizing a `Worktree(id: sessionID, workingDirectory: URL(...))` if missing. The terminal manager keys state by `id` (which is the path), so a synthesized Worktree with the right id works identically to a "real" one. Copy this when a view gets a session and needs to pass a Worktree to something deeper.
+
+## New terminal panes: sync focus *after* the bookkeeping, never rely on `moveFocus` alone
+
+Creating a pane (⌘D split, ⌘T tab) touches two independent notions of focus, and it is easy
+to satisfy neither:
+
+1. **libghostty's** focus bit, set by `applySurfaceActivity` → `focusDidChange` →
+   `ghostty_surface_set_focus`. Derived from `focusedSurfaceIdByTab`.
+2. **AppKit's** first responder, set asynchronously by `GhosttySurfaceView.moveFocus`, which
+   retries with backoff because a brand-new pane isn't in a window yet.
+
+The trap: `applySurfaceActivity` runs from `updateTree`, which fires *before* `focusSurface`
+updates `focusedSurfaceIdByTab`. So the new pane gets computed as unfocused and is explicitly
+told `focusDidChange(false)`, and nothing re-runs the sync afterwards. Meanwhile `moveFocus`
+is the only thing pointing AppKit at the pane — and it gives up once its backoff budget is
+spent. Lose that race (trivial under main-thread contention: a compile storm in a sibling
+session will do it) and you get a split that renders a live shell but ignores every
+keystroke, unrecoverable until the user clicks it. That was the ⌘D "the TTY comes up but is
+stuck" report.
+
+Rules:
+
+- Any path that mutates the tree **and** the focused-surface bookkeeping must call
+  `syncFocusIfNeeded()` **last**, after both. `.gotoSplit` always did; `.newSplit` and
+  `createTab` did not.
+- `createTab` needs it explicitly: `splitTree` installs `trees[tabId]` directly instead of
+  going through `updateTree`, so a new tab gets no activity pass at all otherwise.
+- Never treat `moveFocus` as sufficient. It is best-effort and bounded; it logs when it
+  gives up, and that log is the fingerprint of this bug class.
+
+Same family as the board↔session freezes documented in `SingleSessionTerminalView` (claim
+tokens) and `setOcclusion` (forced repaint on resume): in every case the symptom is "keys
+reach the PTY but the pane looks dead", and the cause is a focus/visibility pass that ran
+against stale state or lost a mounting race.
