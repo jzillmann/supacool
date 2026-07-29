@@ -517,14 +517,16 @@ struct SessionCardView: View {
   /// The most urgent "ball is in your court" reason across this session's PR
   /// references, derived from the cached snapshots. Drives the reason chip so
   /// the Waiting-on-Me pool self-triages (CI failed / changes requested /
-  /// ready to merge / …) instead of being an undifferentiated pile.
+  /// ready to merge / …) instead of being an undifferentiated pile. A low
+  /// Greptile score is excluded — it rides along on the PR chip's own "N/5"
+  /// badge rather than as a second, detached pill.
   private var prReason: PRBallState? {
-    prReferenceSnapshots.actionableReason(for: session)
+    prReferenceSnapshots.standaloneReason(for: session)
   }
 
   /// The one PR-chip glyph the header reason pill already spells out in words,
-  /// so the reference chip drops it and doesn't paint the same conflict / CI /
-  /// score twice. Only when the pill is actually shown (same `showsReasonChip`
+  /// so the reference chip drops it and doesn't paint the same conflict / CI
+  /// state twice. Only when the pill is actually shown (same `showsReasonChip`
   /// gate) — a card with no pill keeps every glyph.
   private var suppressedPRIndicator: SuppressedPRIndicator? {
     guard showsReasonChip else { return nil }
@@ -762,8 +764,9 @@ struct ReferenceChip: View {
   /// for tickets) hides the CI glyph and score badge.
   var prSnapshot: PullRequestSnapshot?
   /// The one glyph already spoken for by the session's triage reason pill, so
-  /// this chip drops it instead of painting the same conflict/CI/score twice.
-  /// Only fires when the chip is the exact PR the pill is calling out.
+  /// this chip drops it instead of painting the same conflict/CI state twice.
+  /// Only fires when the chip is the exact PR the pill is calling out. The
+  /// Greptile badge is never suppressed — the pill stands down for it instead.
   var suppressedIndicator: SuppressedPRIndicator?
 
   /// When set (ticket chips only), hovering the chip reveals a preview
@@ -806,9 +809,7 @@ struct ReferenceChip: View {
           if suppressed != .conflict {
             PRConflictGlyph(snapshot: prSnapshot)
           }
-          if suppressed != .greptile {
-            GreptileScoreBadge(score: prSnapshot.greptileScore)
-          }
+          GreptileScoreBadge(score: prSnapshot.greptileScore)
         }
       }
       .foregroundStyle(.primary.opacity(0.85))
@@ -978,7 +979,7 @@ struct SessionReferenceSummaryChips: View {
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
   /// The one PR-chip glyph already spoken for by the caller's triage reason
   /// pill, so the matching inline chip drops it instead of duplicating the
-  /// conflict/CI/score. Nil when the caller shows no pill (or nothing overlaps).
+  /// conflict/CI state. Nil when the caller shows no pill (or nothing overlaps).
   var suppressedIndicator: SuppressedPRIndicator?
 
   /// Cached Linear inbox records used to hover-preview the primary ticket
@@ -1184,9 +1185,7 @@ private struct ReferenceStackChip: View {
           if suppressed != .conflict {
             PRConflictGlyph(snapshot: featuredSnapshot)
           }
-          if suppressed != .greptile {
-            GreptileScoreBadge(score: featuredSnapshot.greptileScore)
-          }
+          GreptileScoreBadge(score: featuredSnapshot.greptileScore)
         }
       }
       .foregroundStyle(.primary.opacity(0.85))

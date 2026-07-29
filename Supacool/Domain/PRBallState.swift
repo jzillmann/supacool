@@ -135,6 +135,24 @@ nonisolated enum PRBallState: Equatable, Sendable {
     }
   }
 
+  /// Whether the PR reference chip's own inline badge already states this
+  /// reason in full, making a separate reason pill a split of one fact across
+  /// two floating chips. Only a low Greptile score qualifies: the chip carries
+  /// a red "N/5" capsule right on the PR it grades, which is the same number in
+  /// the same color — a detached "Score 3/5" pill adds nothing. The CI and
+  /// conflict glyphs are bare icons, so their pills ("CI failed", "Conflicts")
+  /// do carry extra words and stay; the glyph is dropped instead (see
+  /// `redundantIndicator(for:)`).
+  var isStatedByChipBadge: Bool {
+    switch self {
+    case .greptileLow:
+      return true
+    case .ciFailed, .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+      .ciRunning, .awaitingReview, .merged:
+      return false
+    }
+  }
+
   var systemImage: String {
     switch self {
     case .ciFailed:
@@ -228,12 +246,27 @@ extension [String: PullRequestSnapshot] {
     actionableReference(for: session, greptileThreshold: greptileThreshold)?.ball
   }
 
+  /// The reason worth its own standalone pill: `actionableReason` minus the
+  /// reasons the winning PR's chip badge already states in full (see
+  /// `PRBallState.isStatedByChipBadge`). A low Greptile score stays on the PR
+  /// chip as its red "N/5" badge instead of being hoisted into a detached
+  /// "Score 3/5" pill that floats away from the PR it grades.
+  nonisolated func standaloneReason(for session: AgentSession, greptileThreshold: Int = 5)
+    -> PRBallState?
+  {
+    guard let ball = actionableReason(for: session, greptileThreshold: greptileThreshold),
+      !ball.isStatedByChipBadge
+    else { return nil }
+    return ball
+  }
+
   /// The single inline PR-chip glyph the triage reason pill makes redundant, if
   /// any. The pill spells out one PR's most-urgent reason in words, so the
   /// matching glyph on that same PR's chip would just repeat it. `nil` when the
   /// winning reason has no per-chip glyph equivalent (Changes requested, Ready
-  /// to merge, Draft, PR closed) or when no PR is in the user's court — in
-  /// those cases nothing is duplicated and every glyph stays.
+  /// to merge, Draft, PR closed), when the chip badge is the surface that wins
+  /// (low score — the pill is dropped instead, see `standaloneReason(for:)`),
+  /// or when no PR is in the user's court.
   nonisolated func redundantIndicator(for session: AgentSession, greptileThreshold: Int = 5)
     -> SuppressedPRIndicator?
   {
@@ -244,25 +277,23 @@ extension [String: PullRequestSnapshot] {
     switch winner.ball {
     case .ciFailed: kind = .checks
     case .mergeConflict: kind = .conflict
-    case .greptileLow: kind = .greptile
     default: return nil
     }
     return SuppressedPRIndicator(dedupeKey: winner.dedupeKey, kind: kind)
   }
 }
 
-/// A single inline PR-chip indicator rendered redundant by the triage reason
-/// pill. The pill already surfaces this PR's most-urgent reason as a word chip
-/// ("Conflicts", "CI failed", "Score 3/5"), so the matching glyph on the PR's
-/// own chip is suppressed — exactly that one glyph, and nothing else.
+/// A single inline PR-chip glyph rendered redundant by the triage reason pill.
+/// The pill already surfaces this PR's most-urgent reason as a word chip
+/// ("Conflicts", "CI failed"), so the matching glyph on the PR's own chip is
+/// suppressed — exactly that one glyph, and nothing else. The Greptile score
+/// goes the other way: the chip's "N/5" badge keeps it and the pill stands down.
 nonisolated struct SuppressedPRIndicator: Equatable, Sendable {
   nonisolated enum Kind: Equatable, Sendable {
     /// The `xmark.circle.fill` CI-failed glyph (`PRChecksGlyph`).
     case checks
     /// The `arrow.triangle.branch` merge-conflict glyph (`PRConflictGlyph`).
     case conflict
-    /// The "N/5" low-score badge (`GreptileScoreBadge`).
-    case greptile
   }
 
   let dedupeKey: String

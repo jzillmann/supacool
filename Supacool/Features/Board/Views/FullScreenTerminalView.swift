@@ -426,7 +426,7 @@ struct FullScreenTerminalView: View {
   /// session directly, so any ball-in-your-court reason is always worth showing.
   @ViewBuilder
   private var reasonChip: some View {
-    if let reason = prReferenceSnapshots.actionableReason(for: session) {
+    if let reason = prReferenceSnapshots.standaloneReason(for: session) {
       PRReasonChip(ball: reason)
     }
   }

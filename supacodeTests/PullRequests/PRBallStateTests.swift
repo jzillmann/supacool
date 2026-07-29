@@ -306,10 +306,24 @@ struct PRBallStateTests {
     #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .checks))
   }
 
-  @Test func lowGreptileReasonSuppressesTheScoreBadge() {
+  @Test func lowGreptileKeepsTheScoreBadgeAndDropsThePill() {
+    // The score belongs *on* the PR chip: its red "N/5" badge is the same
+    // number in the same color, attached to the PR it grades. So the badge
+    // stays and the detached "Score 2/5" pill stands down.
     let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, greptileScore: 2)]
-    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
-    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .greptile))
+    let session = session(references: [Self.pr1])
+    #expect(snapshots.redundantIndicator(for: session) == nil)
+    #expect(snapshots.actionableReason(for: session) == .greptileLow(2))
+    #expect(snapshots.standaloneReason(for: session) == nil)
+  }
+
+  @Test func glyphReasonsKeepTheirPill() {
+    // CI/conflict pills carry words the bare glyph doesn't, so they survive —
+    // it's the glyph that yields (see the suppression tests above).
+    let failing = [Self.pr1.dedupeKey: snapshot(checks: Self.failing)]
+    #expect(failing.standaloneReason(for: session(references: [Self.pr1])) == .ciFailed(1))
+    let conflicting = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING")]
+    #expect(conflicting.standaloneReason(for: session(references: [Self.pr1])) == .mergeConflict)
   }
 
   @Test func glyphlessReasonSuppressesNothing() {
