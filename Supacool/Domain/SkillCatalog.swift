@@ -31,7 +31,7 @@ enum SkillCatalog {
   }
 
   static func discoverClaude(projectRoot: URL?) async -> [Skill] {
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    let home = SupacoolPaths.spawnedProcessHomeDirectory
     let userSkillsRoot = home.appending(path: ".claude/skills", directoryHint: .isDirectory)
     let projectSkillsRoot = projectRoot?.appending(path: ".claude/skills", directoryHint: .isDirectory)
     let userCommandsRoot = home.appending(path: ".claude/commands", directoryHint: .isDirectory)
@@ -86,7 +86,7 @@ enum SkillCatalog {
   }
 
   static func discoverCodex(projectRoot: URL?) async -> [Skill] {
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    let home = SupacoolPaths.spawnedProcessHomeDirectory
     let userAgentsRoot = home.appending(path: ".agents/skills", directoryHint: .isDirectory)
     let userCodexRoot = home.appending(path: ".codex/skills", directoryHint: .isDirectory)
     let userCodexSystemRoot = userCodexRoot.appending(path: ".system", directoryHint: .isDirectory)

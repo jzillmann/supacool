@@ -77,7 +77,7 @@ nonisolated enum SessionReferenceScannerLive {
   /// hash). Use `locateJSONLURL` for runtime reads — it falls back to a
   /// `<sessionID>.jsonl` search when the hash misses.
   static func jsonlURL(cwdPath: String, agentNativeSessionID: String) -> URL {
-    let home = FileManager.default.homeDirectoryForCurrentUser
+    let home = SupacoolPaths.spawnedProcessHomeDirectory
     let hashed = hashProjectPath(cwdPath)
     return
       home
@@ -96,7 +96,7 @@ nonisolated enum SessionReferenceScannerLive {
     let direct = jsonlURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
     let fm = FileManager.default
     if fm.fileExists(atPath: direct.path) { return direct }
-    let projectsRoot = fm.homeDirectoryForCurrentUser
+    let projectsRoot = SupacoolPaths.spawnedProcessHomeDirectory
       .appending(path: ".claude", directoryHint: .isDirectory)
       .appending(path: "projects", directoryHint: .isDirectory)
     guard

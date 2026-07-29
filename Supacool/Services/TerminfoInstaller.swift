@@ -36,7 +36,7 @@ enum TerminfoInstaller {
       terminfoInstallerLogger.warning("App bundle has no terminfo directory; skipping install")
       return
     }
-    let userTerminfo = FileManager.default.homeDirectoryForCurrentUser
+    let userTerminfo = SupacoolPaths.spawnedProcessHomeDirectory
       .appendingPathComponent(".terminfo")
 
     var installed = 0

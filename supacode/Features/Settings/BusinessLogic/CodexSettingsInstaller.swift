@@ -14,7 +14,7 @@ nonisolated struct CodexSettingsInstaller {
   let runEnableHooksCommand: @Sendable () async throws -> CommandResult
 
   init(
-    homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+    homeDirectoryURL: URL = SupacoolPaths.spawnedProcessHomeDirectory,
     fileManager: FileManager = .default
   ) {
     self.init(
@@ -25,7 +25,7 @@ nonisolated struct CodexSettingsInstaller {
   }
 
   init(
-    homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+    homeDirectoryURL: URL = SupacoolPaths.spawnedProcessHomeDirectory,
     fileManager: FileManager = .default,
     runEnableHooksCommand: @escaping @Sendable () async throws -> CommandResult
   ) {

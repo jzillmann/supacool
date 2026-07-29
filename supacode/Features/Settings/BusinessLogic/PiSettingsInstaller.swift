@@ -12,7 +12,7 @@ nonisolated struct PiSettingsInstaller {
   let fileManager: FileManager
 
   init(
-    homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser,
+    homeDirectoryURL: URL = SupacoolPaths.spawnedProcessHomeDirectory,
     fileManager: FileManager = .default
   ) {
     self.homeDirectoryURL = homeDirectoryURL

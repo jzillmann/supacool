@@ -21,6 +21,17 @@ SEED_REPO="${2:-}"
 SANDBOX="$HOME/.supacool-preview-sandbox"
 mkdir -p "$SANDBOX/.supacool"
 
+# Seed the sandbox's ~/.claude with the real settings on first run. Agents
+# spawned inside the preview run with HOME=$SANDBOX and read
+# $SANDBOX/.claude/settings.json — without the Supacool hook entries there,
+# preview agents emit NO hooks at all: no busy tracking, no session-id
+# capture, no multi-agent adoption. The hook commands are env-guarded
+# (SUPACOOL_*), so seeding them is inert outside Supacool terminals.
+if [ -f "$HOME/.claude/settings.json" ] && [ ! -f "$SANDBOX/.claude/settings.json" ]; then
+  mkdir -p "$SANDBOX/.claude"
+  cp "$HOME/.claude/settings.json" "$SANDBOX/.claude/settings.json"
+fi
+
 # Seed a single repo onto the preview board on first run only, so sessions you
 # create in the preview survive relaunches. Delete the sandbox to start fresh.
 if [ -n "$SEED_REPO" ] && [ ! -f "$SANDBOX/.supacool/settings.json" ]; then

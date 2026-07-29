@@ -30,6 +30,23 @@ nonisolated enum SupacoolPaths {
         .appending(path: ".supacool", directoryHint: .isDirectory)
   }
 
+  /// The home directory processes SPAWNED BY THIS APP will see: the
+  /// `HOME` environment variable when set (every PTY we create inherits
+  /// it), falling back to the account record. Use this for anything an
+  /// agent or shell reads/writes under `~` — hook settings, `~/.claude`
+  /// state, terminfo — so the app and its children agree on the same
+  /// files. In normal launches this equals `homeDirectoryForCurrentUser`;
+  /// in isolated previews the launcher redirects `HOME` to the sandbox,
+  /// and installing hooks into the real `~/.claude` while the spawned
+  /// claude reads the sandbox one silently breaks all busy/session-id
+  /// tracking (no adoption, no resume — observed 2026-07-28).
+  static var spawnedProcessHomeDirectory: URL {
+    if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty {
+      return URL(filePath: home, directoryHint: .isDirectory).standardizedFileURL
+    }
+    return FileManager.default.homeDirectoryForCurrentUser
+  }
+
   static var reposDirectory: URL {
     baseDirectory.appending(path: "repos", directoryHint: .isDirectory)
   }
