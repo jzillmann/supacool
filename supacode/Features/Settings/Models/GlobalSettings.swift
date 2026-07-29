@@ -60,6 +60,10 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
   /// Browser for a workspace's own server links. `nil` = follow
   /// `preferredBrowserBundleID`. Resolved via `GlobalSettings.browser(for:)`.
   var localServerBrowser: BrowserChoice?
+  /// Remote-control plane: when true, the embedded MCP server listens on
+  /// `127.0.0.1:remoteControlServerPort` (bearer-token gated).
+  var remoteControlServerEnabled: Bool
+  var remoteControlServerPort: Int
 
   static let `default` = GlobalSettings(
     appearanceMode: .dark,
@@ -90,7 +94,9 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     autoDeleteArchivedWorktreesAfterDays: nil,
     shortcutOverrides: [:],
     preferredBrowserBundleID: nil,
-    localServerBrowser: nil
+    localServerBrowser: nil,
+    remoteControlServerEnabled: false,
+    remoteControlServerPort: 4519
   )
 
   init(
@@ -122,7 +128,9 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod? = nil,
     shortcutOverrides: [AppShortcutID: AppShortcutOverride] = [:],
     preferredBrowserBundleID: String? = nil,
-    localServerBrowser: BrowserChoice? = nil
+    localServerBrowser: BrowserChoice? = nil,
+    remoteControlServerEnabled: Bool = false,
+    remoteControlServerPort: Int = 4519
   ) {
     self.appearanceMode = appearanceMode
     self.defaultEditorID = defaultEditorID
@@ -153,6 +161,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     self.shortcutOverrides = shortcutOverrides
     self.preferredBrowserBundleID = preferredBrowserBundleID
     self.localServerBrowser = localServerBrowser
+    self.remoteControlServerEnabled = remoteControlServerEnabled
+    self.remoteControlServerPort = remoteControlServerPort
   }
 
   /// Keys for reading renamed settings fields that no longer
@@ -164,9 +174,27 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     init?(intValue: Int) { nil }
   }
 
-  init(from decoder: any Decoder) throws {
+  /// `try?` intentionally swallows decoding errors (e.g. unrecognized raw values
+  /// from a future app version) and falls through to the legacy migration path,
+  /// which defaults to `nil`. Silently resetting the preference is acceptable
+  /// because `nil` (do nothing) is the safest default.
+  private static func decodeMergedWorktreeAction(from decoder: any Decoder) throws -> MergedWorktreeAction? {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     let legacy = try decoder.container(keyedBy: LegacyCodingKey.self)
+    if let action = try? container.decodeIfPresent(MergedWorktreeAction.self, forKey: .mergedWorktreeAction) {
+      return action
+    }
+    if let legacyBool = try legacy.decodeIfPresent(
+      Bool.self,
+      forKey: LegacyCodingKey(stringValue: "automaticallyArchiveMergedWorktrees")!
+    ) {
+      return legacyBool ? .archive : Self.default.mergedWorktreeAction
+    }
+    return Self.default.mergedWorktreeAction
+  }
+
+  init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
     appearanceMode =
       (try? container.decodeIfPresent(AppearanceMode.self, forKey: .appearanceMode))
       ?? Self.default.appearanceMode
@@ -209,22 +237,7 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     deleteBranchOnDeleteWorktree =
       try container.decodeIfPresent(Bool.self, forKey: .deleteBranchOnDeleteWorktree)
       ?? Self.default.deleteBranchOnDeleteWorktree
-    // `try?` intentionally swallows decoding errors (e.g. unrecognized raw values
-    // from a future app version) and falls through to the legacy migration path,
-    // which defaults to `nil`. Silently resetting the preference is acceptable
-    // because `nil` (do nothing) is the safest default.
-    if let action = try? container.decodeIfPresent(MergedWorktreeAction.self, forKey: .mergedWorktreeAction) {
-      mergedWorktreeAction = action
-    } else {
-      if let legacyBool = try legacy.decodeIfPresent(
-        Bool.self,
-        forKey: LegacyCodingKey(stringValue: "automaticallyArchiveMergedWorktrees")!
-      ) {
-        mergedWorktreeAction = legacyBool ? .archive : Self.default.mergedWorktreeAction
-      } else {
-        mergedWorktreeAction = Self.default.mergedWorktreeAction
-      }
-    }
+    mergedWorktreeAction = try Self.decodeMergedWorktreeAction(from: decoder)
     promptForWorktreeCreation =
       try container.decodeIfPresent(Bool.self, forKey: .promptForWorktreeCreation)
       ?? Self.default.promptForWorktreeCreation
@@ -269,5 +282,11 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     localServerBrowser =
       try container.decodeIfPresent(BrowserChoice.self, forKey: .localServerBrowser)
       ?? Self.default.localServerBrowser
+    remoteControlServerEnabled =
+      try container.decodeIfPresent(Bool.self, forKey: .remoteControlServerEnabled)
+      ?? Self.default.remoteControlServerEnabled
+    remoteControlServerPort =
+      try container.decodeIfPresent(Int.self, forKey: .remoteControlServerPort)
+      ?? Self.default.remoteControlServerPort
   }
 }

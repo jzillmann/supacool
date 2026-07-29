@@ -68,6 +68,8 @@ struct SettingsView: View {
           .tag(SettingsSection.linear)
         Label("Remote Hosts", systemImage: "network")
           .tag(SettingsSection.remoteHosts)
+        Label("Remote Control", systemImage: "antenna.radiowaves.left.and.right")
+          .tag(SettingsSection.remoteControl)
         Label("Shortcuts", systemImage: "keyboard")
           .tag(SettingsSection.shortcuts)
         Label("Updates", systemImage: "arrow.down.circle")
@@ -109,6 +111,8 @@ struct SettingsView: View {
         LinearSettingsView()
       case .remoteHosts:
         RemoteHostsSettingsView()
+      case .remoteControl:
+        RemoteControlSettingsView(store: settingsStore)
       case .repository(let repositoryID):
         if let repository = repositories[id: repositoryID] {
           IfLetStore(

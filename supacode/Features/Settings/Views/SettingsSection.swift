@@ -10,5 +10,6 @@ enum SettingsSection: Hashable, Sendable {
   case github
   case linear
   case remoteHosts
+  case remoteControl
   case repository(Repository.ID)
 }

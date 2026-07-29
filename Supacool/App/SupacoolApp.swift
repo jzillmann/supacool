@@ -285,11 +285,13 @@ struct SupacoolApp: App {
 
   var body: some Scene {
     Window("Supacool", id: WindowID.main) {
-      GhosttyColorSchemeSyncView(ghostty: ghostty) {
-        ContentView(store: store, terminalManager: terminalManager)
-          .environment(ghosttyShortcuts)
-          .environment(commandKeyObserver)
-          .environment(\.openURL, .preferredBrowser)
+      MCPControlServerSyncView(server: mcpControlServer) {
+        GhosttyColorSchemeSyncView(ghostty: ghostty) {
+          ContentView(store: store, terminalManager: terminalManager)
+            .environment(ghosttyShortcuts)
+            .environment(commandKeyObserver)
+            .environment(\.openURL, .preferredBrowser)
+        }
       }
       .openSettingsOnSelection(store: store)
       .openDeeplinkCheatsheetOnRequest(store: store)
@@ -351,6 +353,7 @@ struct SupacoolApp: App {
       SettingsView(store: store)
         .environment(ghosttyShortcuts)
         .environment(commandKeyObserver)
+        .environment(mcpControlServer)
         .environment(\.openURL, .preferredBrowser)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbarColorScheme(store.settings.appearanceMode.colorScheme, for: .windowToolbar)
