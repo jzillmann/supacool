@@ -79,7 +79,17 @@ struct AppearanceSettingsView: View {
           }
         } label: {
           Text("Open Links In")
-          Text("Where pull request, server, and ticket links open.")
+          Text("Where pull request and ticket links open.")
+        }
+        Picker(selection: $store.localServerBrowser) {
+          Text("Same as Above").tag(BrowserChoice?.none)
+          Text("System Default").tag(BrowserChoice?.some(.systemDefault))
+          ForEach(browsers) { browser in
+            Text(browser.name).tag(BrowserChoice?.some(.app(bundleID: browser.bundleID)))
+          }
+        } label: {
+          Text("Open Server Links In")
+          Text("Where a session's own server opens — its port chip and any localhost link.")
         }
       }
       Section {

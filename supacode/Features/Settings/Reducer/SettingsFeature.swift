@@ -34,6 +34,7 @@ struct SettingsFeature {
     var autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod?
     var shortcutOverrides: [AppShortcutID: AppShortcutOverride]
     var preferredBrowserBundleID: String?
+    var localServerBrowser: BrowserChoice?
     var claudeProgressState = AgentHooksInstallState.checking
     var claudeNotificationsState = AgentHooksInstallState.checking
     var codexProgressState = AgentHooksInstallState.checking
@@ -75,6 +76,7 @@ struct SettingsFeature {
       autoDeleteArchivedWorktreesAfterDays = settings.autoDeleteArchivedWorktreesAfterDays
       shortcutOverrides = settings.shortcutOverrides
       preferredBrowserBundleID = settings.preferredBrowserBundleID
+      localServerBrowser = settings.localServerBrowser
       defaultWorktreeBaseDirectoryPath =
         SupacoolPaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
     }
@@ -110,7 +112,8 @@ struct SettingsFeature {
         ),
         autoDeleteArchivedWorktreesAfterDays: autoDeleteArchivedWorktreesAfterDays,
         shortcutOverrides: shortcutOverrides,
-        preferredBrowserBundleID: preferredBrowserBundleID
+        preferredBrowserBundleID: preferredBrowserBundleID,
+        localServerBrowser: localServerBrowser
       )
     }
   }
@@ -233,6 +236,7 @@ struct SettingsFeature {
         state.autoDeleteArchivedWorktreesAfterDays = normalizedSettings.autoDeleteArchivedWorktreesAfterDays
         state.shortcutOverrides = normalizedSettings.shortcutOverrides
         state.preferredBrowserBundleID = normalizedSettings.preferredBrowserBundleID
+        state.localServerBrowser = normalizedSettings.localServerBrowser
         state.defaultWorktreeBaseDirectoryPath = normalizedSettings.defaultWorktreeBaseDirectoryPath ?? ""
         state.syncGlobalDefaults(from: normalizedSettings)
         return .send(.delegate(.settingsChanged(normalizedSettings)))

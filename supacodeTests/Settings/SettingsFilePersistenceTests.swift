@@ -228,6 +228,55 @@ struct SettingsFilePersistenceTests {
     #expect(reloaded.global.preferredBrowserBundleID == "com.google.Chrome")
   }
 
+  @Test(.dependencies) func roundTripsLocalServerBrowser() throws {
+    let storage = SettingsTestStorage()
+
+    withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      $settings.withLock {
+        $0.global.preferredBrowserBundleID = "com.apple.Safari"
+        $0.global.localServerBrowser = .app(bundleID: "com.google.Chrome")
+      }
+    }
+
+    let reloaded: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var reloaded: SettingsFile
+      return reloaded
+    }
+
+    #expect(reloaded.global.preferredBrowserBundleID == "com.apple.Safari")
+    #expect(reloaded.global.localServerBrowser == .app(bundleID: "com.google.Chrome"))
+  }
+
+  /// The explicit-system-default case is the one an "inherit means nil" encoding
+  /// can quietly lose: it has to survive a round trip as *not* `nil`.
+  @Test(.dependencies) func roundTripsLocalServerBrowserPinnedToSystemDefault() throws {
+    let storage = SettingsTestStorage()
+
+    withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      $settings.withLock {
+        $0.global.preferredBrowserBundleID = "com.google.Chrome"
+        $0.global.localServerBrowser = .systemDefault
+      }
+    }
+
+    let reloaded: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var reloaded: SettingsFile
+      return reloaded
+    }
+
+    #expect(reloaded.global.localServerBrowser == .systemDefault)
+  }
+
   @Test(.dependencies) func decodesMissingInAppNotificationsEnabled() throws {
     let legacy = LegacySettingsFile(
       global: LegacyGlobalSettings(
@@ -264,6 +313,7 @@ struct SettingsFilePersistenceTests {
     #expect(settings.global.defaultWorktreeBaseDirectoryPath == nil)
     #expect(settings.global.defaultEditorID == OpenWorktreeAction.automaticSettingsID)
     #expect(settings.global.preferredBrowserBundleID == nil)
+    #expect(settings.global.localServerBrowser == nil)
     #expect(settings.repositoryRoots.isEmpty)
     #expect(settings.pinnedWorktreeIDs.isEmpty)
   }

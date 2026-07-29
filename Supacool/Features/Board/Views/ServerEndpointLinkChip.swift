@@ -8,13 +8,11 @@ import SwiftUI
 struct ServerEndpointLinkChip: View {
   let endpoints: [ServerEndpoint]
 
-  @Environment(\.openURL) private var openURL
-
   @ViewBuilder
   var body: some View {
     if let primary = ServerEndpointScanner.primary(of: endpoints), let url = primary.url {
       Button {
-        openURL(url)
+        WebBrowser.open(url, kind: .localServer)
       } label: {
         chipLabel(primary.label)
       }
@@ -39,7 +37,7 @@ struct ServerEndpointLinkChip: View {
     ForEach(endpoints) { endpoint in
       if let url = endpoint.url {
         Button {
-          openURL(url)
+          WebBrowser.open(url, kind: .localServer)
         } label: {
           Text(verbatim: url.absoluteString)
         }

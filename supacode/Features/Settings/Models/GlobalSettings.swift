@@ -54,8 +54,12 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
   var allowArbitraryDeeplinkInput: Bool
   var autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod?
   var shortcutOverrides: [AppShortcutID: AppShortcutOverride]
-  /// Bundle id of the browser web links open in. `nil` = the system default handler.
+  /// Bundle id of the browser general web links (PRs, tickets) open in.
+  /// `nil` = the system default handler.
   var preferredBrowserBundleID: String?
+  /// Browser for a workspace's own server links. `nil` = follow
+  /// `preferredBrowserBundleID`. Resolved via `GlobalSettings.browser(for:)`.
+  var localServerBrowser: BrowserChoice?
 
   static let `default` = GlobalSettings(
     appearanceMode: .dark,
@@ -85,7 +89,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     defaultWorktreeBaseDirectoryPath: nil,
     autoDeleteArchivedWorktreesAfterDays: nil,
     shortcutOverrides: [:],
-    preferredBrowserBundleID: nil
+    preferredBrowserBundleID: nil,
+    localServerBrowser: nil
   )
 
   init(
@@ -116,7 +121,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     defaultWorktreeBaseDirectoryPath: String? = nil,
     autoDeleteArchivedWorktreesAfterDays: AutoDeletePeriod? = nil,
     shortcutOverrides: [AppShortcutID: AppShortcutOverride] = [:],
-    preferredBrowserBundleID: String? = nil
+    preferredBrowserBundleID: String? = nil,
+    localServerBrowser: BrowserChoice? = nil
   ) {
     self.appearanceMode = appearanceMode
     self.defaultEditorID = defaultEditorID
@@ -146,6 +152,7 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     self.autoDeleteArchivedWorktreesAfterDays = autoDeleteArchivedWorktreesAfterDays
     self.shortcutOverrides = shortcutOverrides
     self.preferredBrowserBundleID = preferredBrowserBundleID
+    self.localServerBrowser = localServerBrowser
   }
 
   /// Keys for reading renamed settings fields that no longer
@@ -259,5 +266,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     preferredBrowserBundleID =
       try container.decodeIfPresent(String.self, forKey: .preferredBrowserBundleID)
       ?? Self.default.preferredBrowserBundleID
+    localServerBrowser =
+      try container.decodeIfPresent(BrowserChoice.self, forKey: .localServerBrowser)
+      ?? Self.default.localServerBrowser
   }
 }
