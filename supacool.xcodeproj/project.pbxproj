@@ -162,6 +162,7 @@
 				8B2985744DB94333AE1B5878 /* Sentry */,
 				D6D054272F2E3EBF00D70ED5 /* PostHog */,
 				E0DF87922F79E2010033488C /* Kingfisher */,
+				A7B3C9D1E5F2470A8B3C4D5F /* MCP */,
 			);
 			productName = supacool;
 			productReference = D69CE04A2F1F378200584C57 /* Supacool.app */;
@@ -227,6 +228,7 @@
 				899A0B6B6B42424B92CD20C2 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				D6D054262F2E3EB300D70ED5 /* XCRemoteSwiftPackageReference "posthog-ios" */,
 				E0DF87912F79E2010033488C /* XCRemoteSwiftPackageReference "Kingfisher" */,
+				A7B3C9D1E5F2470A8B3C4D5E /* XCRemoteSwiftPackageReference "swift-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = D69CE04B2F1F378200584C57 /* Products */;
@@ -686,6 +688,14 @@
 				minimumVersion = 8.8.0;
 			};
 		};
+		A7B3C9D1E5F2470A8B3C4D5E /* XCRemoteSwiftPackageReference "swift-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/modelcontextprotocol/swift-sdk.git";
+			requirement = {
+				kind = upToNextMinorVersion;
+				minimumVersion = 0.12.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -728,6 +738,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = E0DF87912F79E2010033488C /* XCRemoteSwiftPackageReference "Kingfisher" */;
 			productName = Kingfisher;
+		};
+		A7B3C9D1E5F2470A8B3C4D5F /* MCP */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A7B3C9D1E5F2470A8B3C4D5E /* XCRemoteSwiftPackageReference "swift-sdk" */;
+			productName = MCP;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
