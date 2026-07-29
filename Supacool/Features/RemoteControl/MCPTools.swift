@@ -20,9 +20,9 @@ struct MCPToolBox {
       name: listSessionsName,
       description: """
         List every agent session on the Supacool board with its live status \
-        (the same classification the board cards show): in_progress, waiting_on_me, \
-        awaiting_input, waiting_for_checks, detached, interrupted, fresh, parked, \
-        or disconnected.
+        (the same classification the board cards show): inProgress, waitingOnMe, \
+        awaitingInput, waitingForChecks (waiting on CI/review), detached, \
+        interrupted, fresh, parked, or disconnected.
         """,
       inputSchema: .object([
         "type": "object",
@@ -61,11 +61,47 @@ struct MCPToolBox {
   func call(name: String, arguments: [String: Value]?) throws -> CallTool.Result {
     switch name {
     case Self.listSessionsName:
-      throw MCPError.internalError("list_sessions is not implemented yet")
+      return try listSessions()
     case Self.readSessionName:
       throw MCPError.internalError("read_session is not implemented yet")
     default:
       throw MCPError.methodNotFound("Unknown tool: \(name)")
     }
+  }
+
+  // MARK: - list_sessions
+
+  private func listSessions() throws -> CallTool.Result {
+    let state = store.state
+    let classifier = BoardSessionClassifier(
+      terminalManager: terminalManager,
+      prReferenceSnapshots: state.board.prReferenceSnapshots,
+      reinitializingSessionIDs: state.board.reinitializingSessionIDs,
+      repositories: state.repositories.repositories,
+      worktreeInfoByID: state.repositories.worktreeInfoByID
+    )
+    let payload = MCPSessionList(
+      sessions: state.board.sessions.map { session in
+        MCPSessionSummary(session: session, status: classifier.classify(session))
+      }
+    )
+    return try Self.result(payload)
+  }
+
+  // MARK: - Result encoding
+
+  /// Tool results carry the payload twice, per MCP convention: prettified
+  /// JSON in `content` for consumption as text, and the same object as
+  /// `structuredContent` for clients that read it directly.
+  nonisolated static func result<Payload: Codable>(_ payload: Payload) throws -> CallTool.Result {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let json = String(bytes: try encoder.encode(payload), encoding: .utf8) else {
+      throw MCPError.internalError("payload is not valid UTF-8")
+    }
+    return try CallTool.Result(
+      content: [.text(text: json, annotations: nil, _meta: nil)],
+      structuredContent: payload
+    )
   }
 }
