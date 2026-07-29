@@ -1,5 +1,11 @@
 import Foundation
 
+/// Direction for cycle-to-next-in-group navigation (⌘⌥. / ⌘⌥⇧.).
+nonisolated enum GroupCycleDirection: Equatable, Sendable {
+  case forward
+  case backward
+}
+
 /// A named set of agent sessions the user has *pinned* together so they can
 /// flip between related terminals without hunting the board (e.g. a "feature +
 /// its test runner" pair, or a cluster of sessions all chasing one incident).
@@ -61,6 +67,18 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
     else { return nil }
     let next = (index + step + sessionIDs.count) % sessionIDs.count
     return sessionIDs[next]
+  }
+
+  /// Removes `sessionID` from every group's membership and drops any group
+  /// that becomes empty. Called on *permanent* session removal — a merely
+  /// detached/rerun session is deliberately kept (see the type doc).
+  static func purging(sessionID: UUID, from groups: [SessionGroup]) -> [SessionGroup] {
+    groups.compactMap { group in
+      guard group.contains(sessionID) else { return group }
+      var updated = group
+      updated.sessionIDs.removeAll { $0 == sessionID }
+      return updated.isEmpty ? nil : updated
+    }
   }
 
   // MARK: - Codable (forward-compatible)

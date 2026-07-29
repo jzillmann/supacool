@@ -74,6 +74,7 @@ Files following this pattern:
 - `Supacool/Domain/SessionTerminal.swift` → embedded inside each `AgentSession.terminals[]`
 - `Supacool/Domain/Bookmark.swift` (via `BookmarksKey`) → `~/.supacool/bookmarks.json`
 - `Supacool/Domain/Draft.swift` (via `DraftsKey`) → `~/.supacool/drafts.json`
+- `Supacool/Domain/SessionGroup.swift` (via `SessionGroupsKey`) → `~/.supacool/session-groups.json`
 - `Supacool/Domain/TrashedSession.swift` (via `TrashedSessionsKey`) → `~/.supacool/trashed-sessions.json`
 - `Supacool/Domain/LinearTicket.swift` (via `LinearInboxKey`) → `~/.supacool/linear-inbox.json`
 - `Supacool/Domain/RemoteHost.swift` (via `RemoteHostsKey`) → `~/.supacool/remote-hosts.json`
