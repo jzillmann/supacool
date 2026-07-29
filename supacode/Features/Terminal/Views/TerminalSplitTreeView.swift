@@ -151,11 +151,13 @@ struct TerminalSplitTreeView: View {
           }
           .overlay(alignment: .bottomTrailing) {
             // Supacool: per-pane agent chip. Bottom-trailing keeps it
-            // clear of the search overlay and the top drag handle.
+            // clear of the search overlay and the top drag handle. Hit
+            // testing stays ON so the chip's hover tooltip works — it
+            // swallows clicks on its own few points of corner, which is
+            // an acceptable trade for a discoverable activity dot.
             if let badge = paneBadge?(surfaceView.id) {
               badge
                 .padding(6)
-                .allowsHitTesting(false)
             }
           }
           .overlay(alignment: .top) {

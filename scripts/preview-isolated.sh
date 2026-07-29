@@ -38,6 +38,14 @@ if [ -n "$SEED_REPO" ] && [ ! -f "$SANDBOX/.supacool/settings.json" ]; then
   printf '{\n  "repositoryRoots": ["%s"]\n}\n' "$SEED_REPO" > "$SANDBOX/.supacool/settings.json"
 fi
 
-for v in $(env | sed -n 's/^\(SUPACOOL_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done
+# Strip agent-session markers along with SUPACOOL_*: a preview launched
+# from inside ANY agent terminal (Supacool's or a bare claude/codex shell)
+# would otherwise leak them into every PTY the preview spawns. Concretely,
+# an inherited CLAUDE_CODE_CHILD_SESSION makes claudes inside the preview
+# skip transcript saving — their conversations are never written, and a
+# later Resume reports "No conversation found" (observed 2026-07-29).
+for v in $(env | sed -nE 's/^(SUPACOOL_[A-Z_]*|CLAUDE[A-Z_]*|CODEX[A-Z_]*)=.*/\1/p'); do
+  unset "$v"
+done
 exec env HOME="$SANDBOX" "$APP/Contents/MacOS/Supacool" \
   -SupacoolDataDirectory "$SANDBOX/.supacool"

@@ -25,6 +25,7 @@ struct SessionTerminalBadge: View {
     .background(.background.secondary.opacity(0.85))
     .background(agentColor.opacity(0.12))
     .clipShape(Capsule())
+    .help("\(AgentType.displayName(for: agent)) in this pane — \(activityDescription)")
     .accessibilityLabel(
       "\(AgentType.displayName(for: agent)) — \(activityDescription)"
     )
