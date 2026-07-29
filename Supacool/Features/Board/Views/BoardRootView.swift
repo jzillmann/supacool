@@ -51,7 +51,7 @@ struct BoardRootView: View {
   /// Board bucket layout: carousel rails (default) vs full matrix grid.
   /// Read by BoardView via the same UserDefaults key; toggled from the
   /// toolbar button below or ⇧⌘M.
-  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = false
+  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = true
 
   /// Pending auto-navigate triggered by an idle→busy transition. `destination`
   /// nil = back to board; otherwise the session to focus next. The view

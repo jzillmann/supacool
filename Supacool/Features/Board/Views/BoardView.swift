@@ -56,7 +56,7 @@ struct BoardView: View {
   /// via the same UserDefaults key (⇧⌘M). Carousel (default) renders each
   /// bucket as one horizontally scrolling rail; matrix wraps the cards
   /// into a grid so every session is visible at once.
-  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = false
+  @AppStorage("supacool.boardMatrixLayout") private var matrixLayoutEnabled: Bool = true
 
   private let boardReorderAnimation = Animation.spring(response: 0.34, dampingFraction: 0.84)
   private let boardCardWidth: CGFloat = 280

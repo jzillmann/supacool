@@ -64,6 +64,14 @@ struct SessionCardView: View {
   /// every card.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
 
+  /// Fixed, uniform card height shared by every board card in both the grid
+  /// and carousel layouts. Tightened to hug the *common* card — header +
+  /// two-line title + one reference-chip row + footer — so lean cards don't
+  /// show a dead gap. The rare content-heavy card (an extra PR-status or
+  /// debug-link row) overflows and has its footer trimmed by the card's
+  /// `.clipShape`; that's the deliberate trade for perfectly uniform cards.
+  static let cardHeight: CGFloat = 150
+
   @State private var isHovered: Bool = false
   @State private var isInfoPopoverShown: Bool = false
   @State private var isAutoObserverPopoverShown: Bool = false
@@ -118,7 +126,19 @@ struct SessionCardView: View {
       footer
     }
     .padding(14)
-    .frame(maxWidth: .infinity, minHeight: 130, alignment: .topLeading)
+    // Uniform card size. Width is pinned by the board layout (280pt); height
+    // is fixed here so every card is identical and the grid/rail can't
+    // mis-reconcile variable frames (the old `minHeight` let each card size to
+    // its content, which fed the lazy-carousel overlap/clip glitches). The
+    // optional meta rows (debug-link, PR-status, references) are all single
+    // line — `Spacer(minLength: 0)` pins the footer to the bottom, and the
+    // card's `.clipShape` (below) trims the rare over-tall card gracefully.
+    .frame(
+      maxWidth: .infinity,
+      minHeight: Self.cardHeight,
+      maxHeight: Self.cardHeight,
+      alignment: .topLeading
+    )
     .background(cardBackground)
     .overlay {
       cardShape
