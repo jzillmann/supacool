@@ -35,6 +35,8 @@ struct SettingsFeature {
     var shortcutOverrides: [AppShortcutID: AppShortcutOverride]
     var preferredBrowserBundleID: String?
     var localServerBrowser: BrowserChoice?
+    var remoteControlServerEnabled: Bool
+    var remoteControlServerPort: Int
     var claudeProgressState = AgentHooksInstallState.checking
     var claudeNotificationsState = AgentHooksInstallState.checking
     var codexProgressState = AgentHooksInstallState.checking
@@ -77,6 +79,8 @@ struct SettingsFeature {
       shortcutOverrides = settings.shortcutOverrides
       preferredBrowserBundleID = settings.preferredBrowserBundleID
       localServerBrowser = settings.localServerBrowser
+      remoteControlServerEnabled = settings.remoteControlServerEnabled
+      remoteControlServerPort = settings.remoteControlServerPort
       defaultWorktreeBaseDirectoryPath =
         SupacoolPaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
     }
@@ -113,7 +117,9 @@ struct SettingsFeature {
         autoDeleteArchivedWorktreesAfterDays: autoDeleteArchivedWorktreesAfterDays,
         shortcutOverrides: shortcutOverrides,
         preferredBrowserBundleID: preferredBrowserBundleID,
-        localServerBrowser: localServerBrowser
+        localServerBrowser: localServerBrowser,
+        remoteControlServerEnabled: remoteControlServerEnabled,
+        remoteControlServerPort: remoteControlServerPort
       )
     }
   }
@@ -237,6 +243,8 @@ struct SettingsFeature {
         state.shortcutOverrides = normalizedSettings.shortcutOverrides
         state.preferredBrowserBundleID = normalizedSettings.preferredBrowserBundleID
         state.localServerBrowser = normalizedSettings.localServerBrowser
+        state.remoteControlServerEnabled = normalizedSettings.remoteControlServerEnabled
+        state.remoteControlServerPort = normalizedSettings.remoteControlServerPort
         state.defaultWorktreeBaseDirectoryPath = normalizedSettings.defaultWorktreeBaseDirectoryPath ?? ""
         state.syncGlobalDefaults(from: normalizedSettings)
         return .send(.delegate(.settingsChanged(normalizedSettings)))

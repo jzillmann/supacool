@@ -118,6 +118,10 @@ struct SupacoolApp: App {
   @State private var worktreeInfoWatcher: WorktreeInfoWatcherManager
   @State private var commandKeyObserver: CommandKeyObserver
   @State private var store: StoreOf<AppFeature>
+  /// Supacool: remote-control plane — embedded MCP server exposing read-only
+  /// board tools on localhost. Listening is gated by the remote-control
+  /// settings toggle; the instance lives for the whole app run.
+  @State private var mcpControlServer: MCPControlServer
   /// Supacool: routes dropped screenshots through `ImageTransportClient`
   /// (local copy vs. scp-to-remote) so remote terminals get an uploaded
   /// path the agent can read instead of a meaningless Mac-side path.
@@ -209,6 +213,9 @@ struct SupacoolApp: App {
       )
     }
     _store = State(initialValue: appStore)
+    let mcpControlServer = MCPControlServer(store: appStore, terminalManager: terminalManager)
+    mcpControlServer.startFollowingSettings()
+    _mcpControlServer = State(initialValue: mcpControlServer)
 
     // Supacool: install the image-drop coordinator BEFORE touching
     // `appDelegate` so every stored-property init is satisfied.
@@ -344,6 +351,7 @@ struct SupacoolApp: App {
       SettingsView(store: store)
         .environment(ghosttyShortcuts)
         .environment(commandKeyObserver)
+        .environment(mcpControlServer)
         .environment(\.openURL, .preferredBrowser)
         .toolbarBackground(.hidden, for: .windowToolbar)
         .toolbarColorScheme(store.settings.appearanceMode.colorScheme, for: .windowToolbar)

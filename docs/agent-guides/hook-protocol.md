@@ -65,6 +65,25 @@ Supacool tracks it so a ~30 s sweep (`AgentPIDSweep`) can clear busy state if th
 crashes before its busy-off hook fires. Pre-upgrade hook installs omit the field; the
 parser tolerates both.
 
+The sweep has two passes, and **only the first may touch awaiting-input**:
+
+| Pass | Trips when | Clears busy | Clears awaiting |
+|---|---|---|---|
+| dead-PID (`pid-gone`) | `kill(pid, 0)` says the process is gone | yes | **yes** — nobody is left to wait on |
+| stuck-busy (`busy-stale`) | PID alive, no busy hook and a byte-stable screen for `stuckBusyStaleSweepThreshold` sweeps (~90 s) | yes | **no** |
+
+The asymmetry is load-bearing. A byte-stable screen under a live PID is precisely what an
+agent *parked at a prompt* looks like, so it corroborates awaiting rather than refuting it.
+Clearing the chip there dropped a session out of Waiting on Me 58 s after the hook correctly
+promoted it and left it unnoticed for two hours (trace F5D06013, 19:19:00 → 19:19:58).
+
+Correspondingly, every path that releases the busy latch **without** a `busy=false` edge —
+an awaiting-input notification, a `Stop` — must also drop the tab's PID registrations
+(`releaseAgentPIDRegistrations`). Otherwise the watchdog stays armed against a latch that is
+already down and fires ~90 s later for nothing. That omission is what made the trace above
+reachable at all. Guarded by `awaitingInputHookSurvivesTheStuckBusyWatchdog` and
+`stopHookDisarmsStuckBusyWatchdog`.
+
 **Notification** — two lines, header then JSON payload:
 
 ```

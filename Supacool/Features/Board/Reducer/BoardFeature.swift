@@ -36,6 +36,10 @@ struct BoardFeature {
     /// `sessions`. Persisted so quitting + relaunching doesn't lose
     /// the recovery window.
     @Shared(.trashedSessions) var trashedSessions: [TrashedSession] = []
+    /// Named sets of sessions the user pinned together to flip between
+    /// related terminals (⌘⌥. / ⌘⌥⇧. cycles within the active session's
+    /// group). Durable: a member ending/detaching keeps it in the group.
+    @Shared(.sessionGroups) var sessionGroups: [SessionGroup] = []
 
     /// Bookmark pills currently spawning a session. These stay disabled
     /// until the spawn finishes (success or failure) so repeat-clicks
@@ -758,6 +762,21 @@ struct BoardFeature {
     /// Right-click → Delete. No confirmation — re-typing the prompt is
     /// cheap, and undo via the trash sheet would be over-engineering.
     case draftDeleteRequested(id: Draft.ID)
+
+    // MARK: Session groups (pins)
+    /// Create a new named group seeded with this session. Empty/whitespace
+    /// names fall back to the session's display name.
+    case pinSessionToNewGroup(id: AgentSession.ID, name: String)
+    /// Add a session to an existing group (no-op if already a member).
+    case addSessionToGroup(id: AgentSession.ID, groupID: SessionGroup.ID)
+    /// Remove a session from a group. Emptying the group deletes it.
+    case removeSessionFromGroup(id: AgentSession.ID, groupID: SessionGroup.ID)
+    case renameGroup(id: SessionGroup.ID, name: String)
+    case deleteGroup(id: SessionGroup.ID)
+    /// Cycle full-screen focus to the next/previous member of the group
+    /// containing `from`. Drives ⌘⌥. / ⌘⌥⇧. . No-op if `from` isn't in a
+    /// group or the group has a single member.
+    case cycleGroup(from: AgentSession.ID, direction: GroupCycleDirection)
 
     // MARK: Debug session
     /// Right-click → "Debug session…" on a card. Opens the debug sheet
@@ -1846,6 +1865,25 @@ struct BoardFeature {
       case .draftDeleteRequested(let id):
         state.$drafts.withLock { $0.removeAll { $0.id == id } }
         return .none
+
+      case .pinSessionToNewGroup(let id, let name):
+        return reducePinSessionToNewGroup(state: &state, id: id, name: name)
+
+      case .addSessionToGroup(let id, let groupID):
+        return reduceAddSessionToGroup(state: &state, id: id, groupID: groupID)
+
+      case .removeSessionFromGroup(let id, let groupID):
+        return reduceRemoveSessionFromGroup(state: &state, id: id, groupID: groupID)
+
+      case .renameGroup(let id, let name):
+        return reduceRenameGroup(state: &state, id: id, name: name)
+
+      case .deleteGroup(let id):
+        state.$sessionGroups.withLock { $0.removeAll { $0.id == id } }
+        return .none
+
+      case .cycleGroup(let from, let direction):
+        return reduceCycleGroup(state: &state, from: from, direction: direction)
 
       // MARK: - Session lifecycle (resume / rerun) — handlers live in BoardFeature+SessionLifecycle.swift
 
@@ -3031,6 +3069,10 @@ struct BoardFeature {
       trash.append(entry)
     }
     state.$sessions.withLock { $0.removeAll(where: { $0.id == id }) }
+    // Permanent removal (unlike detach) purges the session from any groups
+    // it was pinned into, dropping groups that become empty. A merely
+    // detached/rerun session deliberately stays a member.
+    state.$sessionGroups.withLock { $0 = SessionGroup.purging(sessionID: id, from: $0) }
     state.reinitializingSessionIDs.remove(id)
     state.focusHistory.removeAll { $0 == id }
     // Consume any one-shot advance target recorded by the full-screen

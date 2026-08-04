@@ -228,6 +228,40 @@ struct SettingsFilePersistenceTests {
     #expect(reloaded.global.preferredBrowserBundleID == "com.google.Chrome")
   }
 
+  @Test(.dependencies) func roundTripsRemoteControlServerSettings() throws {
+    let storage = SettingsTestStorage()
+
+    withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var settings: SettingsFile
+      $settings.withLock {
+        $0.global.remoteControlServerEnabled = true
+        $0.global.remoteControlServerPort = 9999
+      }
+    }
+
+    let reloaded: SettingsFile = withDependencies {
+      $0.settingsFileStorage = storage.storage
+    } operation: {
+      @Shared(.settingsFile) var reloaded: SettingsFile
+      return reloaded
+    }
+
+    #expect(reloaded.global.remoteControlServerEnabled == true)
+    #expect(reloaded.global.remoteControlServerPort == 9999)
+  }
+
+  /// Settings files written before the remote-control fields existed must
+  /// decode to the defaults (server off, port 4519) — not wipe anything.
+  @Test(.dependencies) func decodesMissingRemoteControlFieldsAsDefaults() throws {
+    let json = Data(#"{"global":{"appearanceMode":"light"}}"#.utf8)
+    let decoded = try JSONDecoder().decode(SettingsFile.self, from: json)
+    #expect(decoded.global.remoteControlServerEnabled == false)
+    #expect(decoded.global.remoteControlServerPort == 4519)
+    #expect(decoded.global.appearanceMode == .light)
+  }
+
   @Test(.dependencies) func roundTripsLocalServerBrowser() throws {
     let storage = SettingsTestStorage()
 

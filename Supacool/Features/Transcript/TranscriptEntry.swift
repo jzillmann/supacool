@@ -74,9 +74,13 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
   )
 
   /// Awaiting-input state flip. `source` is a free-form string so adding
-  /// new promotion / demotion reasons later doesn't break the schema:
-  /// `"hook"` | `"screen-fallback"` | `"ttl-expired"` |
-  /// `"activity-resumed"` | `"pid-gone"` | `"tab-closed"`.
+  /// new promotion / demotion reasons later doesn't break the schema.
+  /// Promotions: `"hook"` | `"screen-fallback"`. Demotions:
+  /// `"ttl-expired"` | `"activity-resumed"` | `"busy-changed"` (an
+  /// authoritative busy edge superseded it) | `"pid-gone"` | `"tab-closed"`.
+  /// Note `"busy-stale"` is *not* in this set: the stuck-busy watchdog
+  /// deliberately leaves awaiting alone, since a byte-stable screen is
+  /// evidence the agent is parked at a prompt. See `reconcileStuckBusy`.
   case awaitingInputChanged(active: Bool, source: String, surfaceID: UUID?, at: Date)
 
   /// Session-level lifecycle edge. `kind` is stringly-typed for the same

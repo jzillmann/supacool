@@ -1,8 +1,30 @@
 import Foundation
 
 nonisolated enum SupacoolPaths {
+  /// Relocates all of `~/.supacool` — the isolation lever for preview
+  /// instances (`scripts/preview-isolated.sh`). Needed because redirecting
+  /// `$HOME` doesn't move app file data: on current macOS,
+  /// `homeDirectoryForCurrentUser`/`NSHomeDirectory` resolve via the user
+  /// record and ignore the environment, so a preview launched with a fake
+  /// `$HOME` silently shared — and contended the instance lock of — the real
+  /// app's data.
+  ///
+  /// Read from the `-SupacoolDataDirectory <path>` launch argument
+  /// (UserDefaults argument domain). Argv, not an env var, deliberately:
+  /// child shells spawned inside preview terminals must not inherit it.
+  static var dataDirectoryOverride: URL? {
+    guard
+      let path = UserDefaults.standard.string(forKey: "SupacoolDataDirectory"),
+      !path.isEmpty
+    else { return nil }
+    return URL(filePath: path, directoryHint: .isDirectory)
+  }
+
   static var baseDirectory: URL {
-    FileManager.default.homeDirectoryForCurrentUser
+    if let override = dataDirectoryOverride {
+      return override
+    }
+    return FileManager.default.homeDirectoryForCurrentUser
       .appending(path: ".supacool", directoryHint: .isDirectory)
   }
 

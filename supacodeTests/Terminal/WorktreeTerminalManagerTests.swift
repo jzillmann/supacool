@@ -1210,6 +1210,145 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression for the session that silently left "Waiting on Me" and sat
+  /// unnoticed for two hours (trace F5D06013, 19:19:00 → 19:19:58).
+  ///
+  /// Claude's turn died mid-flight (an API error), so no `Stop` and no
+  /// `busy=false` edge ever landed — the PID registration stayed armed.
+  /// 60s later Claude's idle reminder fired, the classifier promoted the
+  /// card to awaiting-input correctly, and 58s after that the stuck-busy
+  /// watchdog cleared the chip as collateral.
+  ///
+  /// Two things must hold. The awaiting hook disarms the registration (it
+  /// already released the display latch, so the watchdog has nothing left
+  /// to reconcile), and even if a sweep does run, the chip survives — a
+  /// byte-stable screen is what an agent parked at a prompt *looks like*.
+  @Test func awaitingInputHookSurvivesTheStuckBusyWatchdog() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        // The prompt Claude is parked at — byte-stable, exactly what trips
+        // the watchdog's stability gate.
+        let screenContents = LockIsolated("❯ \n  (waiting)")
+        let server = AgentHookSocketServer(
+          testingSocketPath: "/tmp/supacool-test-awaiting-survives-watchdog"
+        )
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          awaitingInputTTL: .seconds(8),
+          awaitingInputTransitionOnDebounce: .milliseconds(250),
+          awaitingInputTransitionOffDebounce: .milliseconds(250),
+          awaitingInputActivityPollInterval: .seconds(1),
+          stuckBusyStaleSweepThreshold: 2,
+          // The agent process never dies — the death sweep must not be
+          // what's under test here.
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in screenContents.value }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        // Agent working: busy latched by a PreToolUse-style hook.
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 72082)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        #expect(manager.registeredAgentPIDs(tabID: tabId.rawValue) == [72082])
+
+        // The turn dies. No Stop, no busy=false — just Claude's 60s idle
+        // reminder, which the classifier reads as awaiting-input.
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "claude",
+            event: "Notification",
+            title: nil,
+            body: "Claude is waiting for your input",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+        await clock.advance(by: .milliseconds(250))
+        #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // The awaiting hook released the busy latch, so it must also have
+        // disarmed the watchdog that exists purely to release that latch.
+        #expect(manager.registeredAgentPIDs(tabID: tabId.rawValue).isEmpty)
+
+        // Run well past the watchdog's threshold. The card must stay in
+        // "Waiting on Me" — this is where the trace lost it.
+        for _ in 0..<4 {
+          await manager.sweepAgentPIDs()
+          await clock.advance(by: .seconds(1))
+          #expect(manager.isAwaitingInput(worktreeID: worktree.id, tabID: tabId))
+          #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        }
+      }
+    }
+  }
+
+  /// The companion to the above: a `Stop` hook is also an authoritative
+  /// "no longer busy" edge that arrives without a `busy=false`, so it must
+  /// disarm the PID registration too. Otherwise the watchdog stays armed
+  /// against a latch that's already down and fires ~90s later for nothing.
+  @Test func stopHookDisarmsStuckBusyWatchdog() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let server = AgentHookSocketServer(
+          testingSocketPath: "/tmp/supacool-test-stop-disarms-watchdog"
+        )
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in "❯ \n  (idle)" }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+        #expect(manager.registeredAgentPIDs(tabID: tabId.rawValue) == [4242])
+
+        server.onNotification?(
+          worktree.id,
+          tabId.rawValue,
+          tab.surfaceID,
+          AgentHookNotification(
+            agent: "codex",
+            event: "Stop",
+            title: nil,
+            body: "Done.",
+            sessionID: nil
+          )
+        )
+        await Task.yield()
+
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+        #expect(manager.registeredAgentPIDs(tabID: tabId.rawValue).isEmpty)
+      }
+    }
+  }
+
   /// Codex auto-approve round-trip (PermissionRequest → ~400ms →
   /// PreToolUse busyOn) must not produce a visible "Wants Input"
   /// blink. Guarded by the 750ms default on-debounce.
