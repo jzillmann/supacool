@@ -6,9 +6,11 @@ struct TerminalClient {
   var events: @MainActor @Sendable () -> AsyncStream<Event>
   var tabExists: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> Bool
   var surfaceExists: @MainActor @Sendable (Worktree.ID, TerminalTabID, UUID) -> Bool
-  /// Reads the visible screen of the focused surface in the given tab.
-  /// Returns nil when the worktree/tab/surface is not found.
-  var readScreenContents: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> String?
+  /// Reads the visible screen of the tab's PRIMARY surface (its first
+  /// split leaf — where the session's agent runs), not the focused pane.
+  /// Pairs with `sendText` / `sendPrompt`, which write to that same
+  /// surface. Returns nil when the worktree/tab/surface is not found.
+  var readPrimarySurfaceContents: @MainActor @Sendable (Worktree.ID, TerminalTabID) -> String?
 
   /// Supacool: path to the app's agent-hook Unix socket, or nil if the
   /// server failed to start. Used by the remote-spawn flow to wire up
@@ -102,7 +104,9 @@ extension TerminalClient: DependencyKey {
     events: { fatalError("TerminalClient.events not configured") },
     tabExists: { _, _ in fatalError("TerminalClient.tabExists not configured") },
     surfaceExists: { _, _, _ in fatalError("TerminalClient.surfaceExists not configured") },
-    readScreenContents: { _, _ in fatalError("TerminalClient.readScreenContents not configured") },
+    readPrimarySurfaceContents: { _, _ in
+      fatalError("TerminalClient.readPrimarySurfaceContents not configured")
+    },
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },
@@ -114,7 +118,7 @@ extension TerminalClient: DependencyKey {
     events: { AsyncStream { $0.finish() } },
     tabExists: unimplemented("TerminalClient.tabExists", placeholder: true),
     surfaceExists: unimplemented("TerminalClient.surfaceExists", placeholder: true),
-    readScreenContents: { _, _ in nil },
+    readPrimarySurfaceContents: { _, _ in nil },
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },

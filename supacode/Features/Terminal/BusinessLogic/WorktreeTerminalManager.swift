@@ -1190,6 +1190,20 @@ final class WorktreeTerminalManager {
       ?? states[worktreeID]?.readScreenContents(tabID: tabID, scope: scope)
   }
 
+  /// Like `readScreenContents`, but pinned to the tab's primary surface
+  /// (its first split leaf) instead of the focused pane — the same surface
+  /// `sendText` / `sendPrompt` write to, so session-level automation reads
+  /// and answers the same terminal. See
+  /// `WorktreeTerminalState.primarySurface(tabID:)`.
+  func readPrimarySurfaceContents(
+    worktreeID: Worktree.ID,
+    tabID: TerminalTabID,
+    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+  ) -> String? {
+    readScreenContentsOverride?(worktreeID, tabID)
+      ?? states[worktreeID]?.readPrimarySurfaceContents(tabID: tabID, scope: scope)
+  }
+
   /// Foreground PID of a session's focused surface, or nil when the
   /// tab has no live surface (not yet spawned, or already exited).
   /// Used by Supacool's per-session memory attribution.

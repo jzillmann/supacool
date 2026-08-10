@@ -26,34 +26,43 @@ struct BoardTrayView: View {
       let supacoolRegistered =
         SupacoolDebugSupport.findSupacoolRepository(in: Array(repositories)) != nil
       HStack(alignment: .bottom, spacing: 10) {
-        ForEach(store.trayCards) { card in
+        // Interchangeable cards (spawn spinners, worktree deletes) fold into
+        // one slot so starting a fleet doesn't wallpaper the bottom of the
+        // window — see TrayCardGroup. Error cards never fold.
+        ForEach(TrayCardGroup.group(store.trayCards)) { group in
           TrayCardView(
-            card: card,
+            group: group,
             onPrimary: {
-              store.send(
-                .trayCardPrimaryTapped(
-                  id: card.id,
-                  repositories: Array(repositories)
+              // A folded group has no single thing to navigate to, so the
+              // tap target becomes "clear them all".
+              if group.isCollapsed {
+                dismiss(group)
+              } else {
+                store.send(
+                  .trayCardPrimaryTapped(
+                    id: group.id,
+                    repositories: Array(repositories)
+                  )
                 )
-              )
+              }
             },
-            onSecondary: card.kind.hasSecondaryAction
-              ? { store.send(.trayCardSecondaryTapped(id: card.id)) }
+            onSecondary: group.lead.kind.hasSecondaryAction
+              ? { store.send(.trayCardSecondaryTapped(id: group.id)) }
               : nil,
-            onCopy: card.kind.errorContent != nil
-              ? { store.send(.trayCardCopyTapped(id: card.id)) }
+            onCopy: group.lead.kind.errorContent != nil
+              ? { store.send(.trayCardCopyTapped(id: group.id)) }
               : nil,
-            onDebug: card.kind.errorContent != nil && supacoolRegistered
+            onDebug: group.lead.kind.errorContent != nil && supacoolRegistered
               ? {
                 store.send(
                   .trayCardDebugTapped(
-                    id: card.id,
+                    id: group.id,
                     repositories: Array(repositories)
                   )
                 )
               }
               : nil,
-            onDismiss: { store.send(.trayCardDismissed(id: card.id)) }
+            onDismiss: { dismiss(group) }
           )
           .transition(
             .asymmetric(
@@ -68,10 +77,16 @@ struct BoardTrayView: View {
       .animation(.spring(response: 0.35, dampingFraction: 0.85), value: store.trayCards)
     }
   }
+
+  private func dismiss(_ group: TrayCardGroup) {
+    for card in group.cards {
+      store.send(.trayCardDismissed(id: card.id))
+    }
+  }
 }
 
 private struct TrayCardView: View {
-  let card: TrayCard
+  let group: TrayCardGroup
   let onPrimary: () -> Void
   let onSecondary: (() -> Void)?
   let onCopy: (() -> Void)?
@@ -184,7 +199,7 @@ private struct TrayCardView: View {
 
   @ViewBuilder
   private var leadingIndicator: some View {
-    switch card.kind {
+    switch group.lead.kind {
     case .sessionCreating, .worktreeDeleting:
       // Spinner in place of an icon so the card reads as "in progress"
       // at a glance — matches the "creation takes a while" framing.
@@ -202,7 +217,38 @@ private struct TrayCardView: View {
   }
 
   private var presentation: TrayCardPresentation {
-    switch card.kind {
+    let single = Self.presentation(for: group.lead.kind)
+    guard group.isCollapsed else { return single }
+    return TrayCardPresentation(
+      icon: single.icon,
+      tint: single.tint,
+      title: collapsedTitle,
+      subtitle: Self.summarize(group.displayNames),
+      helpText: "Tap to dismiss all."
+    )
+  }
+
+  /// Plural headline for a folded group — "Starting 13 sessions" instead of
+  /// thirteen identical cards.
+  private var collapsedTitle: String {
+    let count = group.cards.count
+    switch group.lead.kind.collapseKey {
+    case .worktreeDeleting: return "Removing \(count) worktrees"
+    case .sessionCreating, .none: return "Starting \(count) sessions"
+    }
+  }
+
+  /// First two names, then a "+N more" tail, so the subtitle stays on one
+  /// line no matter how big the fleet is.
+  private static func summarize(_ names: [String]) -> String? {
+    guard !names.isEmpty else { return nil }
+    let head = names.prefix(2).joined(separator: ", ")
+    let rest = names.count - min(2, names.count)
+    return rest > 0 ? "\(head) +\(rest) more" : head
+  }
+
+  private static func presentation(for kind: TrayCardKind) -> TrayCardPresentation {
+    switch kind {
     case .staleHooks(let slots):
       return TrayCardPresentation(
         icon: "exclamationmark.triangle.fill",

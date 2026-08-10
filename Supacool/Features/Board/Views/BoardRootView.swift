@@ -379,6 +379,10 @@ struct BoardRootView: View {
         onPreviousInCurrentState: { store.send(.focusPreviousInHistory) },
         nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
         previousInCurrentStateShortcut: AppShortcuts.previousTerminalInState.effective(from: shortcutOverrides),
+        onCycleGroup: { direction in
+          store.send(.cycleGroup(from: session.id, direction: direction))
+        },
+        isInGroup: store.sessionGroups.contains { $0.contains(session.id) },
         onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
         onAutoObserverPromptChanged: { prompt in
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
@@ -791,6 +795,9 @@ struct BoardRootView: View {
           BoardVitalsChip(vitals: boardVitals)
         }
         PRPulseButton(store: store, repositories: repositories, sessionStatus: classify)
+        if !store.sessionGroups.isEmpty {
+          SessionGroupsButton(store: store)
+        }
         if let footprintStore {
           FootprintChip(store: footprintStore)
         }

@@ -63,6 +63,15 @@ struct SessionCardView: View {
   /// for this session's references so unrelated PR updates don't re-render
   /// every card.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
+  /// All session groups (from `BoardFeature.State.sessionGroups`), so the
+  /// card's context menu can show per-group membership toggles. Small array;
+  /// passed whole.
+  var sessionGroups: [SessionGroup] = []
+  /// Toggle this session's membership in a group (add if absent, remove if
+  /// present). Removing the last member deletes the group.
+  var onToggleGroupMembership: ((SessionGroup.ID) -> Void)?
+  /// Create a new group seeded with this session, named by the prompt.
+  var onPinToNewGroup: ((String) -> Void)?
 
   /// Fixed, uniform card height shared by every board card in both the grid
   /// and carousel layouts. Tightened to hug the *common* card — header +
@@ -77,6 +86,8 @@ struct SessionCardView: View {
   @State private var isAutoObserverPopoverShown: Bool = false
   @State private var isAddLinkPromptShown: Bool = false
   @State private var addLinkText: String = ""
+  @State private var isPinToGroupPromptShown: Bool = false
+  @State private var newGroupName: String = ""
   @Environment(\.sessionFootprintStore) private var footprintStore
 
   var body: some View {
@@ -277,6 +288,26 @@ struct SessionCardView: View {
         }
         Divider()
       }
+      if onPinToNewGroup != nil {
+        // Flat buttons, never a nested `Menu` — see the Set Status note above
+        // for why a submenu collapses mid-travel here. Existing groups render
+        // as membership toggles; "Pin to New Group…" opens a name prompt.
+        ForEach(sessionGroups) { group in
+          Button {
+            onToggleGroupMembership?(group.id)
+          } label: {
+            Label(
+              group.name,
+              systemImage: group.contains(session.id) ? "pin.circle.fill" : "pin.circle"
+            )
+          }
+        }
+        Button("Pin to New Group…", systemImage: "pin") {
+          newGroupName = ""
+          isPinToGroupPromptShown = true
+        }
+        Divider()
+      }
       Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
     }
     .alert("Link a work item", isPresented: $isAddLinkPromptShown) {
@@ -287,6 +318,15 @@ struct SessionCardView: View {
       }
     } message: {
       Text("Paste a GitHub pull-request URL or type a ticket id (e.g. CEN-1234) to attach it to this session.")
+    }
+    .alert("New group", isPresented: $isPinToGroupPromptShown) {
+      TextField("Group name", text: $newGroupName)
+      Button("Cancel", role: .cancel) {}
+      Button("Create") {
+        onPinToNewGroup?(newGroupName)
+      }
+    } message: {
+      Text("Pin this session into a new group, then add related terminals and flip between them with ⌘⌥. .")
     }
   }
 

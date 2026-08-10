@@ -1984,7 +1984,7 @@ struct BoardFeature {
         let tabID = TerminalTabID(rawValue: id)
         let userInstructions = session.autoObserverPrompt
         return .run { [autoObserverClient] send in
-          let screen = await terminalClient.readScreenContents(worktreeID, tabID)
+          let screen = await terminalClient.readPrimarySurfaceContents(worktreeID, tabID)
           guard let screen, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             await send(._autoObserverDecided(id: id, response: nil))
             return
@@ -2019,9 +2019,11 @@ struct BoardFeature {
         return .run { send in
           // A live, non-empty screen means the agent's tab is still up and
           // sitting at its prompt — inject the fix-it instruction. If the tab
-          // is gone (detached), `readScreenContents` is nil; fall back to the
-          // notification so the bounce is never silently dropped.
-          let screen = await terminalClient.readScreenContents(worktreeID, tabID)
+          // is gone (detached), the read is nil; fall back to the
+          // notification so the bounce is never silently dropped. Both the
+          // read and the `sendPrompt` below hit the tab's primary surface, so
+          // a split session still gets answered in its first terminal.
+          let screen = await terminalClient.readPrimarySurfaceContents(worktreeID, tabID)
           if let screen, !screen.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await terminalClient.send(
               .sendPrompt(worktreeID: worktreeID, tabID: tabID, text: prompt)

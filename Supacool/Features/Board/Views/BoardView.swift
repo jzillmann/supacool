@@ -912,6 +912,19 @@ struct BoardView: View {
         of: session,
         pulseFallback: store.state.prPulseSnapshots
       ),
+      sessionGroups: store.sessionGroups,
+      onToggleGroupMembership: { groupID in
+        // Read-then-send (allowed in views): flip membership based on the
+        // session's current state in that group.
+        if store.sessionGroups.first(where: { $0.id == groupID })?.contains(session.id) == true {
+          store.send(.removeSessionFromGroup(id: session.id, groupID: groupID))
+        } else {
+          store.send(.addSessionToGroup(id: session.id, groupID: groupID))
+        }
+      },
+      onPinToNewGroup: { name in
+        store.send(.pinSessionToNewGroup(id: session.id, name: name))
+      },
       showsRepoLabelAbove: showsRepoLabelAbove
     )
   }
@@ -1308,6 +1321,9 @@ private struct SessionCardContainer: View {
   let onAddReference: ((String) -> Void)?
   /// Latest checks/Greptile snapshot per PR reference of this session.
   let prReferenceSnapshots: [String: PullRequestSnapshot]
+  let sessionGroups: [SessionGroup]
+  let onToggleGroupMembership: (SessionGroup.ID) -> Void
+  let onPinToNewGroup: (String) -> Void
   /// When true, render a small repo caption above the card (outside the
   /// card border, top-left). The board flips this on for every card when
   /// it sees ≥2 distinct repos in the currently visible session set,
@@ -1376,7 +1392,10 @@ private struct SessionCardContainer: View {
       onReferencesPopoverOpened: onReferencesPopoverOpened,
       onRemoveReference: onRemoveReference,
       onAddReference: onAddReference,
-      prReferenceSnapshots: prReferenceSnapshots
+      prReferenceSnapshots: prReferenceSnapshots,
+      sessionGroups: sessionGroups,
+      onToggleGroupMembership: onToggleGroupMembership,
+      onPinToNewGroup: onPinToNewGroup
     )
     .opacity(dimmed && !isHovered && !isHighlighted && !isSelected ? 0.55 : 1.0)
     .overlay {

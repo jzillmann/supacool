@@ -76,6 +76,12 @@ struct FullScreenTerminalView: View {
   let nextInCurrentStateShortcut: AppShortcut?
   let previousInCurrentStateShortcut: AppShortcut?
 
+  /// Cycle full-screen focus to the next/previous member of this session's
+  /// group (⌘⌥. / ⌘⌥⇧.). No-op if the session isn't in a group.
+  let onCycleGroup: (GroupCycleDirection) -> Void
+  /// Whether this session belongs to a group — gates the header cycle chevron.
+  let isInGroup: Bool
+
   /// Mirrors the board card's auto-observer affordance so the user can
   /// flip the observer on/off without going back to the board.
   let onAutoObserverToggle: () -> Void
@@ -219,6 +225,20 @@ struct FullScreenTerminalView: View {
     // stays held go to the overlay — these bindings only need to fire
     // for the first press.
     .background(switcherShortcuts)
+    // ⌘⌥. / ⌘⌥⇧. cycle within this session's group — the board-wide ⌘. /
+    // ⌘⇧. nav scoped to "the terminals I pinned together". Fire unconditionally;
+    // the reducer no-ops when the session isn't in a group.
+    .background(groupCycleShortcuts)
+  }
+
+  private var groupCycleShortcuts: some View {
+    Group {
+      Button("Next in Group") { onCycleGroup(.forward) }
+        .keyboardShortcut(".", modifiers: [.command, .option])
+      Button("Previous in Group") { onCycleGroup(.backward) }
+        .keyboardShortcut(".", modifiers: [.command, .option, .shift])
+    }
+    .hidden()
   }
 
   private var switcherShortcuts: some View {
@@ -280,6 +300,7 @@ struct FullScreenTerminalView: View {
       autoObserverButton
       debugButton
       splitButton
+      groupCycleButton
       Spacer()
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
@@ -921,6 +942,25 @@ struct FullScreenTerminalView: View {
     .help(isSplit ? "Close the shell split (⌘E)" : "Open a plain shell split in this session (⌘E)")
     .onChange(of: session.id) { _, _ in agentSurfaceID = nil }
     .task(id: session.id) { captureAgentSurfaceIfNeeded() }
+  }
+
+  /// "Next in group" chevron — only shown when this session is pinned into a
+  /// group. Advances to the next member; ⌘⌥. does the same from the keyboard,
+  /// ⌘⌥⇧. steps backward.
+  @ViewBuilder private var groupCycleButton: some View {
+    if isInGroup {
+      Button {
+        onCycleGroup(.forward)
+      } label: {
+        Image(systemName: "pin.circle.fill")
+          .font(.system(size: 13, weight: .medium))
+          .modifier(HeaderIconStyle())
+          .foregroundStyle(.orange)
+          .accessibilityLabel("Next terminal in this group")
+      }
+      .buttonStyle(.plain)
+      .help("Next terminal in this group (⌘⌥.) · ⌘⌥⇧. for previous")
+    }
   }
 
   /// Toggle the shell split beside the agent surface. With 2+ leaves,
