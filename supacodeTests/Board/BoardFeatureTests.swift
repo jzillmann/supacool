@@ -2702,7 +2702,7 @@ struct BoardFeatureTests {
       // Enabling fires an immediate autoObserverTriggered so the
       // observer can react to whatever's already on screen. With an
       // empty screen the effect short-circuits to a nil decision.
-      $0.terminalClient.readScreenContents = { _, _ in nil }
+      $0.terminalClient.readPrimarySurfaceContents = { _, _ in nil }
     }
 
     await store.send(.toggleAutoObserver(id: session.id)) {
@@ -2733,7 +2733,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
-      $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
+      $0.terminalClient.readPrimarySurfaceContents = { _, _ in "Continue? (y/n)" }
       $0.terminalClient.send = { _ in }
       $0.autoObserverClient.decide = { _, _, _ in "y" }
     }
@@ -2787,7 +2787,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
-      $0.terminalClient.readScreenContents = { _, _ in "Continue? (y/n)" }
+      $0.terminalClient.readPrimarySurfaceContents = { _, _ in "Continue? (y/n)" }
       $0.terminalClient.send = { _ in }
       $0.autoObserverClient.decide = { _, _, _ in "y" }
     }
@@ -2810,7 +2810,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
-      $0.terminalClient.readScreenContents = { _, _ in "Some ambiguous output" }
+      $0.terminalClient.readPrimarySurfaceContents = { _, _ in "Some ambiguous output" }
       $0.autoObserverClient.decide = { _, _, _ in nil }
     }
 

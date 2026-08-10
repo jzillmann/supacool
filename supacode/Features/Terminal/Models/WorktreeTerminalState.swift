@@ -561,6 +561,34 @@ final class WorktreeTerminalState {
     return surface.bridge.readScreenContents(scope: scope)
   }
 
+  /// The surface a *programmatic* read/write targets inside a tab: the
+  /// first leaf of the tab's split tree — the pane the tab was created
+  /// with, and therefore the one running the session's agent.
+  ///
+  /// Deliberately NOT the focused surface. Splitting a session tab and
+  /// clicking into the new pane must not redirect the Auto-Observer's
+  /// replies or PR auto-resume prompts into whatever second agent / shell
+  /// the user happens to be working in — those are session-level features
+  /// and always mean the session's first terminal.
+  ///
+  /// Falls back to the focused surface when no split tree is registered
+  /// for the tab (test harnesses that inject surfaces directly).
+  func primarySurface(tabID: TerminalTabID) -> GhosttySurfaceView? {
+    if let firstLeaf = trees[tabID]?.leaves().first { return firstLeaf }
+    return focusedSurfaceIdByTab[tabID].flatMap { surfaces[$0] }
+  }
+
+  /// Screen contents of the tab's primary surface — see
+  /// `primarySurface(tabID:)` for why this is not the focused pane.
+  /// Returns nil when the tab has no live surface.
+  func readPrimarySurfaceContents(
+    tabID: TerminalTabID,
+    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+  ) -> String? {
+    guard let surface = primarySurface(tabID: tabID) else { return nil }
+    return surface.bridge.readScreenContents(scope: scope)
+  }
+
   /// Returns the foreground PID of the focused surface in the given
   /// tab, or nil when the tab has no live surface. Used by Supacool's
   /// board-level memory indicator to map RSS subtrees back to the
@@ -572,14 +600,13 @@ final class WorktreeTerminalState {
     return surface.bridge.foregroundPID
   }
 
-  /// Sends raw text to the focused surface of the given tab without requiring
-  /// focus — used by the Auto-Observer to inject responses without stealing
-  /// keyboard focus from whatever the user is currently doing.
+  /// Sends raw text to the tab's primary surface without requiring focus —
+  /// used by the Auto-Observer to inject responses without stealing
+  /// keyboard focus from whatever the user is currently doing. Targets
+  /// `primarySurface(tabID:)`, not the focused pane.
   func sendText(to tabID: TerminalTabID, text: String) {
-    guard let surfaceID = focusedSurfaceIdByTab[tabID],
-      let surface = surfaces[surfaceID]
-    else {
-      terminalStateLogger.warning("sendText(to:): no focused surface for tab \(tabID.rawValue)")
+    guard let surface = primarySurface(tabID: tabID) else {
+      terminalStateLogger.warning("sendText(to:): no primary surface for tab \(tabID.rawValue)")
       return
     }
     terminalStateLogger.info("sendText(to:): sending \(text.count) chars to tab \(tabID.rawValue)")
@@ -593,10 +620,8 @@ final class WorktreeTerminalState {
   /// discrete later keypress reliably submits, same as a human pasting and
   /// then hitting Enter.
   func sendPrompt(to tabID: TerminalTabID, text: String) {
-    guard let surfaceID = focusedSurfaceIdByTab[tabID],
-      let surface = surfaces[surfaceID]
-    else {
-      terminalStateLogger.warning("sendPrompt(to:): no focused surface for tab \(tabID.rawValue)")
+    guard let surface = primarySurface(tabID: tabID) else {
+      terminalStateLogger.warning("sendPrompt(to:): no primary surface for tab \(tabID.rawValue)")
       return
     }
     let trimmed = text.hasSuffix("\n") ? String(text.dropLast()) : text

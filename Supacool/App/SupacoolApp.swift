@@ -187,8 +187,8 @@ struct SupacoolApp: App {
         surfaceExists: { worktreeID, tabID, surfaceID in
           terminalManager.surfaceExists(worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID)
         },
-        readScreenContents: { worktreeID, tabID in
-          terminalManager.readScreenContents(worktreeID: worktreeID, tabID: tabID)
+        readPrimarySurfaceContents: { worktreeID, tabID in
+          terminalManager.readPrimarySurfaceContents(worktreeID: worktreeID, tabID: tabID)
         },
         hookSocketPath: { terminalManager.socketServer?.socketPath },
         addSessionShellTerminal: { sessionID, worktree in

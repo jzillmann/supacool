@@ -40,6 +40,30 @@ struct WorktreeTerminalStateSplitTests {
     #expect(newID != fixture.surface.id)
   }
 
+  /// Splitting focuses the NEW pane, but session-level automation
+  /// (Auto-Observer replies, PR auto-resume prompts) must keep addressing
+  /// the session's first terminal — otherwise a fix-it prompt lands in
+  /// whatever second agent/shell the user split off.
+  @Test(.dependencies) func primarySurfaceStaysOnFirstLeafAfterSplit() {
+    let fixture = makeStateWithSurface()
+    let firstLeaf = fixture.surface
+
+    #expect(fixture.state.primarySurface(tabID: fixture.tabId)?.id == firstLeaf.id)
+
+    let newID = fixture.state.splitFocusedSurface(in: fixture.tabId, direction: .right)
+    #expect(newID != nil)
+    // Focus followed the new pane…
+    #expect(fixture.state.activeSurfaceID(for: fixture.tabId) == newID)
+    // …but the programmatic target did not.
+    #expect(fixture.state.primarySurface(tabID: fixture.tabId)?.id == firstLeaf.id)
+  }
+
+  @Test(.dependencies) func primarySurfaceIsNilForUnknownTab() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let state = manager.state(for: makeWorktree()) { false }
+    #expect(state.primarySurface(tabID: TerminalTabID(rawValue: UUID())) == nil)
+  }
+
   // MARK: - Helpers
 
   private func makeWorktree() -> Worktree {
