@@ -6,12 +6,25 @@ import SwiftUI
 /// `PRBallState` so the two surfaces never disagree about a session's PR state.
 struct PRReasonChip: View {
   let ball: PRBallState
+  /// The PR this reason belongs to, stamped on the pill when the session holds
+  /// more than one PR. Without it a red "2 checks failed" on a multi-PR card
+  /// reads as a verdict on whichever PR the reference chip happens to show —
+  /// which is how a green "✓ 5/5" chip ended up sitting next to a red pill.
+  /// Nil (the single-PR case) keeps the pill as short as it has always been.
+  var pullRequestNumber: Int?
 
   var body: some View {
     HStack(spacing: 3) {
       Image(systemName: ball.systemImage)
         .font(.caption2)
         .accessibilityLabel(accessibilityLabel)
+      if let pullRequestNumber {
+        Text("#\(pullRequestNumber)")
+          .font(.caption2.weight(.semibold))
+          .monospacedDigit()
+          .lineLimit(1)
+          .opacity(0.75)
+      }
       if let label = ball.reasonLabel {
         Text(label)
           .font(.caption2.weight(.semibold))
@@ -29,8 +42,11 @@ struct PRReasonChip: View {
     .help(accessibilityLabel)
   }
 
+  /// Always names the PR when we know it, even where the visible pill omits
+  /// the number — the tooltip has room the 280pt card header doesn't.
   private var accessibilityLabel: String {
-    ball.reasonLabel.map { "Pull request: \($0)" } ?? "Pull request status"
+    let subject = pullRequestNumber.map { "Pull request #\($0)" } ?? "Pull request"
+    return ball.reasonLabel.map { "\(subject): \($0)" } ?? "\(subject) status"
   }
 
   private var color: Color {

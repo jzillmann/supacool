@@ -91,6 +91,42 @@ struct ReferenceStackPopoverPresentationTests {
     )
   }
 
+  /// The screenshot bug: #4811 and #4814 both open, the reason pill spelling
+  /// out #4814's CI failure while the chip featured #4811 and painted its green
+  /// check + 5/5 beside it. The actionable PR now wins the label.
+  @Test func featuredPullRequestPrefersTheActionableOneOverTheFirstOpen() {
+    let references = [pr(4811, state: .open), pr(4814, state: .open), pr(4815, state: .merged)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(
+        in: references,
+        preferring: "pr:foo/bar#4814"
+      ) == pr(4814, state: .open)
+    )
+  }
+
+  @Test func featuredPullRequestIgnoresAnActionableKeyItDoesNotHold() {
+    let references = [pr(1, state: .merged), pr(2, state: .open)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(
+        in: references,
+        preferring: "pr:foo/bar#999"
+      ) == pr(2, state: .open)
+    )
+  }
+
+  @Test func featuredPullRequestIgnoresATicketKey() {
+    let references: [SessionReference] = [.ticket(id: "CEN-8649"), pr(2, state: .open)]
+
+    #expect(
+      ReferenceStackPopoverPresentation.featuredPullRequest(
+        in: references,
+        preferring: "ticket:CEN-8649"
+      ) == pr(2, state: .open)
+    )
+  }
+
   @Test func pullRequestCollapseCanBeDisabled() {
     let references = (1...(ReferenceStackPopoverPresentation.pullRequestCollapseThreshold + 1)).map {
       pr($0, state: .merged)
