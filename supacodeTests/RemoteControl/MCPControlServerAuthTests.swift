@@ -102,7 +102,7 @@ struct MCPControlServerEndToEndTests {
       capabilities: .init(tools: .init(listChanged: false))
     )
     .withMethodHandler(ListTools.self) { _ in
-      ListTools.Result(tools: MCPToolBox.definitions)
+      ListTools.Result(tools: MCPToolBox.readDefinitions)
     }
     try await server.start(transport: transport)
 

@@ -103,7 +103,7 @@ final class MCPControlServer {
         capabilities: .init(tools: .init(listChanged: false))
       )
       .withMethodHandler(ListTools.self) { _ in
-        ListTools.Result(tools: MCPToolBox.definitions)
+        await ListTools.Result(tools: toolBox.availableTools())
       }
       .withMethodHandler(CallTool.self) { parameters in
         try await toolBox.call(name: parameters.name, arguments: parameters.arguments)

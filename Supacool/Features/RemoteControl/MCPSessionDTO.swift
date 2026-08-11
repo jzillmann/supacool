@@ -43,6 +43,15 @@ nonisolated struct MCPSessionList: Codable, Equatable {
   let sessions: [MCPSessionSummary]
 }
 
+/// Acknowledgement for write tools. Writes are fire-and-observe: the action
+/// is dispatched into the board's own flows, and the caller polls
+/// list_sessions/read_session to see the effect.
+nonisolated struct MCPActionReceipt: Codable, Equatable {
+  let action: String
+  let sessionID: String
+  let note: String
+}
+
 nonisolated struct MCPSessionReading: Codable, Equatable {
   let session: MCPSessionSummary
   /// Terminal text for the requested scope; nil when the session has no

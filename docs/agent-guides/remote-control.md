@@ -64,6 +64,27 @@ status logic, touch the classifier — not either call site.
   tail-capped at 200k chars; transcript entries are flattened to
   `{kind, at, text, detail}` (see `MCPTranscriptEntry`).
 
+Write tools (Phase 2a) — gated by `remoteControlServerAllowsWrites`
+(Settings → Remote Control → "Allow write access", default off): hidden from
+`tools/list` AND refused at call time, checked per request (no restart). All
+return an `MCPActionReceipt {action, sessionID, note}` — writes are
+fire-and-observe, the caller polls `list_sessions`/`read_session`:
+
+- `send_input(session_id, text, submit = true, force = false)` — types into
+  the session's **primary surface**. `submit: true` = `sendPrompt` (synthesized
+  Enter, the proven PR-Pulse path — a trailing `\n` via `sendText` is swallowed
+  by bracketed paste and never submits); `submit: false` = raw `sendText`.
+  Guards: refused when the primary surface is dead/blank (resume first), and
+  refused while the agent is working (`agentActivity` working/deferredWork or
+  `lastKnownBusy`) unless `force`.
+- `resume_session(session_id)` — routes exactly like the card buttons via
+  `BoardResumeEligibility`: shell session → `restoreShellSessionLayout`;
+  captured native id → `resumeDetachedSession` (with `focusOnComplete: false`
+  so a remote resume never yanks the local UI into full-screen); otherwise the
+  agent's resume picker. Receipt's `action` names the route taken.
+- `rerun_session(session_id)` — fresh run of the original prompt
+  (`rerunDetachedSession`); refused for shell sessions and live tabs.
+
 Results carry the payload twice: pretty JSON in `content[0].text` and the same
 object as `structuredContent`.
 
@@ -90,10 +111,11 @@ over seeded `@Shared(.agentSessions)` with `readScreenContentsOverride`
 `remoteControlServerEnabled` patched into the sandbox settings, then curl
 with the sandbox's token.
 
-## Phase 2/3 outlook
+## Phase 2b/3 outlook
 
-Phase 2 adds write tools (`send_input` via the proven synthesized-Enter path,
-`start_session`, `resume_session`) — same server, new tools; gate them behind
-a separate settings toggle. Phase 3 fronts the same endpoint with Tailscale
+Phase 2a (send_input / resume_session / rerun_session) shipped. Phase 2b adds
+`start_session` (spawn new work through the NewTerminal path — mind the
+duplicate-session pitfalls). Phase 3 fronts the same endpoint with Tailscale
 Serve/Funnel for the Claude-app custom connector, possibly switching to
-`StatefulHTTPServerTransport` for server push.
+`StatefulHTTPServerTransport` for server push; requires replacing the
+plaintext token (SDK has OAuth 2.1 hooks).

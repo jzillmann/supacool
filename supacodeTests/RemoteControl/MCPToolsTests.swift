@@ -26,7 +26,9 @@ struct MCPToolsTests {
   }
 
   private func makeToolBox(
-    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
+    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil,
+    sendCommand: ((TerminalClient.Command) -> Void)? = nil,
+    dispatchBoardAction: ((BoardFeature.Action) -> Void)? = nil
   ) -> MCPToolBox {
     let store = Store(initialState: AppFeature.State()) {
       EmptyReducer<AppFeature.State, AppFeature.Action>()
@@ -36,8 +38,15 @@ struct MCPToolsTests {
       terminalManager: WorktreeTerminalManager(
         runtime: GhosttyRuntime(),
         readScreenContents: readScreenContents
-      )
+      ),
+      sendCommand: sendCommand,
+      dispatchBoardAction: dispatchBoardAction
     )
+  }
+
+  private func allowWrites(_ allowed: Bool = true) {
+    @Shared(.settingsFile) var settingsFile
+    $settingsFile.withLock { $0.global.remoteControlServerAllowsWrites = allowed }
   }
 
   private func decodeSessionList(_ result: CallTool.Result) throws -> MCPSessionList {
@@ -180,6 +189,176 @@ struct MCPToolsTests {
     #expect(transcript[0].text == "done, tests green")
     #expect(transcript[1].kind == "lifecycle")
     #expect(transcript[1].text == "parked")
+  }
+
+  // MARK: - Write gating
+
+  @Test(.dependencies) func writeToolsHiddenAndRefusedWhenToggleOff() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Gated")
+    $sessions.withLock { $0 = [session] }
+    allowWrites(false)
+
+    let toolBox = makeToolBox(readScreenContents: { _, _ in "❯" })
+    #expect(toolBox.availableTools().map(\.name) == ["list_sessions", "read_session"])
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.sendInputName,
+        arguments: ["session_id": .string(session.id.uuidString), "text": .string("hi")]
+      )
+    }
+  }
+
+  @Test(.dependencies) func writeToolsListedWhenToggleOn() throws {
+    allowWrites()
+    let names = makeToolBox().availableTools().map(\.name)
+    #expect(
+      names == ["list_sessions", "read_session", "send_input", "resume_session", "rerun_session"]
+    )
+  }
+
+  // MARK: - send_input
+
+  @Test(.dependencies) func sendInputSubmitsPromptToLiveSession() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Live")
+    $sessions.withLock { $0 = [session] }
+    allowWrites()
+
+    var recorded: [TerminalClient.Command] = []
+    let toolBox = makeToolBox(
+      readScreenContents: { _, _ in "❯ which migration strategy?" },
+      sendCommand: { recorded.append($0) }
+    )
+    let result = try toolBox.call(
+      name: MCPToolBox.sendInputName,
+      arguments: ["session_id": .string(session.id.uuidString), "text": .string("use option B")]
+    )
+    let tabID = TerminalTabID(rawValue: session.id)
+    #expect(
+      recorded == [.sendPrompt(worktreeID: session.worktreeID, tabID: tabID, text: "use option B")]
+    )
+    #expect(result.structuredContent != nil)
+  }
+
+  @Test(.dependencies) func sendInputWithoutSubmitTypesRawText() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Raw")
+    $sessions.withLock { $0 = [session] }
+    allowWrites()
+
+    var recorded: [TerminalClient.Command] = []
+    let toolBox = makeToolBox(
+      readScreenContents: { _, _ in "continue? [y/n]" },
+      sendCommand: { recorded.append($0) }
+    )
+    _ = try toolBox.call(
+      name: MCPToolBox.sendInputName,
+      arguments: [
+        "session_id": .string(session.id.uuidString),
+        "text": .string("y"),
+        "submit": .bool(false),
+      ]
+    )
+    let tabID = TerminalTabID(rawValue: session.id)
+    #expect(recorded == [.sendText(worktreeID: session.worktreeID, tabID: tabID, text: "y")])
+  }
+
+  @Test(.dependencies) func sendInputRefusedWithoutLiveSurface() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Dead")
+    $sessions.withLock { $0 = [session] }
+    allowWrites()
+
+    #expect(throws: MCPError.self) {
+      try makeToolBox().call(
+        name: MCPToolBox.sendInputName,
+        arguments: ["session_id": .string(session.id.uuidString), "text": .string("hello")]
+      )
+    }
+  }
+
+  @Test(.dependencies) func sendInputRefusedWhileBusyUnlessForced() throws {
+    @Shared(.agentSessions) var sessions
+    var session = Self.sampleSession(name: "Busy")
+    session.terminals[0].lastKnownBusy = true
+    $sessions.withLock { [session] in $0 = [session] }
+    allowWrites()
+
+    var recorded: [TerminalClient.Command] = []
+    let toolBox = makeToolBox(
+      readScreenContents: { _, _ in "⏺ working…" },
+      sendCommand: { recorded.append($0) }
+    )
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.sendInputName,
+        arguments: ["session_id": .string(session.id.uuidString), "text": .string("stop")]
+      )
+    }
+    #expect(recorded.isEmpty)
+
+    _ = try toolBox.call(
+      name: MCPToolBox.sendInputName,
+      arguments: [
+        "session_id": .string(session.id.uuidString),
+        "text": .string("stop"),
+        "force": .bool(true),
+      ]
+    )
+    #expect(recorded.count == 1)
+  }
+
+  // MARK: - resume_session / rerun_session
+
+  @Test(.dependencies) func resumeRoutesDirectWhenNativeSessionIDCaptured() throws {
+    @Shared(.agentSessions) var sessions
+    var session = Self.sampleSession(name: "Captured")
+    session.terminals[0].agentNativeSessionID = "abc-123"
+    $sessions.withLock { [session] in $0 = [session] }
+    allowWrites()
+
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(dispatchBoardAction: { actions.append($0) })
+    _ = try toolBox.call(
+      name: MCPToolBox.resumeSessionName,
+      arguments: ["session_id": .string(session.id.uuidString)]
+    )
+    #expect(
+      actions == [
+        .resumeDetachedSession(id: session.id, repositories: [], focusOnComplete: false)
+      ]
+    )
+  }
+
+  @Test(.dependencies) func resumeRoutesToPickerWithoutNativeSessionID() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Uncaptured")
+    $sessions.withLock { $0 = [session] }
+    allowWrites()
+
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(dispatchBoardAction: { actions.append($0) })
+    _ = try toolBox.call(
+      name: MCPToolBox.resumeSessionName,
+      arguments: ["session_id": .string(session.id.uuidString)]
+    )
+    #expect(actions == [.resumeDetachedSessionWithPicker(id: session.id, repositories: [])])
+  }
+
+  @Test(.dependencies) func rerunDispatchesForDetachedAgentSession() throws {
+    @Shared(.agentSessions) var sessions
+    let session = Self.sampleSession(name: "Rerun")
+    $sessions.withLock { $0 = [session] }
+    allowWrites()
+
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(dispatchBoardAction: { actions.append($0) })
+    _ = try toolBox.call(
+      name: MCPToolBox.rerunSessionName,
+      arguments: ["session_id": .string(session.id.uuidString)]
+    )
+    #expect(actions == [.rerunDetachedSession(id: session.id, repositories: [])])
   }
 
   @Test(.dependencies) func readSessionRejectsBadArguments() throws {

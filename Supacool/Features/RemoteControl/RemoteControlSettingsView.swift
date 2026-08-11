@@ -52,6 +52,23 @@ struct RemoteControlSettingsView: View {
       }
 
       Section {
+        Toggle(isOn: $store.remoteControlServerAllowsWrites) {
+          Text("Allow write access")
+          Text(
+            "Lets a connected agent type into terminals (send_input) and resume or rerun "
+              + "sessions. Typing into a terminal is arbitrary command execution — leave this "
+              + "off unless you're actively remote-controlling."
+          )
+        }
+        .help("Expose the write tools (send_input, resume_session, rerun_session) to connected agents")
+        .disabled(!store.remoteControlServerEnabled)
+      } header: {
+        Label("Write access", systemImage: "keyboard.badge.ellipsis")
+      } footer: {
+        Text("Checked on every request — no server restart needed.")
+      }
+
+      Section {
         LabeledContent("Access token") {
           HStack(spacing: 8) {
             Text(maskedToken)

@@ -238,6 +238,7 @@ struct SettingsFilePersistenceTests {
       $settings.withLock {
         $0.global.remoteControlServerEnabled = true
         $0.global.remoteControlServerPort = 9999
+        $0.global.remoteControlServerAllowsWrites = true
       }
     }
 
@@ -250,6 +251,7 @@ struct SettingsFilePersistenceTests {
 
     #expect(reloaded.global.remoteControlServerEnabled == true)
     #expect(reloaded.global.remoteControlServerPort == 9999)
+    #expect(reloaded.global.remoteControlServerAllowsWrites == true)
   }
 
   /// Settings files written before the remote-control fields existed must
@@ -259,6 +261,7 @@ struct SettingsFilePersistenceTests {
     let decoded = try JSONDecoder().decode(SettingsFile.self, from: json)
     #expect(decoded.global.remoteControlServerEnabled == false)
     #expect(decoded.global.remoteControlServerPort == 4519)
+    #expect(decoded.global.remoteControlServerAllowsWrites == false)
     #expect(decoded.global.appearanceMode == .light)
   }
 

@@ -64,6 +64,10 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
   /// `127.0.0.1:remoteControlServerPort` (bearer-token gated).
   var remoteControlServerEnabled: Bool
   var remoteControlServerPort: Int
+  /// Write tools (send_input, resume/rerun) are a separate opt-in on top of
+  /// the read-only server — injecting terminal input is arbitrary command
+  /// execution. Checked per request; no server restart involved.
+  var remoteControlServerAllowsWrites: Bool
 
   static let `default` = GlobalSettings(
     appearanceMode: .dark,
@@ -96,7 +100,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     preferredBrowserBundleID: nil,
     localServerBrowser: nil,
     remoteControlServerEnabled: false,
-    remoteControlServerPort: 4519
+    remoteControlServerPort: 4519,
+    remoteControlServerAllowsWrites: false
   )
 
   init(
@@ -130,7 +135,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     preferredBrowserBundleID: String? = nil,
     localServerBrowser: BrowserChoice? = nil,
     remoteControlServerEnabled: Bool = false,
-    remoteControlServerPort: Int = 4519
+    remoteControlServerPort: Int = 4519,
+    remoteControlServerAllowsWrites: Bool = false
   ) {
     self.appearanceMode = appearanceMode
     self.defaultEditorID = defaultEditorID
@@ -163,6 +169,7 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     self.localServerBrowser = localServerBrowser
     self.remoteControlServerEnabled = remoteControlServerEnabled
     self.remoteControlServerPort = remoteControlServerPort
+    self.remoteControlServerAllowsWrites = remoteControlServerAllowsWrites
   }
 
   /// Keys for reading renamed settings fields that no longer
@@ -288,5 +295,8 @@ nonisolated struct GlobalSettings: Codable, Equatable, Sendable {
     remoteControlServerPort =
       try container.decodeIfPresent(Int.self, forKey: .remoteControlServerPort)
       ?? Self.default.remoteControlServerPort
+    remoteControlServerAllowsWrites =
+      try container.decodeIfPresent(Bool.self, forKey: .remoteControlServerAllowsWrites)
+      ?? Self.default.remoteControlServerAllowsWrites
   }
 }

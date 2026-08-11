@@ -37,6 +37,7 @@ struct SettingsFeature {
     var localServerBrowser: BrowserChoice?
     var remoteControlServerEnabled: Bool
     var remoteControlServerPort: Int
+    var remoteControlServerAllowsWrites: Bool
     var claudeProgressState = AgentHooksInstallState.checking
     var claudeNotificationsState = AgentHooksInstallState.checking
     var codexProgressState = AgentHooksInstallState.checking
@@ -81,6 +82,7 @@ struct SettingsFeature {
       localServerBrowser = settings.localServerBrowser
       remoteControlServerEnabled = settings.remoteControlServerEnabled
       remoteControlServerPort = settings.remoteControlServerPort
+      remoteControlServerAllowsWrites = settings.remoteControlServerAllowsWrites
       defaultWorktreeBaseDirectoryPath =
         SupacoolPaths.normalizedWorktreeBaseDirectoryPath(settings.defaultWorktreeBaseDirectoryPath) ?? ""
     }
@@ -119,7 +121,8 @@ struct SettingsFeature {
         preferredBrowserBundleID: preferredBrowserBundleID,
         localServerBrowser: localServerBrowser,
         remoteControlServerEnabled: remoteControlServerEnabled,
-        remoteControlServerPort: remoteControlServerPort
+        remoteControlServerPort: remoteControlServerPort,
+        remoteControlServerAllowsWrites: remoteControlServerAllowsWrites
       )
     }
   }
@@ -245,6 +248,7 @@ struct SettingsFeature {
         state.localServerBrowser = normalizedSettings.localServerBrowser
         state.remoteControlServerEnabled = normalizedSettings.remoteControlServerEnabled
         state.remoteControlServerPort = normalizedSettings.remoteControlServerPort
+        state.remoteControlServerAllowsWrites = normalizedSettings.remoteControlServerAllowsWrites
         state.defaultWorktreeBaseDirectoryPath = normalizedSettings.defaultWorktreeBaseDirectoryPath ?? ""
         state.syncGlobalDefaults(from: normalizedSettings)
         return .send(.delegate(.settingsChanged(normalizedSettings)))
