@@ -84,6 +84,17 @@ fire-and-observe, the caller polls `list_sessions`/`read_session`:
   agent's resume picker. Receipt's `action` names the route taken.
 - `rerun_session(session_id)` — fresh run of the original prompt
   (`rerunDetachedSession`); refused for shell sessions and live tabs.
+- `start_session(repository, prompt, agent = "claude", branch?, name?,
+  model?)` — the remote New Terminal. `branch` set → new worktree via
+  `.newBranch` (branch collisions are pre-checked against
+  `repository.worktrees` so a remote spawn fails fast instead of queueing the
+  interactive conflict alert on an unattended Mac); absent → repo root.
+  Dispatches `BoardFeature.remoteStartSessionRequested` →
+  the same `beginLocalSpawn` the sheet/inbox use, with sheet-identical
+  defaults (bypassPermissions from UserDefaults, fetch-origin from settings).
+  Spawn is async — receipt carries the future session id; a failed spawn
+  restores a draft pill on the board, so remote failures are never invisible.
+  Callers are told not to blind-retry (duplicate-spawn risk).
 
 Results carry the payload twice: pretty JSON in `content[0].text` and the same
 object as `structuredContent`.
@@ -111,11 +122,11 @@ over seeded `@Shared(.agentSessions)` with `readScreenContentsOverride`
 `remoteControlServerEnabled` patched into the sandbox settings, then curl
 with the sandbox's token.
 
-## Phase 2b/3 outlook
+## Phase 3 outlook
 
-Phase 2a (send_input / resume_session / rerun_session) shipped. Phase 2b adds
-`start_session` (spawn new work through the NewTerminal path — mind the
-duplicate-session pitfalls). Phase 3 fronts the same endpoint with Tailscale
+Phases 2a (send_input / resume / rerun) and 2b (start_session) shipped —
+the full remote loop exists: see the board, read a session, answer it, wake
+it, or spawn new work. Phase 3 fronts the same endpoint with Tailscale
 Serve/Funnel for the Claude-app custom connector, possibly switching to
 `StatefulHTTPServerTransport` for server push; requires replacing the
 plaintext token (SDK has OAuth 2.1 hooks).

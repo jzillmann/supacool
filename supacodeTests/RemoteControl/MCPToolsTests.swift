@@ -25,12 +25,40 @@ struct MCPToolsTests {
     )
   }
 
+  private static func makeRepository(
+    id: String,
+    name: String,
+    worktrees: [Worktree] = []
+  ) -> Repository {
+    Repository(
+      id: id,
+      rootURL: URL(fileURLWithPath: id),
+      name: name,
+      worktrees: IdentifiedArray(uniqueElements: worktrees)
+    )
+  }
+
+  private static func makeWorktree(branch: String, repoRoot: String) -> Worktree {
+    let url = URL(fileURLWithPath: "\(repoRoot)-worktrees/\(branch)").standardizedFileURL
+    return Worktree(
+      id: url.path(percentEncoded: false),
+      name: branch,
+      detail: "",
+      workingDirectory: url,
+      repositoryRootURL: URL(fileURLWithPath: repoRoot),
+      branch: branch
+    )
+  }
+
   private func makeToolBox(
+    repositories: [Repository] = [],
     readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil,
     sendCommand: ((TerminalClient.Command) -> Void)? = nil,
     dispatchBoardAction: ((BoardFeature.Action) -> Void)? = nil
   ) -> MCPToolBox {
-    let store = Store(initialState: AppFeature.State()) {
+    var appState = AppFeature.State()
+    appState.repositories.repositories = IdentifiedArray(uniqueElements: repositories)
+    let store = Store(initialState: appState) {
       EmptyReducer<AppFeature.State, AppFeature.Action>()
     }
     return MCPToolBox(
@@ -213,7 +241,10 @@ struct MCPToolsTests {
     allowWrites()
     let names = makeToolBox().availableTools().map(\.name)
     #expect(
-      names == ["list_sessions", "read_session", "send_input", "resume_session", "rerun_session"]
+      names == [
+        "list_sessions", "read_session", "send_input", "resume_session", "rerun_session",
+        "start_session",
+      ]
     )
   }
 
@@ -359,6 +390,123 @@ struct MCPToolsTests {
       arguments: ["session_id": .string(session.id.uuidString)]
     )
     #expect(actions == [.rerunDetachedSession(id: session.id, repositories: [])])
+  }
+
+  // MARK: - start_session
+
+  @Test(.dependencies) func startSessionDispatchesSpawnAtRepoRoot() throws {
+    allowWrites()
+    let repo = Self.makeRepository(id: "/tmp/repo", name: "test-repo")
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(repositories: [repo], dispatchBoardAction: { actions.append($0) })
+
+    let result = try toolBox.call(
+      name: MCPToolBox.startSessionName,
+      arguments: [
+        "repository": .string("test-repo"),
+        "prompt": .string("Fix the flaky tests"),
+      ]
+    )
+
+    guard case .remoteStartSessionRequested(let request, _, let draft) = actions.first else {
+      Issue.record("expected remoteStartSessionRequested, got \(actions)")
+      return
+    }
+    #expect(request.repository.id == "/tmp/repo")
+    #expect(request.selection == .repoRoot)
+    #expect(request.agent?.id == "claude")
+    #expect(request.prompt == "Fix the flaky tests")
+    #expect(request.removeBackingWorktreeOnDelete == false)
+    #expect(draft.prompt == "Fix the flaky tests")
+    #expect(result.structuredContent != nil)
+  }
+
+  @Test(.dependencies) func startSessionWithBranchCreatesWorktreeSelection() throws {
+    allowWrites()
+    let repo = Self.makeRepository(id: "/tmp/repo", name: "test-repo")
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(repositories: [repo], dispatchBoardAction: { actions.append($0) })
+
+    _ = try toolBox.call(
+      name: MCPToolBox.startSessionName,
+      arguments: [
+        "repository": .string("/tmp/repo"),
+        "prompt": .string("Add dark mode"),
+        "branch": .string("feat/dark-mode"),
+        "agent": .string("codex"),
+        "name": .string("Dark mode"),
+      ]
+    )
+
+    guard case .remoteStartSessionRequested(let request, let displayName, _) = actions.first
+    else {
+      Issue.record("expected remoteStartSessionRequested, got \(actions)")
+      return
+    }
+    #expect(request.selection == .newBranch(name: "feat/dark-mode"))
+    #expect(request.agent?.id == "codex")
+    #expect(request.removeBackingWorktreeOnDelete == true)
+    #expect(request.suggestedDisplayName == "Dark mode")
+    #expect(displayName == "Dark mode")
+  }
+
+  @Test(.dependencies) func startSessionRejectsBranchAlreadyCheckedOut() throws {
+    allowWrites()
+    let repo = Self.makeRepository(
+      id: "/tmp/repo",
+      name: "test-repo",
+      worktrees: [Self.makeWorktree(branch: "feat/taken", repoRoot: "/tmp/repo")]
+    )
+    var actions: [BoardFeature.Action] = []
+    let toolBox = makeToolBox(repositories: [repo], dispatchBoardAction: { actions.append($0) })
+
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.startSessionName,
+        arguments: [
+          "repository": .string("test-repo"),
+          "prompt": .string("More work"),
+          "branch": .string("feat/taken"),
+        ]
+      )
+    }
+    #expect(actions.isEmpty)
+  }
+
+  @Test(.dependencies) func startSessionRejectsUnknownRepositoryAndAgent() throws {
+    allowWrites()
+    let repo = Self.makeRepository(id: "/tmp/repo", name: "test-repo")
+    let toolBox = makeToolBox(repositories: [repo])
+
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.startSessionName,
+        arguments: ["repository": .string("nope"), "prompt": .string("hi")]
+      )
+    }
+    #expect(throws: MCPError.self) {
+      try toolBox.call(
+        name: MCPToolBox.startSessionName,
+        arguments: [
+          "repository": .string("test-repo"),
+          "prompt": .string("hi"),
+          "agent": .string("hal9000"),
+        ]
+      )
+    }
+  }
+
+  @Test(.dependencies) func matchRepositoryToleratesTrailingSlashAndAmbiguousNames() throws {
+    let repoA = Self.makeRepository(id: "/tmp/a/dup", name: "dup")
+    let repoB = Self.makeRepository(id: "/tmp/b/dup", name: "dup")
+    let unique = Self.makeRepository(id: "/tmp/unique", name: "unique")
+    let all = IdentifiedArray(uniqueElements: [repoA, repoB, unique])
+
+    #expect(MCPToolBox.matchRepository("/tmp/unique/", in: all)?.id == "/tmp/unique")
+    #expect(MCPToolBox.matchRepository("unique", in: all)?.id == "/tmp/unique")
+    // Ambiguous name must not silently pick one.
+    #expect(MCPToolBox.matchRepository("dup", in: all) == nil)
+    #expect(MCPToolBox.matchRepository("/tmp/a/dup", in: all)?.id == "/tmp/a/dup")
   }
 
   @Test(.dependencies) func readSessionRejectsBadArguments() throws {

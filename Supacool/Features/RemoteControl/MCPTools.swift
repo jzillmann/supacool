@@ -39,6 +39,7 @@ struct MCPToolBox {
   nonisolated static let sendInputName = "send_input"
   nonisolated static let resumeSessionName = "resume_session"
   nonisolated static let rerunSessionName = "rerun_session"
+  nonisolated static let startSessionName = "start_session"
 
   nonisolated static let readDefinitions: [Tool] = [
     Tool(
@@ -155,6 +156,47 @@ struct MCPToolBox {
         "required": .array(["session_id"]),
       ])
     ),
+    Tool(
+      name: startSessionName,
+      description: """
+        Start a brand-new agent session on the board — the remote New Terminal. \
+        With `branch` set, a fresh worktree is created on that new branch \
+        (pick a descriptive kebab-case name); without it the session runs at \
+        the repo root. The session spawns asynchronously: poll list_sessions \
+        for a new entry (a failed spawn surfaces as a draft pill on the board \
+        instead). Do NOT retry on timeout — you may spawn a duplicate.
+        """,
+      inputSchema: .object([
+        "type": "object",
+        "properties": .object([
+          "repository": .object([
+            "type": "string",
+            "description": "Repository — the repositoryID path from list_sessions, or the repo folder name",
+          ]),
+          "prompt": .object([
+            "type": "string",
+            "description": "The initial prompt for the agent",
+          ]),
+          "agent": .object([
+            "type": "string",
+            "description": "Agent id: claude (default), codex, pi, or a configured custom agent",
+          ]),
+          "branch": .object([
+            "type": "string",
+            "description": "Create a new worktree on this new branch; omit to run at the repo root",
+          ]),
+          "name": .object([
+            "type": "string",
+            "description": "Card title on the board (defaults to a prompt-derived name)",
+          ]),
+          "model": .object([
+            "type": "string",
+            "description": "Model passed to the agent's model flag (omit for the agent default)",
+          ]),
+        ]),
+        "required": .array(["repository", "prompt"]),
+      ])
+    ),
   ]
 
   /// What `tools/list` advertises right now — write tools only when the
@@ -176,7 +218,8 @@ struct MCPToolBox {
       return try listSessions()
     case Self.readSessionName:
       return try readSession(arguments: arguments)
-    case Self.sendInputName, Self.resumeSessionName, Self.rerunSessionName:
+    case Self.sendInputName, Self.resumeSessionName, Self.rerunSessionName,
+      Self.startSessionName:
       guard writesAllowed else {
         throw MCPError.invalidRequest(
           "Write tools are disabled — enable \"Allow write access\" in "
@@ -186,6 +229,7 @@ struct MCPToolBox {
       switch name {
       case Self.sendInputName: return try sendInput(arguments: arguments)
       case Self.resumeSessionName: return try resumeSession(arguments: arguments)
+      case Self.startSessionName: return try startSession(arguments: arguments)
       default: return try rerunSession(arguments: arguments)
       }
     default:
@@ -385,6 +429,178 @@ struct MCPToolBox {
           + "poll list_sessions until it turns inProgress"
       )
     )
+  }
+
+  // MARK: - start_session
+
+  private struct StartSessionArguments {
+    let repository: Repository
+    let prompt: String
+    let agent: AgentType?
+    let selection: WorkspaceSelection
+    let branchNote: String
+    let model: String?
+    let explicitName: String?
+  }
+
+  private func parseStartSessionArguments(
+    _ arguments: [String: Value]?
+  ) throws -> StartSessionArguments {
+    guard case .string(let repositoryQuery)? = arguments?["repository"], !repositoryQuery.isEmpty
+    else {
+      throw MCPError.invalidParams("repository is required — a repositoryID path or repo name")
+    }
+    guard case .string(let prompt)? = arguments?["prompt"],
+      !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw MCPError.invalidParams("prompt must be a non-empty string")
+    }
+
+    let repositories = store.state.repositories.repositories
+    guard let repository = Self.matchRepository(repositoryQuery, in: repositories) else {
+      let known = repositories.map(\.name).joined(separator: ", ")
+      throw MCPError.invalidParams(
+        "no repository matches \"\(repositoryQuery)\" — known repositories: \(known)"
+      )
+    }
+
+    let agent: AgentType?
+    switch arguments?["agent"] {
+    case nil:
+      agent = AgentRegistry.entry(forID: "claude")
+    case .string(let agentID):
+      guard let resolved = AgentRegistry.entry(forID: agentID) else {
+        let known = AgentRegistry.allAgents.map(\.id).joined(separator: ", ")
+        throw MCPError.invalidParams("unknown agent \"\(agentID)\" — available: \(known)")
+      }
+      agent = resolved
+    default:
+      throw MCPError.invalidParams("agent must be a string agent id")
+    }
+
+    let selection: WorkspaceSelection
+    var branchNote = "at the repo root"
+    switch arguments?["branch"] {
+    case nil:
+      selection = .repoRoot
+    case .string(let branch) where !branch.trimmingCharacters(in: .whitespaces).isEmpty:
+      // Best-effort collision pre-check so a remote spawn fails fast here
+      // instead of queueing the interactive worktree-conflict alert on a
+      // Mac nobody is sitting at. The spawn itself still guards the race.
+      if let taken = repository.worktrees.first(where: { $0.name == branch }) {
+        throw MCPError.invalidRequest(
+          "branch \"\(branch)\" is already checked out at \(taken.id) — "
+            + "pick another name, or find its session via list_sessions"
+        )
+      }
+      selection = .newBranch(name: branch)
+      branchNote = "in a new worktree on branch \(branch)"
+    default:
+      throw MCPError.invalidParams("branch must be a non-empty string")
+    }
+
+    var model: String?
+    if case .string(let requestedModel)? = arguments?["model"] {
+      model = requestedModel
+    }
+    var explicitName: String?
+    if case .string(let requestedName)? = arguments?["name"],
+      !requestedName.trimmingCharacters(in: .whitespaces).isEmpty
+    {
+      explicitName = requestedName
+    }
+
+    return StartSessionArguments(
+      repository: repository,
+      prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
+      agent: agent,
+      selection: selection,
+      branchNote: branchNote,
+      model: model,
+      explicitName: explicitName
+    )
+  }
+
+  private func startSession(arguments: [String: Value]?) throws -> CallTool.Result {
+    let parsed = try parseStartSessionArguments(arguments)
+
+    // Mirror the New Terminal sheet's submit defaults (NewTerminalFeature+
+    // Create) so remote and local spawns behave identically.
+    @Shared(.settingsFile) var settingsFile
+    let sessionID = UUID()
+    let request = SessionSpawner.LocalRequest(
+      sessionID: sessionID,
+      repository: parsed.repository,
+      selection: parsed.selection,
+      agent: parsed.agent,
+      prompt: parsed.prompt,
+      planMode: false,
+      remoteControl: false,
+      remoteControlName: nil,
+      model: parsed.model,
+      bypassPermissions: UserDefaults.standard.object(forKey: "supacool.bypassPermissions")
+        as? Bool ?? true,
+      fetchOriginBeforeCreation: settingsFile.global.fetchOriginBeforeWorktreeCreation,
+      rerunOwnedWorktreeID: nil,
+      pullRequestLookup: .idle,
+      suggestedDisplayName: parsed.explicitName,
+      removeBackingWorktreeOnDelete: NewTerminalFeature.shouldRemoveBackingWorktreeOnDelete(
+        selection: parsed.selection
+      )
+    )
+    let displayName =
+      parsed.explicitName
+      ?? AgentSession.deriveDisplayName(from: parsed.prompt, fallbackID: sessionID)
+    let now = Date()
+    let draftSnapshot = Draft(
+      id: UUID(),
+      repositoryID: parsed.repository.id,
+      prompt: parsed.prompt,
+      agent: parsed.agent,
+      workspaceQuery: {
+        if case .newBranch(let name) = parsed.selection { return name }
+        return ""
+      }(),
+      planMode: false,
+      remoteControl: false,
+      model: parsed.model,
+      createdAt: now,
+      updatedAt: now
+    )
+
+    dispatchBoardAction(
+      .remoteStartSessionRequested(
+        request: request,
+        displayName: displayName,
+        draftSnapshot: draftSnapshot
+      )
+    )
+    return try Self.result(
+      MCPActionReceipt(
+        action: "startSession",
+        sessionID: sessionID.uuidString,
+        note: "spawn dispatched \(parsed.branchNote) of \(parsed.repository.name) — poll "
+          + "list_sessions for this session id; if it never appears, the spawn failed and "
+          + "left a draft pill on the board. Do not retry blindly."
+      )
+    )
+  }
+
+  /// Matches by exact repositoryID (root path, tolerating a trailing slash)
+  /// or by repo folder name (unique match required).
+  static func matchRepository(
+    _ query: String,
+    in repositories: IdentifiedArrayOf<Repository>
+  ) -> Repository? {
+    let normalizedQuery = query.hasSuffix("/") ? String(query.dropLast()) : query
+    if let byID = repositories.first(where: { repository in
+      let id = repository.id.hasSuffix("/") ? String(repository.id.dropLast()) : repository.id
+      return id == normalizedQuery
+    }) {
+      return byID
+    }
+    let byName = repositories.filter { $0.name == normalizedQuery }
+    return byName.count == 1 ? byName.first : nil
   }
 
   // MARK: - Shared helpers

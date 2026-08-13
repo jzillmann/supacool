@@ -669,6 +669,16 @@ struct BoardFeature {
     /// having to close and reopen — fixes the "added a third repo,
     /// dialog still shows two" stale-snapshot bug.
     case _repositoriesUpdated(repositories: [Repository])
+    /// Remote-control plane (MCP `start_session`): spawn a brand-new session
+    /// through the same `beginLocalSpawn` flow the sheet and Linear inbox
+    /// use. The caller builds the request AND the draft snapshot — on spawn
+    /// failure the draft pill lands on the board, so a remote spawn can
+    /// never fail invisibly.
+    case remoteStartSessionRequested(
+      request: SessionSpawner.LocalRequest,
+      displayName: String,
+      draftSnapshot: Draft
+    )
     case rerunDetachedSession(id: AgentSession.ID, repositories: [Repository])
     /// `focusOnComplete: true` (the default) leaves you in the full-screen
     /// terminal view once the session reincarnates — matches the explicit
@@ -1956,6 +1966,14 @@ struct BoardFeature {
       case ._convertSessionToWorktreeFailed(let id, let message):
         boardLogger.warning("Convert to worktree failed for session \(id): \(message)")
         return .none
+
+      case .remoteStartSessionRequested(let request, let displayName, let draftSnapshot):
+        return beginLocalSpawn(
+          request,
+          displayName: displayName,
+          draftSnapshot: draftSnapshot,
+          state: &state
+        )
 
       case .rerunDetachedSession(let id, let repositories):
         return reduceRerunDetachedSession(state: &state, id: id, repositories: repositories)
