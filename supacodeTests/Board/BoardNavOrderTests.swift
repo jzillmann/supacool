@@ -258,6 +258,27 @@ struct BoardNavOrderTests {
     )
   }
 
+  @Test func navAnchorSurvivesTheBusyBlipInEveryIdleLane() {
+    // Answering a card starts the agent; ⌘. must still walk the lane the
+    // user entered. Waiting on External is a lane too — anchoring only the
+    // attention lane used to dump ⌘. into In Progress from an external card.
+    #expect(BoardNavOrder.shouldPreserveNavAnchor(.waitingOnMe, liveStatus: .inProgress))
+    #expect(BoardNavOrder.shouldPreserveNavAnchor(.awaitingInput, liveStatus: .fresh))
+    #expect(BoardNavOrder.shouldPreserveNavAnchor(.waitingForChecks, liveStatus: .inProgress))
+    #expect(BoardNavOrder.shouldPreserveNavAnchor(.parked, liveStatus: .inProgress))
+  }
+
+  @Test func navAnchorFollowsTheCardWhenItSettlesInAnotherLane() {
+    // Anything that isn't the busy blip is a real lane change — the anchor
+    // gives way so ⌘. keeps matching the lane the card is drawn in.
+    #expect(!BoardNavOrder.shouldPreserveNavAnchor(.waitingOnMe, liveStatus: .waitingForChecks))
+    #expect(!BoardNavOrder.shouldPreserveNavAnchor(.waitingForChecks, liveStatus: .waitingOnMe))
+    #expect(!BoardNavOrder.shouldPreserveNavAnchor(.waitingOnMe, liveStatus: .detached))
+    // A busy anchor never outranks the live status.
+    #expect(!BoardNavOrder.shouldPreserveNavAnchor(.inProgress, liveStatus: .fresh))
+    #expect(!BoardNavOrder.shouldPreserveNavAnchor(.inProgress, liveStatus: .waitingForChecks))
+  }
+
   private func makeSession(_ suffix: Int, isPriority: Bool = false) -> AgentSession {
     AgentSession(
       id: UUID(uuidString: "00000000-0000-0000-0000-00000000000\(suffix)")!,

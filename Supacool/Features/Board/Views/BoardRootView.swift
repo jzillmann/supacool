@@ -376,7 +376,7 @@ struct BoardRootView: View {
         },
         onSwitcherMove: { direction in openSwitcher(direction: direction) },
         onNextInCurrentState: { focusNextSessionInCurrentState() },
-        onPreviousInCurrentState: { store.send(.focusPreviousInHistory) },
+        onPreviousInCurrentState: { focusPreviousSessionInCurrentState() },
         nextInCurrentStateShortcut: AppShortcuts.nextTerminalInState.effective(from: shortcutOverrides),
         previousInCurrentStateShortcut: AppShortcuts.previousTerminalInState.effective(from: shortcutOverrides),
         onCycleGroup: { direction in
@@ -533,11 +533,7 @@ struct BoardRootView: View {
     _ anchorStatus: BoardSessionStatus,
     liveStatus: BoardSessionStatus
   ) -> Bool {
-    isActionableNavigationStatus(anchorStatus) && !isActionableNavigationStatus(liveStatus)
-  }
-
-  private func isActionableNavigationStatus(_ status: BoardSessionStatus) -> Bool {
-    BoardNavOrder.isWaitingStatus(status) || status == .parked
+    BoardNavOrder.shouldPreserveNavAnchor(anchorStatus, liveStatus: liveStatus)
   }
 
   private func armAutoZoomBack(for focusedID: AgentSession.ID?) {
@@ -666,6 +662,38 @@ struct BoardRootView: View {
       classify: classify
     )
     store.send(.focusForward(to: destination))
+  }
+
+  /// ⌘⇧. — walk the back-stack of cards this full-screen run came from. When
+  /// there's nothing left on it (the common case: the user jumped straight
+  /// into a card from the board), step backward through the current bucket
+  /// instead of silently doing nothing — the mirror image of ⌘.
+  private func focusPreviousSessionInCurrentState() {
+    if hasUsableFocusHistory {
+      store.send(.focusPreviousInHistory)
+      return
+    }
+    guard let currentID = store.focusedSessionID else { return }
+    let currentStatusOverride = nextInStateAnchor?.sessionID == currentID
+      ? nextInStateAnchor?.status
+      : nil
+    guard
+      let destination = BoardNavOrder.previousInSameState(
+        before: currentID,
+        visibleSessions: store.visibleSessions,
+        currentStatusOverride: currentStatusOverride,
+        classify: classify
+      )
+    else { return }
+    store.send(.focusSession(id: destination))
+  }
+
+  /// Mirrors the reducer's `.focusPreviousInHistory` filter: entries pointing
+  /// at removed or filtered-out cards are dead weight, so a trail made only of
+  /// those counts as empty and hands over to the bucket walk.
+  private var hasUsableFocusHistory: Bool {
+    let visibleIDs = Set(store.visibleSessions.map(\.id))
+    return store.focusHistory.contains { $0 != store.focusedSessionID && visibleIDs.contains($0) }
   }
 
   /// Where focus should land after removing the focused card `id`. Mirrors

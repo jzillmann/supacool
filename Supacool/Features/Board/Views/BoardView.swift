@@ -1204,6 +1204,31 @@ enum BoardNavOrder {
     status == .waitingForChecks
   }
 
+  /// Statuses that only ever describe a card *while the agent is running* —
+  /// the board shows them in the In Progress row, but they're a phase the
+  /// card passes through, not a lane the user walks.
+  static func isTransientBusyStatus(_ status: BoardSessionStatus) -> Bool {
+    switch status {
+    case .inProgress, .fresh: true
+    case .waitingOnMe, .awaitingInput, .detached, .interrupted, .disconnected, .waitingForChecks, .parked: false
+    }
+  }
+
+  /// Whether ⌘. should keep navigating the lane the user entered rather than
+  /// following the card's live status. True only for the idle → busy blip:
+  /// answering a card starts the agent, and the next ⌘. must still step
+  /// through the lane being walked instead of diving into In Progress.
+  ///
+  /// Both idle lanes count as anchors — Waiting *and* Waiting on External.
+  /// Anchoring only the former is what used to drop ⌘. into In Progress the
+  /// moment you typed into an external-lane session.
+  static func shouldPreserveNavAnchor(
+    _ anchorStatus: BoardSessionStatus,
+    liveStatus: BoardSessionStatus
+  ) -> Bool {
+    !isTransientBusyStatus(anchorStatus) && isTransientBusyStatus(liveStatus)
+  }
+
   /// Stable in-row ordering: all priority cards first, preserving the
   /// user's existing order within priority and regular groups.
   static func priorityFirst(_ sessions: [AgentSession]) -> [AgentSession] {
