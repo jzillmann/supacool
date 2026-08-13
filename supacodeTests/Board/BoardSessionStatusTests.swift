@@ -157,7 +157,7 @@ struct BoardSessionStatusTests {
     #expect(status == .waitingForChecks)
   }
 
-  @Test func busyAndAwaitingInputWinOverPendingPullRequestChecks() {
+  @Test func busyWinsOverPendingPullRequestChecks() {
     let session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
     #expect(
       BoardSessionStatus.classify(
@@ -171,8 +171,31 @@ struct BoardSessionStatusTests {
       BoardSessionStatus.classify(
         session: session,
         tabExists: true,
+        activity: .deferredWork,
+        waitingExternally: true
+      ) == .inProgress
+    )
+  }
+
+  /// A PR mid-CI parks the card in "Waiting on External" even when the agent
+  /// hook reports `wantsInput` — that signal also fires on plain
+  /// idle-at-prompt, and no answer the user gives can settle CI.
+  @Test func pendingPullRequestChecksWinOverAwaitingInput() {
+    let session = sampleSession(hasCompletedAtLeastOnce: true, lastKnownBusy: true)
+    #expect(
+      BoardSessionStatus.classify(
+        session: session,
+        tabExists: true,
         activity: .wantsInput,
         waitingExternally: true
+      ) == .waitingForChecks
+    )
+    #expect(
+      BoardSessionStatus.classify(
+        session: session,
+        tabExists: true,
+        activity: .wantsInput,
+        waitingExternally: false
       ) == .awaitingInput
     )
   }

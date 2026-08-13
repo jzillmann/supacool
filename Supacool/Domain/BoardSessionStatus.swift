@@ -91,7 +91,12 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
     }
     switch activity {
     case .wantsInput:
-      return .awaitingInput
+      // A PR mid-CI (or awaiting review) owns the next move even when the
+      // agent is sitting at its prompt: the hook's "wants input" also fires
+      // on plain idle-at-prompt, and answering it can't unblock CI anyway.
+      // So the external lane wins here and the attention zone only holds
+      // cards the user can actually move. Real agent work still wins below.
+      return waitingExternally ? .waitingForChecks : .awaitingInput
     case .working, .deferredWork:
       return .inProgress
     case .idle:
