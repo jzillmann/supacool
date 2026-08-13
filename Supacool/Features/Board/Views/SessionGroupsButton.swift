@@ -40,6 +40,9 @@ struct SessionGroupsButton: View {
 private struct SessionGroupsPanel: View {
   @Bindable var store: StoreOf<BoardFeature>
   @Binding var isPresented: Bool
+  /// Group currently under a card being dragged over the panel — drives the
+  /// drop highlight.
+  @State private var dropTargetedGroupID: SessionGroup.ID?
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
@@ -105,6 +108,23 @@ private struct SessionGroupsPanel: View {
 
       ForEach(group.sessionIDs, id: \.self) { sessionID in
         memberRow(sessionID: sessionID, group: group)
+      }
+    }
+    .padding(6)
+    .background(
+      RoundedRectangle(cornerRadius: 6)
+        .fill(dropTargetedGroupID == group.id ? Color.accentColor.opacity(0.15) : Color.clear)
+    )
+    // Drag a board card onto a group to add it.
+    .dropDestination(for: String.self) { items, _ in
+      guard let raw = items.first, let draggedID = UUID(uuidString: raw) else { return false }
+      store.send(.addSessionToGroup(id: draggedID, groupID: group.id))
+      return true
+    } isTargeted: { targeted in
+      if targeted {
+        dropTargetedGroupID = group.id
+      } else if dropTargetedGroupID == group.id {
+        dropTargetedGroupID = nil
       }
     }
   }

@@ -838,7 +838,7 @@ struct BoardView: View {
     }()
     let flow = flowActions(for: session, status: sessionStatus)
     let selectedResumeCount = bulkResumeRoutes.count
-    return SessionCardContainer(
+    let card = SessionCardContainer(
       session: session,
       repositoryName: repositories[id: session.repositoryID]?.name,
       pullRequest: matchedPullRequest(for: session),
@@ -927,6 +927,28 @@ struct BoardView: View {
       },
       showsRepoLabelAbove: showsRepoLabelAbove
     )
+    return cardDragAndDrop(card, session: session)
+  }
+
+  /// Drag-to-group wiring for a board card: drag one card onto another to form
+  /// a group (or extend an existing one). Payload is the session id string; the
+  /// drop guards it back to a real UUID, so stray text drags are ignored.
+  private func cardDragAndDrop(_ card: some View, session: AgentSession) -> some View {
+    card
+      .draggable(session.id.uuidString) {
+        Label(session.displayName, systemImage: "pin.fill")
+          .font(.callout)
+          .lineLimit(1)
+          .padding(8)
+      }
+      .dropDestination(for: String.self) { items, _ in
+        guard let raw = items.first,
+          let draggedID = UUID(uuidString: raw),
+          draggedID != session.id
+        else { return false }
+        store.send(.dropSessionOntoSession(dragged: draggedID, target: session.id))
+        return true
+      }
   }
 
   /// Optional rerun/resume/park hand-offs for one board card, derived

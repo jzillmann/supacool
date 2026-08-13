@@ -777,6 +777,10 @@ struct BoardFeature {
     /// containing `from`. Drives ⌘⌥. / ⌘⌥⇧. . No-op if `from` isn't in a
     /// group or the group has a single member.
     case cycleGroup(from: AgentSession.ID, direction: GroupCycleDirection)
+    /// Drag-to-group: the user dropped the `dragged` card onto the `target`
+    /// card. Extends the target's group (or the dragged one), else forms a
+    /// fresh group from the pair. No-op when dropped on itself.
+    case dropSessionOntoSession(dragged: AgentSession.ID, target: AgentSession.ID)
 
     // MARK: Debug session
     /// Right-click → "Debug session…" on a card. Opens the debug sheet
@@ -1884,6 +1888,9 @@ struct BoardFeature {
 
       case .cycleGroup(let from, let direction):
         return reduceCycleGroup(state: &state, from: from, direction: direction)
+
+      case .dropSessionOntoSession(let dragged, let target):
+        return reduceDropSessionOntoSession(state: &state, dragged: dragged, target: target)
 
       // MARK: - Session lifecycle (resume / rerun) — handlers live in BoardFeature+SessionLifecycle.swift
 

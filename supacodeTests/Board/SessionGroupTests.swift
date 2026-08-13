@@ -232,6 +232,79 @@ struct SessionGroupTests {
     #expect(store.state.focusedSessionID == a)
   }
 
+  // MARK: - Reducer: drag-to-group (drop one card onto another)
+
+  @Test(.dependencies) func dropOntoUngroupedTargetFormsNewPair() async {
+    let dragged = UUID(), target = UUID()
+    let groupID = UUID(uuidString: "22222222-0000-0000-0000-000000000001")!
+    let now = Date(timeIntervalSince1970: 0)
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .constant(groupID)
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    await store.send(.dropSessionOntoSession(dragged: dragged, target: target))
+    #expect(store.state.sessionGroups.count == 1)
+    // Target is the anchor → listed first.
+    #expect(store.state.sessionGroups.first?.sessionIDs == [target, dragged])
+    #expect(store.state.sessionGroups.first?.name == "Group")
+  }
+
+  @Test(.dependencies) func dropOntoGroupedTargetJoinsThatGroup() async {
+    let a = UUID(), b = UUID(), dragged = UUID()
+    let group = SessionGroup(name: "Pair", sessionIDs: [a, b])
+    let store = TestStore(
+      initialState: {
+        let state = BoardFeature.State()
+        state.$sessionGroups.withLock { $0 = [group] }
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    // Dropped onto `a`, which is already grouped → dragged joins that group,
+    // no new group is formed.
+    await store.send(.dropSessionOntoSession(dragged: dragged, target: a))
+    #expect(store.state.sessionGroups.count == 1)
+    #expect(store.state.sessionGroups.first?.sessionIDs == [a, b, dragged])
+  }
+
+  @Test(.dependencies) func dropGroupedCardOntoUngroupedTargetPullsTargetIn() async {
+    let a = UUID(), b = UUID(), target = UUID()
+    let group = SessionGroup(name: "Pair", sessionIDs: [a, b])
+    let store = TestStore(
+      initialState: {
+        let state = BoardFeature.State()
+        state.$sessionGroups.withLock { $0 = [group] }
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    // `a` is grouped, `target` is not → target is added to a's group.
+    await store.send(.dropSessionOntoSession(dragged: a, target: target))
+    #expect(store.state.sessionGroups.count == 1)
+    #expect(store.state.sessionGroups.first?.sessionIDs == [a, b, target])
+  }
+
+  @Test(.dependencies) func dropOntoSelfIsNoOp() async {
+    let a = UUID()
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.dropSessionOntoSession(dragged: a, target: a))
+    #expect(store.state.sessionGroups.isEmpty)
+  }
+
   // MARK: - Helpers
 
   private static func sampleSession(

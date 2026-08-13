@@ -88,4 +88,36 @@ extension BoardFeature {
     guard let target else { return .none }
     return .send(.focusForward(to: target))
   }
+
+  /// Drag-to-group. Precedence when the dragged card lands on a target:
+  /// 1. target already in a group → add dragged to it,
+  /// 2. else dragged already in a group → add target to it,
+  /// 3. else form a fresh group from the pair (target first — it's the anchor
+  ///    the user dropped onto), named after the target session.
+  /// Dropping a card on itself, or on a card already in the same group, is a
+  /// no-op.
+  func reduceDropSessionOntoSession(
+    state: inout State,
+    dragged: AgentSession.ID,
+    target: AgentSession.ID
+  ) -> Effect<Action> {
+    guard dragged != target else { return .none }
+
+    if let targetGroupID = state.sessionGroups.first(where: { $0.contains(target) })?.id {
+      return reduceAddSessionToGroup(state: &state, id: dragged, groupID: targetGroupID)
+    }
+    if let draggedGroupID = state.sessionGroups.first(where: { $0.contains(dragged) })?.id {
+      return reduceAddSessionToGroup(state: &state, id: target, groupID: draggedGroupID)
+    }
+
+    let fallback = state.sessions.first(where: { $0.id == target })?.displayName ?? "Group"
+    let group = SessionGroup(
+      id: uuid(),
+      name: fallback,
+      sessionIDs: [target, dragged],
+      createdAt: date.now
+    )
+    state.$sessionGroups.withLock { $0.append(group) }
+    return .none
+  }
 }
