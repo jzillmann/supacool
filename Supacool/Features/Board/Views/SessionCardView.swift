@@ -850,7 +850,7 @@ struct ReferenceChip: View {
     Button {
       onTap?()
       if let url = reference.url(linearOrgSlug: linearOrgSlug) {
-        NSWorkspace.shared.open(url)
+        WebBrowser.open(url)
       }
     } label: {
       HStack(spacing: 3) {
@@ -1526,7 +1526,7 @@ private struct ReferenceStackChip: View {
 
   private func open(_ reference: SessionReference) {
     guard let url = reference.url(linearOrgSlug: linearOrgSlug) else { return }
-    NSWorkspace.shared.open(url)
+    WebBrowser.open(url)
     isPopoverShown = false
   }
 
