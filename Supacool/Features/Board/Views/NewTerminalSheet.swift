@@ -22,6 +22,10 @@ struct NewTerminalSheet: View {
   @Bindable var store: StoreOf<NewTerminalFeature>
   @AppStorage("supacool.bypassPermissions") private var bypassPermissions: Bool = true
   @State private var skillCatalog: [Skill] = []
+  /// The selected agent's saved default model (what "Default" resolves to when
+  /// no `--model` flag is passed). Loaded off `store.agent` so the model picker
+  /// can show, e.g. "Default (opus[1m])". `nil` → plain "Default" label.
+  @State private var defaultModel: String?
   @State private var skillQuery: SkillQuery?
   @State private var selectedSkillID: Skill.ID?
   @State private var promptEditorHandle = PromptTextEditorHandle()
@@ -128,6 +132,11 @@ struct NewTerminalSheet: View {
       skillCatalog = await SkillCatalog.discover(for: skillAutocompleteAgent, projectRoot: selectedProjectRoot)
       reconcileSkillSelection()
     }
+    .task(id: store.agent?.id) {
+      defaultModel = nil
+      guard let agent = store.agent, agent.supportsModelSelection else { return }
+      defaultModel = await AgentDefaultModel.resolve(for: agent)
+    }
     .onChange(of: store.agent) { _, _ in
       skillQuery = nil
       selectedSkillID = nil
@@ -218,7 +227,11 @@ struct NewTerminalSheet: View {
   /// `modelFlag` in the registry.
   private func modelPicker(for agent: AgentType) -> some View {
     Picker(selection: $store.model) {
-      Text("Default").tag("")
+      // Show what "Default" actually resolves to (the agent's saved default,
+      // e.g. "Default (opus[1m])") so it's visible in the collapsed control —
+      // an in-session `/model` persists to that default and would otherwise be
+      // an invisible launch choice.
+      Text(defaultModel.map { "Default (\($0))" } ?? "Default").tag("")
       ForEach(agent.knownModels, id: \.self) { model in
         Text(model).tag(model)
       }
@@ -229,9 +242,19 @@ struct NewTerminalSheet: View {
       }
     } label: {
       Text("Model")
-      Text("Model to launch \(agent.displayName) with. Default lets the agent choose.")
+      Text(modelPickerHint(for: agent))
     }
     .pickerStyle(.menu)
+  }
+
+  /// Footer hint under the Model picker. Names the resolved default when we
+  /// could read it, so the "Default" choice isn't opaque about which model —
+  /// and cost tier — a session will actually launch with.
+  private func modelPickerHint(for agent: AgentType) -> String {
+    if let defaultModel {
+      return "Default launches \(agent.displayName) with its saved default (\(defaultModel))."
+    }
+    return "Model to launch \(agent.displayName) with. Default lets the agent choose."
   }
 
   private var headerSubtitle: String {
