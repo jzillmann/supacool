@@ -11,8 +11,25 @@ import SwiftUI
 struct SessionTerminalBadge: View {
   let agent: AgentType?
   let activity: AgentActivity
+  /// When set, the chip is a button opening this terminal's own controls
+  /// (recent prompts, and the auto-responder on the primary agent).
+  var onTap: (() -> Void)?
 
   var body: some View {
+    if let onTap {
+      Button(action: onTap) { chipLabel }
+        .buttonStyle(.plain)
+        .help(
+          "\(AgentType.displayName(for: agent)) in this pane — \(activityDescription). "
+            + "Click for this terminal's recent prompts."
+        )
+    } else {
+      chipLabel
+        .help("\(AgentType.displayName(for: agent)) in this pane — \(activityDescription)")
+    }
+  }
+
+  private var chipLabel: some View {
     HStack(spacing: 4) {
       AgentIconView(agent: agent, size: 12)
       Text(AgentType.displayName(for: agent))
@@ -25,7 +42,7 @@ struct SessionTerminalBadge: View {
     .background(.background.secondary.opacity(0.85))
     .background(agentColor.opacity(0.12))
     .clipShape(Capsule())
-    .help("\(AgentType.displayName(for: agent)) in this pane — \(activityDescription)")
+    .contentShape(Capsule())
     .accessibilityLabel(
       "\(AgentType.displayName(for: agent)) — \(activityDescription)"
     )

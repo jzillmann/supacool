@@ -134,10 +134,13 @@ struct FullScreenTerminalView: View {
   /// on hover-out (or when the ⓘ button toggles the panel directly) so a
   /// quick cursor pass over the title doesn't pop the panel open.
   @State private var titleHoverTask: Task<Void, Never>?
-  @State private var isAutoObserverPopoverShown: Bool = false
+  /// Which terminal chip's popover (recent prompts / auto-responder) is
+  /// open, keyed by the chip's surface id. Per-terminal controls live on
+  /// the chips, not in the session header — a session can run several
+  /// agents, and "jump to a recent prompt" must target ONE of them.
+  @State private var terminalMenuSurfaceID: UUID?
   @State private var isQuickDiffPresented: Bool = false
   @State private var isConfirmingRemove: Bool = false
-  @State private var isRecentPromptsPopoverShown: Bool = false
   @State private var isConvertPopoverShown: Bool = false
   /// Draft branch name shown in the convert-to-worktree popover.
   /// Initialized from the session display name when the popover opens.
@@ -273,8 +276,6 @@ struct FullScreenTerminalView: View {
       infoButton
       revealInFinderButton
       openDiffButton
-      recentPromptsButton
-      autoObserverButton
       debugButton
       splitButton
       Spacer()
@@ -723,31 +724,6 @@ struct FullScreenTerminalView: View {
   /// session's transcript file. Selecting one fires Ghostty's search
   /// binding pre-populated with that prompt's first ~40 chars, so the
   /// user lands on the matching spot in the scrollback.
-  private var recentPromptsButton: some View {
-    Button {
-      isRecentPromptsPopoverShown.toggle()
-    } label: {
-      Image(systemName: "text.line.first.and.arrowtriangle.forward")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
-        .accessibilityLabel("Jump to a recent prompt")
-    }
-    .buttonStyle(.plain)
-    .help("Jump to a recent prompt")
-    .popover(isPresented: $isRecentPromptsPopoverShown, arrowEdge: .bottom) {
-      RecentPromptsPopover(
-        tabID: TerminalTabID(rawValue: session.id),
-        onJump: { needle in
-          isRecentPromptsPopoverShown = false
-          terminalManager.performBindingAction(
-            worktreeID: session.worktreeID,
-            action: "search:\(needle)"
-          )
-        }
-      )
-    }
-  }
-
   /// Park control beside delete. When the session is live, a primary-action
   /// menu makes both options first-class: clicking the label parks and tears
   /// down the tab, while the disclosure chevron reveals Standby (hide the
@@ -825,27 +801,6 @@ struct FullScreenTerminalView: View {
   /// Mirrors the board card's sparkle button so the user can toggle the
   /// auto-observer (and edit its instructions) without leaving the
   /// terminal. Glows in accent color when the observer is active.
-  private var autoObserverButton: some View {
-    Button {
-      isAutoObserverPopoverShown.toggle()
-    } label: {
-      Image(systemName: "sparkles")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconTintStyle(tint: session.autoObserver ? .accentColor : .secondary))
-        .accessibilityLabel(session.autoObserver ? "Auto-responder is on" : "Auto-responder is off")
-    }
-    .buttonStyle(.plain)
-    .help("Auto-responder: auto-answer obvious prompts (click to configure)")
-    .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .bottom) {
-      AutoObserverPopover(
-        session: session,
-        onToggle: onAutoObserverToggle,
-        onPromptChanged: onAutoObserverPromptChanged,
-        onRunNow: onAutoObserverRunNow
-      )
-    }
-  }
-
   /// Header button that mirrors the board card's right-click "Debug
   /// session…" action — opens the debug sheet that spawns a fresh agent
   /// in the supacool repo, primed with this session's trace.
@@ -940,8 +895,59 @@ struct FullScreenTerminalView: View {
   /// panes get nothing.
   private func paneBadgeView(for surfaceID: UUID) -> AnyView? {
     guard let terminal = badgeTerminal(for: surfaceID) else { return nil }
+    let isPresented = Binding<Bool>(
+      get: { terminalMenuSurfaceID == surfaceID },
+      set: { terminalMenuSurfaceID = $0 ? surfaceID : nil }
+    )
     return AnyView(
-      SessionTerminalBadge(agent: terminal.agent, activity: liveActivity(for: terminal))
+      SessionTerminalBadge(
+        agent: terminal.agent,
+        activity: liveActivity(for: terminal),
+        onTap: { terminalMenuSurfaceID = surfaceID }
+      )
+      .popover(isPresented: isPresented, arrowEdge: .top) {
+        terminalChipPopover(for: terminal)
+      }
+    )
+  }
+
+  /// The per-terminal controls behind a chip click: recent prompts scoped
+  /// and targeted to THIS terminal, plus the auto-responder on the primary
+  /// agent's chip (the observer engine watches the session's primary
+  /// conversation — per-agent observation is a future extension).
+  @ViewBuilder
+  private func terminalChipPopover(for terminal: SessionTerminal) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      RecentPromptsPopover(
+        tabID: TerminalTabID(rawValue: terminal.hostTabID ?? terminal.id),
+        onJump: { needle in
+          terminalMenuSurfaceID = nil
+          jumpToPrompt(needle, in: terminal)
+        }
+      )
+      if terminal.id == session.primaryTerminalID {
+        Divider()
+        AutoObserverPopover(
+          session: session,
+          onToggle: onAutoObserverToggle,
+          onPromptChanged: onAutoObserverPromptChanged,
+          onRunNow: onAutoObserverRunNow
+        )
+      }
+    }
+  }
+
+  /// Scrollback search for a recent prompt, aimed at the chip's terminal:
+  /// pane terminals get their surface focused first so the search binding
+  /// runs against the right pane, not whichever split held focus.
+  private func jumpToPrompt(_ needle: String, in terminal: SessionTerminal) {
+    if terminal.hostTabID != nil, let worktree = resolveWorktree() {
+      let state = terminalManager.state(for: worktree) { false }
+      _ = state.focusSurface(id: terminal.id)
+    }
+    terminalManager.performBindingAction(
+      worktreeID: session.worktreeID,
+      action: "search:\(needle)"
     )
   }
 
