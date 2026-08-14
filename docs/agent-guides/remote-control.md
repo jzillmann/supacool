@@ -101,7 +101,29 @@ object as `structuredContent`.
 
 ## Client setup
 
-Settings → Remote Control has a copy-button for:
+Two equivalent front doors to the same endpoint — the server doesn't care
+which one you use:
+
+**CLI (`scripts/supacoolctl`)** — for any agent with a shell (Claude Code,
+codex, cron) and humans over ssh. No MCP client config at all; it's curl+jq
+speaking the JSON-RPC envelope directly (the stateless transport needs no
+initialize handshake):
+
+```
+supacoolctl list
+supacoolctl read <id> [--scrollback] [--tail N]
+supacoolctl send <id> "answer text" [--raw] [--force]
+supacoolctl resume <id> | rerun <id>
+supacoolctl start --repo supacool --prompt "…" [--branch b] [--agent codex]
+```
+
+Token defaults to `~/.supacool/mcp-token`; `SUPACOOL_CTL_URL` /
+`SUPACOOL_CTL_TOKEN` override both — point the URL at a `tailscale serve`
+address and the same CLI drives the board from another machine or a cloud
+sandbox.
+
+**MCP client** — for clients that want tool discovery. Settings → Remote
+Control has a copy-button for:
 
 ```
 claude mcp add --transport http supacool http://127.0.0.1:4519/mcp \

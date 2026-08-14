@@ -1,0 +1,121 @@
+#!/bin/bash
+# supacoolctl — drive Supacool's remote-control plane from any shell.
+#
+# A thin curl+jq client for the embedded control server (Settings → Remote
+# Control). No MCP client needed: the server speaks plain JSON-RPC over HTTP,
+# one request per call. Made for agents with a Bash tool (Claude Code, codex,
+# cron jobs) and for humans over ssh.
+#
+#   supacoolctl list
+#   supacoolctl read <session-id> [--scrollback] [--tail N]
+#   supacoolctl send <session-id> <text…> [--raw] [--force]
+#   supacoolctl resume <session-id>
+#   supacoolctl rerun <session-id>
+#   supacoolctl start --repo <name|path> --prompt <text> [--branch <b>]
+#                     [--agent <id>] [--name <title>] [--model <m>]
+#
+# Environment:
+#   SUPACOOL_CTL_URL    endpoint (default http://127.0.0.1:4519/mcp).
+#                       Point at a tailscale-served URL to drive the board
+#                       from another machine or a cloud sandbox.
+#   SUPACOOL_CTL_TOKEN  bearer token (default: contents of
+#                       ~/.supacool/mcp-token on this machine)
+#
+# Write commands (send/resume/rerun/start) additionally need "Allow write
+# access" enabled in Settings → Remote Control.
+set -euo pipefail
+
+URL="${SUPACOOL_CTL_URL:-http://127.0.0.1:4519/mcp}"
+TOKEN="${SUPACOOL_CTL_TOKEN:-}"
+if [ -z "$TOKEN" ]; then
+  TOKEN_FILE="$HOME/.supacool/mcp-token"
+  [ -f "$TOKEN_FILE" ] && TOKEN="$(cat "$TOKEN_FILE")"
+fi
+if [ -z "$TOKEN" ]; then
+  echo "supacoolctl: no token — set SUPACOOL_CTL_TOKEN or enable the server once locally" >&2
+  exit 2
+fi
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 64; }
+
+# call <tool-name> <arguments-json>
+call() {
+  local tool="$1" args="$2" response
+  response=$(curl -sS --max-time 30 -X POST "$URL" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    -H "Authorization: Bearer $TOKEN" \
+    -d "$(jq -nc --arg t "$tool" --argjson a "$args" \
+      '{jsonrpc:"2.0", id:1, method:"tools/call", params:{name:$t, arguments:$a}}')") \
+    || { echo "supacoolctl: cannot reach $URL — is Supacool running with Remote Control enabled?" >&2; exit 3; }
+  if [ "$(jq -r '.error.message // empty' <<<"$response")" ]; then
+    jq -r '.error.message' <<<"$response" >&2
+    exit 1
+  fi
+  jq '.result.structuredContent' <<<"$response"
+}
+
+cmd="${1:-}"; [ -n "$cmd" ] && shift || usage
+
+case "$cmd" in
+  list)
+    call list_sessions '{}' | jq -r '
+      .sessions[] |
+      [.status, .agent // "shell", .name, .id] | @tsv' | column -t -s $'\t'
+    ;;
+
+  read)
+    session="${1:?usage: supacoolctl read <session-id> [--scrollback] [--tail N]}"; shift
+    scope="screen"; tail=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --scrollback) scope="scrollback"; shift ;;
+        --tail) tail="${2:?--tail needs a number}"; shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    call read_session "$(jq -nc --arg s "$session" --arg sc "$scope" --argjson t "$tail" \
+      '{session_id:$s, scope:$sc, transcript_tail:$t}')"
+    ;;
+
+  send)
+    session="${1:?usage: supacoolctl send <session-id> <text…> [--raw] [--force]}"; shift
+    submit=true; force=false; text=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --raw) submit=false; shift ;;
+        --force) force=true; shift ;;
+        *) text+=("$1"); shift ;;
+      esac
+    done
+    [ ${#text[@]} -gt 0 ] || usage
+    call send_input "$(jq -nc --arg s "$session" --arg t "${text[*]}" \
+      --argjson submit "$submit" --argjson force "$force" \
+      '{session_id:$s, text:$t, submit:$submit, force:$force}')"
+    ;;
+
+  resume | rerun)
+    session="${1:?usage: supacoolctl $cmd <session-id>}"
+    call "${cmd}_session" "$(jq -nc --arg s "$session" '{session_id:$s}')"
+    ;;
+
+  start)
+    repo=""; prompt=""; extra="{}"
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --repo) repo="${2:?}"; shift 2 ;;
+        --prompt) prompt="${2:?}"; shift 2 ;;
+        --branch) extra=$(jq -c --arg v "${2:?}" '. + {branch:$v}' <<<"$extra"); shift 2 ;;
+        --agent) extra=$(jq -c --arg v "${2:?}" '. + {agent:$v}' <<<"$extra"); shift 2 ;;
+        --name) extra=$(jq -c --arg v "${2:?}" '. + {name:$v}' <<<"$extra"); shift 2 ;;
+        --model) extra=$(jq -c --arg v "${2:?}" '. + {model:$v}' <<<"$extra"); shift 2 ;;
+        *) usage ;;
+      esac
+    done
+    [ -n "$repo" ] && [ -n "$prompt" ] || usage
+    call start_session "$(jq -c --arg r "$repo" --arg p "$prompt" \
+      '. + {repository:$r, prompt:$p}' <<<"$extra")"
+    ;;
+
+  *) usage ;;
+esac
