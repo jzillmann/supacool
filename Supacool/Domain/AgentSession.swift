@@ -491,4 +491,53 @@ nonisolated extension AgentSession {
   var latestAgentBusyTransitionAt: Date? {
     busyTrackedTerminals.compactMap(\.lastBusyTransitionAt).max()
   }
+
+  // MARK: Tab ⇄ pane conversion
+
+  /// Rewrite a TAB terminal's record as a PANE of `hostTabID` after its
+  /// live surface was moved into that tab's split tree. The record's id
+  /// changes to the surface UUID (a pane's identity), so a new value is
+  /// swapped in preserving every tracked field. Refuses the primary and
+  /// pane terminals. Pure record surgery — the caller moves the surface.
+  @discardableResult
+  mutating func convertTabTerminalToPane(
+    terminalID: UUID,
+    surfaceID: UUID,
+    hostTabID: UUID
+  ) -> Bool {
+    guard terminalID != primaryTerminalID,
+      let index = terminals.firstIndex(where: { $0.id == terminalID }),
+      terminals[index].hostTabID == nil
+    else { return false }
+    let old = terminals[index]
+    terminals[index] = SessionTerminal(
+      id: surfaceID,
+      role: old.role,
+      hostTabID: hostTabID,
+      agent: old.agent,
+      initialPrompt: old.initialPrompt,
+      agentNativeSessionID: old.agentNativeSessionID,
+      displayName: old.displayName,
+      workingDirectoryHint: old.workingDirectoryHint,
+      createdAt: old.createdAt,
+      lastActivityAt: old.lastActivityAt,
+      lastKnownBusy: old.lastKnownBusy,
+      hasObservedInitialAgentEvent: old.hasObservedInitialAgentEvent,
+      hasCompletedAtLeastOnce: old.hasCompletedAtLeastOnce,
+      lastBusyTransitionAt: old.lastBusyTransitionAt
+    )
+    return true
+  }
+
+  /// Promote a PANE terminal to a TAB after its surface moved into a
+  /// fresh tab carrying the surface's UUID as its tab id — the record id
+  /// already matches, so only `hostTabID` clears.
+  @discardableResult
+  mutating func convertPaneTerminalToTab(paneID: UUID) -> Bool {
+    guard let index = terminals.firstIndex(where: { $0.id == paneID }),
+      terminals[index].hostTabID != nil
+    else { return false }
+    terminals[index].hostTabID = nil
+    return true
+  }
 }

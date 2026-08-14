@@ -15,6 +15,9 @@ struct SessionTerminalTabStrip: View {
   let onSelect: (UUID) -> Void
   let onClose: (UUID) -> Void
   let onAdd: () -> Void
+  /// Right-click "Convert to split pane" on a non-primary tab — moves
+  /// its terminal into the primary tab's split tree.
+  var onConvertToSplit: ((UUID) -> Void)?
 
   var body: some View {
     HStack(spacing: 6) {
@@ -84,6 +87,16 @@ struct SessionTerminalTabStrip: View {
         ? "\(AgentType.displayName(for: terminal.agent)) terminal"
         : "Shell terminal"
     )
+    .contextMenu {
+      if !isPrimary, let onConvertToSplit {
+        Button {
+          onConvertToSplit(terminal.id)
+        } label: {
+          Label("Convert to Split Pane", systemImage: "rectangle.split.2x1")
+        }
+        .help("Move this terminal into the primary tab as a split pane")
+      }
+    }
   }
 
   private var addButton: some View {

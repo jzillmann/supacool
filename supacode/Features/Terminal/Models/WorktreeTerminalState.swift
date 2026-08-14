@@ -928,6 +928,83 @@ final class WorktreeTerminalState {
     return splitSucceeded ? newID : nil
   }
 
+  /// Move a single-leaf tab's LIVE surface into `targetTab` as a split of
+  /// its focused leaf, then dismantle the now-empty source tab's chrome
+  /// WITHOUT closing the surface. Returns the moved surface's UUID.
+  /// Supacool "convert tab → split pane". Multi-leaf source tabs are
+  /// refused — moving a whole subtree is out of scope.
+  func moveSingleLeafTab(
+    _ sourceTab: TerminalTabID,
+    intoTab targetTab: TerminalTabID,
+    direction: GhosttySplitAction.NewDirection
+  ) -> UUID? {
+    guard sourceTab != targetTab,
+      let sourceTree = trees[sourceTab],
+      sourceTree.leaves().count == 1,
+      let surface = sourceTree.leaves().first,
+      let targetTree = trees[targetTab]
+    else { return nil }
+    let anchorID = focusedSurfaceIdByTab[targetTab] ?? targetTree.leaves().last?.id
+    guard let anchorID, let anchor = surfaces[anchorID] else { return nil }
+    do {
+      let newTree = try targetTree.inserting(
+        view: surface,
+        at: anchor,
+        direction: mapSplitDirection(direction)
+      )
+      updateTree(newTree, for: targetTab)
+    } catch {
+      terminalStateLogger.warning(
+        "moveSingleLeafTab: failed to insert \(surface.id) into \(targetTab.rawValue): \(error)"
+      )
+      return nil
+    }
+    trees.removeValue(forKey: sourceTab)
+    focusedSurfaceIdByTab.removeValue(forKey: sourceTab)
+    tabIsRunningById.removeValue(forKey: sourceTab)
+    creationSurfaceIDByTab.removeValue(forKey: sourceTab)
+    tabManager.closeTab(sourceTab)
+    updateShouldHideTabBar()
+    selectTab(targetTab)
+    focusSurface(surface, in: targetTab)
+    return surface.id
+  }
+
+  /// Move a split pane's LIVE surface out into its own fresh tab (id ==
+  /// the surface's UUID, so the session-terminal record keeps its
+  /// identity). The source tab keeps its remaining leaves. Supacool
+  /// "convert split pane → tab". Refused for a tab's last leaf.
+  func moveSurfaceToNewTab(surfaceID: UUID, title: String) -> Bool {
+    guard let surface = surfaces[surfaceID],
+      let sourceTab = tabId(containing: surfaceID),
+      let sourceTree = trees[sourceTab],
+      sourceTree.leaves().count > 1,
+      let node = sourceTree.find(id: surfaceID),
+      // The new tab MUST carry the surface's UUID (hook resolution and the
+      // session-terminal record hang off it) — bail instead of letting
+      // createTab regenerate on a (theoretical) collision.
+      !tabManager.tabs.contains(where: { $0.id.rawValue == surfaceID })
+    else { return false }
+    let remaining = sourceTree.removing(node)
+    updateTree(remaining, for: sourceTab)
+    if focusedSurfaceIdByTab[sourceTab] == surfaceID {
+      focusedSurfaceIdByTab[sourceTab] = remaining.leaves().first?.id
+    }
+    let newTab = tabManager.createTab(
+      title: title,
+      icon: "terminal",
+      id: surfaceID
+    )
+    trees[newTab] = SplitTree(view: surface)
+    focusedSurfaceIdByTab[newTab] = surfaceID
+    creationSurfaceIDByTab[newTab] = surfaceID
+    tabIsRunningById[newTab] = false
+    updateShouldHideTabBar()
+    onTabCreated?()
+    selectTab(newTab)
+    return true
+  }
+
   func performSplitAction(
     _ action: GhosttySplitAction,
     for surfaceId: UUID,

@@ -724,6 +724,16 @@ final class WorktreeTerminalManager {
         let terminalID = sessions[sessionIndex].terminals[terminalIndex].id
         let storedAgentID = sessions[sessionIndex].terminals[terminalIndex].agent?.id.lowercased()
         if storedAgentID != hookAgentID {
+          // "Latest agent wins" is a PANE rule (hand-typed, user-driven).
+          // A tab-shaped record matched by surface id (remote sessions,
+          // panes converted to tabs) keeps the foreign-agent guard.
+          guard sessions[sessionIndex].terminals[terminalIndex].hostTabID != nil else {
+            terminalLogger.warning(
+              "Ignoring \(hookAgentID) hook session id for terminal \(terminalID) — "
+                + "registered as \(storedAgentID ?? "shell")"
+            )
+            return
+          }
           terminalLogger.warning(
             "Pane terminal \(terminalID) re-adopted from \(storedAgentID ?? "shell") "
               + "to \(hookAgentID)"
@@ -833,17 +843,18 @@ final class WorktreeTerminalManager {
     }
   }
 
-  /// Locate the (session, terminal) index pair for a PANE terminal by its
-  /// surface UUID. Pane terminals carry `hostTabID != nil` and use the
-  /// surface UUID as their id.
+  /// Locate the (session, terminal) index pair whose id IS the reporting
+  /// surface's UUID: adopted pane terminals, and panes later converted to
+  /// their own tab (the tab keeps the surface UUID as its id). The
+  /// surface match is authoritative — a running agent's hook env keeps
+  /// its spawn-time `SUPACOOL_TAB_ID`, so after a tab⇄pane conversion the
+  /// surface UUID is the only stable address.
   private static func paneIndices(
     forSurfaceID surfaceID: UUID,
     in sessions: [AgentSession]
   ) -> (sessionIndex: Int, terminalIndex: Int)? {
     for (sessionIndex, session) in sessions.enumerated() {
-      if let terminalIndex = session.terminals.firstIndex(where: {
-        $0.id == surfaceID && $0.hostTabID != nil
-      }) {
+      if let terminalIndex = session.terminals.firstIndex(where: { $0.id == surfaceID }) {
         return (sessionIndex, terminalIndex)
       }
     }
@@ -1493,6 +1504,7 @@ final class WorktreeTerminalManager {
     terminalID: UUID,
     in worktree: Worktree
   ) {
+    var wasPane = false
     $agentSessions.withLock { sessions in
       guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
       guard sessions[idx].primaryTerminalID != terminalID else {
@@ -1501,12 +1513,83 @@ final class WorktreeTerminalManager {
         )
         return
       }
+      wasPane = sessions[idx].terminal(id: terminalID)?.hostTabID != nil
       sessions[idx].terminals.removeAll { $0.id == terminalID }
     }
     if let state = states[worktree.id] {
-      state.closeTab(TerminalTabID(rawValue: terminalID))
+      if wasPane {
+        // A pane terminal's id is its SURFACE UUID — close the split
+        // leaf, not a (nonexistent) tab.
+        _ = state.closeSurface(id: terminalID)
+      } else {
+        state.closeTab(TerminalTabID(rawValue: terminalID))
+      }
       saveLayoutSnapshot?(worktree.id, captureLayoutSnapshotWithSessionIDs(from: state))
     }
+  }
+
+  /// Convert an auxiliary TAB terminal into a split pane of the session's
+  /// primary tab: move the live surface across, then rewrite the record
+  /// as a pane. Single-leaf tabs only; the primary itself is refused.
+  @discardableResult
+  func convertTerminalToSplit(
+    sessionID: AgentSession.ID,
+    terminalID: UUID,
+    in worktree: Worktree
+  ) -> Bool {
+    guard let session = agentSessions.first(where: { $0.id == sessionID }),
+      terminalID != session.primaryTerminalID,
+      let terminal = session.terminal(id: terminalID),
+      terminal.hostTabID == nil,
+      let state = states[worktree.id]
+    else { return false }
+    let targetTab = TerminalTabID(rawValue: session.primaryTerminalID)
+    guard state.containsTabTree(targetTab),
+      let movedSurfaceID = state.moveSingleLeafTab(
+        TerminalTabID(rawValue: terminalID),
+        intoTab: targetTab,
+        direction: .right
+      )
+    else { return false }
+    $agentSessions.withLock { sessions in
+      guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+      sessions[idx].convertTabTerminalToPane(
+        terminalID: terminalID,
+        surfaceID: movedSurfaceID,
+        hostTabID: session.primaryTerminalID
+      )
+    }
+    saveLayoutSnapshot?(worktree.id, captureLayoutSnapshotWithSessionIDs(from: state))
+    terminalLogger.info(
+      "Converted terminal \(terminalID) to a pane \(movedSurfaceID) of the primary tab"
+    )
+    return true
+  }
+
+  /// Convert an adopted PANE terminal into its own tab: move the live
+  /// surface out into a fresh tab carrying the surface's UUID, then clear
+  /// the record's `hostTabID`. The pane's identity — and its hook
+  /// resolution by surface UUID — survives unchanged.
+  @discardableResult
+  func convertPaneToTab(
+    sessionID: AgentSession.ID,
+    paneID: UUID,
+    in worktree: Worktree
+  ) -> Bool {
+    guard let session = agentSessions.first(where: { $0.id == sessionID }),
+      let pane = session.terminal(id: paneID),
+      pane.hostTabID != nil,
+      let state = states[worktree.id]
+    else { return false }
+    let title = pane.displayName ?? AgentType.displayName(for: pane.agent)
+    guard state.moveSurfaceToNewTab(surfaceID: paneID, title: title) else { return false }
+    $agentSessions.withLock { sessions in
+      guard let idx = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+      sessions[idx].convertPaneTerminalToTab(paneID: paneID)
+    }
+    saveLayoutSnapshot?(worktree.id, captureLayoutSnapshotWithSessionIDs(from: state))
+    terminalLogger.info("Converted pane \(paneID) to its own tab")
+    return true
   }
 
   /// Drop a deleted session's tabs from the persisted layout snapshot for

@@ -26,6 +26,17 @@ struct TerminalClient {
   /// terminal (delete the session instead).
   var removeAuxiliaryTerminal: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Void
 
+  /// Supacool: move an auxiliary TAB terminal's live surface into the
+  /// primary tab's split tree and rewrite its record as a pane. Returns
+  /// false when the terminal can't convert (primary, multi-leaf tab, no
+  /// live tree).
+  var convertTerminalToSplit: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Bool
+
+  /// Supacool: move an adopted PANE terminal's live surface out into its
+  /// own tab (keeping the surface UUID as the tab id) and clear the
+  /// record's `hostTabID`.
+  var convertPaneToTab: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Bool
+
   /// Supacool: drop a deleted session's TabSnapshots from layouts.json
   /// for the given worktree. Other sessions sharing the worktree keep
   /// their tabs. No-op if no snapshot exists for the worktree.
@@ -113,6 +124,8 @@ extension TerminalClient: DependencyKey {
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },
+    convertTerminalToSplit: { _, _, _ in false },
+    convertPaneToTab: { _, _, _ in false },
     pruneLayoutsForRemovedSession: { _, _ in }
   )
 
@@ -125,6 +138,8 @@ extension TerminalClient: DependencyKey {
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },
+    convertTerminalToSplit: { _, _, _ in false },
+    convertPaneToTab: { _, _, _ in false },
     pruneLayoutsForRemovedSession: { _, _ in }
   )
 }

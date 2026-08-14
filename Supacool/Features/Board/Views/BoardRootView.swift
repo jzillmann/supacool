@@ -425,6 +425,24 @@ struct BoardRootView: View {
               repositories: Array(repositories)
             )
           )
+        },
+        onConvertTerminalToSplit: { terminalID in
+          store.send(
+            .convertTerminalToSplit(
+              sessionID: session.id,
+              terminalID: terminalID,
+              repositories: Array(repositories)
+            )
+          )
+        },
+        onConvertPaneToTab: { terminalID in
+          store.send(
+            .convertPaneToTab(
+              sessionID: session.id,
+              terminalID: terminalID,
+              repositories: Array(repositories)
+            )
+          )
         }
       )
       .task(id: session.lastActivityAt) {

@@ -607,6 +607,22 @@ struct BoardFeature {
       terminalID: UUID,
       repositories: [Repository]
     )
+    /// Right-click on a strip tab → "Convert to split pane": move the
+    /// aux tab's live surface beside the primary and rewrite its record
+    /// as a pane.
+    case convertTerminalToSplit(
+      sessionID: AgentSession.ID,
+      terminalID: UUID,
+      repositories: [Repository]
+    )
+    /// Right-click on a pane's chip → "Convert to tab": move the pane's
+    /// live surface into its own tab (keeping the surface UUID as its
+    /// identity).
+    case convertPaneToTab(
+      sessionID: AgentSession.ID,
+      terminalID: UUID,
+      repositories: [Repository]
+    )
     /// UI-only: changes which terminal in the session's composition the
     /// full-screen view is currently rendering. Drives the tab strip
     /// selection state.
@@ -1461,6 +1477,36 @@ struct BoardFeature {
         }
         return .run { _ in
           await terminalClient.removeAuxiliaryTerminal(sessionID, terminalID, worktree)
+        }
+
+      case .convertTerminalToSplit(let sessionID, let terminalID, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }),
+          let repository = repositories.first(where: { $0.id == session.repositoryID })
+        else { return .none }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        // The converted terminal lives inside the primary tab now — the
+        // strip entry disappears, so land the view on the primary.
+        if state.activeTerminalBySession[sessionID] == terminalID {
+          state.activeTerminalBySession[sessionID] = session.primaryTerminalID
+        }
+        return .run { _ in
+          if await !terminalClient.convertTerminalToSplit(sessionID, terminalID, worktree) {
+            boardLogger.warning("convertTerminalToSplit refused for terminal \(terminalID)")
+          }
+        }
+
+      case .convertPaneToTab(let sessionID, let terminalID, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }),
+          let repository = repositories.first(where: { $0.id == session.repositoryID })
+        else { return .none }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        return .run { send in
+          if await terminalClient.convertPaneToTab(sessionID, terminalID, worktree) {
+            // The pane became its own tab; show it (its id is the tab id).
+            await send(.selectActiveTerminal(sessionID: sessionID, terminalID: terminalID))
+          } else {
+            boardLogger.warning("convertPaneToTab refused for pane \(terminalID)")
+          }
         }
 
       case .selectActiveTerminal(let sessionID, let terminalID):

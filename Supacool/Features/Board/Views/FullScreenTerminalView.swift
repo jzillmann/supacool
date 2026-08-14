@@ -112,6 +112,11 @@ struct FullScreenTerminalView: View {
   /// Close button on an auxiliary tab in the session tab strip. Refuses
   /// to remove the primary terminal — the session owns that one.
   let onCloseTerminal: (UUID) -> Void
+  /// Right-click on a strip tab: move its terminal into the primary tab
+  /// as a split pane.
+  let onConvertTerminalToSplit: (UUID) -> Void
+  /// Right-click on a pane's chip: move the pane out into its own tab.
+  let onConvertPaneToTab: (UUID) -> Void
 
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
@@ -905,6 +910,16 @@ struct FullScreenTerminalView: View {
         activity: liveActivity(for: terminal),
         onTap: { terminalMenuSurfaceID = surfaceID }
       )
+      .contextMenu {
+        if terminal.hostTabID != nil {
+          Button {
+            onConvertPaneToTab(terminal.id)
+          } label: {
+            Label("Convert to Tab", systemImage: "rectangle.topthird.inset.filled")
+          }
+          .help("Move this pane out into its own tab in the session strip")
+        }
+      }
       .popover(isPresented: isPresented, arrowEdge: .top) {
         terminalChipPopover(for: terminal)
       }
@@ -1118,7 +1133,8 @@ struct FullScreenTerminalView: View {
             },
             onSelect: onSelectTerminal,
             onClose: onCloseTerminal,
-            onAdd: onAddShellTerminal
+            onAdd: onAddShellTerminal,
+            onConvertToSplit: onConvertTerminalToSplit
           )
         }
         SingleSessionTerminalView(

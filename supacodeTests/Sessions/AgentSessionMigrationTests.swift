@@ -390,6 +390,71 @@ struct AgentSessionMigrationTests {
     #expect(session.anyAgentTerminalKnownBusy == false)
   }
 
+  // MARK: Tab ⇄ pane conversion
+
+  @Test func convertTabTerminalToPaneSwapsIdentityAndKeepsTracking() {
+    let sessionID = UUID()
+    let auxTabID = UUID()
+    let surfaceID = UUID()
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "p"
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: auxTabID, role: .agent, agent: .codex,
+        agentNativeSessionID: "codex-1", lastKnownBusy: true
+      )
+    )
+
+    let didConvert = session.convertTabTerminalToPane(
+      terminalID: auxTabID, surfaceID: surfaceID, hostTabID: sessionID
+    )
+    #expect(didConvert)
+    let pane = session.terminal(id: surfaceID)
+    #expect(pane?.hostTabID == sessionID)
+    #expect(pane?.agent == .codex)
+    #expect(pane?.agentNativeSessionID == "codex-1")
+    #expect(pane?.lastKnownBusy == true)
+    #expect(session.terminal(id: auxTabID) == nil)
+    // Primary refuses conversion.
+    let convertedPrimary = session.convertTabTerminalToPane(
+      terminalID: sessionID, surfaceID: UUID(), hostTabID: sessionID
+    )
+    #expect(convertedPrimary == false)
+  }
+
+  @Test func convertPaneTerminalToTabClearsHostKeepingIdentity() {
+    let sessionID = UUID()
+    let paneID = UUID()
+    var session = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo",
+      agent: .claude,
+      initialPrompt: "p"
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: paneID, role: .agent, hostTabID: sessionID, agent: .codex,
+        agentNativeSessionID: "codex-1"
+      )
+    )
+
+    let didPromote = session.convertPaneTerminalToTab(paneID: paneID)
+    #expect(didPromote)
+    let converted = session.terminal(id: paneID)
+    #expect(converted?.hostTabID == nil)
+    #expect(converted?.agentNativeSessionID == "codex-1")
+    // The strip now shows it; a second conversion refuses (already a tab).
+    #expect(session.tabTerminals.map(\.id).contains(paneID))
+    let promotedAgain = session.convertPaneTerminalToTab(paneID: paneID)
+    #expect(promotedAgain == false)
+  }
+
   // MARK: Busy-state aggregation
 
   /// `session.lastKnownBusy` is the read forwarder used by the board
