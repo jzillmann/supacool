@@ -204,6 +204,7 @@ The terminal layer (`WorktreeTerminalManager`) is `@Observable` but outside TCA.
 - Handled via runtime action callbacks in `GhosttySurfaceBridge`, not by app menu shortcuts.
 - App-level tab actions should be triggered by Ghostty actions (`GHOSTTY_ACTION_NEW_TAB` / `GHOSTTY_ACTION_CLOSE_TAB`) to honor user custom bindings.
 - `GhosttySurfaceView.performKeyEquivalent` routes bound keys to Ghostty first; only unbound keys fall through to the app, and only when the surface is the actual first responder.
+- Because of that first-responder gate, any key the app wants must be **unbound in Ghostty** (`AppShortcuts.ghosttyCLIKeybindArguments` / `reservedGhosttyUnbindArguments`) — otherwise the same keystroke does different things depending on where the user last clicked. See [`docs/agent-guides/ui-patterns.md`](./docs/agent-guides/ui-patterns.md) § Every ⌘-key has exactly one owner.
 
 ### Formatting & linting
 

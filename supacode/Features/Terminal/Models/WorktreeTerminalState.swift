@@ -1880,22 +1880,16 @@ final class WorktreeTerminalState {
     view.closeSurface()
     cleanupSurfaceState(for: view.id)
     if newTree.isEmpty {
+      // Closing the tab's last surface *is* closing the tab, so hand off to
+      // `closeTab` rather than re-implementing it. The hand-rolled teardown
+      // that used to live here skipped `onTabClosed` and never re-focused a
+      // sibling tab, which left observers believing a torn-down session was
+      // still alive. Dropping the (now empty) tree first makes the
+      // `removeTree` inside `closeTab` a no-op — this surface is already gone.
       trees.removeValue(forKey: tabId)
       focusedSurfaceIdByTab.removeValue(forKey: tabId)
       tabIsRunningById.removeValue(forKey: tabId)
-      cleanupLaunchScriptDirectory(for: tabId)
-      tabManager.closeTab(tabId)
-      updateShouldHideTabBar()
-      if let kind = blockingScripts.removeValue(forKey: tabId) {
-        lastBlockingScriptTabByKind.removeValue(forKey: kind)
-
-        onBlockingScriptCompleted?(kind, nil, nil)
-      } else {
-        for (kind, tracked) in lastBlockingScriptTabByKind where tracked == tabId {
-          lastBlockingScriptTabByKind.removeValue(forKey: kind)
-        }
-      }
-      emitTaskStatusIfChanged()
+      closeTab(tabId)
       return
     }
     updateTree(newTree, for: tabId)

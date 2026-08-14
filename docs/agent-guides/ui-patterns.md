@@ -156,3 +156,53 @@ Same family as the board↔session freezes documented in `SingleSessionTerminalV
 tokens) and `setOcclusion` (forced repaint on resume): in every case the symptom is "keys
 reach the PTY but the pane looks dead", and the cause is a focus/visibility pass that ran
 against stale state or lost a mounting race.
+
+## Every ⌘-key has exactly one owner — write it down before you bind it
+
+A ⌘-keystroke inside Supacool can be claimed in **three** independent places, and they are
+resolved in this order:
+
+1. **The key window's view hierarchy.** AppKit offers the event to
+   `NSWindow.performKeyEquivalent` first, which walks the views. Both SwiftUI's
+   view-level `.keyboardShortcut(...)` (the hidden `Button`s in `FullScreenTerminalView`)
+   and `GhosttySurfaceView.performKeyEquivalent` live here.
+2. **Ghostty's own keybindings.** `GhosttySurfaceView.performKeyEquivalent` asks
+   `ghostty_surface_key_is_binding` and, when the answer is yes, either forwards to the main
+   menu or feeds the event to libghostty — but only when the surface is the actual
+   `firstResponder`.
+3. **The main menu.** Reached last, via `NSApp.mainMenu.performKeyEquivalent`.
+
+Because layer 2 is gated on first-responder state, a key bound in two layers does something
+**different depending on where the user last clicked**. That was the ⌘W bug: Ghostty's macOS
+default binds ⌘W to `close_surface`, the File menu bound it to "Close Window", and
+`FullScreenTerminalView` bound it to "back to the board". One keystroke, three outcomes —
+including silently killing a running agent's surface.
+
+Rules:
+
+- **Unbind in Ghostty anything the app owns.** `AppShortcuts.ghosttyCLIKeybindArguments`
+  emits `--keybind=…=unbind` for every `AppShortcut`, plus
+  `AppShortcuts.reservedGhosttyUnbindArguments` for keys that have no menu item and are not
+  user-rebindable (⌘W). Once unbound, `bindingFlags(for:)` returns nil and the event falls
+  through to SwiftUI **every** time — no first-responder lottery.
+- **Never gate a menu shortcut on a `@FocusedValue` nobody sets.** `WindowCommands` used
+  `closeSurfaceAction == nil` to decide whether ⌘W overlapped Ghostty's `close_surface`.
+  The only setter was deleted with the sidebar in `8dae4c31`, so the guard silently inverted
+  and the menu item claimed ⌘W unconditionally. A focused value with no publisher is not a
+  neutral default — it is a permanently-true branch.
+- **Keep app-owned keys non-destructive.** ⌘W in the full-screen session view returns to the
+  board and never closes a surface. Closing panes is ⌘E / the header split toggle; closing a
+  session is an explicit board action.
+
+## Closing a tab's last surface must go through `closeTab`
+
+`WorktreeTerminalState.handleCloseRequest` (the Ghostty `close_surface` callback) removes the
+leaf from the split tree; when the tree comes back empty, the tab is gone too. That branch
+used to hand-roll the teardown, which meant it skipped `onTabClosed?()` and never re-focused
+a sibling tab — so `WorktreeTerminalManager` never emitted `.tabClosed` and observers went on
+believing a torn-down session was alive. It now drops the empty tree and delegates to
+`closeTab(_:)`; the `removeTree` inside is a no-op because the surface is already gone.
+
+Note that `handleCloseRequest` still **discards** Ghostty's `processAlive` flag, so closing a
+surface kills a running child process with no confirmation. That is a known gap, not a
+decision — see `features.md`.

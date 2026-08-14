@@ -365,6 +365,20 @@ enum AppShortcuts {
     ]
   }
 
+  // MARK: - Bindings the app owns outright.
+
+  // ⌘W belongs to the app, not to Ghostty. Ghostty's macOS defaults bind it to
+  // `close_surface`, which raced our own ⌘W ("back to the board"): whichever
+  // won depended on whether the terminal surface happened to be the first
+  // responder at that instant, so the same keystroke could dismiss the session
+  // view, hide the window, or silently kill a running agent's surface.
+  // Unbinding it makes `GhosttySurfaceView.performKeyEquivalent` see ⌘W as a
+  // non-binding and let it fall through to SwiftUI every single time.
+  // Not an `AppShortcut` because it has no menu item and is not user-rebindable.
+  static let reservedGhosttyUnbindArguments: [String] = [
+    "--keybind=super+w=unbind",
+  ]
+
   // MARK: - Ghostty CLI arguments.
 
   static var ghosttyCLIKeybindArguments: [String] {
@@ -373,7 +387,9 @@ enum AppShortcuts {
 
   static func ghosttyCLIKeybindArguments(from overrides: [AppShortcutID: AppShortcutOverride]) -> [String] {
     let effectiveShortcuts = all.compactMap { $0.effective(from: overrides) }
-    return effectiveShortcuts.map(\.ghosttyUnbindArgument) + tabSelectionGhosttyKeybindArguments
+    return effectiveShortcuts.map(\.ghosttyUnbindArgument)
+      + tabSelectionGhosttyKeybindArguments
+      + reservedGhosttyUnbindArguments
   }
 
   // MARK: - Conflict detection.

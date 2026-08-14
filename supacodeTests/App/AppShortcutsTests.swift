@@ -74,6 +74,17 @@ struct AppShortcutsTests {
     }
   }
 
+  // ⌘W must never reach Ghostty: the app owns it (back to the board / close
+  // window). Leaving Ghostty's default `super+w=close_surface` in place made
+  // the same keystroke sometimes kill a running agent's surface.
+  @Test func ghosttyCLIArgumentsAlwaysUnbindCommandW() {
+    #expect(AppShortcuts.ghosttyCLIKeybindArguments.contains("--keybind=super+w=unbind"))
+
+    let override = AppShortcutOverride(keyCode: UInt16(kVK_ANSI_K), modifiers: [.command])
+    let withOverrides = AppShortcuts.ghosttyCLIKeybindArguments(from: [.newWorktree: override])
+    #expect(withOverrides.contains("--keybind=super+w=unbind"))
+  }
+
   // MARK: - Shortcut identity.
 
   @Test func allShortcutsHaveUniqueIDs() {

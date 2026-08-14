@@ -312,6 +312,62 @@ struct WorktreeTerminalManagerTests {
     #expect(second == .setupScriptConsumed(worktreeID: worktree.id))
   }
 
+  // Closing a tab's last surface is closing the tab. The teardown used to be
+  // hand-rolled inside `handleCloseRequest`, which skipped `onTabClosed` and
+  // left observers thinking a dead session was still alive.
+  @Test func closingLastSurfaceOfTabEmitsTabClosed() async {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let stream = manager.eventStream()
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+
+    // What Ghostty invokes when the surface's `close_surface` action runs.
+    surface.bridge.onCloseRequest?(false)
+
+    let event = await nextEvent(stream) { event in
+      if case .tabClosed = event { return true }
+      return false
+    }
+
+    #expect(event == .tabClosed(worktreeID: worktree.id))
+    #expect(state.tabManager.tabs.contains { $0.id == tabID } == false)
+    #expect(state.containsTabTree(tabID) == false)
+  }
+
+  // With several surfaces the tab survives — only the closed leaf goes away.
+  @Test func closingOneOfTwoSurfacesKeepsTheTab() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+    #expect(state.performSplitAction(.newSplit(direction: .right), for: surface.id))
+
+    guard let split = state.splitTree(for: tabID).leaves().first(where: { $0.id != surface.id }) else {
+      Issue.record("Expected a split surface")
+      return
+    }
+
+    split.bridge.onCloseRequest?(false)
+
+    #expect(state.tabManager.tabs.contains { $0.id == tabID })
+    #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
+  }
+
   @Test func taskStatusReflectsAnyRunningTab() {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

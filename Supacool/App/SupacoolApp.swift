@@ -302,7 +302,7 @@ struct SupacoolApp: App {
       // Supacool: SidebarCommands dropped — the sidebar-toggle / reveal-in-sidebar
       // commands don't make sense without a sidebar. Menu stays cleaner.
       TerminalCommands(ghosttyShortcuts: ghosttyShortcuts)
-      WindowCommands(ghosttyShortcuts: ghosttyShortcuts)
+      WindowCommands()
       CommandGroup(after: .textEditing) {
         let cmdPalette = AppShortcuts.commandPalette.effective(from: store.settings.shortcutOverrides)
         Button("Command Palette") {

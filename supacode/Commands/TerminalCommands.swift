@@ -1,10 +1,14 @@
 import SwiftUI
 
+// Supacool: the New Terminal / Close Terminal / Close Terminal Tab menu items
+// used to live here, driven by focused values the deleted sidebar published.
+// Since that deletion (8dae4c31) nothing set them, so the items were
+// permanently disabled *while still reserving ⌘W / ⌘⌥W / ⌘T at the menu
+// level* — which is what made ⌘W ambiguous. They are gone; ⌘T and ⌘⌥W now
+// fall straight through to Ghostty's own new_tab / close_tab bindings, and
+// ⌘W belongs to the board (see AppShortcuts.reservedGhosttyUnbindArguments).
 struct TerminalCommands: Commands {
   let ghosttyShortcuts: GhosttyShortcutManager
-  @FocusedValue(\.newTerminalAction) private var newTerminalAction
-  @FocusedValue(\.closeSurfaceAction) private var closeSurfaceAction
-  @FocusedValue(\.closeTabAction) private var closeTabAction
   @FocusedValue(\.startSearchAction) private var startSearchAction
   @FocusedValue(\.searchSelectionAction) private var searchSelectionAction
   @FocusedValue(\.navigateSearchNextAction) private var navigateSearchNextAction
@@ -12,30 +16,6 @@ struct TerminalCommands: Commands {
   @FocusedValue(\.endSearchAction) private var endSearchAction
 
   var body: some Commands {
-    CommandGroup(after: .newItem) {
-      Divider()
-      Button("New Terminal", systemImage: "apple.terminal") {
-        newTerminalAction?()
-      }
-      .modifier(KeyboardShortcutModifier(shortcut: ghosttyShortcuts.keyboardShortcut(for: "new_tab")))
-      .disabled(newTerminalAction == nil)
-      Button("Close Terminal") {
-        closeSurfaceAction?()
-      }
-      .modifier(
-        KeyboardShortcutModifier(
-          shortcut: closeSurfaceAction == nil ? nil : ghosttyShortcuts.keyboardShortcut(for: "close_surface")
-        )
-      )
-      .disabled(closeSurfaceAction == nil)
-      Button("Close Terminal Tab") {
-        closeTabAction?()
-      }
-      .modifier(
-        KeyboardShortcutModifier(shortcut: ghosttyShortcuts.keyboardShortcut(for: "close_tab"))
-      )
-      .disabled(closeTabAction == nil)
-    }
     CommandGroup(after: .textEditing) {
       Button("Find...") {
         startSearchAction?()
@@ -81,39 +61,6 @@ struct TerminalCommands: Commands {
       )
       .disabled(searchSelectionAction == nil)
     }
-  }
-}
-
-private struct NewTerminalActionKey: FocusedValueKey {
-  typealias Value = () -> Void
-}
-
-extension FocusedValues {
-  var newTerminalAction: (() -> Void)? {
-    get { self[NewTerminalActionKey.self] }
-    set { self[NewTerminalActionKey.self] = newValue }
-  }
-}
-
-private struct CloseSurfaceActionKey: FocusedValueKey {
-  typealias Value = () -> Void
-}
-
-extension FocusedValues {
-  var closeSurfaceAction: (() -> Void)? {
-    get { self[CloseSurfaceActionKey.self] }
-    set { self[CloseSurfaceActionKey.self] = newValue }
-  }
-}
-
-private struct CloseTabActionKey: FocusedValueKey {
-  typealias Value = () -> Void
-}
-
-extension FocusedValues {
-  var closeTabAction: (() -> Void)? {
-    get { self[CloseTabActionKey.self] }
-    set { self[CloseTabActionKey.self] = newValue }
   }
 }
 

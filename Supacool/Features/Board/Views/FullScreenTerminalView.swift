@@ -187,10 +187,12 @@ struct FullScreenTerminalView: View {
         .hidden()
     )
     .background(
-      // ⌘W closes the focused terminal if the tab has splits, else
-      // dismisses back to the board. Matches the macOS convention of
-      // ⌘W = "close the nearest pane/window".
-      Button("Close Terminal or Board") { closeCurrentTerminalOrBack() }
+      // ⌘W always goes back to the board — never destructive. It used to
+      // close the focused split when the tab had several, which made the
+      // key mean two different things depending on invisible state (and
+      // raced Ghostty's own ⌘W = close_surface). Splits are closed with
+      // ⌘E or the header's split toggle instead.
+      Button("Back to Board") { onBackToBoard() }
         .keyboardShortcut("w", modifiers: .command)
         .hidden()
     )
@@ -266,7 +268,7 @@ struct FullScreenTerminalView: View {
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
-      .help("Return to board (⌘B, ⌘., or two-finger swipe left)")
+      .help("Return to board (⌘B, ⌘W, ⌘., or two-finger swipe left)")
 
       Divider().frame(height: 18)
 
@@ -1004,29 +1006,6 @@ struct FullScreenTerminalView: View {
     }
     if resolved.count == 1 {
       agentSurfaceID = resolved[0].id
-    }
-  }
-
-  /// Backs ⌘W. If the session's tab has multiple leaves, close the
-  /// focused one (native Ghostty behavior). Otherwise fall back to
-  /// "back to board" — the less destructive of the two options the
-  /// user suggested.
-  private func closeCurrentTerminalOrBack() {
-    guard let worktree = resolveWorktree() else {
-      onBackToBoard()
-      return
-    }
-    let state = terminalManager.state(for: worktree) { false }
-    let tabID = TerminalTabID(rawValue: session.id)
-    guard state.containsTabTree(tabID) else {
-      onBackToBoard()
-      return
-    }
-    let leaves = state.splitTree(for: tabID).leaves()
-    if leaves.count > 1 {
-      state.closeFocusedSurface()
-    } else {
-      onBackToBoard()
     }
   }
 
