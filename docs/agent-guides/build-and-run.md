@@ -6,7 +6,7 @@
 brew install mise librsvg       # librsvg only if you want to regenerate the icon
 cd /path/to/supacool
 mise trust                      # approve ~/.local/share/mise managing this dir
-mise install                    # pulls zig 0.15.2, swiftlint, xcsift, create-dmg
+mise install                    # pulls zig 0.16.0, swiftlint, xcsift, create-dmg
 ```
 
 ## Every build
@@ -29,17 +29,26 @@ error: cannot execute tool 'metal' due to missing Metal Toolchain;
        use: xcodebuild -downloadComponent MetalToolchain
 ```
 
-**Cause**: upstream ghostty builds a universal xcframework (macOS + iOS + iOS-sim slices) by default. Xcode 26 ships the iOS Metal Toolchain as a separately-downloadable component. Even with the toolchain installed, the build is slower than necessary for a macOS-only app.
+**Cause**: the Metal Toolchain is a **hard prerequisite for the macOS build**, not an iOS-only concern. `MetallibStep` is wired into `src/build/SharedDeps.zig`, so ghostty compiles `src/renderer/shaders/shaders.metal` via `xcrun metal` for the *native macOS* slice. Since Xcode 26 the Metal Toolchain ships as a separately-downloadable component: the `metal` binary is present as a shim at `$(xcrun -f metal)` and errors out until you download the component.
 
-**Supacool's fix** is already applied — the Makefile's `build-ghostty-xcframework` rule passes `-Dxcframework-target=native` to the zig build, which emits only the macOS slice. `ThirdParty/ghostty/src/build/Config.zig:140` defines the flag; `ThirdParty/ghostty/src/build/GhosttyXCFramework.zig:80` switches on it. No iOS compilation, no Metal Toolchain dependency.
-
-**If you still hit the error** after all that — e.g. ghostty's upstream changed the build config in a merge — the fallback is:
+**The fix is to download it** — one-time, ~1GB, machine-wide:
 
 ```bash
 xcodebuild -downloadComponent MetalToolchain
 ```
 
-…which installs the iOS Metal Toolchain (one-time, ~1GB) and lets the universal build complete. Prefer fixing the zig flag; only download as a workaround.
+**Confirm it's an environment problem, not a ghostty problem**, before touching build flags — compile a trivial shader with no ghostty involved:
+
+```bash
+printf '#include <metal_stdlib>\nkernel void k() {}\n' > /tmp/probe.metal
+xcrun -sdk macosx metal -c /tmp/probe.metal -o /tmp/probe.ir
+```
+
+If that fails, every ghostty pin fails the same way and no zig flag will help.
+
+> ⚠️ This page previously claimed `-Dxcframework-target=native` avoided the Metal Toolchain dependency by skipping the iOS slices. **That was wrong** — the macOS slice compiles Metal shaders too. Corrected 2026-08-14 after a rebuild on Xcode 26.5 failed at `metal Ghostty (Ghostty.ir)` with 207/217 steps already succeeded.
+
+**`-Dxcframework-target=native` is still worth keeping**, just for a different reason: it emits only the macOS slice, so the build is faster. `ThirdParty/ghostty/src/build/Config.zig` defines the flag. Note that upstream has since removed iOS from the full Ghostty build entirely — only `libghostty-vt` targets iOS now (`-Demit-lib-vt`) — so the flag saves less than it used to.
 
 ## Product naming
 
