@@ -118,6 +118,11 @@ struct FullScreenTerminalView: View {
   /// Close button on an auxiliary tab in the session tab strip. Refuses
   /// to remove the primary terminal — the session owns that one.
   let onCloseTerminal: (UUID) -> Void
+  /// Right-click on a strip tab: move its terminal into the primary tab
+  /// as a split pane.
+  let onConvertTerminalToSplit: (UUID) -> Void
+  /// Right-click on a pane's chip: move the pane out into its own tab.
+  let onConvertPaneToTab: (UUID) -> Void
 
   /// The macOS app opened when the user clicks the diff button. Swap via
   /// `defaults write io.morethan.supacool supacool.gitGuiApp Tower`
@@ -140,10 +145,13 @@ struct FullScreenTerminalView: View {
   /// on hover-out (or when the ⓘ button toggles the panel directly) so a
   /// quick cursor pass over the title doesn't pop the panel open.
   @State private var titleHoverTask: Task<Void, Never>?
-  @State private var isAutoObserverPopoverShown: Bool = false
+  /// Which terminal chip's popover (recent prompts / auto-responder) is
+  /// open, keyed by the chip's surface id. Per-terminal controls live on
+  /// the chips, not in the session header — a session can run several
+  /// agents, and "jump to a recent prompt" must target ONE of them.
+  @State private var terminalMenuSurfaceID: UUID?
   @State private var isQuickDiffPresented: Bool = false
   @State private var isConfirmingRemove: Bool = false
-  @State private var isRecentPromptsPopoverShown: Bool = false
   @State private var isConvertPopoverShown: Bool = false
   /// Draft branch name shown in the convert-to-worktree popover.
   /// Initialized from the session display name when the popover opens.
@@ -298,8 +306,6 @@ struct FullScreenTerminalView: View {
       infoButton
       revealInFinderButton
       openDiffButton
-      recentPromptsButton
-      autoObserverButton
       debugButton
       splitButton
       groupCycleButton
@@ -307,7 +313,6 @@ struct FullScreenTerminalView: View {
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
       }
-      agentChip
       overflowMenu
       parkControl
       removeButton
@@ -390,22 +395,9 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  private var agentChip: some View {
-    HStack(spacing: 4) {
-      AgentIconView(agent: session.agent, size: 12)
-      Text(AgentType.displayName(for: session.agent))
-        .font(.caption.weight(.medium))
-        .foregroundStyle(agentColor)
-    }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 3)
-    .background(agentColor.opacity(0.12))
-    .clipShape(Capsule())
-  }
-
-  private var agentColor: Color {
-    AgentType.tintColor(for: session.agent)
-  }
+  // The agent chip moved from the session header to each terminal: see
+  // `paneBadgeView(for:)` (per-pane chip) and the tab-strip labels — a
+  // session can run several agents, so a single header chip would lie.
 
   @ViewBuilder
   private var repoChip: some View {
@@ -786,31 +778,6 @@ struct FullScreenTerminalView: View {
   /// session's transcript file. Selecting one fires Ghostty's search
   /// binding pre-populated with that prompt's first ~40 chars, so the
   /// user lands on the matching spot in the scrollback.
-  private var recentPromptsButton: some View {
-    Button {
-      isRecentPromptsPopoverShown.toggle()
-    } label: {
-      Image(systemName: "text.line.first.and.arrowtriangle.forward")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
-        .accessibilityLabel("Jump to a recent prompt")
-    }
-    .buttonStyle(.plain)
-    .help("Jump to a recent prompt")
-    .popover(isPresented: $isRecentPromptsPopoverShown, arrowEdge: .bottom) {
-      RecentPromptsPopover(
-        tabID: TerminalTabID(rawValue: session.id),
-        onJump: { needle in
-          isRecentPromptsPopoverShown = false
-          terminalManager.performBindingAction(
-            worktreeID: session.worktreeID,
-            action: "search:\(needle)"
-          )
-        }
-      )
-    }
-  }
-
   /// Park control beside delete. When the session is live, a primary-action
   /// menu makes both options first-class: clicking the label parks and tears
   /// down the tab, while the disclosure chevron reveals Standby (hide the
@@ -888,27 +855,6 @@ struct FullScreenTerminalView: View {
   /// Mirrors the board card's sparkle button so the user can toggle the
   /// auto-observer (and edit its instructions) without leaving the
   /// terminal. Glows in accent color when the observer is active.
-  private var autoObserverButton: some View {
-    Button {
-      isAutoObserverPopoverShown.toggle()
-    } label: {
-      Image(systemName: "sparkles")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconTintStyle(tint: session.autoObserver ? .accentColor : .secondary))
-        .accessibilityLabel(session.autoObserver ? "Auto-responder is on" : "Auto-responder is off")
-    }
-    .buttonStyle(.plain)
-    .help("Auto-responder: auto-answer obvious prompts (click to configure)")
-    .popover(isPresented: $isAutoObserverPopoverShown, arrowEdge: .bottom) {
-      AutoObserverPopover(
-        session: session,
-        onToggle: onAutoObserverToggle,
-        onPromptChanged: onAutoObserverPromptChanged,
-        onRunNow: onAutoObserverRunNow
-      )
-    }
-  }
-
   /// Header button that mirrors the board card's right-click "Debug
   /// session…" action — opens the debug sheet that spawns a fresh agent
   /// in the supacool repo, primed with this session's trace.
@@ -930,7 +876,7 @@ struct FullScreenTerminalView: View {
   @ViewBuilder
   private var splitButton: some View {
     let worktree = resolveWorktree()
-    let isSplit = currentLeafCount(worktree: worktree) > 1
+    let isSplit = hasUntrackedLeaf(worktree: worktree)
     Button {
       toggleShellSplit()
     } label: {
@@ -965,9 +911,12 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Toggle the shell split beside the agent surface. With 2+ leaves,
-  /// close every non-agent leaf so the toolbar always returns to the
-  /// single-pane state. With 1 leaf, split to the right.
+  /// Toggle the shell split beside the agent surface. With untracked
+  /// (plain shell) leaves present, close them so the toolbar always
+  /// returns to the tracked-panes-only state. Otherwise split to the
+  /// right. Tracked = the tab's own (creation) surface plus every
+  /// hook-adopted agent pane — a second agent's pane is never closed by
+  /// ⌘E, only its plain shell siblings are.
   private func toggleShellSplit() {
     guard let worktree = resolveWorktree() else { return }
     let state = terminalManager.state(for: worktree) { false }
@@ -975,8 +924,9 @@ struct FullScreenTerminalView: View {
     guard state.containsTabTree(tabID) else { return }
     let leaves = state.splitTree(for: tabID).leaves()
     captureAgentSurfaceIfNeeded(leaves: leaves)
-    if leaves.count > 1 {
-      for leaf in leaves where leaf.id != agentSurfaceID {
+    let untracked = leaves.filter { !isTrackedSurface($0.id, in: state, tabID: tabID) }
+    if !untracked.isEmpty {
+      for leaf in untracked {
         _ = state.closeSurface(id: leaf.id)
       }
     } else {
@@ -984,12 +934,136 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  private func currentLeafCount(worktree: Worktree?) -> Int {
-    guard let worktree else { return 0 }
+  /// Whether a surface backs a tracked terminal: the tab's own creation
+  /// surface (falling back to the legacy single-leaf capture) or an
+  /// adopted agent pane's persisted terminal.
+  private func isTrackedSurface(
+    _ surfaceID: UUID,
+    in state: WorktreeTerminalState,
+    tabID: TerminalTabID
+  ) -> Bool {
+    if let pane = session.terminal(id: surfaceID), pane.hostTabID != nil { return true }
+    if let creationSurfaceID = state.creationSurfaceID(for: tabID) {
+      return surfaceID == creationSurfaceID
+    }
+    return surfaceID == agentSurfaceID
+  }
+
+  /// True when the session's primary tab has at least one plain-shell
+  /// leaf — i.e. something ⌘E would close. Adopted agent panes don't
+  /// count; they belong to the composition, not the toggle.
+  private func hasUntrackedLeaf(worktree: Worktree?) -> Bool {
+    guard let worktree else { return false }
     let state = terminalManager.state(for: worktree) { false }
     let tabID = TerminalTabID(rawValue: session.id)
-    guard state.containsTabTree(tabID) else { return 0 }
-    return state.splitTree(for: tabID).leaves().count
+    guard state.containsTabTree(tabID) else { return false }
+    return state.splitTree(for: tabID).leaves().contains {
+      !isTrackedSurface($0.id, in: state, tabID: tabID)
+    }
+  }
+
+  /// Resolve the chip shown on a split leaf: an adopted agent pane's own
+  /// terminal, or — on the tab's creation surface (single leaf for legacy
+  /// tabs) — the active tab terminal when it runs an agent. Plain shell
+  /// panes get nothing.
+  private func paneBadgeView(for surfaceID: UUID) -> AnyView? {
+    guard let terminal = badgeTerminal(for: surfaceID) else { return nil }
+    let isPresented = Binding<Bool>(
+      get: { terminalMenuSurfaceID == surfaceID },
+      set: { terminalMenuSurfaceID = $0 ? surfaceID : nil }
+    )
+    return AnyView(
+      SessionTerminalBadge(
+        agent: terminal.agent,
+        activity: liveActivity(for: terminal),
+        onTap: { terminalMenuSurfaceID = surfaceID }
+      )
+      .contextMenu {
+        if terminal.hostTabID != nil {
+          Button {
+            onConvertPaneToTab(terminal.id)
+          } label: {
+            Label("Convert to Tab", systemImage: "rectangle.topthird.inset.filled")
+          }
+          .help("Move this pane out into its own tab in the session strip")
+        }
+      }
+      .popover(isPresented: isPresented, arrowEdge: .top) {
+        terminalChipPopover(for: terminal)
+      }
+    )
+  }
+
+  /// The per-terminal controls behind a chip click: recent prompts scoped
+  /// and targeted to THIS terminal, plus the auto-responder on the primary
+  /// agent's chip (the observer engine watches the session's primary
+  /// conversation — per-agent observation is a future extension).
+  @ViewBuilder
+  private func terminalChipPopover(for terminal: SessionTerminal) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      RecentPromptsPopover(
+        tabID: TerminalTabID(rawValue: terminal.hostTabID ?? terminal.id),
+        onJump: { needle in
+          terminalMenuSurfaceID = nil
+          jumpToPrompt(needle, in: terminal)
+        }
+      )
+      if terminal.id == session.primaryTerminalID {
+        Divider()
+        AutoObserverPopover(
+          session: session,
+          onToggle: onAutoObserverToggle,
+          onPromptChanged: onAutoObserverPromptChanged,
+          onRunNow: onAutoObserverRunNow
+        )
+      }
+    }
+  }
+
+  /// Scrollback search for a recent prompt, aimed at the chip's terminal:
+  /// pane terminals get their surface focused first so the search binding
+  /// runs against the right pane, not whichever split held focus.
+  private func jumpToPrompt(_ needle: String, in terminal: SessionTerminal) {
+    if terminal.hostTabID != nil, let worktree = resolveWorktree() {
+      let state = terminalManager.state(for: worktree) { false }
+      _ = state.focusSurface(id: terminal.id)
+    }
+    terminalManager.performBindingAction(
+      worktreeID: session.worktreeID,
+      action: "search:\(needle)"
+    )
+  }
+
+  private func badgeTerminal(for surfaceID: UUID) -> SessionTerminal? {
+    if let pane = session.terminal(id: surfaceID), pane.hostTabID != nil, pane.role == .agent {
+      return pane
+    }
+    guard let active = session.terminal(id: activeTerminalID), active.role == .agent,
+      let worktree = resolveWorktree()
+    else { return nil }
+    let state = terminalManager.state(for: worktree) { false }
+    let tabID = TerminalTabID(rawValue: activeTerminalID)
+    guard state.containsTabTree(tabID) else { return nil }
+    if let creationSurfaceID = state.creationSurfaceID(for: tabID) {
+      return creationSurfaceID == surfaceID ? active : nil
+    }
+    // Legacy tab without creation tracking: chip only when unambiguous.
+    return state.splitTree(for: tabID).leaves().count == 1 ? active : nil
+  }
+
+  /// Live activity for one terminal's chip: pane terminals read their own
+  /// surface's busy latch; tab terminals read the tab's fused activity.
+  private func liveActivity(for terminal: SessionTerminal) -> AgentActivity {
+    if terminal.hostTabID != nil {
+      return terminalManager.isAgentSurfaceBusy(
+        worktreeID: session.worktreeID,
+        surfaceID: terminal.id
+      ) ? .working : .idle
+    }
+    return terminalManager.agentActivity(
+      worktreeID: session.worktreeID,
+      tabID: TerminalTabID(rawValue: terminal.id)
+    )
   }
 
   private func captureAgentSurfaceIfNeeded(leaves: [GhosttySurfaceView]? = nil) {
@@ -1092,20 +1166,27 @@ struct FullScreenTerminalView: View {
       // Supacool; each card is one session, and clicking one should
       // show only that session's terminal tree.
       VStack(spacing: 0) {
-        if session.terminals.count > 1 {
+        // Pane terminals render inside their host tab's split tree, so
+        // the strip shows tab terminals only.
+        if session.tabTerminals.count > 1 {
           SessionTerminalTabStrip(
-            terminals: session.terminals,
+            terminals: session.tabTerminals,
             primaryTerminalID: session.primaryTerminalID,
             activeTerminalID: activeTerminalID,
+            activity: { terminal in
+              terminal.role == .agent ? liveActivity(for: terminal) : nil
+            },
             onSelect: onSelectTerminal,
             onClose: onCloseTerminal,
-            onAdd: onAddShellTerminal
+            onAdd: onAddShellTerminal,
+            onConvertToSplit: onConvertTerminalToSplit
           )
         }
         SingleSessionTerminalView(
           worktree: worktree,
           tabID: TerminalTabID(rawValue: activeTerminalID),
-          manager: terminalManager
+          manager: terminalManager,
+          paneBadge: { surfaceID in paneBadgeView(for: surfaceID) }
         )
         .id(activeTerminalID)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

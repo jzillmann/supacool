@@ -198,6 +198,14 @@ struct SupacoolApp: App {
           terminalManager.removeAuxiliaryTerminal(
             sessionID: sessionID, terminalID: terminalID, in: worktree)
         },
+        convertTerminalToSplit: { sessionID, terminalID, worktree in
+          terminalManager.convertTerminalToSplit(
+            sessionID: sessionID, terminalID: terminalID, in: worktree)
+        },
+        convertPaneToTab: { sessionID, paneID, worktree in
+          terminalManager.convertPaneToTab(
+            sessionID: sessionID, paneID: paneID, in: worktree)
+        },
         pruneLayoutsForRemovedSession: { sessionID, worktreeID in
           terminalManager.pruneLayoutsForRemovedSession(
             sessionID: sessionID, worktreeID: worktreeID)

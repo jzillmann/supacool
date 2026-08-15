@@ -39,7 +39,9 @@ struct BoardSessionClassifier {
     let status = BoardSessionStatus.classify(
       session: session,
       tabExists: tabExists,
-      activity: terminalManager.agentActivity(worktreeID: session.worktreeID, tabID: tabID),
+      // Merged across every agent terminal (working wins) — a second agent
+      // split into the session keeps the card In Progress until ALL yield.
+      activity: terminalManager.sessionActivity(for: session),
       waitingExternally: waitingExternally(for: session)
     )
     if !tabExists, reinitializingSessionIDs.contains(session.id) {

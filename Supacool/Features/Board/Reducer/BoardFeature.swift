@@ -594,7 +594,7 @@ struct BoardFeature {
     case setManualStatusOverride(id: AgentSession.ID, status: BoardSessionStatus?)
     case markSessionActivity(id: AgentSession.ID)
     case markSessionCompletedOnce(id: AgentSession.ID)
-    case updateSessionBusyState(id: AgentSession.ID, busy: Bool)
+    case updateSessionBusyState(id: AgentSession.ID, terminalID: UUID, busy: Bool)
     /// Fired by `SessionStateWatcher` on mount + status transitions.
     /// Used as a fallback to clear "Starting session" cards when a
     /// session is already live but never emits busy=true (e.g. shell).
@@ -627,6 +627,22 @@ struct BoardFeature {
     /// its tab. No-op for the primary terminal — the session itself owns
     /// that one; deleting it is "remove session".
     case removeAuxiliaryTerminal(
+      sessionID: AgentSession.ID,
+      terminalID: UUID,
+      repositories: [Repository]
+    )
+    /// Right-click on a strip tab → "Convert to split pane": move the
+    /// aux tab's live surface beside the primary and rewrite its record
+    /// as a pane.
+    case convertTerminalToSplit(
+      sessionID: AgentSession.ID,
+      terminalID: UUID,
+      repositories: [Repository]
+    )
+    /// Right-click on a pane's chip → "Convert to tab": move the pane's
+    /// live surface into its own tab (keeping the surface UUID as its
+    /// identity).
+    case convertPaneToTab(
       sessionID: AgentSession.ID,
       terminalID: UUID,
       repositories: [Repository]
@@ -696,6 +712,10 @@ struct BoardFeature {
     /// built-in resume picker scoped to the session's working directory.
     case resumeDetachedSessionWithPicker(id: AgentSession.ID, repositories: [Repository])
     case resumeFailed(id: AgentSession.ID, message: String)
+    /// Internal: a multi-agent Resume couldn't restore a pane terminal's
+    /// host tab and flattened the pane into its own tab — fix the record
+    /// so hooks and future resumes treat it as a tab terminal.
+    case _paneTerminalPromotedToTab(id: AgentSession.ID, terminalID: UUID)
     /// User confirmed the "convert to worktree" popover on the repo-root
     /// pill in the focused terminal header. Creates the worktree on disk
     /// via git-wt and types `cd '<path>'` into the session's focused
@@ -1418,11 +1438,13 @@ struct BoardFeature {
         state.priorityTerminationAlert = nil
         return .none
 
-      case .updateSessionBusyState(let id, let busy):
+      case .updateSessionBusyState(let id, let terminalID, let busy):
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-          guard sessions[index].lastKnownBusy != busy else { return }
-          sessions[index].updatePrimaryTerminal {
+          guard let terminal = sessions[index].terminal(id: terminalID),
+            terminal.lastKnownBusy != busy
+          else { return }
+          sessions[index].updateTerminal(id: terminalID) {
             $0.lastKnownBusy = busy
             $0.lastBusyTransitionAt = Date()
             $0.lastActivityAt = Date()
@@ -1560,6 +1582,36 @@ struct BoardFeature {
         }
         return .run { _ in
           await terminalClient.removeAuxiliaryTerminal(sessionID, terminalID, worktree)
+        }
+
+      case .convertTerminalToSplit(let sessionID, let terminalID, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }),
+          let repository = repositories.first(where: { $0.id == session.repositoryID })
+        else { return .none }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        // The converted terminal lives inside the primary tab now — the
+        // strip entry disappears, so land the view on the primary.
+        if state.activeTerminalBySession[sessionID] == terminalID {
+          state.activeTerminalBySession[sessionID] = session.primaryTerminalID
+        }
+        return .run { _ in
+          if await !terminalClient.convertTerminalToSplit(sessionID, terminalID, worktree) {
+            boardLogger.warning("convertTerminalToSplit refused for terminal \(terminalID)")
+          }
+        }
+
+      case .convertPaneToTab(let sessionID, let terminalID, let repositories):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }),
+          let repository = repositories.first(where: { $0.id == session.repositoryID })
+        else { return .none }
+        let worktree = Self.resumeWorktree(for: session, repository: repository)
+        return .run { send in
+          if await terminalClient.convertPaneToTab(sessionID, terminalID, worktree) {
+            // The pane became its own tab; show it (its id is the tab id).
+            await send(.selectActiveTerminal(sessionID: sessionID, terminalID: terminalID))
+          } else {
+            boardLogger.warning("convertPaneToTab refused for pane \(terminalID)")
+          }
         }
 
       case .selectActiveTerminal(let sessionID, let terminalID):
@@ -1917,6 +1969,13 @@ struct BoardFeature {
 
       case .restoreShellSessionLayout(let id, let repositories):
         return reduceRestoreShellSessionLayout(state: &state, id: id, repositories: repositories)
+
+      case ._paneTerminalPromotedToTab(let id, let terminalID):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].updateTerminal(id: terminalID) { $0.hostTabID = nil }
+        }
+        return .none
 
       case .resumeFailed(let id, let message):
         state.reinitializingSessionIDs.remove(id)

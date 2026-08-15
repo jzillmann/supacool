@@ -1,31 +1,50 @@
 import Foundation
 
 nonisolated enum SupacoolPaths {
-  /// Relocates all of `~/.supacool` — the isolation lever for preview
-  /// instances (`scripts/preview-isolated.sh`). Needed because redirecting
-  /// `$HOME` doesn't move app file data: on current macOS,
-  /// `homeDirectoryForCurrentUser`/`NSHomeDirectory` resolve via the user
-  /// record and ignore the environment, so a preview launched with a fake
-  /// `$HOME` silently shared — and contended the instance lock of — the real
-  /// app's data.
+  /// Explicit data-directory override, resolved once per process. Set by
+  /// the isolated-preview launcher as a LAUNCH ARGUMENT
+  /// (`-SupacoolDataDirectory <path>`), which UserDefaults surfaces via
+  /// the argument domain.
   ///
-  /// Read from the `-SupacoolDataDirectory <path>` launch argument
-  /// (UserDefaults argument domain). Argv, not an env var, deliberately:
-  /// child shells spawned inside preview terminals must not inherit it.
-  static var dataDirectoryOverride: URL? {
-    guard
-      let path = UserDefaults.standard.string(forKey: "SupacoolDataDirectory"),
-      !path.isEmpty
+  /// Why not the `$HOME` redirect the preview script used to rely on:
+  /// Foundation's `homeDirectoryForCurrentUser` resolves the account
+  /// record and IGNORES the `HOME` environment variable — so "isolated"
+  /// previews silently pointed at the real `~/.supacool` and were then
+  /// (correctly) blocked by `SingleInstanceGuard`. An argv-based override
+  /// actually takes effect, and — unlike an env var — is invisible to
+  /// child shells, so a real Supacool launched from inside a preview
+  /// terminal can't accidentally inherit the sandbox.
+  private static let dataDirectoryOverride: URL? = {
+    guard let raw = UserDefaults.standard.string(forKey: "SupacoolDataDirectory"),
+      !raw.isEmpty
     else { return nil }
-    return URL(filePath: path, directoryHint: .isDirectory)
-  }
+    return URL(
+      filePath: NSString(string: raw).expandingTildeInPath,
+      directoryHint: .isDirectory
+    ).standardizedFileURL
+  }()
 
   static var baseDirectory: URL {
-    if let override = dataDirectoryOverride {
-      return override
+    dataDirectoryOverride
+      ?? FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: ".supacool", directoryHint: .isDirectory)
+  }
+
+  /// The home directory processes SPAWNED BY THIS APP will see: the
+  /// `HOME` environment variable when set (every PTY we create inherits
+  /// it), falling back to the account record. Use this for anything an
+  /// agent or shell reads/writes under `~` — hook settings, `~/.claude`
+  /// state, terminfo — so the app and its children agree on the same
+  /// files. In normal launches this equals `homeDirectoryForCurrentUser`;
+  /// in isolated previews the launcher redirects `HOME` to the sandbox,
+  /// and installing hooks into the real `~/.claude` while the spawned
+  /// claude reads the sandbox one silently breaks all busy/session-id
+  /// tracking (no adoption, no resume — observed 2026-07-28).
+  static var spawnedProcessHomeDirectory: URL {
+    if let home = ProcessInfo.processInfo.environment["HOME"], !home.isEmpty {
+      return URL(filePath: home, directoryHint: .isDirectory).standardizedFileURL
     }
     return FileManager.default.homeDirectoryForCurrentUser
-      .appending(path: ".supacool", directoryHint: .isDirectory)
   }
 
   static var reposDirectory: URL {

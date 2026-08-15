@@ -48,11 +48,13 @@ extension BoardFeature {
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].parked = true
       sessions[index].parkedActive = false
-      sessions[index].updatePrimaryTerminal {
-        $0.lastKnownBusy = false
-        $0.lastBusyTransitionAt = nil
-        $0.lastActivityAt = now
+      // Clear busy on ALL terminals — a parked card must never read
+      // .interrupted off a stale secondary flag after the next quit.
+      for terminalIndex in sessions[index].terminals.indices {
+        sessions[index].terminals[terminalIndex].lastKnownBusy = false
+        sessions[index].terminals[terminalIndex].lastBusyTransitionAt = nil
       }
+      sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
     }
     state.reinitializingSessionIDs.remove(id)
     TranscriptRecorder.shared.append(
@@ -82,10 +84,16 @@ extension BoardFeature {
       reason: .park,
       sessions: state.sessions
     )
+    // Every agent-hosting tab dies, not just the primary — a secondary
+    // agent left running in an aux tab would keep burning tokens on a
+    // "parked" session. Panes die with their host tab.
+    let tabIDsToDestroy = Array(Set([id] + session.agentHostTabIDs))
     let terminalEffect: Effect<Action> = .run { _ in
-      await terminalClient.send(
-        .destroyTab(worktree, tabID: TerminalTabID(rawValue: id))
-      )
+      for tabID in tabIDsToDestroy {
+        await terminalClient.send(
+          .destroyTab(worktree, tabID: TerminalTabID(rawValue: tabID))
+        )
+      }
       if shouldReleaseOwnedProcesses {
         await terminalClient.send(.releaseOwnedProcesses(worktreePath: releasePath))
       }
@@ -159,25 +167,28 @@ extension BoardFeature {
     // would never resolve it — looking like "resume does nothing".
     let worktree = Self.resumeWorktree(for: session, repository: repository)
     // Reset transient status so the card immediately reflects the new run.
+    // ALL terminals: stale `lastKnownBusy` on a secondary would otherwise
+    // re-interrupt the card after the next quit.
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].parked = false
       sessions[index].parkedActive = false
-      sessions[index].updatePrimaryTerminal {
-        $0.lastKnownBusy = false
-        $0.lastBusyTransitionAt = nil
-        $0.lastActivityAt = Date()
+      for terminalIndex in sessions[index].terminals.indices {
+        sessions[index].terminals[terminalIndex].lastKnownBusy = false
+        sessions[index].terminals[terminalIndex].lastBusyTransitionAt = nil
       }
+      sessions[index].updatePrimaryTerminal { $0.lastActivityAt = Date() }
     }
     state.reinitializingSessionIDs.insert(id)
     TranscriptRecorder.shared.append(
       event: .sessionLifecycle(kind: "resumed", context: "captured-id", at: Date()),
       tabID: TerminalTabID(rawValue: id)
     )
+    let bypassPermissions = Self.readBypassPermissions()
     guard
       let resumeCommand = agent.resumeCommand(
         sessionID: sessionID,
-        bypassPermissions: Self.readBypassPermissions(),
+        bypassPermissions: bypassPermissions,
         model: session.model
       )
     else {
@@ -185,12 +196,16 @@ extension BoardFeature {
         .resumeFailed(id: id, message: "\(agent.displayName) doesn't support resume by id.")
       )
     }
+    let secondaryJobs = Self.secondaryResumeJobs(
+      for: session,
+      bypassPermissions: bypassPermissions
+    )
     if focusOnComplete {
       state.focusedSessionID = id
     }
     let command = resumeCommand + "\r"
     return .run {
-      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository, clock, secondaryJobs] send in
       // Guardrail: never launch the resume command into a directory that no
       // longer exists. If this is an owns-worktree session whose checkout was
       // deleted (trash → restore), put the worktree back at its exact original
@@ -220,7 +235,122 @@ extension BoardFeature {
           id: id
         )
       )
+      await Self.resumeSecondaryAgents(
+        jobs: secondaryJobs,
+        sessionID: id,
+        worktree: worktree,
+        terminalClient: terminalClient,
+        clock: clock,
+        send: send
+      )
     }
+  }
+
+  /// One secondary agent terminal to bring back during Resume.
+  struct SecondaryResumeJob: Sendable, Equatable {
+    let terminalID: UUID
+    let hostTabID: UUID?
+    let command: String
+  }
+
+  /// Secondary agents — aux-tab agents and hook-adopted split panes —
+  /// resume alongside the primary, each with its own captured id. No model
+  /// flag: they were hand-typed, and resume continues on the
+  /// conversation's model anyway. Terminals without a captured id or
+  /// without resume support (pi) are skipped; their records survive for a
+  /// later manual re-launch.
+  static func secondaryResumeJobs(
+    for session: AgentSession,
+    bypassPermissions: Bool
+  ) -> [SecondaryResumeJob] {
+    session.agentTerminals
+      .filter { $0.id != session.primaryTerminalID }
+      .compactMap { terminal in
+        guard let nativeID = terminal.agentNativeSessionID, !nativeID.isEmpty,
+          let terminalAgent = terminal.agent,
+          let command = terminalAgent.resumeCommand(
+            sessionID: nativeID,
+            bypassPermissions: bypassPermissions,
+            model: nil
+          )
+        else {
+          boardLogger.warning(
+            "Resume: skipping secondary terminal \(terminal.id) — no captured id or no resume support"
+          )
+          return nil
+        }
+        return SecondaryResumeJob(
+          terminalID: terminal.id,
+          hostTabID: terminal.hostTabID,
+          command: command
+        )
+      }
+  }
+
+  /// The effect-side half of multi-agent Resume: bring each secondary
+  /// back — tab terminals as their own tabs, pane terminals split into
+  /// their host tab (or flattened into a tab when the host didn't come
+  /// back) — then land the user on the primary tab.
+  private static func resumeSecondaryAgents(
+    jobs: [SecondaryResumeJob],
+    sessionID: AgentSession.ID,
+    worktree: Worktree,
+    terminalClient: TerminalClient,
+    clock: any Clock<Duration>,
+    send: Send<Action>
+  ) async {
+    guard !jobs.isEmpty else { return }
+    // Let the primary tab's tree exist before splitting into it, then
+    // stagger spawns like the eager-reattach path (concurrent setuid
+    // `login` forks race in dyld — see the reattach effect).
+    try? await clock.sleep(for: .milliseconds(400))
+    // Tabs before panes so a pane whose host is an aux agent tab finds
+    // its tree.
+    for job in jobs where job.hostTabID == nil {
+      await terminalClient.send(
+        .createTabWithInput(
+          worktree,
+          input: job.command + "\r",
+          runSetupScriptIfNew: false,
+          id: job.terminalID
+        )
+      )
+      try? await clock.sleep(for: .milliseconds(150))
+    }
+    for job in jobs {
+      guard let hostTabID = job.hostTabID else { continue }
+      if terminalClient.tabExists(worktree.id, TerminalTabID(rawValue: hostTabID)) {
+        await terminalClient.send(
+          .splitTabWithInput(
+            worktree,
+            tabID: TerminalTabID(rawValue: hostTabID),
+            direction: .horizontal,
+            input: job.command,
+            id: job.terminalID
+          )
+        )
+      } else {
+        // The host tab didn't come back (snapshot drift) — degrade by
+        // flattening: the pane becomes its own tab rather than losing
+        // the agent. The record is fixed up so future hooks and resumes
+        // treat it as a tab terminal.
+        boardLogger.warning(
+          "Resume: host tab \(hostTabID) missing for pane \(job.terminalID); promoting to tab"
+        )
+        await terminalClient.send(
+          .createTabWithInput(
+            worktree,
+            input: job.command + "\r",
+            runSetupScriptIfNew: false,
+            id: job.terminalID
+          )
+        )
+        await send(._paneTerminalPromotedToTab(id: sessionID, terminalID: job.terminalID))
+      }
+      try? await clock.sleep(for: .milliseconds(150))
+    }
+    // Land the user on the primary tab, not whichever spawned last.
+    await terminalClient.send(.selectTab(worktree, tabID: TerminalTabID(rawValue: sessionID)))
   }
 
   func reduceResumeDetachedSessionWithPicker(
@@ -242,11 +372,11 @@ extension BoardFeature {
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].parked = false
       sessions[index].parkedActive = false
-      sessions[index].updatePrimaryTerminal {
-        $0.lastKnownBusy = false
-        $0.lastBusyTransitionAt = nil
-        $0.lastActivityAt = Date()
+      for terminalIndex in sessions[index].terminals.indices {
+        sessions[index].terminals[terminalIndex].lastKnownBusy = false
+        sessions[index].terminals[terminalIndex].lastBusyTransitionAt = nil
       }
+      sessions[index].updatePrimaryTerminal { $0.lastActivityAt = Date() }
     }
     state.reinitializingSessionIDs.insert(id)
     TranscriptRecorder.shared.append(
@@ -647,6 +777,13 @@ extension BoardFeature {
       else { continue }
       let worktree = Self.resumeWorktree(for: session, repository: repository)
       for terminal in session.auxiliaryTerminals {
+        // Pane terminals live inside another tab's split tree — their id
+        // is a SURFACE UUID and must never be spawned as a tab.
+        if terminal.hostTabID != nil { continue }
+        // Agent auxiliaries with a captured id belong to Resume: an eager
+        // blank shell here would spend the tab id and make the
+        // interrupted agent look like an empty terminal.
+        if terminal.role == .agent, terminal.agentNativeSessionID?.isEmpty == false { continue }
         jobs.append(AuxiliaryReattachJob(worktree: worktree, tabID: terminal.id))
       }
     }

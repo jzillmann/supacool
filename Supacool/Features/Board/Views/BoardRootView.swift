@@ -429,6 +429,24 @@ struct BoardRootView: View {
               repositories: Array(repositories)
             )
           )
+        },
+        onConvertTerminalToSplit: { terminalID in
+          store.send(
+            .convertTerminalToSplit(
+              sessionID: session.id,
+              terminalID: terminalID,
+              repositories: Array(repositories)
+            )
+          )
+        },
+        onConvertPaneToTab: { terminalID in
+          store.send(
+            .convertPaneToTab(
+              sessionID: session.id,
+              terminalID: terminalID,
+              repositories: Array(repositories)
+            )
+          )
         }
       )
       .task(id: session.lastActivityAt) {
@@ -1071,8 +1089,8 @@ struct BoardRootView: View {
         session: session,
         terminalManager: terminalManager,
         classify: { classify($0) },
-        onBusyStateChange: { newBusy in
-          store.send(.updateSessionBusyState(id: session.id, busy: newBusy))
+        onBusyStateChange: { terminalID, newBusy in
+          store.send(.updateSessionBusyState(id: session.id, terminalID: terminalID, busy: newBusy))
         },
         onBusyToIdleTransition: {
           store.send(.markSessionCompletedOnce(id: session.id))

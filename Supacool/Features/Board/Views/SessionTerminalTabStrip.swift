@@ -10,9 +10,14 @@ struct SessionTerminalTabStrip: View {
   let terminals: [SessionTerminal]
   let primaryTerminalID: UUID
   let activeTerminalID: UUID
+  /// Live activity for a terminal's chip dot. Nil = no dot (shells).
+  var activity: ((SessionTerminal) -> AgentActivity?)?
   let onSelect: (UUID) -> Void
   let onClose: (UUID) -> Void
   let onAdd: () -> Void
+  /// Right-click "Convert to split pane" on a non-primary tab — moves
+  /// its terminal into the primary tab's split tree.
+  var onConvertToSplit: ((UUID) -> Void)?
 
   var body: some View {
     HStack(spacing: 6) {
@@ -40,12 +45,19 @@ struct SessionTerminalTabStrip: View {
       onSelect(terminal.id)
     } label: {
       HStack(spacing: 5) {
-        Image(systemName: terminal.role == .agent ? "sparkles" : "terminal.fill")
-          .font(.system(size: 10, weight: .semibold))
-          .accessibilityLabel(terminal.role == .agent ? "Agent terminal" : "Shell terminal")
+        if terminal.role == .agent {
+          AgentIconView(agent: terminal.agent, size: 10)
+        } else {
+          Image(systemName: "terminal.fill")
+            .font(.system(size: 10, weight: .semibold))
+            .accessibilityLabel("Shell terminal")
+        }
         Text(label(for: terminal))
           .font(.caption.weight(.medium))
           .lineLimit(1)
+        if let liveActivity = activity?(terminal) {
+          SessionTerminalBadge.ActivityDot(activity: liveActivity)
+        }
         if !isPrimary {
           Button {
             onClose(terminal.id)
@@ -70,7 +82,21 @@ struct SessionTerminalTabStrip: View {
       )
     }
     .buttonStyle(.plain)
-    .help(isPrimary ? "Agent terminal" : "Shell terminal")
+    .help(
+      terminal.role == .agent
+        ? "\(AgentType.displayName(for: terminal.agent)) terminal"
+        : "Shell terminal"
+    )
+    .contextMenu {
+      if !isPrimary, let onConvertToSplit {
+        Button {
+          onConvertToSplit(terminal.id)
+        } label: {
+          Label("Convert to Split Pane", systemImage: "rectangle.split.2x1")
+        }
+        .help("Move this terminal into the primary tab as a split pane")
+      }
+    }
   }
 
   private var addButton: some View {

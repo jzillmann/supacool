@@ -81,7 +81,10 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
       if session.isRemote {
         return .disconnected
       }
-      return session.lastKnownBusy ? .interrupted : .detached
+      // ANY agent terminal that was mid-turn at quit makes the card
+      // .interrupted — a working secondary must be as visible as a
+      // working primary after a relaunch.
+      return session.anyAgentTerminalKnownBusy ? .interrupted : .detached
     }
     // Manual override wins over auto-classification while the tab is
     // alive. The reducer auto-clears it on the next busy-state transition,
@@ -122,8 +125,10 @@ nonisolated enum BoardSessionStatus: String, Equatable, Sendable, Codable {
     session: AgentSession,
     now: Date
   ) -> Bool {
-    guard !session.lastKnownBusy else { return false }
-    guard let lastBusyTransitionAt = session.lastBusyTransitionAt else { return false }
+    guard !session.anyAgentTerminalKnownBusy else { return false }
+    // Newest busy flip across all agent terminals: any agent's fresh
+    // busy→idle edge holds the card through the grace window.
+    guard let lastBusyTransitionAt = session.latestAgentBusyTransitionAt else { return false }
     return now.timeIntervalSince(lastBusyTransitionAt) < idleRebucketDelay
   }
 }

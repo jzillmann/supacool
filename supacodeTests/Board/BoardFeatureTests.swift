@@ -2270,6 +2270,181 @@ struct BoardFeatureTests {
     #expect(id == sessionID)
   }
 
+  // MARK: - Multi-agent resume
+
+  @Test(.dependencies) func resumeDetachedSessionResumesSecondaryAgents() async throws {
+    let sessionID = UUID()
+    let auxTabID = UUID()
+    let paneID = UUID()
+    let unresumableID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "primary-native-1" }
+    // A codex agent in its own aux tab, an adopted claude pane in the
+    // primary tab, and an agent terminal with no captured id (skipped).
+    session.terminals.append(
+      SessionTerminal(
+        id: auxTabID, role: .agent, agent: .codex, agentNativeSessionID: "codex-native-1"
+      )
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: paneID, role: .agent, hostTabID: sessionID, agent: .claude,
+        agentNativeSessionID: "pane-native-1"
+      )
+    )
+    session.terminals.append(
+      SessionTerminal(id: unresumableID, role: .agent, agent: .claude)
+    )
+    let repository = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = ImmediateClock()
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+      $0.terminalClient.tabExists = { _, _ in true }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repository]))
+    await store.finish()
+
+    let commands = sentCommands.value
+    // Primary first, then the aux tab, then the pane split, then the
+    // final select back to the primary tab.
+    guard commands.count == 4 else {
+      Issue.record("Expected 4 commands, got \(commands)")
+      return
+    }
+    guard case .createTabWithInput(_, let primaryInput, _, let primaryTabID) = commands[0] else {
+      Issue.record("Expected primary createTabWithInput, got \(commands[0])")
+      return
+    }
+    #expect(primaryInput.contains("primary-native-1"))
+    #expect(primaryTabID == sessionID)
+    guard case .createTabWithInput(_, let auxInput, _, let auxID) = commands[1] else {
+      Issue.record("Expected aux createTabWithInput, got \(commands[1])")
+      return
+    }
+    #expect(auxInput.contains("codex-native-1"))
+    #expect(auxID == auxTabID)
+    guard
+      case .splitTabWithInput(_, let hostTabID, _, let paneInput, let paneSurfaceID) = commands[2]
+    else {
+      Issue.record("Expected splitTabWithInput, got \(commands[2])")
+      return
+    }
+    #expect(hostTabID == TerminalTabID(rawValue: sessionID))
+    #expect(paneInput?.contains("pane-native-1") == true)
+    #expect(paneSurfaceID == paneID)
+    guard case .selectTab(_, let selectedTabID) = commands[3] else {
+      Issue.record("Expected selectTab, got \(commands[3])")
+      return
+    }
+    #expect(selectedTabID == TerminalTabID(rawValue: sessionID))
+    // All terminals' stale busy flags were reset.
+    #expect(store.state.sessions[0].anyAgentTerminalKnownBusy == false)
+  }
+
+  @Test(.dependencies) func resumeFlattensPaneWhenHostTabIsMissing() async {
+    let sessionID = UUID()
+    let hostTabID = UUID()
+    let paneID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "primary-native-1" }
+    // Pane hosted by a tab that will NOT come back (e.g. its shell aux
+    // terminal was removed and the snapshot lost).
+    session.terminals.append(
+      SessionTerminal(
+        id: paneID, role: .agent, hostTabID: hostTabID, agent: .claude,
+        agentNativeSessionID: "pane-native-1"
+      )
+    )
+    let repository = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = ImmediateClock()
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+      $0.terminalClient.tabExists = { _, _ in false }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repository]))
+    await store.finish()
+
+    // The pane came back as its own tab under its terminal id…
+    let flattened = sentCommands.value.contains { command in
+      if case .createTabWithInput(_, let input, _, let id) = command {
+        return id == paneID && input.contains("pane-native-1")
+      }
+      return false
+    }
+    #expect(flattened)
+    // …and the record was fixed up to a tab terminal.
+    #expect(store.state.sessions[0].terminal(id: paneID)?.hostTabID == nil)
+  }
+
+  @Test func collectAuxiliaryReattachJobsSkipsPanesAndResumableAgents() {
+    let sessionID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    let shellTabID = UUID()
+    let resumableAgentTabID = UUID()
+    let unresumableAgentTabID = UUID()
+    let paneID = UUID()
+    session.terminals.append(SessionTerminal(id: shellTabID, role: .shell))
+    session.terminals.append(
+      SessionTerminal(
+        id: resumableAgentTabID, role: .agent, agent: .codex, agentNativeSessionID: "codex-1"
+      )
+    )
+    session.terminals.append(
+      SessionTerminal(id: unresumableAgentTabID, role: .agent, agent: .claude)
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: paneID, role: .agent, hostTabID: sessionID, agent: .claude,
+        agentNativeSessionID: "pane-1"
+      )
+    )
+    let repository = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+
+    let jobs = BoardFeature.collectAuxiliaryReattachJobs(
+      sessions: [session],
+      repositories: [repository]
+    )
+    // Shell tab reattaches; agent-without-id reattaches as a shell; the
+    // resumable agent tab belongs to Resume; the pane must never become
+    // a tab.
+    #expect(jobs.map(\.tabID) == [shellTabID, unresumableAgentTabID])
+  }
+
   @Test(.dependencies) func deleteFromTrashFiresCapturedCleanup() async {
     let session = Self.sampleSession(
       repositoryID: "/tmp/repo",
@@ -2442,7 +2617,7 @@ struct BoardFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
+    await store.send(.updateSessionBusyState(id: session.id, terminalID: session.id, busy: true)) {
       $0.$sessions.withLock { sessions in
         sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = true }
         sessions[0].manualStatusOverride = nil
@@ -2460,14 +2635,14 @@ struct BoardFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.updateSessionBusyState(id: session.id, busy: true)) {
+    await store.send(.updateSessionBusyState(id: session.id, terminalID: session.id, busy: true)) {
       $0.$sessions.withLock { sessions in
         sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = true }
         #expect(sessions[0].lastBusyTransitionAt != nil)
       }
     }
 
-    await store.send(.updateSessionBusyState(id: session.id, busy: false)) {
+    await store.send(.updateSessionBusyState(id: session.id, terminalID: session.id, busy: false)) {
       $0.$sessions.withLock { sessions in
         sessions[0].updatePrimaryTerminal { $0.lastKnownBusy = false }
         #expect(sessions[0].lastBusyTransitionAt != nil)
@@ -3560,7 +3735,7 @@ struct BoardFeatureTests {
     // clearance separately.
     store.exhaustivity = .off
 
-    await store.send(.updateSessionBusyState(id: session.id, busy: true))
+    await store.send(.updateSessionBusyState(id: session.id, terminalID: session.id, busy: true))
     #expect(store.state.trayCards.isEmpty)
   }
 
@@ -3580,7 +3755,7 @@ struct BoardFeatureTests {
     }
     store.exhaustivity = .off
 
-    await store.send(.updateSessionBusyState(id: session.id, busy: false))
+    await store.send(.updateSessionBusyState(id: session.id, terminalID: session.id, busy: false))
     #expect(store.state.trayCards == [card])
   }
 

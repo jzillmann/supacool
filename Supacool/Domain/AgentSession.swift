@@ -442,4 +442,102 @@ nonisolated extension AgentSession {
   var lastActivityAt: Date {
     terminals.map(\.lastActivityAt).max() ?? createdAt
   }
+
+  // MARK: Multi-agent accessors
+  //
+  // A session can track several agents at once — the primary, agents in
+  // auxiliary tabs, and hook-adopted agents in split panes. Status and
+  // recovery aggregate over these instead of the primary alone.
+
+  /// Every tracked agent terminal — primary, aux-tab agents, and adopted
+  /// split panes. Shell terminals never appear here.
+  var agentTerminals: [SessionTerminal] {
+    terminals.filter { $0.role == .agent }
+  }
+
+  /// Terminals that ARE Ghostty tabs (pane terminals render inside their
+  /// host tab and are excluded). This is what the tab strip shows.
+  var tabTerminals: [SessionTerminal] {
+    terminals.filter { $0.hostTabID == nil }
+  }
+
+  /// Distinct Ghostty tab ids hosting at least one agent terminal, in
+  /// terminal order. A pane terminal contributes its host tab; the tab and
+  /// a pane inside it dedupe to one entry. Drives status aggregation.
+  var agentHostTabIDs: [UUID] {
+    var seen = Set<UUID>()
+    return agentTerminals.compactMap { terminal in
+      let tabID = terminal.hostTabID ?? terminal.id
+      return seen.insert(tabID).inserted ? tabID : nil
+    }
+  }
+
+  /// The terminals whose busy state the board watches and persists: every
+  /// agent terminal PLUS the primary even when it is a shell — legacy
+  /// shell-mode sessions classified `.interrupted` off the primary's busy
+  /// bit long before multi-agent tracking, and keep doing so.
+  var busyTrackedTerminals: [SessionTerminal] {
+    terminals.filter { $0.role == .agent || $0.id == primaryTerminalID }
+  }
+
+  /// True when ANY busy-tracked terminal was mid-turn at the last persist.
+  /// Feeds the `.interrupted` classification after a relaunch.
+  var anyAgentTerminalKnownBusy: Bool {
+    busyTrackedTerminals.contains { $0.lastKnownBusy }
+  }
+
+  /// Newest busy-state flip across all busy-tracked terminals. Powers the
+  /// brief idle-rebucket grace window in the board classifier.
+  var latestAgentBusyTransitionAt: Date? {
+    busyTrackedTerminals.compactMap(\.lastBusyTransitionAt).max()
+  }
+
+  // MARK: Tab ⇄ pane conversion
+
+  /// Rewrite a TAB terminal's record as a PANE of `hostTabID` after its
+  /// live surface was moved into that tab's split tree. The record's id
+  /// changes to the surface UUID (a pane's identity), so a new value is
+  /// swapped in preserving every tracked field. Refuses the primary and
+  /// pane terminals. Pure record surgery — the caller moves the surface.
+  @discardableResult
+  mutating func convertTabTerminalToPane(
+    terminalID: UUID,
+    surfaceID: UUID,
+    hostTabID: UUID
+  ) -> Bool {
+    guard terminalID != primaryTerminalID,
+      let index = terminals.firstIndex(where: { $0.id == terminalID }),
+      terminals[index].hostTabID == nil
+    else { return false }
+    let old = terminals[index]
+    terminals[index] = SessionTerminal(
+      id: surfaceID,
+      role: old.role,
+      hostTabID: hostTabID,
+      agent: old.agent,
+      initialPrompt: old.initialPrompt,
+      agentNativeSessionID: old.agentNativeSessionID,
+      displayName: old.displayName,
+      workingDirectoryHint: old.workingDirectoryHint,
+      createdAt: old.createdAt,
+      lastActivityAt: old.lastActivityAt,
+      lastKnownBusy: old.lastKnownBusy,
+      hasObservedInitialAgentEvent: old.hasObservedInitialAgentEvent,
+      hasCompletedAtLeastOnce: old.hasCompletedAtLeastOnce,
+      lastBusyTransitionAt: old.lastBusyTransitionAt
+    )
+    return true
+  }
+
+  /// Promote a PANE terminal to a TAB after its surface moved into a
+  /// fresh tab carrying the surface's UUID as its tab id — the record id
+  /// already matches, so only `hostTabID` clears.
+  @discardableResult
+  mutating func convertPaneTerminalToTab(paneID: UUID) -> Bool {
+    guard let index = terminals.firstIndex(where: { $0.id == paneID }),
+      terminals[index].hostTabID != nil
+    else { return false }
+    terminals[index].hostTabID = nil
+    return true
+  }
 }

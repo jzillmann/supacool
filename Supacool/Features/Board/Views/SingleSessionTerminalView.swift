@@ -16,6 +16,9 @@ struct SingleSessionTerminalView: View {
   let worktree: Worktree
   let tabID: TerminalTabID
   let manager: WorktreeTerminalManager
+  /// Optional per-pane chip (agent icon + activity dot) rendered on each
+  /// split leaf. Nil result = no chip for that surface.
+  var paneBadge: ((UUID) -> AnyView?)?
 
   @State private var windowActivity = WindowActivityState.inactive
   /// Claim on the shared `WorktreeTerminalState` proving this instance is
@@ -32,7 +35,8 @@ struct SingleSessionTerminalView: View {
         TerminalSplitTreeAXContainer(
           tree: state.splitTree(for: tabID),
           activeSurfaceID: state.activeSurfaceID(for: tabID),
-          unfocusedSplitOverlay: unfocusedSplitOverlay
+          unfocusedSplitOverlay: unfocusedSplitOverlay,
+          paneBadge: paneBadge
         ) { operation in
           state.performSplitOperation(operation, in: tabID)
         }

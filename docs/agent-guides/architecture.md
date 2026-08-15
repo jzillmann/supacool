@@ -32,7 +32,8 @@ AgentSession (Codable, persisted)
 └── primaryTerminalID: UUID        — which terminal drives card status; defaults to terminals[0].id
 
 SessionTerminal (Codable, embedded in AgentSession.terminals)
-├── id: UUID                       — the Ghostty TerminalTabID.rawValue
+├── id: UUID                       — the Ghostty TerminalTabID.rawValue (or the SURFACE UUID when hostTabID is set)
+├── hostTabID: UUID?               — non-nil ⇒ this terminal is a split PANE inside that tab (hook-adopted agent)
 ├── role: SessionTerminalRole      — .agent | .shell
 ├── agent: AgentType?              — nil for .shell
 ├── initialPrompt: String          — verbatim, used for Rerun
@@ -47,7 +48,9 @@ SessionTerminal (Codable, embedded in AgentSession.terminals)
 
 **Key invariant**: `session.id == session.primaryTerminalID == primaryTerminal.id == its Ghostty tab id`. Newly created sessions always satisfy this; the model permits decoupling in the future but no code path does so today. Don't break it casually.
 
-`AgentSession` exposes read-only forwarders (`session.agent`, `session.initialPrompt`, `session.lastKnownBusy`, `session.lastActivityAt`, …) that delegate to the primary terminal so the broad read surface stays terse. Writes must go through `session.updatePrimaryTerminal { … }` or `session.updateTerminal(id:) { … }` — there are no setters on the forwarders. Status (in-progress / waiting on me) is derived from the PRIMARY terminal only; shells in the composition appear as a `+N sh` pill on the card but never promote status.
+`AgentSession` exposes read-only forwarders (`session.agent`, `session.initialPrompt`, `session.lastKnownBusy`, `session.lastActivityAt`, …) that delegate to the primary terminal so the broad read surface stays terse. Writes must go through `session.updatePrimaryTerminal { … }` or `session.updateTerminal(id:) { … }` — there are no setters on the forwarders.
+
+**Multi-agent tracking (since 2026-07)**: a session can track several agents at once — the primary, agents in auxiliary tabs, and agents the user hand-types into split panes (auto-adopted from their first hook event; see [`hook-protocol.md`](./hook-protocol.md) § Consumption). Aggregating accessors: `agentTerminals`, `tabTerminals` (what the tab strip shows — panes render inside their host tab), `agentHostTabIDs`, `anyAgentTerminalKnownBusy`, `latestAgentBusyTransitionAt`, `busyTrackedTerminals`. Status merges across ALL agent terminals under **working wins** (`AgentActivity.mergedWorkingWins` + `WorktreeTerminalManager.sessionActivity(for:)`): the card stays In Progress while ANY agent works and only lands in Wants Input / Waiting on Me once no agent is mid-turn; any agent's persisted `lastKnownBusy` makes a dead card `.interrupted`. Shells never promote status (they appear as a `+N sh` pill). Resume brings back ALL agents with captured ids — tab terminals via `createTabWithInput`, pane terminals split back into their host tab under their original surface UUID (`.splitTabWithInput`) so hooks re-attach, flattening to a tab when the host is gone. The per-terminal agent chip (icon + activity dot) lives on each pane / tab-strip label — `SessionTerminalBadge` — not in the session header.
 
 ## Only the main worktree is in state
 

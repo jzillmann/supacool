@@ -28,6 +28,17 @@ struct TerminalClient {
   /// terminal (delete the session instead).
   var removeAuxiliaryTerminal: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Void
 
+  /// Supacool: move an auxiliary TAB terminal's live surface into the
+  /// primary tab's split tree and rewrite its record as a pane. Returns
+  /// false when the terminal can't convert (primary, multi-leaf tab, no
+  /// live tree).
+  var convertTerminalToSplit: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Bool
+
+  /// Supacool: move an adopted PANE terminal's live surface out into its
+  /// own tab (keeping the surface UUID as the tab id) and clear the
+  /// record's `hostTabID`.
+  var convertPaneToTab: @MainActor @Sendable (AgentSession.ID, UUID, Worktree) -> Bool
+
   /// Supacool: drop a deleted session's TabSnapshots from layouts.json
   /// for the given worktree. Other sessions sharing the worktree keep
   /// their tabs. No-op if no snapshot exists for the worktree.
@@ -61,6 +72,13 @@ struct TerminalClient {
     case splitSurface(
       Worktree, tabID: TerminalTabID, surfaceID: UUID, direction: SplitDirection,
       input: String?, id: UUID? = nil)
+    /// Supacool: split the given tab's FOCUSED surface (no anchor surface
+    /// required — reducers don't know one) and type `input` into the new
+    /// pane. Used by multi-agent Resume to recreate adopted agent panes;
+    /// `id` becomes the new surface's UUID so hook events re-attach to the
+    /// pane's persisted `SessionTerminal`.
+    case splitTabWithInput(
+      Worktree, tabID: TerminalTabID, direction: SplitDirection, input: String?, id: UUID)
     case destroyTab(Worktree, tabID: TerminalTabID)
     case destroySurface(Worktree, tabID: TerminalTabID, surfaceID: UUID)
     case prune(Set<Worktree.ID>)
@@ -110,6 +128,8 @@ extension TerminalClient: DependencyKey {
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },
+    convertTerminalToSplit: { _, _, _ in false },
+    convertPaneToTab: { _, _, _ in false },
     pruneLayoutsForRemovedSession: { _, _ in }
   )
 
@@ -122,6 +142,8 @@ extension TerminalClient: DependencyKey {
     hookSocketPath: { nil },
     addSessionShellTerminal: { _, _ in nil },
     removeAuxiliaryTerminal: { _, _, _ in },
+    convertTerminalToSplit: { _, _, _ in false },
+    convertPaneToTab: { _, _, _ in false },
     pruneLayoutsForRemovedSession: { _, _ in }
   )
 }

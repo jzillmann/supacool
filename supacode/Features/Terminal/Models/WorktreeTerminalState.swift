@@ -55,6 +55,12 @@ final class WorktreeTerminalState {
   /// PID keeps the surface busy. Legacy hooks without a PID share a
   /// sentinel slot (`0`) so paired on/off calls still balance.
   private var busyPIDsBySurface: [UUID: Set<Int32>] = [:]
+  /// The root surface each tab was created with — where Supacool typed the
+  /// launch command. Hook events arriving from a DIFFERENT surface of the
+  /// same tab come from a split pane, which is how the manager tells "the
+  /// tab's own agent" apart from "an agent the user started in a split"
+  /// (auto-adoption). Restored tabs record their layout's first leaf.
+  private var creationSurfaceIDByTab: [TerminalTabID: UUID] = [:]
   #if DEBUG
     private var testSurfaceIDsByTab: [TerminalTabID: Set<UUID>] = [:]
     private var testBusySurfaceIDsByTab: [TerminalTabID: Set<UUID>] = [:]
@@ -82,6 +88,12 @@ final class WorktreeTerminalState {
   /// the user is engaging with again and to optimistically mark submitted
   /// prompts as busy while waiting for agent hooks to catch up.
   var onInputObserved: ((TerminalTabID, String) -> Void)?
+  /// Fires when the user explicitly closes a split surface whose process
+  /// is still alive, and the host tab survives it. Supacool prunes the
+  /// matching adopted pane terminal — closing a live pane is the explicit
+  /// "I'm done with this agent" gesture. Process-exit closes and tab
+  /// teardown do NOT fire this: those panes stay resumable.
+  var onSurfaceClosed: ((TerminalTabID, UUID) -> Void)?
 
   init(
     runtime: GhosttyRuntime,
@@ -528,6 +540,56 @@ final class WorktreeTerminalState {
     emitTaskStatusIfChanged()
   }
 
+  /// Single-surface variant of `clearAgentBusy(tabID:)`. Awaiting-input and
+  /// Stop hooks identify the reporting surface, and with two agents split
+  /// inside one tab a tab-wide reset would wipe the *sibling* agent's busy
+  /// latch — its "working" state must survive another pane's yield.
+  func clearAgentBusy(surfaceID: UUID, tabID: TerminalTabID) {
+    #if DEBUG
+      if testSurfaceIDsByTab[tabID]?.contains(surfaceID) == true {
+        testBusySurfaceIDsByTab[tabID]?.remove(surfaceID)
+        if testBusySurfaceIDsByTab[tabID]?.isEmpty == true {
+          testBusySurfaceIDsByTab.removeValue(forKey: tabID)
+        }
+        tabManager.updateDirty(tabID, isDirty: isTabBusy(tabID))
+        emitTaskStatusIfChanged()
+        return
+      }
+    #endif
+    busyPIDsBySurface.removeValue(forKey: surfaceID)
+    surfaces[surfaceID]?.bridge.state.agentBusy = false
+    tabManager.updateDirty(tabID, isDirty: isTabBusy(tabID))
+    emitTaskStatusIfChanged()
+  }
+
+  /// Per-surface busy: the surface's agent-busy hook latch or a running
+  /// OSC progress state. The pane-terminal mirror of `isTabBusy` — used to
+  /// persist each adopted agent pane's own busy bit and to color its chip.
+  func isSurfaceBusy(_ surfaceID: UUID) -> Bool {
+    #if DEBUG
+      if testBusySurfaceIDsByTab.values.contains(where: { $0.contains(surfaceID) }) {
+        return true
+      }
+    #endif
+    if busyPIDsBySurface[surfaceID]?.isEmpty == false { return true }
+    guard let surface = surfaces[surfaceID] else { return false }
+    return surface.bridge.state.agentBusy
+      || isRunningProgressState(surface.bridge.state.progressState)
+  }
+
+  /// True when any surface in the tab has its agent-busy HOOK latch set —
+  /// the authoritative "an agent in this tab is mid-turn" bit, excluding
+  /// OSC progress-state (long-running shell commands). Used by activity
+  /// classification so a working agent outranks a sibling pane's
+  /// awaiting-input signal (working wins).
+  func hasAgentBusyLatch(_ tabId: TerminalTabID) -> Bool {
+    #if DEBUG
+      if testBusySurfaceIDsByTab[tabId]?.isEmpty == false { return true }
+    #endif
+    guard let tree = trees[tabId] else { return false }
+    return tree.leaves().contains { $0.bridge.state.agentBusy }
+  }
+
   func focusSelectedTab() {
     guard let tabId = tabManager.selectedTabId else { return }
     focusSurface(in: tabId)
@@ -853,8 +915,29 @@ final class WorktreeTerminalState {
     let tree = SplitTree(view: surface)
     trees[tabId] = tree
     focusedSurfaceIdByTab[tabId] = surface.id
+    creationSurfaceIDByTab[tabId] = surface.id
     return tree
   }
+
+  /// The surface a tab was created with, or nil for tabs that predate the
+  /// tracking (or DEBUG test tabs registered without one).
+  func creationSurfaceID(for tabId: TerminalTabID) -> UUID? {
+    creationSurfaceIDByTab[tabId]
+  }
+
+  #if DEBUG
+    /// Test hook: mark a registered test surface as the tab's creation
+    /// surface so resolution tests can distinguish root from pane hooks.
+    func registerTestCreationSurface(_ surfaceID: UUID, tabID: TerminalTabID) {
+      creationSurfaceIDByTab[tabID] = surfaceID
+    }
+
+    /// Test hook: add an extra surface to an existing test tab, emulating
+    /// a split pane for hook-resolution and busy-latch tests.
+    func registerTestSurface(_ surfaceID: UUID, tabID: TerminalTabID) {
+      testSurfaceIDsByTab[tabID, default: []].insert(surfaceID)
+    }
+  #endif
 
   /// Split the focused surface in `tabId` by `direction`. The new surface
   /// inherits the working directory and environment from the source (i.e.
@@ -865,12 +948,93 @@ final class WorktreeTerminalState {
   @discardableResult
   func splitFocusedSurface(
     in tabId: TerminalTabID,
-    direction: GhosttySplitAction.NewDirection
+    direction: GhosttySplitAction.NewDirection,
+    newSurfaceID: UUID? = nil
   ) -> UUID? {
     guard let focusedId = focusedSurfaceIdByTab[tabId] else { return nil }
-    let newID = UUID()
+    // A caller-chosen surface UUID lets multi-agent Resume recreate an
+    // adopted pane under its persisted terminal id, so hook events
+    // re-attach to the same SessionTerminal.
+    let newID = newSurfaceID ?? UUID()
     let splitSucceeded = performSplitAction(.newSplit(direction: direction), for: focusedId, newSurfaceID: newID)
     return splitSucceeded ? newID : nil
+  }
+
+  /// Move a single-leaf tab's LIVE surface into `targetTab` as a split of
+  /// its focused leaf, then dismantle the now-empty source tab's chrome
+  /// WITHOUT closing the surface. Returns the moved surface's UUID.
+  /// Supacool "convert tab → split pane". Multi-leaf source tabs are
+  /// refused — moving a whole subtree is out of scope.
+  func moveSingleLeafTab(
+    _ sourceTab: TerminalTabID,
+    intoTab targetTab: TerminalTabID,
+    direction: GhosttySplitAction.NewDirection
+  ) -> UUID? {
+    guard sourceTab != targetTab,
+      let sourceTree = trees[sourceTab],
+      sourceTree.leaves().count == 1,
+      let surface = sourceTree.leaves().first,
+      let targetTree = trees[targetTab]
+    else { return nil }
+    let anchorID = focusedSurfaceIdByTab[targetTab] ?? targetTree.leaves().last?.id
+    guard let anchorID, let anchor = surfaces[anchorID] else { return nil }
+    do {
+      let newTree = try targetTree.inserting(
+        view: surface,
+        at: anchor,
+        direction: mapSplitDirection(direction)
+      )
+      updateTree(newTree, for: targetTab)
+    } catch {
+      terminalStateLogger.warning(
+        "moveSingleLeafTab: failed to insert \(surface.id) into \(targetTab.rawValue): \(error)"
+      )
+      return nil
+    }
+    trees.removeValue(forKey: sourceTab)
+    focusedSurfaceIdByTab.removeValue(forKey: sourceTab)
+    tabIsRunningById.removeValue(forKey: sourceTab)
+    creationSurfaceIDByTab.removeValue(forKey: sourceTab)
+    tabManager.closeTab(sourceTab)
+    updateShouldHideTabBar()
+    selectTab(targetTab)
+    focusSurface(surface, in: targetTab)
+    return surface.id
+  }
+
+  /// Move a split pane's LIVE surface out into its own fresh tab (id ==
+  /// the surface's UUID, so the session-terminal record keeps its
+  /// identity). The source tab keeps its remaining leaves. Supacool
+  /// "convert split pane → tab". Refused for a tab's last leaf.
+  func moveSurfaceToNewTab(surfaceID: UUID, title: String) -> Bool {
+    guard let surface = surfaces[surfaceID],
+      let sourceTab = tabId(containing: surfaceID),
+      let sourceTree = trees[sourceTab],
+      sourceTree.leaves().count > 1,
+      let node = sourceTree.find(id: surfaceID),
+      // The new tab MUST carry the surface's UUID (hook resolution and the
+      // session-terminal record hang off it) — bail instead of letting
+      // createTab regenerate on a (theoretical) collision.
+      !tabManager.tabs.contains(where: { $0.id.rawValue == surfaceID })
+    else { return false }
+    let remaining = sourceTree.removing(node)
+    updateTree(remaining, for: sourceTab)
+    if focusedSurfaceIdByTab[sourceTab] == surfaceID {
+      focusedSurfaceIdByTab[sourceTab] = remaining.leaves().first?.id
+    }
+    let newTab = tabManager.createTab(
+      title: title,
+      icon: "terminal",
+      id: surfaceID
+    )
+    trees[newTab] = SplitTree(view: surface)
+    focusedSurfaceIdByTab[newTab] = surfaceID
+    creationSurfaceIDByTab[newTab] = surfaceID
+    tabIsRunningById[newTab] = false
+    updateShouldHideTabBar()
+    onTabCreated?()
+    selectTab(newTab)
+    return true
   }
 
   func performSplitAction(
@@ -1021,6 +1185,7 @@ final class WorktreeTerminalState {
     trees.removeAll()
     focusedSurfaceIdByTab.removeAll()
     tabIsRunningById.removeAll()
+    creationSurfaceIDByTab.removeAll()
     #if DEBUG
       testSurfaceIDsByTab.removeAll()
       testBusySurfaceIDsByTab.removeAll()
@@ -1230,6 +1395,7 @@ final class WorktreeTerminalState {
     let tree = SplitTree(view: surface)
     trees[tabId] = tree
     focusedSurfaceIdByTab[tabId] = surface.id
+    creationSurfaceIDByTab[tabId] = surface.id
     tabIsRunningById[tabId] = false
 
     // Recursively restore splits.
@@ -1739,6 +1905,7 @@ final class WorktreeTerminalState {
     }
     focusedSurfaceIdByTab.removeValue(forKey: tabId)
     tabIsRunningById.removeValue(forKey: tabId)
+    creationSurfaceIDByTab.removeValue(forKey: tabId)
     #if DEBUG
       testSurfaceIDsByTab.removeValue(forKey: tabId)
       testBusySurfaceIDsByTab.removeValue(forKey: tabId)
@@ -1860,7 +2027,7 @@ final class WorktreeTerminalState {
     }
   }
 
-  private func handleCloseRequest(for view: GhosttySurfaceView, processAlive _: Bool) {
+  private func handleCloseRequest(for view: GhosttySurfaceView, processAlive: Bool) {
     guard surfaces[view.id] != nil else { return }
     guard let tabId = tabId(containing: view.id), let tree = trees[tabId] else {
       view.closeSurface()
@@ -1879,6 +2046,9 @@ final class WorktreeTerminalState {
     let newTree = tree.removing(node)
     view.closeSurface()
     cleanupSurfaceState(for: view.id)
+    if !newTree.isEmpty, processAlive {
+      onSurfaceClosed?(tabId, view.id)
+    }
     if newTree.isEmpty {
       // Closing the tab's last surface *is* closing the tab, so hand off to
       // `closeTab` rather than re-implementing it. The hand-rolled teardown
