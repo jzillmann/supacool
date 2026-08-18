@@ -130,6 +130,9 @@ final class WorktreeTerminalState {
   /// hosting the surfaces (`SingleSessionTerminalView`), which calls
   /// `confirmPendingTerminalClose` / `cancelPendingTerminalClose`.
   private(set) var pendingTerminalClose: PendingTerminalClose?
+  /// Surfaces whose close the app itself ordered, so `handleCloseRequest` lets
+  /// them through without asking. See `closeSurface(id:)`.
+  private var preauthorizedCloseSurfaceIDs: Set<UUID> = []
 
   init(
     runtime: GhosttyRuntime,
@@ -845,12 +848,20 @@ final class WorktreeTerminalState {
   }
 
   @discardableResult
+  /// Programmatic close of a specific pane — the ⌘E shell-split toggle and the
+  /// `destroySurface` deeplink. Skips the live-process confirmation: the caller
+  /// is not the user reaching for a close key (the deeplink runs its own
+  /// confirmation, the toggle is a deliberate "collapse that pane"), and with
+  /// no one watching for an alert the close would otherwise just never happen.
+  /// The close still round-trips through Ghostty, so the authorization is
+  /// recorded per surface and consumed by `handleCloseRequest`.
   func closeSurface(id surfaceID: UUID) -> Bool {
     guard let surface = surfaces[surfaceID] else {
       terminalStateLogger.warning(
         "closeSurface: surface \(surfaceID) not found. Known: \(surfaces.keys.map(\.uuidString))")
       return false
     }
+    preauthorizedCloseSurfaceIDs.insert(surfaceID)
     surface.performBindingAction("close_surface")
     return true
   }
@@ -1968,6 +1979,7 @@ final class WorktreeTerminalState {
     if pendingTerminalClose?.target == .surface(surfaceID) {
       pendingTerminalClose = nil
     }
+    preauthorizedCloseSurfaceIDs.remove(surfaceID)
     recentHookBySurfaceID.removeValue(forKey: surfaceID)
     busyPIDsBySurface.removeValue(forKey: surfaceID)
     surfaces.removeValue(forKey: surfaceID)
@@ -2110,7 +2122,10 @@ final class WorktreeTerminalState {
     // `confirm-close-surface` config, and on that setting's default it is
     // false while the shell just sits at a prompt. This flag used to be
     // discarded, so a close request killed a running agent on the spot.
-    if processAlive, let tabId = tabId(containing: view.id) {
+    if preauthorizedCloseSurfaceIDs.remove(view.id) == nil,
+      processAlive,
+      let tabId = tabId(containing: view.id)
+    {
       pendingTerminalClose = PendingTerminalClose(
         tabID: tabId,
         target: .surface(view.id),

@@ -221,10 +221,14 @@ Rules for anything that closes a terminal:
 
 - **User-initiated closes go through the `request*` entry points** — `requestCloseTab` for a
   tab, the `processAlive` branch of `handleCloseRequest` for a pane. They confirm first.
-- **Programmatic teardown keeps calling `closeTab` / `performCloseRequest` directly.** Park,
-  remove, blocking-script cleanup and layout restore are not the user reaching for ⌘W; they
-  have already asked, or the question makes no sense. Routing them through the confirmation
-  would deadlock a headless path behind an alert nobody is looking at.
+- **Programmatic teardown bypasses the confirmation.** Park, remove, blocking-script cleanup
+  and layout restore are not the user reaching for ⌘W; they have already asked, or the
+  question makes no sense. Routing them through the confirmation would strand a headless path
+  behind an alert nobody is watching for — it would not close, and nothing would say why.
+  Tab-level callers just call `closeTab`. `closeSurface(id:)` (the ⌘E split toggle, the
+  `destroySurface` deeplink) cannot, because the close round-trips through Ghostty before
+  coming back as a request, so it records the surface in `preauthorizedCloseSurfaceIDs` and
+  `handleCloseRequest` consumes that instead of asking.
 - **A pending close is state, so it can go stale.** `cleanupSurfaceState` drops it when its
   surface disappears and `closeTab` drops it when its tab does — otherwise a process that
   exits on its own while the dialog is up leaves a question on screen about a terminal that

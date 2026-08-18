@@ -470,6 +470,37 @@ struct WorktreeTerminalManagerTests {
     #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
   }
 
+  // The app's own `closeSurface(id:)` — the ⌘E split toggle and the
+  // destroySurface deeplink — must not stall behind an alert nobody is
+  // watching for. It closes even with a live process.
+  @Test func programmaticCloseSurfaceSkipsTheConfirmation() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+    #expect(state.performSplitAction(.newSplit(direction: .right), for: surface.id))
+
+    guard let split = state.splitTree(for: tabID).leaves().first(where: { $0.id != surface.id }) else {
+      Issue.record("Expected a split surface")
+      return
+    }
+
+    // Stands in for Ghostty's round trip: performBindingAction can't reach a
+    // real surface here, so replay the callback the app would receive.
+    #expect(state.closeSurface(id: split.id))
+    split.bridge.onCloseRequest?(true)
+
+    #expect(state.pendingTerminalClose == nil)
+    #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
+  }
+
   // ⌘⌥W (Ghostty `close_tab`) is the other way to lose a session by keystroke,
   // so it asks on the same terms.
   @Test func requestCloseTabAsksOnlyWhenAPaneIsBusy() {
