@@ -44,7 +44,7 @@ xcodebuild test -project supacool.xcodeproj -scheme supacool \
   -skipMacroValidation
 ```
 
-If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to missing Metal Toolchain`: the Makefile already passes `-Dxcframework-target=native` to keep the ghostty build macOS-only. If you still hit it, the fallback is `xcodebuild -downloadComponent MetalToolchain` (~1GB one-time). See [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md).
+If `build-ghostty-xcframework` fails with `cannot execute tool 'metal' due to missing Metal Toolchain`, run `xcodebuild -downloadComponent MetalToolchain` (~690MB, one-time, machine-wide). The Metal Toolchain is a hard prerequisite for the **macOS** build — ghostty compiles `shaders.metal` for the native slice — so no zig flag avoids it. See [`docs/agent-guides/build-and-run.md`](./docs/agent-guides/build-and-run.md).
 
 ### Previewing a branch as a second instance
 
