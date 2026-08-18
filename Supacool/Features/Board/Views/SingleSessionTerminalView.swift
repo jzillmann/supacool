@@ -50,6 +50,7 @@ struct SingleSessionTerminalView: View {
         state.syncFocus(windowIsKey: activity.isKeyWindow, windowIsVisible: activity.isVisible)
       }
     )
+    .modifier(PendingTerminalCloseAlert(state: state, tabID: tabID))
     .onAppear {
       sessionViewToken = state.claimSessionView()
       // Align the worktree state's selected tab to the session's tab so
@@ -121,5 +122,47 @@ struct SingleSessionTerminalView: View {
       )
     }
     return windowActivity
+  }
+}
+
+/// Confirmation for a close the user asked for while a process was still
+/// running. Lives here because this is the only view that hosts live
+/// surfaces (the full-screen session view and the blocking-script sheet both
+/// render through it), so the question is always asked next to the terminal
+/// it is about.
+///
+/// Scoped to `tabID`: one `WorktreeTerminalState` can back several tabs, and
+/// only the view showing the affected one should put up the alert.
+private struct PendingTerminalCloseAlert: ViewModifier {
+  let state: WorktreeTerminalState
+  let tabID: TerminalTabID
+
+  private var pending: PendingTerminalClose? {
+    guard let pending = state.pendingTerminalClose, pending.tabID == tabID else { return nil }
+    return pending
+  }
+
+  func body(content: Content) -> some View {
+    content.alert(
+      pending?.closesTab == true ? "Close this terminal?" : "Close this pane?",
+      isPresented: Binding(
+        get: { pending != nil },
+        set: { if !$0 { state.cancelPendingTerminalClose() } }
+      ),
+      presenting: pending
+    ) { _ in
+      Button("Close", role: .destructive) {
+        state.confirmPendingTerminalClose()
+      }
+      Button("Cancel", role: .cancel) {
+        state.cancelPendingTerminalClose()
+      }
+    } message: { pending in
+      Text(
+        pending.closesTab
+          ? "A process is still running here. Closing ends it — anything it hasn't saved is lost."
+          : "A process is still running in this pane. Closing ends it."
+      )
+    }
   }
 }

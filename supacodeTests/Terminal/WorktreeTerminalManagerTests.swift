@@ -368,6 +368,175 @@ struct WorktreeTerminalManagerTests {
     #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
   }
 
+  // A close request while the child process is still alive must ask first.
+  // Ghostty passes `processAlive: true` for exactly that case; discarding it
+  // is what let ⌘W silently kill a running agent.
+  @Test func closeRequestWithLiveProcessWaitsForConfirmation() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+
+    surface.bridge.onCloseRequest?(true)
+
+    #expect(state.pendingTerminalClose?.target == .surface(surface.id))
+    #expect(state.pendingTerminalClose?.closesTab == true)
+    // Nothing torn down yet.
+    #expect(state.tabManager.tabs.contains { $0.id == tabID })
+    #expect(state.containsTabTree(tabID))
+  }
+
+  @Test func confirmingPendingCloseTearsTheTabDown() async {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+    let stream = manager.eventStream()
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+
+    surface.bridge.onCloseRequest?(true)
+    state.confirmPendingTerminalClose()
+
+    let event = await nextEvent(stream) { event in
+      if case .tabClosed = event { return true }
+      return false
+    }
+
+    #expect(event == .tabClosed(worktreeID: worktree.id))
+    #expect(state.pendingTerminalClose == nil)
+    #expect(state.tabManager.tabs.contains { $0.id == tabID } == false)
+  }
+
+  @Test func cancellingPendingCloseKeepsTheTerminal() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+
+    surface.bridge.onCloseRequest?(true)
+    state.cancelPendingTerminalClose()
+
+    #expect(state.pendingTerminalClose == nil)
+    #expect(state.tabManager.tabs.contains { $0.id == tabID })
+    #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
+  }
+
+  // Losing one pane of a split is a smaller deal than losing the tab, and the
+  // confirmation says so — but it still asks.
+  @Test func closingALivePaneAsksAndReportsItDoesNotCloseTheTab() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+    #expect(state.performSplitAction(.newSplit(direction: .right), for: surface.id))
+
+    guard let split = state.splitTree(for: tabID).leaves().first(where: { $0.id != surface.id }) else {
+      Issue.record("Expected a split surface")
+      return
+    }
+
+    split.bridge.onCloseRequest?(true)
+    #expect(state.pendingTerminalClose?.closesTab == false)
+
+    state.confirmPendingTerminalClose()
+    #expect(state.tabManager.tabs.contains { $0.id == tabID })
+    #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
+  }
+
+  // ⌘⌥W (Ghostty `close_tab`) is the other way to lose a session by keystroke,
+  // so it asks on the same terms.
+  @Test func requestCloseTabAsksOnlyWhenAPaneIsBusy() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let idleTab = state.createTab(),
+      let busyTab = state.createTab(focusing: false),
+      let idleSurface = state.splitTree(for: idleTab).root?.leftmostLeaf(),
+      let busySurface = state.splitTree(for: busyTab).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected two tabs")
+      return
+    }
+
+    // Both branches are driven explicitly: a surface spawned in the test
+    // harness has not reached a shell prompt yet, so Ghostty's real answer is
+    // "needs confirm" and the idle case would never be exercised.
+    idleSurface.testNeedsCloseConfirmationOverride = false
+    busySurface.testNeedsCloseConfirmationOverride = true
+
+    // Idle tab: nothing running, closes straight away.
+    state.requestCloseTab(idleTab)
+    #expect(state.pendingTerminalClose == nil)
+    #expect(state.tabManager.tabs.contains { $0.id == idleTab } == false)
+
+    state.requestCloseTab(busyTab)
+    #expect(state.pendingTerminalClose?.target == .tab)
+    #expect(state.tabManager.tabs.contains { $0.id == busyTab })
+
+    state.confirmPendingTerminalClose()
+    #expect(state.tabManager.tabs.contains { $0.id == busyTab } == false)
+  }
+
+  // A process that exits on its own while the dialog is up must not leave a
+  // question on screen about a terminal that is already gone.
+  @Test func processExitingUnderAPendingCloseClearsIt() {
+    let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
+    let worktree = makeWorktree()
+    let state = manager.state(for: worktree)
+
+    guard
+      let tabID = state.createTab(),
+      let surface = state.splitTree(for: tabID).root?.leftmostLeaf()
+    else {
+      Issue.record("Expected a tab with one surface")
+      return
+    }
+    #expect(state.performSplitAction(.newSplit(direction: .right), for: surface.id))
+
+    guard let split = state.splitTree(for: tabID).leaves().first(where: { $0.id != surface.id }) else {
+      Issue.record("Expected a split surface")
+      return
+    }
+
+    split.bridge.onCloseRequest?(true)
+    #expect(state.pendingTerminalClose != nil)
+
+    // The child exits: Ghostty re-issues the close with processAlive = false.
+    split.bridge.onCloseRequest?(false)
+
+    #expect(state.pendingTerminalClose == nil)
+    #expect(state.splitTree(for: tabID).leaves().map(\.id) == [surface.id])
+  }
+
   @Test func taskStatusReflectsAnyRunningTab() {
     let manager = WorktreeTerminalManager(runtime: GhosttyRuntime())
     let worktree = makeWorktree()

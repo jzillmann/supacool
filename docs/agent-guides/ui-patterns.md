@@ -203,6 +203,32 @@ a sibling tab — so `WorktreeTerminalManager` never emitted `.tabClosed` and ob
 believing a torn-down session was alive. It now drops the empty tree and delegates to
 `closeTab(_:)`; the `removeTree` inside is a no-op because the surface is already gone.
 
-Note that `handleCloseRequest` still **discards** Ghostty's `processAlive` flag, so closing a
-surface kills a running child process with no confirmation. That is a known gap, not a
-decision — see `features.md`.
+## A close that would kill running work has to ask
+
+Ghostty hands the app a `processAlive` flag with every close request. It is not "a shell
+exists" — `Surface.needsConfirmQuit` returns false once the child has exited, honors the
+user's `confirm-close-surface` config, and on that setting's default is false while the
+shell just sits at a prompt. So it means: **there is a running command to lose**.
+
+Supacool used to discard it, which is how one keystroke could take out a working agent with
+no trace. Now a live close request parks itself in
+`WorktreeTerminalState.pendingTerminalClose` and `SingleSessionTerminalView` puts up the
+alert — that view is the only host of live surfaces (the full-screen session view and the
+blocking-script sheet both render through it), so the question always appears next to the
+terminal it is about, and the alert is scoped to the affected `tabID`.
+
+Rules for anything that closes a terminal:
+
+- **User-initiated closes go through the `request*` entry points** — `requestCloseTab` for a
+  tab, the `processAlive` branch of `handleCloseRequest` for a pane. They confirm first.
+- **Programmatic teardown keeps calling `closeTab` / `performCloseRequest` directly.** Park,
+  remove, blocking-script cleanup and layout restore are not the user reaching for ⌘W; they
+  have already asked, or the question makes no sense. Routing them through the confirmation
+  would deadlock a headless path behind an alert nobody is looking at.
+- **A pending close is state, so it can go stale.** `cleanupSurfaceState` drops it when its
+  surface disappears and `closeTab` drops it when its tab does — otherwise a process that
+  exits on its own while the dialog is up leaves a question on screen about a terminal that
+  is already gone.
+- `GhosttySurfaceView.needsCloseConfirmation` wraps `ghostty_surface_needs_confirm_quit` for
+  the tab case (which has no callback flag to read) and carries a DEBUG-only override,
+  because unit tests have no live Ghostty app and would otherwise always see `false`.

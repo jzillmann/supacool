@@ -10,6 +10,36 @@ private let blockingScriptLogger = SupaLogger("BlockingScript")
 private let layoutLogger = SupaLogger("Layout")
 private let terminalStateLogger = SupaLogger("Terminal")
 
+/// A close the user asked for that is waiting on their confirmation because
+/// the terminal still has a live process.
+///
+/// Main-actor isolated like everything that touches it (the state, the alert).
+/// It cannot be `nonisolated`: it holds a `TerminalTabID`, whose `Equatable`
+/// conformance is actor-isolated under Swift 6's global `@MainActor`, and a
+/// nonisolated type may not use an isolated conformance.
+struct PendingTerminalClose: Equatable, Identifiable {
+  enum Target: Equatable {
+    /// One pane of a split tab.
+    case surface(UUID)
+    /// The whole tab, i.e. every pane in it.
+    case tab
+  }
+
+  let tabID: TerminalTabID
+  let target: Target
+  /// True when going through with this ends the tab — a tab close, or the
+  /// tab's last remaining pane. Drives the wording: losing a pane is a much
+  /// smaller deal than losing the session's terminal.
+  let closesTab: Bool
+
+  var id: String {
+    switch target {
+    case .surface(let surfaceID): "surface-\(surfaceID.uuidString)"
+    case .tab: "tab-\(tabID.rawValue)"
+    }
+  }
+}
+
 @MainActor
 @Observable
 final class WorktreeTerminalState {
@@ -94,6 +124,12 @@ final class WorktreeTerminalState {
   /// "I'm done with this agent" gesture. Process-exit closes and tab
   /// teardown do NOT fire this: those panes stay resumable.
   var onSurfaceClosed: ((TerminalTabID, UUID) -> Void)?
+
+  /// A close the user asked for that we are holding until they confirm,
+  /// because the terminal still has a live process. Presented by the view
+  /// hosting the surfaces (`SingleSessionTerminalView`), which calls
+  /// `confirmPendingTerminalClose` / `cancelPendingTerminalClose`.
+  private(set) var pendingTerminalClose: PendingTerminalClose?
 
   init(
     runtime: GhosttyRuntime,
@@ -843,7 +879,44 @@ final class WorktreeTerminalState {
     return true
   }
 
+  /// User-initiated tab close (Ghostty's `close_tab`, ⌘⌥W by default).
+  /// Confirms first when any pane still has a live process. Programmatic
+  /// teardown — park, remove, blocking-script cleanup — keeps calling
+  /// `closeTab` directly: those paths have already asked, or are not the
+  /// user's doing at all.
+  func requestCloseTab(_ tabId: TerminalTabID) {
+    let leaves = trees[tabId]?.leaves() ?? []
+    guard leaves.contains(where: { $0.needsCloseConfirmation }) else {
+      closeTab(tabId)
+      return
+    }
+    pendingTerminalClose = PendingTerminalClose(tabID: tabId, target: .tab, closesTab: true)
+  }
+
+  /// Go through with the held close. The surface case passes
+  /// `processAlive: true` because that is precisely why we stopped to ask —
+  /// and it is what tells `onSurfaceClosed` this was a deliberate "I'm done
+  /// with this agent" rather than a process that exited on its own.
+  func confirmPendingTerminalClose() {
+    guard let pending = pendingTerminalClose else { return }
+    pendingTerminalClose = nil
+    switch pending.target {
+    case .surface(let surfaceID):
+      guard let view = surfaces[surfaceID] else { return }
+      performCloseRequest(for: view, processAlive: true)
+    case .tab:
+      closeTab(pending.tabID)
+    }
+  }
+
+  func cancelPendingTerminalClose() {
+    pendingTerminalClose = nil
+  }
+
   func closeTab(_ tabId: TerminalTabID) {
+    if pendingTerminalClose?.tabID == tabId {
+      pendingTerminalClose = nil
+    }
     let closedBlockingKind = blockingScripts.removeValue(forKey: tabId)
     cleanupLaunchScriptDirectory(for: tabId)
     // Clear lingering tab tracking for completed or non-blocking tabs.
@@ -1659,7 +1732,7 @@ final class WorktreeTerminalState {
     }
     view.bridge.onCloseTab = { [weak self] _ in
       guard let self else { return false }
-      self.closeTab(tabId)
+      self.requestCloseTab(tabId)
       return true
     }
     view.bridge.onGotoTab = { [weak self] target in
@@ -1892,6 +1965,9 @@ final class WorktreeTerminalState {
   }
 
   private func cleanupSurfaceState(for surfaceID: UUID) {
+    if pendingTerminalClose?.target == .surface(surfaceID) {
+      pendingTerminalClose = nil
+    }
     recentHookBySurfaceID.removeValue(forKey: surfaceID)
     busyPIDsBySurface.removeValue(forKey: surfaceID)
     surfaces.removeValue(forKey: surfaceID)
@@ -2028,6 +2104,24 @@ final class WorktreeTerminalState {
   }
 
   private func handleCloseRequest(for view: GhosttySurfaceView, processAlive: Bool) {
+    guard surfaces[view.id] != nil else { return }
+    // Ghostty raises `processAlive` only when there is real work to lose: it
+    // is false once the child has exited, it honors the user's
+    // `confirm-close-surface` config, and on that setting's default it is
+    // false while the shell just sits at a prompt. This flag used to be
+    // discarded, so a close request killed a running agent on the spot.
+    if processAlive, let tabId = tabId(containing: view.id) {
+      pendingTerminalClose = PendingTerminalClose(
+        tabID: tabId,
+        target: .surface(view.id),
+        closesTab: (trees[tabId]?.leaves().count ?? 0) <= 1
+      )
+      return
+    }
+    performCloseRequest(for: view, processAlive: processAlive)
+  }
+
+  private func performCloseRequest(for view: GhosttySurfaceView, processAlive: Bool) {
     guard surfaces[view.id] != nil else { return }
     guard let tabId = tabId(containing: view.id), let tree = trees[tabId] else {
       view.closeSurface()

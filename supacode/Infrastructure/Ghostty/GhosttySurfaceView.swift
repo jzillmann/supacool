@@ -262,6 +262,28 @@ final class GhosttySurfaceView: NSView, Identifiable {
     }
   }
 
+  /// Whether closing this surface would kill work the user cares about.
+  ///
+  /// Delegates to Ghostty's own `needsConfirmQuit`, which is false once the
+  /// child has exited, honors the user's `confirm-close-surface` config, and
+  /// (on its default setting) is false while the shell just sits at a prompt.
+  /// So this is "there is a running command", not merely "a shell exists".
+  var needsCloseConfirmation: Bool {
+    #if DEBUG
+      if let testNeedsCloseConfirmationOverride {
+        return testNeedsCloseConfirmationOverride
+      }
+    #endif
+    guard let surface else { return false }
+    return ghostty_surface_needs_confirm_quit(surface)
+  }
+
+  #if DEBUG
+    /// Test seam: unit tests run without a live Ghostty app, so `surface` is
+    /// nil and `needsCloseConfirmation` would always be false.
+    var testNeedsCloseConfirmationOverride: Bool?
+  #endif
+
   func closeSurface() {
     clearNotificationObservers()
     if let surface {
