@@ -66,7 +66,14 @@ ensure-submodules:
 	fi
 
 $(GHOSTTY_BUILD_OUTPUTS):
+	@# `xcodebuild -create-xcframework` REFUSES to write over an existing output,
+	@# so an interrupted zig build (^C, a killed job, two builds racing) leaves a
+	@# half-written macos/GhosttyKit.xcframework that makes every later build fail
+	@# with a bare "process exited with code 70". Clear both ends first so the
+	@# rule is always re-runnable.
+	@rm -rf ThirdParty/ghostty/macos/GhosttyKit.xcframework
 	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false -Dxcframework-target=native
+	rm -rf $(GHOSTTY_XCFRAMEWORK_PATH)
 	rsync -a ThirdParty/ghostty/macos/GhosttyKit.xcframework Frameworks
 	@src="ThirdParty/ghostty/zig-out/share/ghostty"; \
 	dst="$(GHOSTTY_RESOURCE_PATH)"; \
