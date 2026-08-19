@@ -72,6 +72,16 @@ The sweep has two passes, and **only the first may touch awaiting-input**:
 | dead-PID (`pid-gone`) | `kill(pid, 0)` says the process is gone | yes | **yes** — nobody is left to wait on |
 | stuck-busy (`busy-stale`) | PID alive, no busy hook and a byte-stable screen for `stuckBusyStaleSweepThreshold` sweeps (~90 s) | yes | **no** |
 
+The stuck-busy screen read is pinned to the **registration's own surface**, not the tab.
+Busy registrations are per-surface; `readScreenContents(tabID:)` resolves through the
+*focused* pane. In a split tab that meant judging pane A's liveness by pane B's screen — and
+a sibling pane idle for hours is trivially byte-stable, so the watchdog kept clearing the
+latch of the pane that was mid-turn. Trace 80BB762E: 24 fires, **none** before the tab was
+split, the last one 35 s before a screenshot of the agent visibly working; fleet-wide,
+multi-surface tabs were 3.6× likelier to see a `busy-stale` fire than single-surface ones.
+Any future reasoning about one particular agent must read that agent's surface
+(`WorktreeTerminalState.readSurfaceContents(surfaceID:)`), never the tab.
+
 The asymmetry is load-bearing. A byte-stable screen under a live PID is precisely what an
 agent *parked at a prompt* looks like, so it corroborates awaiting rather than refuting it.
 Clearing the chip there dropped a session out of Waiting on Me 58 s after the hook correctly

@@ -504,6 +504,16 @@ final class WorktreeTerminalState {
       onTabCreated?()
       return (tabId, surfaceID)
     }
+
+    /// Adds a second (third, …) test surface to an existing test tab, so
+    /// tests can exercise split-tab behaviour — most importantly that
+    /// per-surface reasoning (the stuck-busy watchdog) doesn't judge one
+    /// pane by a sibling's screen.
+    @discardableResult
+    func registerTestSurface(in tabId: TerminalTabID, surfaceID: UUID = UUID()) -> UUID {
+      testSurfaceIDsByTab[tabId, default: []].insert(surfaceID)
+      return surfaceID
+    }
   #endif
 
   func selectTab(_ tabId: TerminalTabID) {
@@ -660,6 +670,32 @@ final class WorktreeTerminalState {
       let surface = surfaces[surfaceID]
     else { return nil }
     return surface.bridge.readScreenContents(scope: scope)
+  }
+
+  /// Whether a live surface with this ID is registered in this worktree.
+  /// Lets callers holding a surface-scoped identity (the stuck-busy
+  /// watchdog's per-PID busy registrations) tell "that pane is gone" apart
+  /// from "that pane read back empty" before deciding what a nil read means.
+  func containsSurface(_ surfaceID: UUID) -> Bool {
+    surfaces[surfaceID] != nil
+  }
+
+  /// Reads the screen contents of one specific surface, regardless of which
+  /// pane in its tab currently has focus.
+  ///
+  /// Deliberately NOT `readScreenContents(tabID:)`: that one resolves through
+  /// `focusedSurfaceIdByTab`, so in a split tab it answers about whichever
+  /// pane the user last clicked. Any caller reasoning about a *particular*
+  /// agent — one whose identity is a surface, not a tab — must ask about that
+  /// surface or it will judge one pane by another pane's screen. See
+  /// `WorktreeTerminalManager.reconcileStuckBusy`.
+  ///
+  /// Returns nil when the surface is not registered here.
+  func readSurfaceContents(
+    surfaceID: UUID,
+    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+  ) -> String? {
+    surfaces[surfaceID]?.bridge.readScreenContents(scope: scope)
   }
 
   /// The surface a *programmatic* read/write targets inside a tab: the

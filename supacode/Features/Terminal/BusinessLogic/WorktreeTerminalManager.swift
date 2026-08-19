@@ -152,6 +152,10 @@ final class WorktreeTerminalManager {
   private let ownedProcessTracker: WorktreeOwnedProcessTracker?
   private var ownedProcessRefreshTickCount: Int = 0
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
+  /// Surface-scoped sibling of `readScreenContentsOverride`. Separate rather
+  /// than a widened signature so tests that only care about a single-pane tab
+  /// keep injecting the two-argument form.
+  private let readSurfaceContentsOverride: ((Worktree.ID, TerminalTabID, UUID) -> String?)?
   private(set) var socketServer: AgentHookSocketServer?
   private var states: [Worktree.ID: WorktreeTerminalState] = [:]
   /// Supacool-only. Per-tab awaiting-input tracking. The hook signal is
@@ -226,7 +230,8 @@ final class WorktreeTerminalManager {
     ownedProcessTracker: WorktreeOwnedProcessTracker? = nil,
     startPromptScreenScanning: Bool = true,
     clock: C = ContinuousClock(),
-    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil
+    readScreenContents: ((Worktree.ID, TerminalTabID) -> String?)? = nil,
+    readSurfaceContents: ((Worktree.ID, TerminalTabID, UUID) -> String?)? = nil
   ) {
     self.runtime = runtime
     self.awaitingInputTTL = awaitingInputTTL
@@ -248,6 +253,7 @@ final class WorktreeTerminalManager {
       try await clock.sleep(for: duration)
     }
     self.readScreenContentsOverride = readScreenContents
+    self.readSurfaceContentsOverride = readSurfaceContents
     if startPromptScreenScanning {
       startAwaitingInputPromptScreenScanning()
     }
@@ -2388,8 +2394,17 @@ final class WorktreeTerminalManager {
   /// The screen-stability gate is load-bearing: it's what separates a stuck
   /// latch from a legitimately long, quiet tool run — a plain time/TTL check
   /// can't tell them apart, which is exactly why the busy latch has never
-  /// carried one. The screen read only happens here (30s sweep cadence, and
-  /// only for tabs with a registered busy PID), not in the 1s prompt scan,
+  /// carried one. That gate only holds if the screen read is pinned to the
+  /// registration's *own* surface: busy registrations are per-surface, but
+  /// the tab-scoped read resolves through the focused pane. In a split tab
+  /// that meant judging pane A's liveness by pane B's screen — and a sibling
+  /// pane idle for hours is trivially byte-stable, so the watchdog cleared
+  /// the latch of an agent that was mid-turn (trace 80BB762E, 24 fires, none
+  /// of them before the tab was split; the last one 35s before a screenshot
+  /// of the agent visibly working).
+  ///
+  /// The screen read only happens here (30s sweep cadence, and only for
+  /// tabs with a registered busy PID), not in the 1s prompt scan,
   /// so it doesn't reintroduce the per-tick main-thread cost that scan
   /// avoids for hooked tabs.
   private func reconcileStuckBusy(tabID: UUID, pid: Int32) {
@@ -2397,7 +2412,14 @@ final class WorktreeTerminalManager {
       var registration = registrations[pid]
     else { return }
     let wrappedTabID = TerminalTabID(rawValue: tabID)
-    let fingerprint = screenFingerprint(worktreeID: registration.worktreeID, tabID: wrappedTabID)
+    // Pinned to the registration's own surface. Reading the tab (i.e. the
+    // focused pane) judged one agent by another's screen — see the doc
+    // comment above.
+    let fingerprint = screenFingerprint(
+      worktreeID: registration.worktreeID,
+      tabID: wrappedTabID,
+      surfaceID: registration.surfaceID
+    )
 
     // No readable screen, or it changed since last sweep → either still
     // producing output or no idle evidence yet. Reset and re-seed.
@@ -2522,9 +2544,45 @@ final class WorktreeTerminalManager {
     }
   }
 
-  private func screenFingerprint(worktreeID: Worktree.ID, tabID: TerminalTabID) -> String? {
-    let contents = readScreenContentsOverride?(worktreeID, tabID)
+  /// Resolves the raw screen text a fingerprint is computed from.
+  ///
+  /// With a `surfaceID` the read is pinned to that pane. It falls back to the
+  /// tab-scoped read only when the surface is not registered in this worktree
+  /// — a pane that closed (whose registration the PID sweep is about to reap
+  /// anyway), or a test harness that injects surfaces without live Ghostty
+  /// views. A registered-but-unreadable surface yields nil, which callers
+  /// treat as "no evidence" rather than falling back to a sibling pane.
+  private func screenContentsForFingerprint(
+    worktreeID: Worktree.ID,
+    tabID: TerminalTabID,
+    surfaceID: UUID?
+  ) -> String? {
+    if let surfaceID {
+      if let readSurfaceContentsOverride {
+        return readSurfaceContentsOverride(worktreeID, tabID, surfaceID)
+      }
+      if states[worktreeID]?.containsSurface(surfaceID) == true {
+        return states[worktreeID]?.readSurfaceContents(surfaceID: surfaceID)
+      }
+    }
+    return readScreenContentsOverride?(worktreeID, tabID)
       ?? states[worktreeID]?.readScreenContents(tabID: tabID)
+  }
+
+  /// Tail-of-screen fingerprint used as idle evidence.
+  ///
+  /// Pass `surfaceID` whenever the question is about one particular agent
+  /// rather than the tab as a whole — the tab-scoped read resolves through
+  /// the *focused* pane, which in a split tab is not necessarily the pane
+  /// being asked about.
+  private func screenFingerprint(
+    worktreeID: Worktree.ID,
+    tabID: TerminalTabID,
+    surfaceID: UUID? = nil
+  ) -> String? {
+    let contents = screenContentsForFingerprint(
+      worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID
+    )
     let screen = contents?.trimmingCharacters(in: .whitespacesAndNewlines)
     guard let screen, !screen.isEmpty else { return nil }
 

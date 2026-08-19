@@ -1420,6 +1420,114 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// Regression, trace 80BB762E. In a split tab the busy latch is per
+  /// *surface*, but the watchdog used to read the screen per *tab* — which
+  /// resolves through the focused pane. A sibling pane idle for hours is
+  /// trivially byte-stable, so the watchdog kept clearing the latch of the
+  /// pane that was actually mid-turn: 24 false-idle cards in one session,
+  /// none of them before the tab was split.
+  ///
+  /// The tab-scoped read here deliberately returns the *frozen sibling* —
+  /// the exact evidence that used to trip the watchdog. Only a read pinned
+  /// to the working surface keeps the latch up.
+  @Test func stuckBusyWatchdogJudgesEachSurfaceByItsOwnScreen() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let workingSurfaceID = LockIsolated(UUID())
+        let workingScreen = LockIsolated("✳ Fluttering… (0s)")
+        // The pane the user last clicked into: another agent, idle for hours.
+        let idleSibling = "❯ \n  (idle)"
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stuck-busy-split")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readScreenContents: { _, _ in idleSibling },
+          readSurfaceContents: { _, _, surfaceID in
+            surfaceID == workingSurfaceID.value ? workingScreen.value : idleSibling
+          }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+        workingSurfaceID.setValue(tab.surfaceID)
+        // Split: a second pane, holding a long-finished agent.
+        manager.state(for: worktree).registerTestSurface(in: tabId)
+
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Well past the threshold. The working pane's screen advances every
+        // sweep; the focused sibling never moves.
+        for frame in 1...6 {
+          workingScreen.setValue("✳ Fluttering… (\(frame)s)")
+          await manager.sweepAgentPIDs()
+          #expect(
+            manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId),
+            "watchdog cleared a working pane's latch on sweep \(frame) — it read the sibling"
+          )
+        }
+      }
+    }
+  }
+
+  /// The mirror of the above: pinning the read to the registration's own
+  /// surface must not make the watchdog toothless. A genuinely stuck pane
+  /// still gets cleared even while a sibling pane churns away.
+  @Test func stuckBusyWatchdogStillClearsAStuckSurfaceWhileASiblingIsBusy() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let stuckSurfaceID = LockIsolated(UUID())
+        let siblingFrame = LockIsolated(0)
+        let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-stuck-busy-split-clear")
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          socketServer: server,
+          stuckBusyStaleSweepThreshold: 2,
+          isProcessAlive: { _ in true },
+          clock: clock,
+          readSurfaceContents: { _, _, surfaceID in
+            surfaceID == stuckSurfaceID.value
+              ? "› \n  (idle)"
+              : "build log line \(siblingFrame.value)"
+          }
+        )
+        let worktree = makeWorktree()
+
+        guard let tab = makeTab(in: manager, for: worktree) else {
+          Issue.record("Expected tab and surface")
+          return
+        }
+        let tabId = tab.tabId
+        stuckSurfaceID.setValue(tab.surfaceID)
+        manager.state(for: worktree).registerTestSurface(in: tabId)
+
+        server.onBusy?(worktree.id, tabId.rawValue, tab.surfaceID, true, 4242)
+        #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+
+        // Sweep 1 seeds the baseline, sweep 2 is one stable sweep, sweep 3
+        // reaches the threshold — the sibling's churn must not hold it up.
+        for _ in 0..<3 {
+          siblingFrame.withValue { $0 += 1 }
+          await manager.sweepAgentPIDs()
+        }
+        #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabId))
+      }
+    }
+  }
+
   /// A fresh busy hook mid-window recreates the PID registration and resets
   /// the staleness counter, so the watchdog's clock restarts — an agent
   /// that keeps signalling work is never spuriously cleared.
