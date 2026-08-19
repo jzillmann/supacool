@@ -25,9 +25,14 @@ mise trust && mise install           # zig, swiftlint, xcsift, create-dmg
 
 # Every build
 make build-ghostty-xcframework       # Zig compiles ghostty → Frameworks/GhosttyKit.xcframework
-make build-app                       # Xcode build
+make build-app                       # Xcode build (Debug)
 make run-app                         # Build + launch with log stream
 make test                            # Run full test suite
+
+# Daily driving — Debug is -Onone, which costs real CPU once the board runs a
+# large fleet (the hot path is ghostty's kqueue loop multiplexing one PTY per
+# session). Use the optimized build for the app you actually live in.
+make install-release-build           # Optimized build → /Applications
 
 # Only the Supacool tests (faster iteration)
 # Keep -derivedDataPath AND PRODUCT_BUNDLE_IDENTIFIER: together they stop the test

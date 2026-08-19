@@ -109,6 +109,36 @@ install-dev-build: build-app # install dev build to /Applications
 	ditto "$$src" "$$dst"; \
 	echo "installed $$dst"
 
+# Release builds for daily driving. Debug is -Onone/-O0, which is a real cost
+# once the board runs a large fleet: the hot path is ghostty's kqueue event loop
+# multiplexing one PTY per session, and an unoptimized build multiplies that.
+# ONLY_ACTIVE_ARCH=YES keeps this to the local arch — the universal binary is
+# only needed for distribution (see `archive`).
+build-app-release: build-ghostty-xcframework # Build the macOS app (Release, optimized)
+	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release build -skipMacroValidation ONLY_ACTIVE_ARCH=YES -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
+
+run-app-release: build-app-release # Build then launch (Release)
+	@settings="$$(xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release -showBuildSettings -json 2>/dev/null)"; \
+	build_dir="$$(echo "$$settings" | jq -r '.[0].buildSettings.BUILT_PRODUCTS_DIR')"; \
+	product="$$(echo "$$settings" | jq -r '.[0].buildSettings.FULL_PRODUCT_NAME')"; \
+	exec_name="$$(echo "$$settings" | jq -r '.[0].buildSettings.EXECUTABLE_NAME')"; \
+	"$$build_dir/$$product/Contents/MacOS/$$exec_name"
+
+install-release-build: build-app-release # Install optimized build to /Applications
+	@settings="$$(xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release -showBuildSettings -json 2>/dev/null)"; \
+	build_dir="$$(echo "$$settings" | jq -r '.[0].buildSettings.BUILT_PRODUCTS_DIR')"; \
+	product="$$(echo "$$settings" | jq -r '.[0].buildSettings.FULL_PRODUCT_NAME')"; \
+	src="$$build_dir/$$product"; \
+	dst="/Applications/$$product"; \
+	if [ ! -d "$$src" ]; then \
+		echo "app not found: $$src"; \
+		exit 1; \
+	fi; \
+	echo "copying $$src -> $$dst"; \
+	rm -rf "$$dst"; \
+	ditto "$$src" "$$dst"; \
+	echo "installed $$dst"
+
 archive: build-ghostty-xcframework # Archive Release build for distribution
 	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release -archivePath build/supacool.xcarchive archive CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$$APPLE_TEAM_ID" CODE_SIGN_IDENTITY="$$DEVELOPER_ID_IDENTITY_SHA" OTHER_CODE_SIGN_FLAGS="--timestamp" -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" $(XCODEBUILD_FLAGS) 2>&1 $(FORMATTER)'
 

@@ -19,6 +19,37 @@ make test                       # full test suite
 make check                      # swift-format + swiftlint
 ```
 
+## Debug vs Release — which to actually run
+
+`build-app` / `run-app` build **Debug**, which is `SWIFT_OPTIMIZATION_LEVEL = -Onone`
+and `GCC_OPTIMIZATION_LEVEL = 0`. That is fine for iterating, but it is the wrong
+build to *live* in: Supacool's hot path is ghostty's `backend.kqueue.Loop.tick`
+multiplexing one PTY per session, plus a `termio.Exec.ReadThread` per terminal.
+With a large board that loop is hot continuously, and unoptimized code multiplies
+its cost — a fleet of dozens of chatty agent sessions can push the app to several
+hundred percent CPU.
+
+```bash
+make build-app-release          # optimized build
+make run-app-release            # optimized build + launch
+make install-release-build      # optimized build → /Applications
+```
+
+These pass `ONLY_ACTIVE_ARCH=YES`: the Release configuration otherwise builds a
+universal binary, which only matters for distribution (`make archive`). Signing
+needs no setup — Release uses `CODE_SIGN_STYLE = Automatic` with the ad-hoc
+identity, unlike `archive`, which wants `APPLE_TEAM_ID` / `DEVELOPER_ID_IDENTITY_SHA`.
+
+Note the single-instance guard: quit a running Supacool before launching another
+build of it, or the second one exits with the "already running" alert.
+
+**Concurrent builds collide.** Every one of these targets shares the same
+DerivedData, and Xcode takes an exclusive lock on `XCBuildData/build.db`. Two
+sessions running `make build-app` at once fail with `unable to attach DB … database
+is locked`. That is not a corrupt checkout — it is contention. Either serialize the
+builds or give one a private `-derivedDataPath` (which is exactly why the
+`only-Supacool-tests` invocation below pins its own).
+
 `run-app` uses `xcodebuild -showBuildSettings` to derive the current `FULL_PRODUCT_NAME` dynamically — so even though Supacool renamed `PRODUCT_NAME` from `$(TARGET_NAME)` to a literal `Supacool`, the makefile finds `Supacool.app` automatically and launches it.
 
 ## The Metal Toolchain trap
