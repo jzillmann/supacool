@@ -114,8 +114,16 @@ install-dev-build: build-app # install dev build to /Applications
 # multiplexing one PTY per session, and an unoptimized build multiplies that.
 # ONLY_ACTIVE_ARCH=YES keeps this to the local arch — the universal binary is
 # only needed for distribution (see `archive`).
+#
+# ENABLE_HARDENED_RUNTIME=NO is required for a LOCAL release build. The Release
+# configuration enables the hardened runtime, which turns on library validation:
+# every embedded framework must then be signed by the same Team ID as the main
+# executable. A local build is ad-hoc signed and so has no Team ID at all, so dyld
+# refuses to load Sparkle.framework and the app dies at launch with
+# "Library not loaded … different Team IDs". `archive` keeps the hardened runtime
+# because it signs with a real Developer ID, which notarization requires.
 build-app-release: build-ghostty-xcframework # Build the macOS app (Release, optimized)
-	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release build -skipMacroValidation ONLY_ACTIVE_ARCH=YES -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
+	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release build -skipMacroValidation ONLY_ACTIVE_ARCH=YES ENABLE_HARDENED_RUNTIME=NO -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'
 
 run-app-release: build-app-release # Build then launch (Release)
 	@settings="$$(xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Release -showBuildSettings -json 2>/dev/null)"; \

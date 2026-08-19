@@ -36,9 +36,23 @@ make install-release-build      # optimized build → /Applications
 ```
 
 These pass `ONLY_ACTIVE_ARCH=YES`: the Release configuration otherwise builds a
-universal binary, which only matters for distribution (`make archive`). Signing
-needs no setup — Release uses `CODE_SIGN_STYLE = Automatic` with the ad-hoc
-identity, unlike `archive`, which wants `APPLE_TEAM_ID` / `DEVELOPER_ID_IDENTITY_SHA`.
+universal binary, which only matters for distribution (`make archive`).
+
+They also pass `ENABLE_HARDENED_RUNTIME=NO`, and that one is load-bearing. The
+Release configuration turns the hardened runtime on, which enables **library
+validation**: every embedded framework must then carry the same Team ID as the main
+executable. A local build is ad-hoc signed and therefore has *no* Team ID, so dyld
+refuses to map `Sparkle.framework` and the app is killed before `main()` with
+
+```
+Library not loaded: @rpath/Sparkle.framework/Versions/B/Sparkle
+Reason: … mapping process and mapped file (non-platform) have different Team IDs
+```
+
+which surfaces as the macOS "Supacool cannot be opened because of a problem" dialog.
+Check with `codesign -dv --verbose=2 <app>`: a good local build reads `flags=0x2(adhoc)`,
+a broken one `flags=0x10002(adhoc,runtime)`. `archive` keeps the hardened runtime on
+purpose — it signs with a real Developer ID, which notarization requires.
 
 Note the single-instance guard: quit a running Supacool before launching another
 build of it, or the second one exits with the "already running" alert.
