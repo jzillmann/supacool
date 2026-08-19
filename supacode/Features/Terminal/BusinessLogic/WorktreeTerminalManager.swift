@@ -1749,7 +1749,7 @@ final class WorktreeTerminalManager {
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
     let sleep = self.sleep
     let awaitingInputTTL = self.awaitingInputTTL
-    awaitingInputExpiryTasks[tabID] = Task { [weak self, sleep, awaitingInputTTL] in
+    awaitingInputExpiryTasks[tabID] = Task { @MainActor [weak self, sleep, awaitingInputTTL] in
       do {
         try await sleep(awaitingInputTTL)
       } catch {
@@ -1773,7 +1773,7 @@ final class WorktreeTerminalManager {
     deferredWorkByTab[tabID] = DeferredWorkTracker(worktreeID: worktreeID)
     deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
     let sleep = self.sleep
-    deferredWorkExpiryTasks[tabID] = Task { [weak self, sleep, duration] in
+    deferredWorkExpiryTasks[tabID] = Task { @MainActor [weak self, sleep, duration] in
       do {
         try await sleep(duration)
       } catch {
@@ -1844,7 +1844,7 @@ final class WorktreeTerminalManager {
 
     let sleep = self.sleep
     let delay = self.firstHookDeadmanDelay
-    firstHookDeadmanTasks[rawTabID] = Task { [weak self, sleep, delay] in
+    firstHookDeadmanTasks[rawTabID] = Task { @MainActor [weak self, sleep, delay] in
       do {
         try await sleep(delay)
       } catch {
@@ -1906,7 +1906,7 @@ final class WorktreeTerminalManager {
 
     let sleep = self.sleep
     let optimisticBusyTTL = self.optimisticBusyTTL
-    optimisticBusyExpiryTasks[rawTabID] = Task { [weak self, sleep, optimisticBusyTTL] in
+    optimisticBusyExpiryTasks[rawTabID] = Task { @MainActor [weak self, sleep, optimisticBusyTTL] in
       do {
         try await sleep(optimisticBusyTTL)
       } catch {
@@ -1974,7 +1974,7 @@ final class WorktreeTerminalManager {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
     let sleep = self.sleep
     let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
-    awaitingInputActivityTasks[tabID] = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
+    awaitingInputActivityTasks[tabID] = Task { @MainActor [weak self, sleep, awaitingInputActivityPollInterval] in
       while !Task.isCancelled {
         do {
           try await sleep(awaitingInputActivityPollInterval)
@@ -2064,7 +2064,7 @@ final class WorktreeTerminalManager {
       desiredState
       ? awaitingInputTransitionOnDebounce
       : awaitingInputTransitionOffDebounce
-    awaitingInputDebounceTasks[tabID] = Task { [weak self, sleep, debounce] in
+    awaitingInputDebounceTasks[tabID] = Task { @MainActor [weak self, sleep, debounce] in
       do {
         try await sleep(debounce)
       } catch {
@@ -2079,7 +2079,7 @@ final class WorktreeTerminalManager {
     guard awaitingInputPromptScanTask == nil else { return }
     let sleep = self.sleep
     let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
-    awaitingInputPromptScanTask = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
+    awaitingInputPromptScanTask = Task { @MainActor [weak self, sleep, awaitingInputActivityPollInterval] in
       while !Task.isCancelled {
         do {
           try await sleep(awaitingInputActivityPollInterval)
