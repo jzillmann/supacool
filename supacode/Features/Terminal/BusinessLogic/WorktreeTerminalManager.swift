@@ -1745,18 +1745,30 @@ final class WorktreeTerminalManager {
     }
   }
 
+  // Every timer body in this file hops with `await MainActor.run` instead of
+  // relying on the closure being main-actor isolated. Under
+  // SWIFT_APPROACHABLE_CONCURRENCY these closures default to
+  // `nonisolated(nonsending)`: calls into this @MainActor class typecheck with
+  // no `await` because isolation is statically "inherited from the caller" —
+  // but a Task has no isolated caller to inherit, so the body really runs on
+  // the cooperative pool. That raced the main thread on the dictionaries below
+  // and segfaulted inside Dictionary CoW (7 crashes, 2026-08-19).
+  // Writing `Task { @MainActor in }` does NOT fix it: the closure still
+  // mangles as `() async -> ()`. Verify with
+  // `nm Supacool | grep <symbol> | xcrun swift-demangle` — an isolated closure
+  // reads `@Swift.MainActor`. See docs/agent-guides/swift6-gotchas.md.
   private func scheduleAwaitingInputExpiry(for tabID: UUID) {
     awaitingInputExpiryTasks.removeValue(forKey: tabID)?.cancel()
     let sleep = self.sleep
     let awaitingInputTTL = self.awaitingInputTTL
-    awaitingInputExpiryTasks[tabID] = Task { @MainActor [weak self, sleep, awaitingInputTTL] in
+    awaitingInputExpiryTasks[tabID] = Task { [weak self, sleep, awaitingInputTTL] in
       do {
         try await sleep(awaitingInputTTL)
       } catch {
         return
       }
       guard let self else { return }
-      self.expireAwaitingInput(tabID: tabID)
+      await MainActor.run { self.expireAwaitingInput(tabID: tabID) }
     }
   }
 
@@ -1773,14 +1785,14 @@ final class WorktreeTerminalManager {
     deferredWorkByTab[tabID] = DeferredWorkTracker(worktreeID: worktreeID)
     deferredWorkExpiryTasks.removeValue(forKey: tabID)?.cancel()
     let sleep = self.sleep
-    deferredWorkExpiryTasks[tabID] = Task { @MainActor [weak self, sleep, duration] in
+    deferredWorkExpiryTasks[tabID] = Task { [weak self, sleep, duration] in
       do {
         try await sleep(duration)
       } catch {
         return
       }
       guard let self else { return }
-      self.expireDeferredWork(tabID: tabID)
+      await MainActor.run { self.expireDeferredWork(tabID: tabID) }
     }
   }
 
@@ -1844,14 +1856,14 @@ final class WorktreeTerminalManager {
 
     let sleep = self.sleep
     let delay = self.firstHookDeadmanDelay
-    firstHookDeadmanTasks[rawTabID] = Task { @MainActor [weak self, sleep, delay] in
+    firstHookDeadmanTasks[rawTabID] = Task { [weak self, sleep, delay] in
       do {
         try await sleep(delay)
       } catch {
         return
       }
       guard let self else { return }
-      self.fireFirstHookDeadman(worktreeID: worktreeID, tabID: tabID)
+      await MainActor.run { self.fireFirstHookDeadman(worktreeID: worktreeID, tabID: tabID) }
     }
   }
 
@@ -1906,14 +1918,14 @@ final class WorktreeTerminalManager {
 
     let sleep = self.sleep
     let optimisticBusyTTL = self.optimisticBusyTTL
-    optimisticBusyExpiryTasks[rawTabID] = Task { @MainActor [weak self, sleep, optimisticBusyTTL] in
+    optimisticBusyExpiryTasks[rawTabID] = Task { [weak self, sleep, optimisticBusyTTL] in
       do {
         try await sleep(optimisticBusyTTL)
       } catch {
         return
       }
       guard let self else { return }
-      self.expireOptimisticBusy(tabID: rawTabID)
+      await MainActor.run { self.expireOptimisticBusy(tabID: rawTabID) }
     }
   }
 
@@ -1974,7 +1986,7 @@ final class WorktreeTerminalManager {
     guard awaitingInputActivityTasks[tabID] == nil else { return }
     let sleep = self.sleep
     let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
-    awaitingInputActivityTasks[tabID] = Task { @MainActor [weak self, sleep, awaitingInputActivityPollInterval] in
+    awaitingInputActivityTasks[tabID] = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
       while !Task.isCancelled {
         do {
           try await sleep(awaitingInputActivityPollInterval)
@@ -1982,7 +1994,7 @@ final class WorktreeTerminalManager {
           return
         }
         guard let self else { return }
-        self.sampleAwaitingInputActivity(tabID: tabID)
+        await MainActor.run { self.sampleAwaitingInputActivity(tabID: tabID) }
       }
     }
   }
@@ -2064,14 +2076,14 @@ final class WorktreeTerminalManager {
       desiredState
       ? awaitingInputTransitionOnDebounce
       : awaitingInputTransitionOffDebounce
-    awaitingInputDebounceTasks[tabID] = Task { @MainActor [weak self, sleep, debounce] in
+    awaitingInputDebounceTasks[tabID] = Task { [weak self, sleep, debounce] in
       do {
         try await sleep(debounce)
       } catch {
         return
       }
       guard let self else { return }
-      self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState)
+      await MainActor.run { self.commitAwaitingInputPresentation(for: tabID, desiredState: desiredState) }
     }
   }
 
@@ -2079,7 +2091,7 @@ final class WorktreeTerminalManager {
     guard awaitingInputPromptScanTask == nil else { return }
     let sleep = self.sleep
     let awaitingInputActivityPollInterval = self.awaitingInputActivityPollInterval
-    awaitingInputPromptScanTask = Task { @MainActor [weak self, sleep, awaitingInputActivityPollInterval] in
+    awaitingInputPromptScanTask = Task { [weak self, sleep, awaitingInputActivityPollInterval] in
       while !Task.isCancelled {
         do {
           try await sleep(awaitingInputActivityPollInterval)

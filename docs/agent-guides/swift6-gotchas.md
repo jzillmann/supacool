@@ -181,11 +181,77 @@ nonisolated extension String {
 
 Live example: `Supacool/Clients/ServerLifecycleClient.swift`.
 
+## 11. `Task { }` in a `@MainActor` class does **not** run on the main actor
+
+The worst one so far: it type-checks clean, runs off the main actor anyway, and
+corrupts state silently. Seven `SIGSEGV`s on 2026-08-19 before it was pinned down.
+
+```swift
+@MainActor final class WorktreeTerminalManager {
+  private var expiryTasks: [UUID: Task<Void, Never>] = [:]   // main-actor state
+
+  func schedule(for tabID: UUID) {
+    expiryTasks[tabID] = Task { [weak self, sleep] in
+      try? await sleep(ttl)
+      guard let self else { return }
+      self.expire(tabID: tabID)      // ← compiles with no `await`, runs OFF main
+    }
+  }
+}
+```
+
+**Why.** We build with `SWIFT_APPROACHABLE_CONCURRENCY = YES`, so async closures
+default to `nonisolated(nonsending)` (SE-0461). Isolation is *statically*
+"inherited from the caller", which is why the call needs no `await` and draws no
+warning — but a `Task` has no isolated caller to inherit from, so at runtime the
+body starts on the **generic cooperative executor**. Static isolation
+inheritance is not a runtime executor.
+
+Two threads then mutate the same `Dictionary`; CoW loses and you get a garbage
+storage pointer:
+
+```
+EXC_BAD_ACCESS (SIGSEGV) at 0x8000000000000008
+swift_isUniquelyReferenced_nonNull_native + 0
+Dictionary.subscript.setter
+Triggered by Thread: 186, Dispatch Queue: com.apple.root.default-qos.cooperative
+```
+
+**`Task { @MainActor in }` does not fix it.** That was tried first and changed
+nothing; the closure still compiles to a non-isolated type.
+
+**The fix** — force a runtime hop the compiler cannot elide:
+
+```swift
+await MainActor.run { self.expire(tabID: tabID) }
+```
+
+Awaiting a `@MainActor async` method works too (a real executor switch), which
+is why the one timer already written as `await self.sampleAwaitingInputPromptScreens()`
+never crashed while its six siblings did.
+
+**How to verify, without waiting for a crash** — isolation is visible in the
+mangled symbol:
+
+```bash
+nm Supacool.app/Contents/MacOS/Supacool \
+  | grep 'scheduleAwaitingInputExpiry.*cfU_$' | awk '{print $3}' \
+  | sed 's/^_//' | xcrun swift-demangle
+```
+
+An isolated closure reads `@Swift.MainActor () async -> ()`. A broken one reads
+plain `() async -> ()`. Counting `swift_task_switch` in the closure family
+(`otool -tV -p <symbol>`) shows the same thing: the fixed build gained three
+hops the broken one lacked.
+
+Live example: `supacode/Features/Terminal/BusinessLogic/WorktreeTerminalManager.swift`
+(all seven timer schedulers).
+
 ---
 
 If you hit an isolation error not listed here, the first debugging moves that usually work:
 
 1. **Add `nonisolated` to the smallest thing that compiles it** — a single method, or a whole type declaration. Don't sprinkle `@MainActor` everywhere.
-2. **Wrap MainActor-coupled reads in `MainActor.run { }` inside `.run` effects.**
+2. **Wrap MainActor-coupled reads in `MainActor.run { }`** — inside `.run` effects, and inside any `Task { }` body that touches main-actor state (see #11).
 3. **Use type-based `@Dependency(X.self)` when a key-path gives you Sendable errors.**
 4. **Check supacode itself for the pattern** — there's a 99% chance upstream already has a working example.
