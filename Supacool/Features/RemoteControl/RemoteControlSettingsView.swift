@@ -19,11 +19,12 @@ struct RemoteControlSettingsView: View {
         Toggle(isOn: $store.remoteControlServerEnabled) {
           Text("Enable remote control server")
           Text(
-            "Runs an MCP server on 127.0.0.1 so an external agent (e.g. a Claude Code "
-              + "session) can list board sessions and read their terminals. Read-only."
+            "Lets external agents list board sessions and read their terminals — via the "
+              + "supacoolctl CLI or any MCP client (one server on 127.0.0.1, both speak to it). "
+              + "Read-only; writing is the separate toggle below."
           )
         }
-        .help("Start or stop the embedded MCP server")
+        .help("Start or stop the embedded remote-control server")
 
         LabeledContent {
           TextField(
