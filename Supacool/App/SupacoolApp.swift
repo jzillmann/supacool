@@ -128,6 +128,15 @@ struct SupacoolApp: App {
   @State private var imageDropCoordinator: ImageDropCoordinator
 
   @MainActor init() {
+    // Ignore SIGPIPE process-wide. The app writes into child-process pipes
+    // and PTYs all over (lifecycle scripts, owned-process teardown, the hook
+    // socket, ghostty surfaces); a write after the reader died delivers
+    // SIGPIPE, whose default action silently kills the whole app — no crash
+    // report, the board just vanishes (exited due to SIGPIPE, 2026-08-25,
+    // mid session-removal while its worktree's processes were being
+    // SIGTERMed). Ignored, those writes fail with EPIPE instead, which every
+    // caller already treats as an ordinary error.
+    signal(SIGPIPE, SIG_IGN)
     // Refuse to start a second non-isolated instance against the same
     // ~/.supacool — two instances racing the shared board files silently
     // corrupt state (open sessions vanish). Must run before the @Shared
