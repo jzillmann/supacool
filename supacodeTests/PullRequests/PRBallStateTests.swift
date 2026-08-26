@@ -317,6 +317,20 @@ struct PRBallStateTests {
     #expect(snapshots.standaloneReason(for: session) == nil)
   }
 
+  @Test func readyToMergeDropsThePillAndKeepsTheChip() {
+    // The chip already reads "#1 ✓ 5/5" — a green checks-passed glyph beside a
+    // green score, on the PR itself. That *is* the green light, so the detached
+    // "Ready to merge" capsule stands down and nothing on the chip is hidden.
+    let snapshots = [
+      Self.pr1.dedupeKey: snapshot(
+        checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5)
+    ]
+    let session = session(references: [Self.pr1])
+    #expect(snapshots.actionableReason(for: session) == .readyToMerge)
+    #expect(snapshots.standaloneReason(for: session) == nil)
+    #expect(snapshots.redundantIndicator(for: session) == nil)
+  }
+
   @Test func glyphReasonsKeepTheirPill() {
     // CI/conflict pills carry words the bare glyph doesn't, so they survive —
     // it's the glyph that yields (see the suppression tests above).

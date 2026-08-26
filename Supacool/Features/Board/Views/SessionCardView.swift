@@ -557,9 +557,10 @@ struct SessionCardView: View {
   /// The most urgent "ball is in your court" reason across this session's PR
   /// references, derived from the cached snapshots. Drives the reason chip so
   /// the Waiting-on-Me pool self-triages (CI failed / changes requested /
-  /// ready to merge / …) instead of being an undifferentiated pile. A low
-  /// Greptile score is excluded — it rides along on the PR chip's own "N/5"
-  /// badge rather than as a second, detached pill.
+  /// draft / …) instead of being an undifferentiated pile. A low Greptile
+  /// score and a ready-to-merge PR are excluded — both already ride on the PR
+  /// chip's own badge ("N/5", green check) rather than as a second, detached
+  /// pill.
   private var prReason: PRBallState? {
     prReferenceSnapshots.standaloneReason(for: session)
   }

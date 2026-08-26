@@ -137,17 +137,24 @@ nonisolated enum PRBallState: Equatable, Sendable {
 
   /// Whether the PR reference chip's own inline badge already states this
   /// reason in full, making a separate reason pill a split of one fact across
-  /// two floating chips. Only a low Greptile score qualifies: the chip carries
-  /// a red "N/5" capsule right on the PR it grades, which is the same number in
-  /// the same color — a detached "Score 3/5" pill adds nothing. The CI and
-  /// conflict glyphs are bare icons, so their pills ("CI failed", "Conflicts")
-  /// do carry extra words and stay; the glyph is dropped instead (see
-  /// `redundantIndicator(for:)`).
+  /// two floating chips. Two reasons qualify:
+  ///
+  /// - A low Greptile score: the chip carries a red "N/5" capsule right on the
+  ///   PR it grades, which is the same number in the same color — a detached
+  ///   "Score 3/5" pill adds nothing.
+  /// - Ready to merge: the chip already reads "#5268 ✓ 5/5" — a green
+  ///   checks-passed glyph next to a green score, on the PR itself. That *is*
+  ///   the green light; a second green "Ready to merge" capsule floating beside
+  ///   it says the same thing twice and costs a card's worth of header width.
+  ///
+  /// The CI and conflict glyphs are bare icons, so their pills ("CI failed",
+  /// "Conflicts") do carry extra words and stay; the glyph is dropped instead
+  /// (see `redundantIndicator(for:)`).
   var isStatedByChipBadge: Bool {
     switch self {
-    case .greptileLow:
+    case .greptileLow, .readyToMerge:
       return true
-    case .ciFailed, .mergeConflict, .changesRequested, .draft, .readyToMerge, .closedUnmerged,
+    case .ciFailed, .mergeConflict, .changesRequested, .draft, .closedUnmerged,
       .ciRunning, .awaitingReview, .merged:
       return false
     }
@@ -250,7 +257,8 @@ extension [String: PullRequestSnapshot] {
   /// reasons the winning PR's chip badge already states in full (see
   /// `PRBallState.isStatedByChipBadge`). A low Greptile score stays on the PR
   /// chip as its red "N/5" badge instead of being hoisted into a detached
-  /// "Score 3/5" pill that floats away from the PR it grades.
+  /// "Score 3/5" pill that floats away from the PR it grades, and a
+  /// ready-to-merge PR says so through the chip's own green check + score.
   nonisolated func standaloneReason(for session: AgentSession, greptileThreshold: Int = 5)
     -> PRBallState?
   {
@@ -263,10 +271,10 @@ extension [String: PullRequestSnapshot] {
   /// The single inline PR-chip glyph the triage reason pill makes redundant, if
   /// any. The pill spells out one PR's most-urgent reason in words, so the
   /// matching glyph on that same PR's chip would just repeat it. `nil` when the
-  /// winning reason has no per-chip glyph equivalent (Changes requested, Ready
-  /// to merge, Draft, PR closed), when the chip badge is the surface that wins
-  /// (low score — the pill is dropped instead, see `standaloneReason(for:)`),
-  /// or when no PR is in the user's court.
+  /// winning reason has no per-chip glyph equivalent (Changes requested,
+  /// Draft, PR closed), when the chip badge is the surface that wins (low
+  /// score, ready to merge — the pill is dropped instead, see
+  /// `standaloneReason(for:)`), or when no PR is in the user's court.
   nonisolated func redundantIndicator(for session: AgentSession, greptileThreshold: Int = 5)
     -> SuppressedPRIndicator?
   {
