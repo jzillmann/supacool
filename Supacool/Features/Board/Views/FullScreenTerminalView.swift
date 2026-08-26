@@ -986,6 +986,17 @@ struct FullScreenTerminalView: View {
             Label("Convert to Tab", systemImage: "rectangle.topthird.inset.filled")
           }
           .help("Move this pane out into its own tab in the session strip")
+          // Same rule as the tab strip: everything but the session's
+          // primary terminal can be closed from its own right-click menu.
+          if terminal.id != session.primaryTerminalID {
+            Divider()
+            Button(role: .destructive) {
+              onCloseTerminal(terminal.id)
+            } label: {
+              Label("Close Terminal", systemImage: "xmark")
+            }
+            .help("Close this pane and end its shell")
+          }
         }
       }
       .popover(isPresented: isPresented, arrowEdge: .top) {

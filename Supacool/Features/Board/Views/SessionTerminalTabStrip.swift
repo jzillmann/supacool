@@ -88,13 +88,24 @@ struct SessionTerminalTabStrip: View {
         : "Shell terminal"
     )
     .contextMenu {
-      if !isPrimary, let onConvertToSplit {
-        Button {
-          onConvertToSplit(terminal.id)
-        } label: {
-          Label("Convert to Split Pane", systemImage: "rectangle.split.2x1")
+      // The primary (agent) terminal is deliberately absent here: the
+      // reducer refuses to remove it, so offering Close would be a lie.
+      if !isPrimary {
+        if let onConvertToSplit {
+          Button {
+            onConvertToSplit(terminal.id)
+          } label: {
+            Label("Convert to Split Pane", systemImage: "rectangle.split.2x1")
+          }
+          .help("Move this terminal into the primary tab as a split pane")
+          Divider()
         }
-        .help("Move this terminal into the primary tab as a split pane")
+        Button(role: .destructive) {
+          onClose(terminal.id)
+        } label: {
+          Label("Close Terminal", systemImage: "xmark")
+        }
+        .help("Close this terminal and end its shell")
       }
     }
   }
