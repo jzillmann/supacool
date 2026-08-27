@@ -38,19 +38,61 @@ struct SessionGroupsButton: View {
 /// The popover body: one section per group, each with an inline-editable name,
 /// a delete control, and its member rows.
 private struct SessionGroupsPanel: View {
+  /// Which slice of the group list the panel is showing. Defaults to
+  /// `.current` so opening the panel while inside a pinned session lands on
+  /// that session's group — the common case is "flip to a sibling", not
+  /// "browse every group".
+  private enum Scope: Hashable {
+    case current
+    case all
+  }
+
   @Bindable var store: StoreOf<BoardFeature>
   @Binding var isPresented: Bool
   /// Group currently under a card being dragged over the panel — drives the
   /// drop highlight.
   @State private var dropTargetedGroupID: SessionGroup.ID?
+  @State private var scope: Scope = .current
+
+  /// The group owning the session the user currently has open, if any. A
+  /// session can live in several groups; the first is stable pin order, which
+  /// matches what ⌘⌥. cycles through.
+  private var currentGroup: SessionGroup? {
+    guard let focused = store.focusedSessionID else { return nil }
+    return store.sessionGroups.first(where: { $0.contains(focused) })
+  }
+
+  private var displayedGroups: [SessionGroup] {
+    guard scope == .current, let currentGroup else { return store.sessionGroups }
+    return [currentGroup]
+  }
+
+  /// Only worth offering the switch when there's something to switch to.
+  private var showsScopePicker: Bool {
+    currentGroup != nil && store.sessionGroups.count > 1
+  }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text("Groups")
-        .font(.headline)
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 6)
+      HStack(spacing: 8) {
+        Text("Groups")
+          .font(.headline)
+        Spacer(minLength: 8)
+        if showsScopePicker {
+          Picker("Show", selection: $scope) {
+            Text("This").tag(Scope.current)
+            Text("All (\(store.sessionGroups.count))").tag(Scope.all)
+          }
+          .pickerStyle(.segmented)
+          .labelsHidden()
+          .fixedSize()
+          .controlSize(.small)
+          .help("Show only the group of the session you have open, or every group")
+        }
+      }
+      .padding(.horizontal, 14)
+      .padding(.top, 12)
+      .padding(.bottom, 6)
 
       if store.sessionGroups.isEmpty {
         Text("No groups yet. Right-click a card → “Pin to New Group…”.")
@@ -62,7 +104,7 @@ private struct SessionGroupsPanel: View {
       } else {
         ScrollView {
           VStack(alignment: .leading, spacing: 14) {
-            ForEach(store.sessionGroups) { group in
+            ForEach(displayedGroups) { group in
               groupSection(group)
             }
           }
