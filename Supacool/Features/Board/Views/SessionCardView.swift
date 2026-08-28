@@ -815,6 +815,14 @@ struct SessionCardView: View {
   }
 }
 
+/// Put a reference's web URL on the clipboard. Shared by the chip and the
+/// PR-stack popover row so both context menus copy the same thing.
+private func copyReferenceLink(_ reference: SessionReference, linearOrgSlug: String) {
+  guard let url = reference.url(linearOrgSlug: linearOrgSlug) else { return }
+  NSPasteboard.general.clearContents()
+  NSPasteboard.general.setString(url.absoluteString, forType: .string)
+}
+
 /// A single reference chip: ticket id or PR number. Click opens the reference externally.
 struct ReferenceChip: View {
   let reference: SessionReference
@@ -899,6 +907,13 @@ struct ReferenceChip: View {
       }
     }
     .contextMenu {
+      if reference.url(linearOrgSlug: linearOrgSlug) != nil {
+        Button {
+          copyReferenceLink(reference, linearOrgSlug: linearOrgSlug)
+        } label: {
+          Label("Copy link", systemImage: "doc.on.doc")
+        }
+      }
       if let onAddLink {
         Button(action: onAddLink) {
           Label("Add link…", systemImage: "link.badge.plus")
@@ -1506,6 +1521,14 @@ private struct ReferenceStackChip: View {
     .buttonStyle(.plain)
     .help(rowHelp(for: reference))
     .contextMenu {
+      if reference.url(linearOrgSlug: linearOrgSlug) != nil {
+        Button {
+          copyReferenceLink(reference, linearOrgSlug: linearOrgSlug)
+          isPopoverShown = false
+        } label: {
+          Label("Copy link", systemImage: "doc.on.doc")
+        }
+      }
       if let onAddLink {
         Button {
           onAddLink()
