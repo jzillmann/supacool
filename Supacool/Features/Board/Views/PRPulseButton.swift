@@ -268,7 +268,7 @@ struct PRPulseButton: View {
         .fill(healthColor(pullRequest.health))
         .frame(width: 8, height: 8)
         .opacity(0.5)
-      Text("#\(pullRequest.number)")
+      Text(verbatim: "#\(pullRequest.number)")
         .monospacedDigit()
         .foregroundStyle(.tertiary)
       Text(pullRequest.title)
@@ -329,7 +329,7 @@ struct PRPulseButton: View {
           Circle()
             .fill(healthColor(pullRequest.health))
             .frame(width: 8, height: 8)
-          Text("#\(pullRequest.number)")
+          Text(verbatim: "#\(pullRequest.number)")
             .monospacedDigit()
             .foregroundStyle(.secondary)
           if pullRequest.isDraft {

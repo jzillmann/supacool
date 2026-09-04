@@ -213,17 +213,48 @@ extension PRBallState {
 }
 
 extension [String: PullRequestSnapshot] {
+  /// PR ball-states for `session` paired with the reference each one belongs
+  /// to, one per PR reference that has a cached snapshot — minus the closed
+  /// PRs the session has already moved past.
+  ///
+  /// A closed-unmerged PR sits in the user's court only while it is the
+  /// session's last word ("you closed this, decide what's next"). The moment
+  /// the same session carries another PR that is open, draft, or merged — the
+  /// everyday "reopened the work under a new number" flow — the closed one is
+  /// history. Left in, it outranked `readyToMerge` in `triagePriority` and put
+  /// a "#5399 PR closed" pill, and a stack chip featuring #5399, on a session
+  /// whose live PR #5411 was green and ready to merge.
+  ///
+  /// Supersession is judged on the snapshot's state where there is one, and on
+  /// the reference's own cached `PRState` otherwise, so a PR whose snapshot
+  /// hasn't been fetched yet still counts as the live successor.
+  nonisolated func rankedBallStates(of session: AgentSession, greptileThreshold: Int = 5)
+    -> [(dedupeKey: String, ball: PRBallState)]
+  {
+    let ranked = session.references.compactMap {
+      reference -> (dedupeKey: String, ball: PRBallState)? in
+      guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
+        return nil
+      }
+      let ball = PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
+      return (dedupeKey: reference.dedupeKey, ball: ball)
+    }
+    let hasSuccessor = session.references.contains { reference in
+      guard case .pullRequest(_, _, _, let referenceState, _) = reference,
+        let state = self[reference.dedupeKey]?.state ?? referenceState
+      else { return false }
+      return state != .closed
+    }
+    guard hasSuccessor else { return ranked }
+    return ranked.filter { $0.ball != .closedUnmerged }
+  }
+
   /// PR ball-states for `session`, one per PR reference that has a cached
   /// snapshot. Drives both the card's reason chip and the board's
   /// external-court decision off the same explicitly-linked source, so the
   /// two never disagree.
   nonisolated func ballStates(of session: AgentSession, greptileThreshold: Int = 5) -> [PRBallState] {
-    session.references.compactMap { reference in
-      guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
-        return nil
-      }
-      return PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
-    }
+    rankedBallStates(of: session, greptileThreshold: greptileThreshold).map(\.ball)
   }
 
   /// The most urgent "ball is in your court" reason across `session`'s PRs
@@ -233,16 +264,9 @@ extension [String: PullRequestSnapshot] {
   nonisolated func actionableReference(for session: AgentSession, greptileThreshold: Int = 5)
     -> (dedupeKey: String, ball: PRBallState)?
   {
-    session.references
-      .compactMap { reference -> (String, PRBallState)? in
-        guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
-          return nil
-        }
-        let ball = PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
-        return ball.court == .mine ? (reference.dedupeKey, ball) : nil
-      }
-      .min { $0.1.triagePriority < $1.1.triagePriority }
-      .map { (dedupeKey: $0.0, ball: $0.1) }
+    rankedBallStates(of: session, greptileThreshold: greptileThreshold)
+      .filter { $0.ball.court == .mine }
+      .min { $0.ball.triagePriority < $1.ball.triagePriority }
   }
 
   /// The most urgent "ball is in your court" reason across `session`'s PRs, or

@@ -19,7 +19,7 @@ struct PRReasonChip: View {
         .font(.caption2)
         .accessibilityLabel(accessibilityLabel)
       if let pullRequestNumber {
-        Text("#\(pullRequestNumber)")
+        Text(verbatim: "#\(pullRequestNumber)")
           .font(.caption2.weight(.semibold))
           .monospacedDigit()
           .lineLimit(1)

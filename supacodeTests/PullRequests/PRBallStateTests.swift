@@ -291,6 +291,9 @@ struct PRBallStateTests {
   private static let pr2 = SessionReference.pullRequest(
     owner: "o", repo: "r", number: 2, state: .open, title: nil
   )
+  private static let closedPR1 = SessionReference.pullRequest(
+    owner: "o", repo: "r", number: 1, state: .closed, title: nil
+  )
 
   @Test func conflictReasonSuppressesTheConflictGlyph() {
     // The pill says "Conflicts" for this PR, so its own branch glyph is the
@@ -365,6 +368,57 @@ struct PRBallStateTests {
     let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1, Self.pr2]))
     #expect(indicator?.kind(for: Self.pr1.dedupeKey) == .checks)
     #expect(indicator?.kind(for: Self.pr2.dedupeKey) == nil)
+  }
+
+  @Test func closedPullRequestYieldsToItsSuccessor() {
+    // The session reopened its work as pr2 after closing pr1. "PR closed"
+    // outranks "Ready to merge" in triage, so left in it hijacked both the
+    // reason pill and the stack chip's featured PR — pointing the header at a
+    // dead PR while the live one was green.
+    let snapshots = [
+      Self.closedPR1.dedupeKey: snapshot(state: .closed),
+      Self.pr2.dedupeKey: snapshot(checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5),
+    ]
+    let session = session(references: [Self.closedPR1, Self.pr2])
+    #expect(snapshots.actionableReference(for: session)?.dedupeKey == Self.pr2.dedupeKey)
+    #expect(snapshots.actionableReason(for: session) == .readyToMerge)
+    #expect(!snapshots.ballStates(of: session).contains(.closedUnmerged))
+  }
+
+  @Test func closedPullRequestYieldsToASuccessorWithoutASnapshotYet() {
+    // pr2's snapshot hasn't been fetched yet; its cached reference state is
+    // enough to say the closed PR is history.
+    let snapshots = [Self.closedPR1.dedupeKey: snapshot(state: .closed)]
+    let session = session(references: [Self.closedPR1, Self.pr2])
+    #expect(snapshots.actionableReason(for: session) == nil)
+  }
+
+  @Test func closedPullRequestYieldsToAMergedSuccessor() {
+    let snapshots = [
+      Self.closedPR1.dedupeKey: snapshot(state: .closed),
+      Self.pr2.dedupeKey: snapshot(state: .merged),
+    ]
+    let session = session(references: [Self.closedPR1, Self.pr2])
+    #expect(snapshots.actionableReason(for: session) == nil)
+  }
+
+  @Test func soleClosedPullRequestStaysInMyCourt() {
+    // Nothing succeeded it, so the closed PR is the session's last word and
+    // still deserves its pill.
+    let snapshots = [Self.closedPR1.dedupeKey: snapshot(state: .closed)]
+    let session = session(references: [Self.closedPR1])
+    #expect(snapshots.actionableReason(for: session) == .closedUnmerged)
+  }
+
+  @Test func closedPullRequestDoesNotHoldASessionOutOfWaitingOnExternal() {
+    // The live PR is mid-CI — their court. The superseded closed PR used to
+    // count as "mine" and drag the card back into Waiting on Me.
+    let snapshots = [
+      Self.closedPR1.dedupeKey: snapshot(state: .closed),
+      Self.pr2.dedupeKey: snapshot(checks: Self.running),
+    ]
+    let states = snapshots.ballStates(of: session(references: [Self.closedPR1, Self.pr2]))
+    #expect(PRBallState.sessionWaitsExternally(states))
   }
 
   @Test func actionableReferenceReportsTheWinningPRKey() {
