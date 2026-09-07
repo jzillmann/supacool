@@ -368,13 +368,27 @@ final class WorktreeTerminalManager {
         ),
         tabID: wrappedTabID
       )
+      let body = notification.body ?? ""
+      if notification.event == "Stop" {
+        // Stop is the authoritative end-of-turn edge. Emit this before the
+        // state lookup so coordination consumers still receive completion
+        // when a terminal is disappearing or its worktree was pruned.
+        self?.emit(
+          .agentTurnEnded(
+            worktreeID: decoded,
+            tabID: tabID,
+            surfaceID: surfaceID,
+            agent: notification.agent,
+            message: body
+          )
+        )
+      }
       self?.markInitialAgentEventObserved(tabID: tabID, surfaceID: surfaceID)
       guard let state = self?.states[decoded] else {
         terminalLogger.debug("Dropped hook notification for unknown worktree \(decoded)")
         return
       }
       let title = notification.title ?? notification.agent
-      let body = notification.body ?? ""
       state.appendHookNotification(title: title, body: body, surfaceID: surfaceID)
       self?.captureAgentNativeSessionID(
         worktreeID: decoded,

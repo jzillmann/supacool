@@ -26,6 +26,7 @@ AgentSession (Codable, persisted)
 ├── createdAt                      — Date (session-level)
 ├── isPriority / planMode / parked — session-scoped flags
 ├── autoObserver / autoObserverPrompt — session-scoped observer config
+├── reviewLoop: ReviewLoopState?   — explicitly armed, bounded PR-review coordination
 ├── references / referencesScannedAt — work-item parse cache
 ├── remoteWorkspaceID / remoteHostID / tmuxSessionName / remoteConnectionLost — remote-session metadata
 ├── terminals: [SessionTerminal]   — the composition (always ≥ 1, see below)
@@ -45,6 +46,12 @@ SessionTerminal (Codable, embedded in AgentSession.terminals)
 ├── hasCompletedAtLeastOnce        — flips true on first busy→idle of this terminal
 └── lastBusyTransitionAt: Date?    — most recent busy-state flip (drives classifier hysteresis)
 ```
+
+`ReviewLoopState` is durable coordination metadata, not a general workflow graph. Its reviewer is an ordinary
+Codex `SessionTerminal`; the state records the reviewer terminal id, phase, round ceiling, expected/reviewed commit
+SHAs, convergence warning, and last structured result. `BoardFeature+ReviewLoop` owns the fixed
+`review → fix → new commit → re-review` transition sequence. A Stop hook is the only authoritative turn boundary,
+and any ambiguity moves the loop to `needsDecision` rather than dispatching another prompt.
 
 **Key invariant**: `session.id == session.primaryTerminalID == primaryTerminal.id == its Ghostty tab id`. Newly created sessions always satisfy this; the model permits decoupling in the future but no code path does so today. Don't break it casually.
 

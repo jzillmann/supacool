@@ -89,6 +89,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// Free-form instructions for the Auto-Observer.
   var autoObserverPrompt: String
 
+  /// An explicitly armed, bounded implementer/reviewer loop for this
+  /// session's pull request. The reviewer is a real auxiliary agent
+  /// terminal; this value holds only the durable coordination state.
+  var reviewLoop: ReviewLoopState?
+
   /// External work-item references parsed from the session's conversation.
   var references: [SessionReference]
 
@@ -165,6 +170,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     parkedActive: Bool = false,
     autoObserver: Bool = false,
     autoObserverPrompt: String = "",
+    reviewLoop: ReviewLoopState? = nil,
     references: [SessionReference] = [],
     referencesScannedAt: Date? = nil,
     dismissedReferenceKeys: Set<String> = [],
@@ -192,6 +198,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.parkedActive = parkedActive
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
+    self.reviewLoop = reviewLoop
     self.references = references
     self.referencesScannedAt = referencesScannedAt
     self.dismissedReferenceKeys = dismissedReferenceKeys
@@ -234,7 +241,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case createdAt
     case removeBackingWorktreeOnDelete, isPriority, planMode, remoteControl, model
     case parked, parkedActive
-    case autoObserver, autoObserverPrompt
+    case autoObserver, autoObserverPrompt, reviewLoop
     case references, referencesScannedAt, dismissedReferenceKeys
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
@@ -269,6 +276,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     parkedActive = try c.decodeIfPresent(Bool.self, forKey: .parkedActive) ?? false
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
+    reviewLoop = try c.decodeIfPresent(ReviewLoopState.self, forKey: .reviewLoop)
     references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
     dismissedReferenceKeys = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReferenceKeys) ?? []
@@ -354,6 +362,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(parkedActive, forKey: .parkedActive)
     try c.encode(autoObserver, forKey: .autoObserver)
     try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
+    try c.encodeIfPresent(reviewLoop, forKey: .reviewLoop)
     try c.encode(references, forKey: .references)
     try c.encodeIfPresent(referencesScannedAt, forKey: .referencesScannedAt)
     try c.encode(dismissedReferenceKeys, forKey: .dismissedReferenceKeys)

@@ -153,6 +153,10 @@ does the *identical* `nc -U $SUPACOOL_SOCKET_PATH`. Key choices (details and rat
   classifier).
 - `onNotification` posts the system notification and calls
   `captureAgentNativeSessionID(worktreeID:tabID:surfaceID:notification:)`.
+- Every `Stop` notification also emits `TerminalClient.Event.agentTurnEnded` with the exact worktree, tab, surface,
+  agent, and final-message body before terminal-state lookup. The bounded PR review loop consumes that event as its
+  authoritative turn boundary. It matches exact terminal identity, requires the reviewer marker + JSON payload,
+  and never advances from a busy-state transition or polling heuristic.
 
 ### Surface-keyed resolution & auto-adoption (multi-agent, since 2026-07)
 

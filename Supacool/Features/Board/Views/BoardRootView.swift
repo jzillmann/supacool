@@ -244,6 +244,7 @@ struct BoardRootView: View {
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
+    .modifier(ReviewLoopDecisionAlertModifier(store: store))
     .modifier(DirtySessionRemovalConfirmationModifier(store: store))
     .modifier(WorktreeConflictAlertModifier(store: store))
     .modifier(
@@ -388,6 +389,13 @@ struct BoardRootView: View {
           store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
         },
         onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
+        onStartReviewLoop: {
+          store.send(.startReviewLoop(id: session.id, repositories: Array(repositories)))
+        },
+        onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
+        onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
+        onContinueReviewLoop: { store.send(.continueReviewLoopOneRound(id: session.id)) },
+        onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
         onDebug: {
           store.send(
             .debugSessionRequested(
@@ -1133,6 +1141,38 @@ private struct PriorityTerminationAlertModifier: ViewModifier {
       }
       Button("Dismiss", role: .cancel) {
         store.send(.dismissPriorityTerminationAlert)
+      }
+    } message: { alert in
+      Text(alert.message)
+    }
+  }
+}
+
+private struct ReviewLoopDecisionAlertModifier: ViewModifier {
+  @Bindable var store: StoreOf<BoardFeature>
+
+  func body(content: Content) -> some View {
+    content.alert(
+      store.reviewLoopDecisionAlert?.title ?? "Review is not converging",
+      isPresented: Binding(
+        get: { store.reviewLoopDecisionAlert != nil },
+        set: { if !$0 { store.send(.dismissReviewLoopDecisionAlert) } }
+      ),
+      presenting: store.reviewLoopDecisionAlert
+    ) { alert in
+      if alert.isArmed {
+        Button("Diagnose Architecture") {
+          store.send(.diagnoseReviewLoop(id: alert.sessionID))
+        }
+        Button("Continue One Round") {
+          store.send(.continueReviewLoopOneRound(id: alert.sessionID))
+        }
+        Button("Stop Review", role: .destructive) {
+          store.send(.stopReviewLoop(id: alert.sessionID))
+        }
+      }
+      Button("Not Now", role: .cancel) {
+        store.send(.dismissReviewLoopDecisionAlert)
       }
     } message: { alert in
       Text(alert.message)

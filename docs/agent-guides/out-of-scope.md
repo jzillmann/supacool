@@ -8,9 +8,18 @@ Supacool started as a broader vision (workflow engine + cockpit + agent orchestr
 
 **Why it's out**: Comandante explicitly said "let's go ahead with the fork. and let's get it functional quickly. This will be just my personal CLI terminal." Supacool's scope is the terminal UI. If the workflow-engine vision comes back, it lives in a **separate project** that communicates with Supacool over HTTP/SSE, not as code inside this repo.
 
-**Signals this is creeping back into scope**: anyone talks about Supacool *autonomously routing work* — spawning agents on a schedule, phase state machines, webhook-driven orchestration.
+**Signals this is creeping back into scope**: anyone talks about Supacool *autonomously routing work* — spawning
+agents on a schedule, webhook-driven orchestration, configurable workflow graphs, or chaining arbitrary phases.
 
-**What is NOT engine creep** (shipped, in scope): read-only integrations that inform the human at the board — the Linear inbox (`LinearInboxFeature`, paste/refresh/assign/start-session-on-ticket), PR Pulse polling (`PRMonitorClient`, Greptile scores, merge-conflict surfacing), and narrowly-guarded conveniences like opt-in auto-resume when a PR bounces on a mechanical reason (attempt-capped in `BoardFeature.autoResumeAttempts`). The line: Supacool may *watch and surface*; a human (or an explicit per-session opt-in with a loop guard) decides what runs. A headless service that plans and dispatches work is still out.
+**What is NOT engine creep** (shipped, in scope): read-only integrations that inform the human at the board — the
+Linear inbox (`LinearInboxFeature`, paste/refresh/assign/start-session-on-ticket), PR Pulse polling
+(`PRMonitorClient`, Greptile scores, merge-conflict surfacing), narrowly-guarded conveniences like opt-in
+auto-resume when a PR bounces on a mechanical reason (attempt-capped in `BoardFeature.autoResumeAttempts`), and
+the explicitly armed **bounded PR review loop**. That loop is a hard-coded per-session product flow: one Codex
+reviewer, one primary implementer, structured results, commit-SHA verification, warning at round 3, hard pause at
+round 5, and human choices for diagnosis / one extra round / stop. It does not poll for work, choose tickets, or let
+users assemble arbitrary steps. The line: Supacool may *watch and surface*; a human (or an explicit per-session
+opt-in with a loop guard) decides what runs. A headless service that plans and dispatches work is still out.
 
 ## 2. Supervisor-via-CLI (Pi replacement)
 

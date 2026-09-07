@@ -103,6 +103,16 @@ struct TerminalClient {
   }
 
   enum Event: Equatable {
+    /// An agent's Stop hook is the authoritative end-of-turn signal. Unlike
+    /// busy-state changes, this carries the exact surface and final message
+    /// needed by consumers that coordinate work between agent terminals.
+    case agentTurnEnded(
+      worktreeID: Worktree.ID,
+      tabID: UUID,
+      surfaceID: UUID,
+      agent: String,
+      message: String
+    )
     case notificationReceived(worktreeID: Worktree.ID, title: String, body: String)
     case notificationIndicatorChanged(count: Int)
     case tabCreated(worktreeID: Worktree.ID)

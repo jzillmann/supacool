@@ -247,13 +247,16 @@ struct WorktreeTerminalManagerTests {
     #expect(manager.taskStatus(for: worktree.id) == .running)
   }
 
-  @Test func socketNotificationRoutesToDecodedWorktreeState() {
-    withDependencies {
+  @Test func socketNotificationRoutesToDecodedWorktreeState() async {
+    await withDependencies {
       $0.date.now = Date(timeIntervalSince1970: 1_234)
     } operation: {
       let server = AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-socket-notification")
       let manager = WorktreeTerminalManager(runtime: GhosttyRuntime(), socketServer: server)
       let worktree = makeWorktree(id: "/tmp/repo/wt with spaces")
+      var events = manager.eventStream().makeAsyncIterator()
+      let initialEvent = await events.next()
+      #expect(initialEvent == .notificationIndicatorChanged(count: 0))
 
       guard let tab = makeTab(in: manager, for: worktree),
         let encodedID = worktree.id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
@@ -274,6 +277,20 @@ struct WorktreeTerminalManagerTests {
         state.notifications.contains {
           $0.title == "Done" && $0.body == "All complete"
         }
+      )
+      // Tab creation and notification-indicator refresh are emitted beside
+      // the Stop event, so assert membership instead of depending on order.
+      let postStopEvents = [await events.next(), await events.next(), await events.next()]
+      #expect(
+        postStopEvents.contains(
+          .agentTurnEnded(
+            worktreeID: worktree.id,
+            tabID: tab.tabId.rawValue,
+            surfaceID: tab.surfaceID,
+            agent: "codex",
+            message: "All complete"
+          )
+        )
       )
     }
   }

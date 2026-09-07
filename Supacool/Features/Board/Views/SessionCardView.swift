@@ -41,6 +41,13 @@ struct SessionCardView: View {
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
   var onAutoObserverRunNow: (() -> Void)?
+  /// Explicitly armed, bounded PR review-loop controls. The reviewer runs
+  /// in a real auxiliary terminal but stays collapsed behind this control.
+  var onStartReviewLoop: (() -> Void)?
+  var onOpenReviewLoopReviewer: (() -> Void)?
+  var onDiagnoseReviewLoop: (() -> Void)?
+  var onContinueReviewLoop: (() -> Void)?
+  var onStopReviewLoop: (() -> Void)?
   /// Right-click → "Debug session…" — opens the debug sheet that spawns
   /// a fresh agent in the supacool repo primed with this session's
   /// trace JSONL.
@@ -101,10 +108,21 @@ struct SessionCardView: View {
         if let onTogglePriority {
           priorityButton(action: onTogglePriority)
         }
-        if !session.auxiliaryTerminals.isEmpty {
-          shellCompositionPill
+        if nonReviewAuxiliaryCount > 0 {
+          compositionPill
         }
         Spacer()
+        if session.reviewLoop != nil || canStartReviewLoop {
+          ReviewLoopControl(
+            state: session.reviewLoop,
+            canStart: canStartReviewLoop,
+            onStart: { onStartReviewLoop?() },
+            onOpenReviewer: { onOpenReviewLoopReviewer?() },
+            onDiagnose: { onDiagnoseReviewLoop?() },
+            onContinueOneRound: { onContinueReviewLoop?() },
+            onStop: { onStopReviewLoop?() }
+          )
+        }
         infoButton
         if onAutoObserverToggle != nil {
           autoObserverButton
@@ -281,6 +299,18 @@ struct SessionCardView: View {
         Button("Debug session…", systemImage: "ladybug", action: onDebug)
         Divider()
       }
+      if session.reviewLoop == nil, canStartReviewLoop, let onStartReviewLoop {
+        Button("Start Review Loop", systemImage: "arrow.triangle.2.circlepath", action: onStartReviewLoop)
+        Divider()
+      } else if session.reviewLoop != nil {
+        if let onOpenReviewLoopReviewer {
+          Button("Open Reviewer", systemImage: "eye", action: onOpenReviewLoopReviewer)
+        }
+        if let onStopReviewLoop {
+          Button("Stop Review Loop", systemImage: "stop.circle", action: onStopReviewLoop)
+        }
+        Divider()
+      }
       if onAddReference != nil {
         Button("Add link…", systemImage: "link.badge.plus") {
           addLinkText = ""
@@ -327,6 +357,14 @@ struct SessionCardView: View {
       }
     } message: {
       Text("Pin this session into a new group, then add related terminals and flip between them with ⌘⌥. .")
+    }
+  }
+
+  private var canStartReviewLoop: Bool {
+    guard onStartReviewLoop != nil, session.agent != nil, !session.isRemote else { return false }
+    return session.references.contains { reference in
+      guard case .pullRequest(_, _, _, let state, _) = reference else { return false }
+      return state == nil || state == .open || state == .draft
     }
   }
 
@@ -395,15 +433,15 @@ struct SessionCardView: View {
     }
   }
 
-  /// Compact "+N sh" pill — shows when the session has auxiliary shell
-  /// terminals beyond its agent. Purely informational; opening the card
-  /// still routes straight to the agent terminal.
-  private var shellCompositionPill: some View {
-    let count = session.auxiliaryTerminals.count
+  /// Compact auxiliary-terminal pill. The review-loop terminal has its own
+  /// progress control and is deliberately excluded so the card does not
+  /// describe one background reviewer twice.
+  private var compositionPill: some View {
+    let count = nonReviewAuxiliaryCount
     return HStack(spacing: 2) {
       Image(systemName: "terminal.fill")
         .font(.system(size: 9, weight: .semibold))
-        .accessibilityLabel("Auxiliary shell tabs")
+        .accessibilityLabel("Auxiliary terminals")
       Text("+\(count)")
         .font(.caption2.weight(.semibold).monospacedDigit())
     }
@@ -412,7 +450,12 @@ struct SessionCardView: View {
     .padding(.vertical, 1)
     .background(Color.secondary.opacity(0.12))
     .clipShape(Capsule())
-    .help("\(count) auxiliary shell tab\(count == 1 ? "" : "s") in this session")
+    .help("\(count) other terminal\(count == 1 ? "" : "s") in this session")
+  }
+
+  private var nonReviewAuxiliaryCount: Int {
+    let reviewerID = session.reviewLoop?.reviewerTerminalID
+    return session.auxiliaryTerminals.count { $0.id != reviewerID }
   }
 
   /// Small bookmark glyph signalling whether the agent's native session id
