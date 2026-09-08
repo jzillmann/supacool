@@ -1,0 +1,257 @@
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 877c43724..f73ff4bb9 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1464,7 +1464,15 @@ scrollbar: Scrollbar = .system,
+ /// A default link that matches a URL and opens it in the system opener always
+ /// exists. This can be disabled using `link-url`.
+ ///
+-/// TODO: This can't currently be set!
++/// The syntax is `link = <regex>,<action>[,<highlight>]`, e.g.
++/// `link = \bCEN-\d+\b,open,hover-mods:super`. Fields are read
++/// right-to-left, so a comma inside the regex needs no escaping. The only
++/// action currently available is `open`, which opens the matched text with
++/// the system opener. The highlight defaults to hovering with the
++/// ctrl-or-super modifier, matching the built-in URL link.
++///
++/// Setting this to an empty value clears every link, the built-in URL
++/// matcher included.
+ link: RepeatableLink = .{},
+ 
+ /// Enable URL matching. URLs are matched on hover with control (Linux) or
+@@ -8716,11 +8724,112 @@ pub const RepeatableLink = struct {
+ 
+     links: std.ArrayList(inputpkg.Link) = .empty,
+ 
++    /// Parse a link from a config value.
++    ///
++    /// Syntax: `link = <regex>,<action>[,<highlight>]`
++    ///
++    /// The fields are parsed right-to-left so the regex never needs to
++    /// escape a comma (`\d{1,9}` is a perfectly normal thing to write).
++    /// `<highlight>` may be omitted, in which case it defaults to the
++    /// same highlight the built-in URL matcher uses (hover with the
++    /// platform's ctrl-or-super modifier).
++    ///
++    /// Valid actions: `open`.
++    /// Valid highlights: `always`, `hover`, `always-mods:<mods>`,
++    /// `hover-mods:<mods>`, where `<mods>` is `+`-joined from `shift`,
++    /// `ctrl`, `alt` and `super`.
++    ///
++    /// An empty value resets the list, dropping every previously
++    /// configured link (the built-in URL matcher included).
+     pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void {
+-        _ = self;
+-        _ = alloc;
+-        _ = input_;
+-        return error.NotImplemented;
++        const input = input_ orelse "";
++        if (input.len == 0) {
++            self.links.clearRetainingCapacity();
++            return;
++        }
++
++        var rest = input;
++        var highlight: inputpkg.Link.Highlight = .{
++            .hover_mods = inputpkg.ctrlOrSuper(.{}),
++        };
++
++        // Trailing field is the highlight, but only if it parses as one.
++        if (splitLastField(rest)) |split| {
++            if (parseHighlight(split.field)) |parsed| {
++                highlight = parsed;
++                rest = split.rest;
++            }
++        }
++
++        const split = splitLastField(rest) orelse return error.InvalidValue;
++        const action = parseAction(split.field) orelse return error.InvalidValue;
++        const regex = split.rest;
++        if (regex.len == 0) return error.InvalidValue;
++
++        // Reject a regex oniguruma can't compile here, at config-parse
++        // time, rather than letting every mouse move log a failure.
++        {
++            const probe: inputpkg.Link = .{
++                .regex = regex,
++                .action = action,
++                .highlight = highlight,
++            };
++            var compiled = probe.oniRegex() catch return error.InvalidValue;
++            compiled.deinit();
++        }
++
++        try self.links.append(alloc, .{
++            .regex = try alloc.dupe(u8, regex),
++            .action = action,
++            .highlight = highlight,
++        });
++    }
++
++    const FieldSplit = struct {
++        rest: []const u8,
++        field: []const u8,
++    };
++
++    fn splitLastField(input: []const u8) ?FieldSplit {
++        const idx = std.mem.lastIndexOfScalar(u8, input, ',') orelse return null;
++        return .{ .rest = input[0..idx], .field = input[idx + 1 ..] };
++    }
++
++    fn parseAction(raw: []const u8) ?inputpkg.Link.Action {
++        if (std.mem.eql(u8, raw, "open")) return .{ .open = {} };
++        return null;
++    }
++
++    fn parseHighlight(raw: []const u8) ?inputpkg.Link.Highlight {
++        if (std.mem.eql(u8, raw, "always")) return .{ .always = {} };
++        if (std.mem.eql(u8, raw, "hover")) return .{ .hover = {} };
++        if (std.mem.startsWith(u8, raw, "always-mods:")) {
++            const mods = parseMods(raw["always-mods:".len..]) orelse return null;
++            return .{ .always_mods = mods };
++        }
++        if (std.mem.startsWith(u8, raw, "hover-mods:")) {
++            const mods = parseMods(raw["hover-mods:".len..]) orelse return null;
++            return .{ .hover_mods = mods };
++        }
++        return null;
++    }
++
++    fn parseMods(raw: []const u8) ?inputpkg.Mods {
++        if (raw.len == 0) return null;
++        var mods: inputpkg.Mods = .{};
++        var it = std.mem.splitScalar(u8, raw, '+');
++        while (it.next()) |part| {
++            if (std.mem.eql(u8, part, "shift")) {
++                mods.shift = true;
++            } else if (std.mem.eql(u8, part, "ctrl") or std.mem.eql(u8, part, "control")) {
++                mods.ctrl = true;
++            } else if (std.mem.eql(u8, part, "alt") or std.mem.eql(u8, part, "opt") or std.mem.eql(u8, part, "option")) {
++                mods.alt = true;
++            } else if (std.mem.eql(u8, part, "super") or std.mem.eql(u8, part, "cmd") or std.mem.eql(u8, part, "command")) {
++                mods.super = true;
++            } else return null;
++        }
++        return mods;
+     }
+ 
+     /// Deep copy of the struct. Required by Config.
+@@ -8755,12 +8864,115 @@ pub const RepeatableLink = struct {
+ 
+     /// Used by Formatter
+     pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
+-        // This currently can't be set so we don't format anything.
+-        _ = self;
+-        _ = formatter;
++        var buf: [4096]u8 = undefined;
++        for (self.links.items) |link| {
++            const action = switch (link.action) {
++                .open => "open",
++                // Internal-only, never user-specified, so never formatted.
++                ._open_osc8 => continue,
++            };
++
++            var highlight_buf: [64]u8 = undefined;
++            const highlight = switch (link.highlight) {
++                .always => "always",
++                .hover => "hover",
++                .always_mods => |mods| try formatMods(&highlight_buf, "always-mods:", mods),
++                .hover_mods => |mods| try formatMods(&highlight_buf, "hover-mods:", mods),
++            };
++
++            const value = std.fmt.bufPrint(
++                &buf,
++                "{s},{s},{s}",
++                .{ link.regex, action, highlight },
++            ) catch continue;
++            try formatter.formatEntry([]const u8, value);
++        }
++    }
++
++    fn formatMods(
++        buf: []u8,
++        prefix: []const u8,
++        mods: inputpkg.Mods,
++    ) std.fmt.BufPrintError![]const u8 {
++        var writer = std.Io.Writer.fixed(buf);
++        writer.writeAll(prefix) catch return error.NoSpaceLeft;
++        var first = true;
++        inline for (.{ "shift", "ctrl", "alt", "super" }) |name| {
++            if (@field(mods, name)) {
++                if (!first) writer.writeByte('+') catch return error.NoSpaceLeft;
++                writer.writeAll(name) catch return error.NoSpaceLeft;
++                first = false;
++            }
++        }
++        return writer.buffered();
+     }
+ };
+ 
++test "RepeatableLink: parse" {
++    const testing = std.testing;
++    var arena = ArenaAllocator.init(testing.allocator);
++    defer arena.deinit();
++    const alloc = arena.allocator();
++
++    var list: RepeatableLink = .{};
++    try list.parseCLI(alloc, "\\bCEN-\\d+\\b,open");
++    try testing.expectEqual(@as(usize, 1), list.links.items.len);
++    try testing.expectEqualStrings("\\bCEN-\\d+\\b", list.links.items[0].regex);
++    try testing.expect(list.links.items[0].action == .open);
++    try testing.expect(list.links.items[0].highlight == .hover_mods);
++
++    // A comma inside the regex belongs to the regex.
++    try list.parseCLI(alloc, "\\b[A-Z]{2,6}-\\d+\\b,open,always");
++    try testing.expectEqual(@as(usize, 2), list.links.items.len);
++    try testing.expectEqualStrings("\\b[A-Z]{2,6}-\\d+\\b", list.links.items[1].regex);
++    try testing.expect(list.links.items[1].highlight == .always);
++
++    // The exact shape Supacool emits for ticket ids.
++    try list.parseCLI(alloc, "\\b(CEN|FOO)-\\d+\\b,open,hover-mods:super");
++    try testing.expectEqualStrings("\\b(CEN|FOO)-\\d+\\b", list.links.items[2].regex);
++    try testing.expect(list.links.items[2].highlight.hover_mods.super);
++
++    try list.parseCLI(alloc, "foo,open,hover-mods:ctrl+shift");
++    try testing.expect(list.links.items[3].highlight.hover_mods.ctrl);
++    try testing.expect(list.links.items[3].highlight.hover_mods.shift);
++
++    // Empty resets.
++    try list.parseCLI(alloc, "");
++    try testing.expectEqual(@as(usize, 0), list.links.items.len);
++}
++
++test "RepeatableLink: parse errors" {
++    const testing = std.testing;
++    var arena = ArenaAllocator.init(testing.allocator);
++    defer arena.deinit();
++    const alloc = arena.allocator();
++
++    var list: RepeatableLink = .{};
++    try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "foo"));
++    try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "foo,nope"));
++    try testing.expectError(error.InvalidValue, list.parseCLI(alloc, ",open"));
++    // Unparseable regex.
++    try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "[unterminated,open"));
++}
++
++test "RepeatableLink: formatEntry" {
++    const testing = std.testing;
++    var arena = ArenaAllocator.init(testing.allocator);
++    defer arena.deinit();
++    const alloc = arena.allocator();
++
++    var buf: std.Io.Writer.Allocating = .init(alloc);
++    defer buf.deinit();
++
++    var list: RepeatableLink = .{};
++    try list.parseCLI(alloc, "CEN-\\d+,open,hover-mods:super");
++    try list.formatEntry(formatterpkg.entryFormatter("link", &buf.writer));
++    try testing.expectEqualStrings(
++        "link = CEN-\\d+,open,hover-mods:super\n",
++        buf.written(),
++    );
++}
++
+ /// Options for copy on select behavior.
+ pub const CopyOnSelect = enum {
+     /// Disables copy on select entirely. This is the default on macOS.

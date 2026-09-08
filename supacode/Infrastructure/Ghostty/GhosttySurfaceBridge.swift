@@ -1,4 +1,5 @@
 import AppKit
+import ComposableArchitecture
 import Foundation
 import GhosttyKit
 
@@ -46,6 +47,7 @@ final class GhosttySurfaceBridge {
     if let handled = handleSplitAction(action) { return handled }
     if handleTitleAndPath(action) { return false }
     if handleCommandStatus(action) { return false }
+    if let handled = handleOpenURL(action) { return handled }
     if handleMouseAndLink(action) { return false }
     if handleSearchAndScroll(action) { return false }
     if handleSizeAndKey(action) { return false }
@@ -353,6 +355,38 @@ final class GhosttySurfaceBridge {
     }
   }
 
+  /// Ghostty's `open` link action opens the matched text verbatim, so a bare
+  /// ticket id would end up as `open CEN-9398`. Claim the action for matches
+  /// Supacool knows how to resolve and open the real URL ourselves; return
+  /// `false` for everything else so ghostty's own opener still runs.
+  ///
+  /// Returns `nil` when this isn't an open-URL action at all.
+  private func handleOpenURL(_ action: ghostty_action_s) -> Bool? {
+    guard action.tag == GHOSTTY_ACTION_OPEN_URL else { return nil }
+    let openUrl = action.action.open_url
+    let matched = string(from: openUrl.url, length: openUrl.len)
+    state.openUrlKind = openUrl.kind
+    state.openUrl = matched
+
+    // An OSC 8 hyperlink already carries a real URL — never rewrite those.
+    guard openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let matched else { return false }
+
+    @Shared(.settingsFile) var settingsFile
+    // Same key `SessionInfoPopover` reads through `@AppStorage`; read straight
+    // from `UserDefaults` here because this is a plain class, not a view.
+    let slug = UserDefaults.standard.string(forKey: "supacool.references.linearOrg") ?? ""
+    guard
+      let url = TerminalLinkRules.linearURL(
+        forMatched: matched,
+        teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
+        linearOrgSlug: slug
+      )
+    else { return false }
+
+    NSWorkspace.shared.open(url)
+    return true
+  }
+
   private func handleMouseAndLink(_ action: ghostty_action_s) -> Bool {
     switch action.tag {
     case GHOSTTY_ACTION_MOUSE_SHAPE:
@@ -372,12 +406,6 @@ final class GhosttySurfaceBridge {
 
     case GHOSTTY_ACTION_RENDERER_HEALTH:
       state.rendererHealth = action.action.renderer_health
-      return true
-
-    case GHOSTTY_ACTION_OPEN_URL:
-      let openUrl = action.action.open_url
-      state.openUrlKind = openUrl.kind
-      state.openUrl = string(from: openUrl.url, length: openUrl.len)
       return true
 
     case GHOSTTY_ACTION_COLOR_CHANGE:

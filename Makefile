@@ -12,6 +12,7 @@ GHOSTTY_RESOURCE_PATH := Resources/ghostty
 GHOSTTY_TERMINFO_PATH := Resources/terminfo
 GHOSTTY_BUILD_OUTPUTS := $(GHOSTTY_XCFRAMEWORK_PATH) $(GHOSTTY_RESOURCE_PATH) $(GHOSTTY_TERMINFO_PATH)
 SUBMODULE_PATHS := ThirdParty/ghostty Resources/git-wt
+GHOSTTY_PATCHES := $(wildcard patches/ghostty-*.patch)
 PROJECT_FILE_PATH := supacool.xcodeproj/project.pbxproj
 SPM_CACHE_DIR := $(HOME)/Library/Caches/supacool-spm/SourcePackages
 FORMAT ?= xcsift
@@ -33,7 +34,7 @@ else
   $(error Unknown FORMAT "$(FORMAT)". Use xcsift, xcpretty, or none)
 endif
 .DEFAULT_GOAL := help
-.PHONY: build-ghostty-xcframework repair-submodules ensure-submodules build-app run-app install-dev-build archive export-archive format lint check test bump-version bump-and-release log-stream
+.PHONY: build-ghostty-xcframework patch-ghostty repair-submodules ensure-submodules build-app run-app install-dev-build archive export-archive format lint check test bump-version bump-and-release log-stream
 
 help:  # Display this help.
 	@-+echo "Run make with one of the following targets:"
@@ -65,7 +66,27 @@ ensure-submodules:
 		exit 1; \
 	fi
 
-$(GHOSTTY_BUILD_OUTPUTS):
+patch-ghostty: ensure-submodules # Apply Supacool's local patches to the ghostty submodule (idempotent)
+	@# The submodule stays pinned to an upstream commit; these patches are applied
+	@# on top at build time so `upstream-cherry-pick` and submodule bumps keep
+	@# working. Each patch is skipped when it already applies in reverse, so a
+	@# repeated build (or a `repair-submodules` that reset the tree) is a no-op.
+	@for patch in $(GHOSTTY_PATCHES); do \
+		if git -C ThirdParty/ghostty apply --reverse --check "$(CURDIR)/$$patch" >/dev/null 2>&1; then \
+			echo "ghostty patch already applied: $$patch"; \
+		elif git -C ThirdParty/ghostty apply "$(CURDIR)/$$patch"; then \
+			echo "ghostty patch applied: $$patch"; \
+			rm -rf $(GHOSTTY_BUILD_OUTPUTS); \
+		else \
+			echo "error: failed to apply $$patch to ThirdParty/ghostty"; \
+			echo "       (rebase it after a submodule bump, see patches/README.md)"; \
+			exit 1; \
+		fi; \
+	done
+
+# The patch files are real prerequisites: editing one must rebuild the
+# framework, which a patched-but-untracked submodule tree can't tell us.
+$(GHOSTTY_BUILD_OUTPUTS): $(GHOSTTY_PATCHES) | patch-ghostty
 	@# `xcodebuild -create-xcframework` REFUSES to write over an existing output,
 	@# so an interrupted zig build (^C, a killed job, two builds racing) leaves a
 	@# half-written macos/GhosttyKit.xcframework that makes every later build fail

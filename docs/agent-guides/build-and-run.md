@@ -19,6 +19,25 @@ make test                       # full test suite
 make check                      # swift-format + swiftlint
 ```
 
+## Local ghostty patches
+
+`ThirdParty/ghostty` stays pinned to an upstream commit, and `make patch-ghostty`
+(run first by `build-ghostty-xcframework`) applies everything in `patches/` on top
+of that checkout. Apply is idempotent — a patch that already applies in reverse is
+skipped — so a repeated build, or a `repair-submodules` that reset the tree with
+`--force`, is a no-op. The submodule's working tree is simply dirty after a build;
+its pinned SHA never moves.
+
+The patch files are real prerequisites of the framework, so editing one rebuilds
+it. **A submodule bump does not**: the outputs already exist, so `make
+build-ghostty-xcframework` after a bump used to be a silent no-op and the app kept
+linking the old framework. That is how `82232ecde` landed with a clipboard API the
+Swift side had never compiled against. After bumping, `rm -rf
+Frameworks/GhosttyKit.xcframework` and rebuild before trusting the tree.
+
+If `make patch-ghostty` fails after a bump, rebase the patch — see
+[`patches/README.md`](../../patches/README.md).
+
 ## Debug vs Release — which to actually run
 
 `build-app` / `run-app` build **Debug**, which is `SWIFT_OPTIMIZATION_LEVEL = -Onone`

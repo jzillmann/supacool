@@ -85,6 +85,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 ├── supacool.xcodeproj/       # Xcode project (objectVersion 77, synchronized root groups; targets `supacool` + `supacoolTests`)
 ├── docs/agent-guides/        # deep reference docs (start here when doing architecture work)
 ├── .claude/skills/           # Claude-invokable skill modules (recurring workflows)
+├── patches/                  # local patches applied to ThirdParty/ghostty at build time
 ├── ThirdParty/ghostty/       # Ghostty submodule → GhosttyKit.xcframework
 └── Makefile                  # build-ghostty-xcframework, build-app, run-app, test, etc.
 ```

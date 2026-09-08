@@ -42,11 +42,11 @@ final class GhosttyRuntime {
       action_cb: { @Sendable app, target, action in
         GhosttyRuntime.actionCallback(app, target, action)
       },
-      read_clipboard_cb: { @Sendable userdata, location, state in
-        GhosttyRuntime.readClipboardCallback(userdata, location, state)
+      read_clipboard_cb: { @Sendable userdata, location, state, mimes, mimesLen, list in
+        GhosttyRuntime.readClipboardCallback(userdata, location, state, mimes, mimesLen, list)
       },
-      confirm_read_clipboard_cb: { @Sendable userdata, string, state, request in
-        GhosttyRuntime.confirmReadClipboardCallback(userdata, string, state, request)
+      confirm_read_clipboard_cb: { @Sendable userdata, confirm, state, request in
+        GhosttyRuntime.confirmReadClipboardCallback(userdata, confirm, state, request)
       },
       write_clipboard_cb: { @Sendable userdata, location, content, len, confirm in
         GhosttyRuntime.writeClipboardCallback(userdata, location, content, len, confirm)
@@ -263,30 +263,56 @@ final class GhosttyRuntime {
   private nonisolated static func readClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
     _ location: ghostty_clipboard_e,
-    _ state: UnsafeMutableRawPointer?
-  ) -> Bool {
+    _ state: UnsafeMutableRawPointer?,
+    _ mimes: UnsafePointer<UnsafePointer<CChar>?>?,
+    _ mimesLen: Int,
+    _ list: Bool
+  ) -> ghostty_clipboard_read_result_e {
     let userdataBits = userdata.map { UInt(bitPattern: $0) }
     let stateBits = state.map { UInt(bitPattern: $0) }
+    // The C array is only valid for the duration of this call, so copy it
+    // before any thread hop.
+    var requestedMimes: [String] = []
+    if let mimes {
+      for index in 0..<mimesLen {
+        guard let ptr = mimes[index] else { continue }
+        requestedMimes.append(String(cString: ptr))
+      }
+    }
     if Thread.isMainThread {
       return MainActor.assumeIsolated {
-        readClipboard(userdataBits: userdataBits, location: location, stateBits: stateBits)
+        readClipboard(
+          userdataBits: userdataBits,
+          location: location,
+          stateBits: stateBits,
+          requestedMimes: requestedMimes,
+          list: list
+        )
       }
     }
     return DispatchQueue.main.sync {
       MainActor.assumeIsolated {
-        readClipboard(userdataBits: userdataBits, location: location, stateBits: stateBits)
+        readClipboard(
+          userdataBits: userdataBits,
+          location: location,
+          stateBits: stateBits,
+          requestedMimes: requestedMimes,
+          list: list
+        )
       }
     }
   }
 
   private nonisolated static func confirmReadClipboardCallback(
     _ userdata: UnsafeMutableRawPointer?,
-    _ string: UnsafePointer<CChar>?,
+    _ confirm: UnsafePointer<ghostty_clipboard_confirm_s>?,
     _ state: UnsafeMutableRawPointer?,
     _ request: ghostty_clipboard_request_e
   ) {
-    guard let string else { return }
-    let value = String(cString: string)
+    guard let confirm else { return }
+    // Copy the borrowed C payload before hopping threads; libghostty owns it
+    // only for the duration of this call.
+    let value = ClipboardPayload(confirm.pointee)
     let userdataBits = userdata.map { UInt(bitPattern: $0) }
     let stateBits = state.map { UInt(bitPattern: $0) }
     if Thread.isMainThread {
@@ -397,28 +423,57 @@ final class GhosttyRuntime {
     return bridge.handleAction(target: target, action: action)
   }
 
+  /// Supacool only ever serves the clipboard as text, so a read is answered
+  /// with a single `text/plain` representation for whichever text MIME the
+  /// core asked for.
+  private static let clipboardTextMime = "text/plain"
+
   private static func readClipboard(
     userdataBits: UInt?,
     location: ghostty_clipboard_e,
-    stateBits: UInt?
-  ) -> Bool {
+    stateBits: UInt?,
+    requestedMimes: [String],
+    list: Bool
+  ) -> ghostty_clipboard_read_result_e {
     let userdata = userdataBits.flatMap { UnsafeMutableRawPointer(bitPattern: $0) }
     let state = stateBits.flatMap { UnsafeMutableRawPointer(bitPattern: $0) }
     guard let bridge = surfaceBridge(fromUserdata: userdata), let surface = bridge.surface else {
-      return false
+      return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
     }
-    guard let value = NSPasteboard.ghostty(location)?.getOpinionatedStringContents() else {
-      return false
+    guard let pasteboard = NSPasteboard.ghostty(location) else {
+      return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED
     }
-    value.withCString { ptr in
-      ghostty_surface_complete_clipboard_request(surface, ptr, state, false)
+
+    // Serve the first text MIME the core asked for (an empty request list
+    // means "whatever you have"), echoing its exact spelling back so the
+    // core can match it.
+    let servedMime =
+      requestedMimes.isEmpty
+      ? clipboardTextMime
+      : requestedMimes.first { $0.hasPrefix("text/") || $0 == "*/*" }
+    var contents: [ClipboardPayload.Content] = []
+    if let servedMime, let value = pasteboard.getOpinionatedStringContents() {
+      contents.append(.init(mime: servedMime == "*/*" ? clipboardTextMime : servedMime, data: Data(value.utf8)))
     }
-    return true
+    let available = list ? [clipboardTextMime] : []
+    guard !contents.isEmpty || list else { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
+
+    completeClipboardRequest(
+      surface,
+      payload: .init(contents: contents, available: available),
+      state: state,
+      confirmed: false
+    )
+    return GHOSTTY_CLIPBOARD_READ_STARTED
   }
 
+  /// Supacool auto-approves clipboard reads that libghostty wants confirmed
+  /// (OSC 52 and friends) — the same behaviour as before the clipboard API
+  /// grew MIME representations. The approval completes with exactly the
+  /// payload libghostty handed us, so the clipboard is never re-read.
   private static func confirmReadClipboard(
     userdataBits: UInt?,
-    value: String,
+    value: ClipboardPayload,
     stateBits: UInt?,
     request: ghostty_clipboard_request_e
   ) {
@@ -428,8 +483,96 @@ final class GhosttyRuntime {
     guard let bridge = surfaceBridge(fromUserdata: userdata), let surface = bridge.surface else {
       return
     }
-    value.withCString { ptr in
-      ghostty_surface_complete_clipboard_request(surface, ptr, state, true)
+    completeClipboardRequest(surface, payload: value, state: state, confirmed: true)
+  }
+
+  /// A clipboard read payload copied out of libghostty's borrowed C memory so
+  /// it can survive a thread hop and be handed back on completion.
+  nonisolated struct ClipboardPayload: Sendable {
+    struct Content: Sendable {
+      let mime: String
+      let data: Data
+    }
+
+    var contents: [Content] = []
+    var available: [String] = []
+
+    init(contents: [Content] = [], available: [String] = []) {
+      self.contents = contents
+      self.available = available
+    }
+
+    init(_ confirm: ghostty_clipboard_confirm_s) {
+      if let raw = confirm.contents {
+        for index in 0..<confirm.contents_len {
+          let content = raw[index]
+          guard let mime = content.mime else { continue }
+          let data = content.len > 0 ? Data(bytes: content.data, count: content.len) : Data()
+          contents.append(.init(mime: String(cString: mime), data: data))
+        }
+      }
+      if let raw = confirm.available {
+        for index in 0..<confirm.available_len {
+          guard let ptr = raw[index] else { continue }
+          available.append(String(cString: ptr))
+        }
+      }
+    }
+  }
+
+  /// Copies `payload` into C memory that stays alive for the duration of the
+  /// call and completes the pending read.
+  private static func completeClipboardRequest(
+    _ surface: ghostty_surface_t,
+    payload: ClipboardPayload,
+    state: UnsafeMutableRawPointer?,
+    confirmed: Bool,
+    remember: Bool = false
+  ) {
+    var cStrings: [UnsafeMutablePointer<CChar>] = []
+    var cDatas: [UnsafeMutableRawPointer] = []
+    defer {
+      cStrings.forEach { free($0) }
+      cDatas.forEach { $0.deallocate() }
+    }
+
+    var cContents: [ghostty_clipboard_content_s] = []
+    for entry in payload.contents {
+      guard let mime = strdup(entry.mime) else { continue }
+      cStrings.append(mime)
+      let buffer = UnsafeMutableRawPointer.allocate(byteCount: max(entry.data.count, 1), alignment: 1)
+      cDatas.append(buffer)
+      entry.data.withUnsafeBytes { source in
+        if let base = source.baseAddress { buffer.copyMemory(from: base, byteCount: source.count) }
+      }
+      cContents.append(
+        ghostty_clipboard_content_s(
+          mime: mime,
+          data: buffer.assumingMemoryBound(to: CChar.self),
+          len: entry.data.count
+        )
+      )
+    }
+
+    var cAvailable: [UnsafePointer<CChar>?] = []
+    for mime in payload.available {
+      guard let string = strdup(mime) else { continue }
+      cStrings.append(string)
+      cAvailable.append(UnsafePointer(string))
+    }
+
+    cContents.withUnsafeBufferPointer { contentsBuffer in
+      cAvailable.withUnsafeBufferPointer { availableBuffer in
+        var complete = ghostty_clipboard_complete_s(
+          contents: contentsBuffer.baseAddress,
+          contents_len: contentsBuffer.count,
+          available: availableBuffer.baseAddress,
+          available_len: availableBuffer.count,
+          confirmed: confirmed,
+          remember: remember
+        )
+        ghostty_surface_complete_clipboard_request(surface, &complete, state)
+      }
     }
   }
 
@@ -468,15 +611,17 @@ final class GhosttyRuntime {
     ghostty_config_load_default_files(config)
     ghostty_config_load_recursive_files(config)
     ghostty_config_load_cli_args(config)
-    loadBundledOverrides(into: config)
+    loadBundledOverrides(into: config, settings: settingsFile)
     loadBundledTheme(into: config, enabled: settingsFile.global.terminalThemeSyncEnabled)
     ghostty_config_finalize(config)
     return config
   }
 
-  /// Applies Supacool-specific config (padding values) that takes precedence over user settings.
-  private static func loadBundledOverrides(into config: ghostty_config_t) {
-    let defaults = "window-padding-x = 14\nwindow-padding-y = 12,0\n"
+  /// Applies Supacool-specific config (padding, ticket links) that takes precedence over user settings.
+  private static func loadBundledOverrides(into config: ghostty_config_t, settings: SettingsFile) {
+    let defaults =
+      "window-padding-x = 14\nwindow-padding-y = 12,0\n"
+      + TerminalLinkRules.configLines(teamKeys: configuredLinearTeamKeys(in: settings))
     let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacool-defaults.conf")
     do {
       try defaults.write(to: tempURL, atomically: true, encoding: .utf8)
@@ -485,6 +630,15 @@ final class GhosttyRuntime {
       return
     }
     tempURL.path.withCString { ghostty_config_load_file(config, $0) }
+  }
+
+  /// Union of every repo's configured Linear team keys. The ghostty config is
+  /// app-global while the keys are per-repo, so a ticket id is clickable in any
+  /// terminal as long as some repo claims its prefix.
+  static func configuredLinearTeamKeys(in settings: SettingsFile) -> Set<String> {
+    settings.repositories.values.reduce(into: Set<String>()) { keys, repository in
+      keys.formUnion(parseLinearTeamKeys(repository.linearTeamKeys))
+    }
   }
 
   /// When terminal theme sync is enabled, loads the bundled Supacool
