@@ -43,6 +43,9 @@ extension BoardFeatureTests {
       return
     }
     #expect(input.contains("SUPACOOL_REVIEW_RESULT"))
+    #expect(input.contains("# Review handoff — copy this entire block"))
+    #expect(input.contains("## Findings"))
+    #expect(input.contains("SUPACOOL_REVIEW_RESULT_END"))
     #expect(input.contains("round 1 of 5"))
   }
 

@@ -118,18 +118,109 @@ nonisolated struct ReviewLoopReport: Codable, Equatable, Sendable {
 
 enum ReviewLoopReportParser {
   static let marker = "SUPACOOL_REVIEW_RESULT"
+  static let endMarker = "SUPACOOL_REVIEW_RESULT_END"
 
-  /// Extracts the JSON object immediately following the marker in a reviewer
-  /// final message. Markdown code fences and surrounding prose are accepted;
-  /// malformed or incomplete payloads return nil.
+  /// Extracts a review handoff from a reviewer final message. New reviewers
+  /// emit a bounded Markdown block; the original JSON contract remains
+  /// supported so persisted and in-flight review loops survive upgrades.
   static func parse(_ message: String) -> ReviewLoopReport? {
     guard let markerRange = message.range(of: marker) else { return nil }
     let suffix = message[markerRange.upperBound...]
+    if let markdownReport = parseMarkdown(suffix) {
+      return markdownReport
+    }
+    return parseLegacyJSON(suffix)
+  }
+
+  private static func parseMarkdown(_ suffix: Substring) -> ReviewLoopReport? {
+    guard let endRange = suffix.range(of: endMarker) else { return nil }
+    let block = String(suffix[..<endRange.lowerBound])
+      .replacing("\r\n", with: "\n")
+    let lines = block.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+
+    guard
+      let verdictLine = lines.first(where: { hasPrefix($0, prefix: "Verdict:") }),
+      let reviewedSHALine = lines.first(where: { hasPrefix($0, prefix: "Reviewed commit:") }),
+      let summaryHeading = lines.firstIndex(where: { normalized($0) == "## summary" }),
+      let findingsHeading = lines.firstIndex(where: { normalized($0) == "## findings" }),
+      summaryHeading < findingsHeading
+    else { return nil }
+
+    let verdictValue = value(after: "Verdict:", in: verdictLine).lowercased()
+    let verdict: ReviewLoopVerdict
+    switch verdictValue {
+    case "pass", "passed": verdict = .pass
+    case "changes", "changes requested": verdict = .changes
+    case "blocked": verdict = .blocked
+    default: return nil
+    }
+
+    let reviewedSHA = value(after: "Reviewed commit:", in: reviewedSHALine)
+      .trimmingCharacters(in: CharacterSet(charactersIn: "`"))
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !reviewedSHA.isEmpty else { return nil }
+
+    let summary = lines[(summaryHeading + 1)..<findingsHeading]
+      .joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    let findings = parseFindings(lines[(findingsHeading + 1)...])
+
+    return ReviewLoopReport(
+      verdict: verdict,
+      reviewedSHA: reviewedSHA,
+      summary: summary,
+      findings: findings
+    )
+  }
+
+  private static func parseLegacyJSON(_ suffix: Substring) -> ReviewLoopReport? {
     guard let start = suffix.firstIndex(of: "{") else { return nil }
     guard let end = endOfJSONObject(in: suffix, from: start) else { return nil }
     let json = String(suffix[start...end])
     guard let data = json.data(using: .utf8) else { return nil }
     return try? JSONDecoder().decode(ReviewLoopReport.self, from: data)
+  }
+
+  private static func parseFindings(_ lines: ArraySlice<String>) -> [String] {
+    var findings: [String] = []
+    for line in lines {
+      let trimmed = line.trimmingCharacters(in: .whitespaces)
+      guard !trimmed.isEmpty else { continue }
+      if let finding = orderedListValue(trimmed) {
+        findings.append(finding)
+      } else if !findings.isEmpty {
+        findings[findings.count - 1] += " " + trimmed
+      }
+    }
+    if findings.count == 1,
+      ["none", "none.", "no findings", "no findings."].contains(findings[0].lowercased())
+    {
+      return []
+    }
+    return findings
+  }
+
+  private static func orderedListValue(_ line: String) -> String? {
+    guard let period = line.firstIndex(of: "."), period != line.startIndex else { return nil }
+    let number = line[..<period]
+    guard number.allSatisfy(\.isNumber) else { return nil }
+    let valueStart = line.index(after: period)
+    let value = line[valueStart...].trimmingCharacters(in: .whitespaces)
+    return value.isEmpty ? nil : value
+  }
+
+  private static func normalized(_ line: String) -> String {
+    line.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+  }
+
+  private static func hasPrefix(_ line: String, prefix: String) -> Bool {
+    normalized(line).hasPrefix(prefix.lowercased())
+  }
+
+  private static func value(after prefix: String, in line: String) -> String {
+    let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let range = trimmed.range(of: prefix, options: [.caseInsensitive, .anchored]) else { return "" }
+    return trimmed[range.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private static func endOfJSONObject(
