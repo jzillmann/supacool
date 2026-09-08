@@ -32,7 +32,7 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
     case "pullRequest":
       let c = try decoder.container(keyedBy: PRKeys.self)
       let owner = try c.decode(String.self, forKey: .owner)
-      let repo = try c.decode(String.self, forKey: .repo)
+      let repo = Self.normalizedRepositoryName(try c.decode(String.self, forKey: .repo))
       let number = try c.decode(Int.self, forKey: .number)
       let state = try c.decodeIfPresent(PRState.self, forKey: .state)
       let title = try c.decodeIfPresent(String.self, forKey: .title)
@@ -63,6 +63,22 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       try c.encodeIfPresent(state, forKey: .state)
       try c.encodeIfPresent(title, forKey: .title)
     }
+  }
+
+  // MARK: - Normalization
+
+  /// Strips the `.git` clone-URL suffix from a repository name.
+  ///
+  /// A GitHub repo is never *named* `foo.git` — that suffix belongs to the
+  /// clone URL. But transcripts carry both forms (git and `gh` print the
+  /// `.git` URL on push), and the PR-URL regex accepts dots, so
+  /// `github.com/o/r.git/pull/42` used to yield a second reference with its
+  /// own `dedupeKey`. The card then showed one PR twice: once resolved, and
+  /// once stuck on "Loading…" forever, because `gh pr view --repo o/r.git`
+  /// 404s. Normalizing at both parse and decode collapses the twin and heals
+  /// sessions that already persisted one.
+  nonisolated static func normalizedRepositoryName(_ repo: String) -> String {
+    repo.hasSuffix(".git") ? String(repo.dropLast(4)) : repo
   }
 
   // MARK: - Stable keys for dedup / UI diffing
@@ -132,5 +148,35 @@ nonisolated enum PRState: String, Codable, Sendable {
     case .open, .draft: return true
     case .merged, .closed: return false
     }
+  }
+}
+
+extension [SessionReference] {
+  /// Collapses references sharing a `dedupeKey`, keeping first-seen order and
+  /// preferring the entry that already carries a resolved PR state/title.
+  /// Needed on decode: normalizing away a `.git` suffix can turn two stored
+  /// references into the same one, and the unresolved copy must not win.
+  nonisolated func deduplicatedByKey() -> [SessionReference] {
+    var result: [SessionReference] = []
+    var indexByKey: [String: Int] = [:]
+    for reference in self {
+      let key = reference.dedupeKey
+      guard let existing = indexByKey[key] else {
+        indexByKey[key] = result.count
+        result.append(reference)
+        continue
+      }
+      guard case .pullRequest(let owner, let repo, let number, let newState, let newTitle) = reference,
+        case .pullRequest(_, _, _, let oldState, let oldTitle) = result[existing]
+      else { continue }
+      result[existing] = .pullRequest(
+        owner: owner,
+        repo: repo,
+        number: number,
+        state: oldState ?? newState,
+        title: oldTitle ?? newTitle
+      )
+    }
+    return result
   }
 }

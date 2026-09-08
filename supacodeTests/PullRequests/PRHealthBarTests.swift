@@ -165,3 +165,46 @@ struct PRHealthBarTests {
     )
   }
 }
+
+/// A PR URL carrying the clone-URL `.git` suffix used to become a second,
+/// unresolvable reference to the same PR — one chip showing `#5481 +1` with
+/// two bars, the twin stuck on "Loading…".
+struct SessionReferenceRepoNormalizationTests {
+  @Test func gitSuffixIsStrippedFromRepositoryName() {
+    #expect(SessionReference.normalizedRepositoryName("centrum_backend.git") == "centrum_backend")
+    #expect(SessionReference.normalizedRepositoryName("centrum_backend") == "centrum_backend")
+    // Only the suffix goes; a dot inside the name is legitimate.
+    #expect(SessionReference.normalizedRepositoryName("docs.github.io") == "docs.github.io")
+  }
+
+  @Test func bothURLFormsScanToOneReference() {
+    let text = """
+      pushed to https://github.com/centrumai/centrum_backend.git/pull/5481
+      see https://github.com/centrumai/centrum_backend/pull/5481
+      """
+
+    let refs = SessionReferenceScannerLive.scanText(text)
+
+    #expect(refs.count == 1)
+    #expect(refs.first?.dedupeKey == "pr:centrumai/centrum_backend#5481")
+  }
+
+  @Test func storedGitSuffixReferenceCollapsesOnDecode() throws {
+    let stored: [SessionReference] = [
+      .pullRequest(owner: "centrumai", repo: "centrum_backend", number: 5481, state: .open, title: "Reload"),
+      .pullRequest(owner: "centrumai", repo: "centrum_backend.git", number: 5481, state: nil, title: nil),
+    ]
+    let data = try JSONEncoder().encode(stored)
+
+    let decoded = try JSONDecoder().decode([SessionReference].self, from: data).deduplicatedByKey()
+
+    #expect(decoded.count == 1)
+    // The resolved copy wins — the `.git` twin never had a state to lose.
+    #expect(
+      decoded.first
+        == .pullRequest(
+          owner: "centrumai", repo: "centrum_backend", number: 5481, state: .open, title: "Reload"
+        )
+    )
+  }
+}

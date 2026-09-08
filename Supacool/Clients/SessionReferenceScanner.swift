@@ -352,7 +352,7 @@ nonisolated enum SessionReferenceScannerLive {
 
     for match in text.matches(of: prURLRegex) {
       let owner = String(match.output.1)
-      let repo = String(match.output.2)
+      let repo = SessionReference.normalizedRepositoryName(String(match.output.2))
       guard let number = Int(match.output.3) else { continue }
       let ref = SessionReference.pullRequest(
         owner: owner, repo: repo, number: number, state: nil, title: nil

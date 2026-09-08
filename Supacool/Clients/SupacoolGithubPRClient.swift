@@ -114,7 +114,7 @@ nonisolated struct ParsedPullRequestURL: Equatable, Hashable, Sendable {
     return ParsedPullRequestURL(
       url: String(match.output.0),
       owner: String(match.output.1),
-      repo: String(match.output.2),
+      repo: SessionReference.normalizedRepositoryName(String(match.output.2)),
       number: number
     )
   }

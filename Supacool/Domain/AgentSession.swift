@@ -277,7 +277,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     reviewLoop = try c.decodeIfPresent(ReviewLoopState.self, forKey: .reviewLoop)
-    references = try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? []
+    // Deduped on the way in: `SessionReference` normalizes a `.git` repo
+    // suffix on decode, which can collapse two stored references into one.
+    references = (try c.decodeIfPresent([SessionReference].self, forKey: .references) ?? [])
+      .deduplicatedByKey()
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
     dismissedReferenceKeys = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReferenceKeys) ?? []
     remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
