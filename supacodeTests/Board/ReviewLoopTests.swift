@@ -64,6 +64,60 @@ struct ReviewLoopTests {
         ))
   }
 
+  @Test func reportParserExtractsHumanReadableMarkdownHandoff() {
+    let report = ReviewLoopReportParser.parse(
+      """
+      SUPACOOL_REVIEW_RESULT
+      # Review handoff — copy this entire block
+
+      Verdict: changes
+      Reviewed commit: `abc123`
+
+      ## Summary
+
+      Two correctness issues remain.
+
+      ## Findings
+
+      1. Guard the empty response before indexing.
+      2. Preserve the existing value
+         when decoding an older snapshot.
+      SUPACOOL_REVIEW_RESULT_END
+      """
+    )
+
+    #expect(
+      report
+        == ReviewLoopReport(
+          verdict: .changes,
+          reviewedSHA: "abc123",
+          summary: "Two correctness issues remain.",
+          findings: [
+            "Guard the empty response before indexing.",
+            "Preserve the existing value when decoding an older snapshot.",
+          ],
+        ))
+  }
+
+  @Test func reportParserTreatsNoFindingsAsAnEmptyList() {
+    let report = ReviewLoopReportParser.parse(
+      """
+      SUPACOOL_REVIEW_RESULT
+      # Review handoff — copy this entire block
+      Verdict: pass
+      Reviewed commit: `def456`
+      ## Summary
+      Ready to merge.
+      ## Findings
+      1. No findings.
+      SUPACOOL_REVIEW_RESULT_END
+      """
+    )
+
+    #expect(report?.verdict == .pass)
+    #expect(report?.findings == [])
+  }
+
   @Test func reportParserHandlesNestedJSONAndCodeFence() {
     let report = ReviewLoopReportParser.parse(
       "SUPACOOL_REVIEW_RESULT ```json\n" + "{\"verdict\":\"pass\",\"reviewed_sha\":\"def456\","
@@ -79,6 +133,11 @@ struct ReviewLoopTests {
     #expect(ReviewLoopReportParser.parse("No marker here") == nil)
     #expect(ReviewLoopReportParser.parse("SUPACOOL_REVIEW_RESULT {not json}") == nil)
     #expect(ReviewLoopReportParser.parse("SUPACOOL_REVIEW_RESULT {\"verdict\":\"pass\"") == nil)
+    #expect(
+      ReviewLoopReportParser.parse(
+        "SUPACOOL_REVIEW_RESULT\nVerdict: pass\nReviewed commit: abc123\n## Summary\nDone\n## Findings\n1. None."
+      ) == nil
+    )
     #expect(
       ReviewLoopReportParser.parse(
         "SUPACOOL_REVIEW_RESULT {\"verdict\":\"unknown\",\"reviewed_sha\":\"x\",\"summary\":\"x\",\"findings\":[]}"

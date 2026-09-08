@@ -537,13 +537,27 @@ extension BoardFeature {
       If individual findings share a deeper architectural or scope problem, return blocked instead of inventing
       an endless stream of local fixes.
       \(prior)
-      Your FINAL message must contain this marker followed by exactly one valid JSON object:
+      Your FINAL message must be this exact Markdown structure. It is a human-readable handoff, so keep every
+      finding as one numbered list item and include both boundary markers:
+
       SUPACOOL_REVIEW_RESULT
-      {"verdict":"pass|changes|blocked","reviewed_sha":"full git SHA",
-      "summary":"short summary","findings":["actionable finding"]}
+      # Review handoff — copy this entire block
+
+      Verdict: pass|changes|blocked
+      Reviewed commit: `full git SHA`
+
+      ## Summary
+
+      Short summary.
+
+      ## Findings
+
+      1. Actionable finding with file and line references when useful.
+      SUPACOOL_REVIEW_RESULT_END
 
       Use pass only when there are no actionable findings, changes when concrete fixes remain, and blocked when
-      the architecture or requested scope needs a human decision. Do not put anything after the JSON object.
+      the architecture or requested scope needs a human decision. For pass, write `1. No findings.` under Findings.
+      Do not put anything after SUPACOOL_REVIEW_RESULT_END.
       """
   }
 
