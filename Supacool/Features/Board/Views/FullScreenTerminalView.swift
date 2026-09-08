@@ -88,6 +88,14 @@ struct FullScreenTerminalView: View {
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
 
+  /// The reviewer remains a real auxiliary terminal, but its coordination
+  /// state is collapsed into this header control until the user opens it.
+  var onStartReviewLoop: () -> Void = {}
+  var onOpenReviewLoopReviewer: () -> Void = {}
+  var onDiagnoseReviewLoop: () -> Void = {}
+  var onContinueReviewLoop: () -> Void = {}
+  var onStopReviewLoop: () -> Void = {}
+
   /// Mirrors the board card's right-click "Debug session…" action so the
   /// user can spawn a debug agent without leaving the terminal view.
   let onDebug: () -> Void
@@ -284,6 +292,17 @@ struct FullScreenTerminalView: View {
       pullRequestStatus
       reasonChip
       referenceChips
+      if session.reviewLoop != nil || canStartReviewLoop {
+        ReviewLoopControl(
+          state: session.reviewLoop,
+          canStart: canStartReviewLoop,
+          onStart: onStartReviewLoop,
+          onOpenReviewer: onOpenReviewLoopReviewer,
+          onDiagnose: onDiagnoseReviewLoop,
+          onContinueOneRound: onContinueReviewLoop,
+          onStop: onStopReviewLoop
+        )
+      }
       Text(session.displayName)
         .font(.headline)
         .lineLimit(1)
@@ -319,6 +338,13 @@ struct FullScreenTerminalView: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
+  }
+
+  private var canStartReviewLoop: Bool {
+    session.reviewLoop == nil
+      && session.agent != nil
+      && !session.isRemote
+      && BoardFeature.actionablePullRequestURL(in: session) != nil
   }
 
   /// Catch-all "⋯" menu for less-frequent session actions. Keep entries

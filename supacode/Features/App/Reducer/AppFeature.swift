@@ -1015,6 +1015,19 @@ struct AppFeature {
           return .send(.repositories(.deleteScriptCompleted(worktreeID: worktreeID, exitCode: exitCode, tabId: tabId)))
         }
 
+      case .terminalEvent(.agentTurnEnded(let worktreeID, let tabID, let surfaceID, let agent, let message)):
+        return .send(
+          .board(
+            .reviewLoopAgentTurnEnded(
+              worktreeID: worktreeID,
+              tabID: tabID,
+              surfaceID: surfaceID,
+              agent: agent,
+              message: message
+            )
+          )
+        )
+
       case .terminalEvent:
         return .none
       }

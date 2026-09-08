@@ -72,6 +72,7 @@ Files following this pattern:
 
 - `Supacool/Domain/AgentSession.swift` → persisted per session in `~/.supacool/sessions/<uuid>/session.json` (see below)
 - `Supacool/Domain/SessionTerminal.swift` → embedded inside each `AgentSession.terminals[]`
+- `Supacool/Domain/ReviewLoop.swift` (type `ReviewLoopState`) → embedded as optional `AgentSession.reviewLoop`
 - `Supacool/Domain/Bookmark.swift` (via `BookmarksKey`) → `~/.supacool/bookmarks.json`
 - `Supacool/Domain/Draft.swift` (via `DraftsKey`) → `~/.supacool/drafts.json`
 - `Supacool/Domain/SessionGroup.swift` (via `SessionGroupsKey`) → `~/.supacool/session-groups.json`

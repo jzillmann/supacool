@@ -149,6 +149,11 @@ struct BoardFeature {
     /// detached card and decide whether to resume, rerun, or remove it.
     var priorityTerminationAlert: PriorityTerminationAlertState?
 
+    /// Blocking handoff when an armed review loop cannot safely continue:
+    /// invalid output, no implementation commit, an architectural blocker,
+    /// or the configured round ceiling. The user chooses the next move.
+    var reviewLoopDecisionAlert: ReviewLoopDecisionAlertState?
+
     /// Presented when removing a session would also delete a dirty
     /// backing worktree. The user must explicitly confirm before the
     /// card is trashed and the worktree cleanup is dispatched.
@@ -525,8 +530,37 @@ struct BoardFeature {
     }
   }
 
+  nonisolated struct ReviewLoopDecisionAlertState: Equatable, Identifiable, Sendable {
+    let sessionID: AgentSession.ID
+    let displayName: String
+    let reason: String
+    let isArmed: Bool
+
+    var id: AgentSession.ID { sessionID }
+    var title: String { isArmed ? "Review needs a decision" : "Review loop unavailable" }
+    var message: String { "\(displayName): \(reason)" }
+  }
+
   enum Action: BindableAction, Equatable {
     case binding(BindingAction<State>)
+
+    // MARK: Review loop
+    case startReviewLoop(id: AgentSession.ID, repositories: [Repository])
+    /// Authoritative Stop-hook completion for an agent terminal. The exact
+    /// tab/surface identity prevents one agent from advancing another's turn.
+    case reviewLoopAgentTurnEnded(
+      worktreeID: Worktree.ID,
+      tabID: UUID,
+      surfaceID: UUID,
+      agent: String,
+      message: String
+    )
+    case _reviewLoopImplementationHeadResolved(id: AgentSession.ID, headSHA: String?)
+    case openReviewLoopReviewer(id: AgentSession.ID)
+    case diagnoseReviewLoop(id: AgentSession.ID)
+    case continueReviewLoopOneRound(id: AgentSession.ID)
+    case stopReviewLoop(id: AgentSession.ID)
+    case dismissReviewLoopDecisionAlert
 
     // MARK: Session CRUD
     case createSession(AgentSession)
@@ -1164,6 +1198,44 @@ struct BoardFeature {
       case .binding:
         return .none
 
+      case .startReviewLoop(let id, let repositories):
+        return reduceStartReviewLoop(state: &state, id: id, repositories: repositories)
+
+      case .reviewLoopAgentTurnEnded(
+        let worktreeID, let tabID, let surfaceID, let agent, let message
+      ):
+        return reduceReviewLoopAgentTurnEnded(
+          state: &state,
+          worktreeID: worktreeID,
+          tabID: tabID,
+          surfaceID: surfaceID,
+          agent: agent,
+          message: message
+        )
+
+      case ._reviewLoopImplementationHeadResolved(let id, let headSHA):
+        return reduceReviewLoopImplementationHeadResolved(
+          state: &state,
+          id: id,
+          headSHA: headSHA
+        )
+
+      case .openReviewLoopReviewer(let id):
+        return reduceOpenReviewLoopReviewer(state: &state, id: id)
+
+      case .diagnoseReviewLoop(let id):
+        return reduceDiagnoseReviewLoop(state: &state, id: id)
+
+      case .continueReviewLoopOneRound(let id):
+        return reduceContinueReviewLoopOneRound(state: &state, id: id)
+
+      case .stopReviewLoop(let id):
+        return reduceStopReviewLoop(state: &state, id: id)
+
+      case .dismissReviewLoopDecisionAlert:
+        state.reviewLoopDecisionAlert = nil
+        return .none
+
       // MARK: - Session lifecycle (create) — handlers live in BoardFeature+SessionLifecycle.swift
 
       case .createSession(let session):
@@ -1576,6 +1648,18 @@ struct BoardFeature {
         guard let repository = repositories.first(where: { $0.id == session.repositoryID }) else {
           return .none
         }
+        if session.reviewLoop?.reviewerTerminalID == terminalID,
+          session.reviewLoop?.phase != .passed,
+          session.reviewLoop?.phase != .stopped
+        {
+          let now = date.now
+          state.$sessions.withLock { sessions in
+            guard let index = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+            sessions[index].reviewLoop?.phase = .stopped
+            sessions[index].reviewLoop?.escalationReason = "Reviewer terminal closed by user."
+            sessions[index].reviewLoop?.updatedAt = now
+          }
+        }
         let worktree = Self.resumeWorktree(for: session, repository: repository)
         if state.activeTerminalBySession[sessionID] == terminalID {
           state.activeTerminalBySession[sessionID] = session.primaryTerminalID
@@ -1588,6 +1672,17 @@ struct BoardFeature {
         guard let session = state.sessions.first(where: { $0.id == sessionID }),
           let repository = repositories.first(where: { $0.id == session.repositoryID })
         else { return .none }
+        // Review-loop prompt injection addresses the reviewer's auxiliary
+        // tab directly. Keep that terminal as a tab until surface-targeted
+        // background input exists; converting it would send the next round
+        // to the primary pane instead.
+        let activeReviewerID = session.reviewLoop.flatMap { loop in
+          loop.phase == .passed || loop.phase == .stopped ? nil : loop.reviewerTerminalID
+        }
+        guard activeReviewerID != terminalID else {
+          boardLogger.info("convertTerminalToSplit: refusing active review-loop reviewer")
+          return .none
+        }
         let worktree = Self.resumeWorktree(for: session, repository: repository)
         // The converted terminal lives inside the primary tab now — the
         // strip entry disappears, so land the view on the primary.

@@ -869,15 +869,16 @@ struct BoardView: View {
       onPark: flow.onPark,
       onParkActive: flow.onParkActive,
       onUnpark: flow.onUnpark,
-      onAutoObserverToggle: {
-        store.send(.toggleAutoObserver(id: session.id))
+      onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
+      onAutoObserverPromptChanged: { prompt in store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt)) },
+      onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
+      onStartReviewLoop: {
+        store.send(.startReviewLoop(id: session.id, repositories: Array(repositories)))
       },
-      onAutoObserverPromptChanged: { prompt in
-        store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt))
-      },
-      onAutoObserverRunNow: {
-        store.send(.autoObserverTriggered(id: session.id))
-      },
+      onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
+      onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
+      onContinueReviewLoop: { store.send(.continueReviewLoopOneRound(id: session.id)) },
+      onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
       onDebug: {
         store.send(
           .debugSessionRequested(
@@ -1358,6 +1359,11 @@ private struct SessionCardContainer: View {
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
+  let onStartReviewLoop: () -> Void
+  let onOpenReviewLoopReviewer: () -> Void
+  let onDiagnoseReviewLoop: () -> Void
+  let onContinueReviewLoop: () -> Void
+  let onStopReviewLoop: () -> Void
   let onDebug: () -> Void
   let onServerLifecycleRefresh: () -> Void
   let onServerLifecycleStart: () -> Void
@@ -1434,6 +1440,11 @@ private struct SessionCardContainer: View {
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
       onAutoObserverRunNow: onAutoObserverRunNow,
+      onStartReviewLoop: onStartReviewLoop,
+      onOpenReviewLoopReviewer: onOpenReviewLoopReviewer,
+      onDiagnoseReviewLoop: onDiagnoseReviewLoop,
+      onContinueReviewLoop: onContinueReviewLoop,
+      onStopReviewLoop: onStopReviewLoop,
       onDebug: onDebug,
       onAppear: onAppear,
       onReferencesPopoverOpened: onReferencesPopoverOpened,
