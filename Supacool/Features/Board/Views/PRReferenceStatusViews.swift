@@ -177,3 +177,66 @@ extension PullRequestSnapshot {
     return parts.map { " · \($0)" }.joined()
   }
 }
+
+/// The PR health strip: one mark per live pull request on a session, coloured
+/// by that PR's own state (see `PRHealthBar`). Replaces the featured-PR glyphs
+/// on the collapsed stack chip, where a single `✓ 5/5` used to speak for every
+/// PR behind the `+N`.
+///
+/// Marks are sorted worst-first, so the leftmost bar is always the one that
+/// most wants the user. A conflicting PR is drawn broken rather than solid —
+/// a rebase is a different job from a red build, and shape carries that
+/// without spending a fourth colour.
+struct PRHealthBarStrip: View {
+  let bars: [PRHealthBar]
+  /// Marks past this many collapse into a `+N`, so a session holding a dozen
+  /// PRs can't push the card past its grid column.
+  var maxBars: Int = 6
+
+  @ScaledMetric(relativeTo: .caption2) private var barWidth: CGFloat = 3
+  @ScaledMetric(relativeTo: .caption2) private var barHeight: CGFloat = 10
+
+  var body: some View {
+    if !bars.isEmpty {
+      HStack(spacing: 2) {
+        ForEach(bars.prefix(maxBars)) { bar in
+          mark(bar)
+        }
+        if bars.count > maxBars {
+          Text("+\(bars.count - maxBars)")
+            .font(.caption2)
+            .monospacedDigit()
+            .foregroundStyle(.secondary)
+        }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func mark(_ bar: PRHealthBar) -> some View {
+    Group {
+      if bar.isConflicted {
+        // Three stacked segments read as a dashed line at this size, where a
+        // 3pt-wide dashed stroke would just look like a rendering artifact.
+        VStack(spacing: barHeight / 8) {
+          ForEach(0..<3, id: \.self) { _ in
+            Capsule().fill(color(bar.level))
+          }
+        }
+      } else {
+        Capsule().fill(color(bar.level))
+      }
+    }
+    .frame(width: barWidth, height: barHeight)
+    .accessibilityLabel(bar.summary)
+  }
+
+  private func color(_ level: PRHealthBar.Level) -> Color {
+    switch level {
+    case .failing: .red
+    case .warning: .yellow
+    case .pending: .secondary
+    case .healthy: .green
+    }
+  }
+}

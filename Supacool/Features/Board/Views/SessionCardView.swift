@@ -1176,7 +1176,6 @@ struct SessionReferenceSummaryChips: View {
           onRemoveReference: onRemoveReference,
           onAddLink: onAddLink,
           prReferenceSnapshots: prReferenceSnapshots,
-          suppressedIndicator: suppressedIndicator,
           actionablePullRequestKey: actionablePullRequestKey
         )
       }
@@ -1293,11 +1292,6 @@ private struct ReferenceStackChip: View {
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on the popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
-  /// The one glyph already spoken for by the caller's triage reason pill —
-  /// suppressed on the collapsed label only when the featured PR is the exact
-  /// PR the pill is calling out. Popover rows keep every glyph: opening the
-  /// stack is an explicit drill-in where full per-PR detail is wanted.
-  var suppressedIndicator: SuppressedPRIndicator?
   /// `dedupeKey` of the PR whose ball is in the user's court, so the collapsed
   /// label features that PR instead of whichever one happens to be open first.
   /// Nil falls back to the open → draft → newest heuristic.
@@ -1319,23 +1313,12 @@ private struct ReferenceStackChip: View {
         Text(chipText)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
-        // Surface the featured PR's CI + Greptile state right on the
-        // collapsed label so the stack chip reads as richly as the
-        // single-PR `ReferenceChip` — a red glyph for failures, an
-        // "N/5" capsule for the score. Both hide themselves when nothing
-        // is known, so non-PR stacks stay clean.
-        if let featuredSnapshot {
-          let suppressed = featuredPullRequest.flatMap {
-            suppressedIndicator?.kind(for: $0.dedupeKey)
-          }
-          if suppressed != .checks {
-            PRChecksGlyph(snapshot: featuredSnapshot)
-          }
-          if suppressed != .conflict {
-            PRConflictGlyph(snapshot: featuredSnapshot)
-          }
-          GreptileScoreBadge(score: featuredSnapshot.greptileScore)
-        }
+        // One mark per live PR rather than the featured PR's glyphs. A
+        // collapsed stack is exactly where a single "✓ 5/5" lies: it grades
+        // one PR while three more hide behind the "+3". The strip hides
+        // itself when the stack holds no live PRs, so ticket stacks and
+        // all-merged PR stacks stay clean.
+        PRHealthBarStrip(bars: healthBars)
       }
       .foregroundStyle(.primary.opacity(0.85))
       .padding(.horizontal, 6)
@@ -1376,17 +1359,11 @@ private struct ReferenceStackChip: View {
     )
   }
 
-  /// Latest checks/Greptile snapshot for the featured PR, used to draw the
-  /// inline glyph + score on the chip. Nil hides both indicators. Once the
-  /// featured PR is merged or closed its CI/score are stale noise, so we drop
-  /// the snapshot — same rule the per-PR `ReferenceChip` applies via
-  /// `PRState.showsLiveStatus`.
-  private var featuredSnapshot: PullRequestSnapshot? {
-    guard let featuredPullRequest,
-      case .pullRequest(_, _, _, let state, _) = featuredPullRequest,
-      state?.showsLiveStatus ?? true
-    else { return nil }
-    return prReferenceSnapshots[featuredPullRequest.dedupeKey]
+  /// Health marks for this stack's live PRs. Empty for ticket stacks, which
+  /// have no CI/score vocabulary.
+  private var healthBars: [PRHealthBar] {
+    guard kind == .pullRequests else { return [] }
+    return prReferenceSnapshots.healthBars(of: references)
   }
 
   private var chipText: String {
@@ -1404,8 +1381,10 @@ private struct ReferenceStackChip: View {
   private var helpText: String {
     switch kind {
     case .pullRequests:
-      let statusSuffix = featuredSnapshot?.statusHelpSuffix ?? ""
-      return "Show \(references.count) pull requests\(statusSuffix)"
+      // One line per live PR, matching the strip's marks left to right, so
+      // the tooltip explains every colour rather than only the featured PR's.
+      let lines = healthBars.map(\.summary)
+      return (["Show \(references.count) pull requests"] + lines).joined(separator: "\n")
     case .tickets:
       let noun = references.count == 1 ? "ticket" : "tickets"
       return "Show \(references.count) more \(noun)"

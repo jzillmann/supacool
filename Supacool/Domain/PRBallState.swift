@@ -283,12 +283,18 @@ extension [String: PullRequestSnapshot] {
   /// chip as its red "N/5" badge instead of being hoisted into a detached
   /// "Score 3/5" pill that floats away from the PR it grades, and a
   /// ready-to-merge PR says so through the chip's own green check + score.
+  ///
+  /// Only for single-PR sessions. Past one PR the chips collapse into a stack
+  /// whose badge is `PRHealthBarStrip` — coloured marks, no numbers — so the
+  /// score and the green light are no longer *stated*, only hinted, and the
+  /// pill has to carry the words again.
   nonisolated func standaloneReason(for session: AgentSession, greptileThreshold: Int = 5)
     -> PRBallState?
   {
-    guard let ball = actionableReason(for: session, greptileThreshold: greptileThreshold),
-      !ball.isStatedByChipBadge
+    guard let ball = actionableReason(for: session, greptileThreshold: greptileThreshold)
     else { return nil }
+    let isCollapsedIntoStack = session.references.count(where: \.isPullRequestReference) > 1
+    guard isCollapsedIntoStack || !ball.isStatedByChipBadge else { return nil }
     return ball
   }
 
