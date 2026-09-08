@@ -188,13 +188,19 @@ extension BoardFeature {
     }
   }
 
+  /// Opens the session full screen with the reviewer terminal active, and parks
+  /// any pending decision instead of answering it.
+  ///
+  /// The loop stays in `.needsDecision`, so the orange review pill on the card and
+  /// in the full-screen toolbar keeps offering the same choices. The user can read
+  /// the diff and the reviewer output first, then decide from there.
   func reduceOpenReviewLoopReviewer(state: inout State, id: AgentSession.ID) -> Effect<Action> {
-    guard
-      let reviewerID = state.sessions.first(where: { $0.id == id })?
-        .reviewLoop?.reviewerTerminalID
-    else { return .none }
+    guard let session = state.sessions.first(where: { $0.id == id }) else { return .none }
+    state.reviewLoopDecisionAlert = nil
     state.focusedSessionID = id
-    state.activeTerminalBySession[id] = reviewerID
+    if let reviewerID = session.reviewLoop?.reviewerTerminalID {
+      state.activeTerminalBySession[id] = reviewerID
+    }
     return .none
   }
 

@@ -116,7 +116,7 @@ private struct ReviewLoopPopover: View {
   }
 
   private var shouldEscalate: Bool {
-    state.convergenceWarning || state.round >= state.maximumRounds
+    state.phase == .needsDecision || state.convergenceWarning || state.round >= state.maximumRounds
   }
 
   var body: some View {

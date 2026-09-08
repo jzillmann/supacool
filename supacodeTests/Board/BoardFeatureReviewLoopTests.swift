@@ -174,6 +174,42 @@ extension BoardFeatureTests {
     #expect(commands.value.isEmpty)
   }
 
+  @Test(.dependencies) func reviewLoopInspectParksTheDecisionAndOpensTheReviewer() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 5,
+        maximumRounds: 5,
+        escalationReason: "The scope may be wrong."
+      )
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    state.reviewLoopDecisionAlert = BoardFeature.ReviewLoopDecisionAlertState(
+      sessionID: session.id,
+      displayName: session.displayName,
+      reason: "The scope may be wrong.",
+      isArmed: true
+    )
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.tabExists = { _, _ in true }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.openReviewLoopReviewer(id: session.id))
+
+    #expect(store.state.reviewLoopDecisionAlert == nil)
+    #expect(store.state.focusedSessionID == session.id)
+    #expect(store.state.activeTerminalBySession[session.id] == reviewerID)
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .needsDecision)
+    #expect(store.state.sessions.first?.reviewLoop?.escalationReason == "The scope may be wrong.")
+  }
+
   @Test(.dependencies) func reviewLoopMatchesExactTerminalWhenSessionsShareAWorktree() async throws {
     let firstReviewerID = UUID()
     let secondReviewerID = UUID()

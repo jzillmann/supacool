@@ -1161,6 +1161,9 @@ private struct ReviewLoopDecisionAlertModifier: ViewModifier {
       presenting: store.reviewLoopDecisionAlert
     ) { alert in
       if alert.isArmed {
+        Button("Inspect in Terminal") {
+          store.send(.openReviewLoopReviewer(id: alert.sessionID))
+        }
         Button("Diagnose Architecture") {
           store.send(.diagnoseReviewLoop(id: alert.sessionID))
         }
