@@ -876,7 +876,7 @@ struct ReferenceChip: View {
           state?.showsLiveStatus ?? true {
           let suppressed = suppressedIndicator?.kind(for: reference.dedupeKey)
           if suppressed != .checks {
-            PRChecksGlyph(checks: prSnapshot.statusChecks)
+            PRChecksGlyph(snapshot: prSnapshot)
           }
           if suppressed != .conflict {
             PRConflictGlyph(snapshot: prSnapshot)
@@ -1286,7 +1286,7 @@ private struct ReferenceStackChip: View {
             suppressedIndicator?.kind(for: $0.dedupeKey)
           }
           if suppressed != .checks {
-            PRChecksGlyph(checks: featuredSnapshot.statusChecks)
+            PRChecksGlyph(snapshot: featuredSnapshot)
           }
           if suppressed != .conflict {
             PRConflictGlyph(snapshot: featuredSnapshot)

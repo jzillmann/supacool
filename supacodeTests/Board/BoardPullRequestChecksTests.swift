@@ -111,12 +111,75 @@ struct BoardPullRequestChecksTests {
     )
     #expect(!BoardPullRequestChecks.isWaitingExternal(pullRequest))
   }
+
+  // MARK: - Required checks GitHub never put in the rollup
+
+  @Test func blockedMergeWithOnlyGreenChecksReadsAsPending() {
+    // centrumai/centrum_backend#5423: the rollup held one green Greptile run
+    // while the required "PR Gate" context had never reported and the CI
+    // workflow sat queued. github.com said "1 expected, 1 successful"; the
+    // chip said all checks passed.
+    let checks = [GithubPullRequestStatusCheck(name: "Greptile Review", status: "COMPLETED", conclusion: "SUCCESS")]
+    let pullRequest = makePullRequest(mergeStateStatus: "BLOCKED", checks: checks)
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .pending)
+    #expect(BoardPullRequestChecks.isWaiting(pullRequest))
+    #expect(BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func blockedMergeWithNoChecksAtAllReadsAsPending() {
+    let pullRequest = makePullRequest(mergeStateStatus: "BLOCKED")
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .pending)
+    #expect(BoardPullRequestChecks.isWaiting(pullRequest))
+  }
+
+  @Test func blockedMergeAwaitingReviewStillReportsChecksPassed() {
+    // A missing review blocks the merge too. Reading that as a missing check
+    // would hang a permanent clock on every PR awaiting a reviewer.
+    let checks = [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")]
+    let pullRequest = makePullRequest(
+      reviewDecision: "REVIEW_REQUIRED",
+      mergeStateStatus: "BLOCKED",
+      checks: checks
+    )
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .completed(allPassed: true))
+    #expect(!BoardPullRequestChecks.isWaiting(pullRequest))
+    // Still external — the reviewer owns the next move.
+    #expect(BoardPullRequestChecks.isWaitingExternal(pullRequest))
+  }
+
+  @Test func blockedMergeWithChangesRequestedStillReportsChecksPassed() {
+    let checks = [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")]
+    let pullRequest = makePullRequest(
+      reviewDecision: "CHANGES_REQUESTED",
+      mergeStateStatus: "BLOCKED",
+      checks: checks
+    )
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .completed(allPassed: true))
+  }
+
+  @Test func blockedMergeWithAFailedCheckStillReportsTheFailure() {
+    // A red check is a settled verdict and explains the block on its own.
+    let checks = [
+      GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "FAILURE"),
+    ]
+    let pullRequest = makePullRequest(mergeStateStatus: "BLOCKED", checks: checks)
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .completed(allPassed: false))
+    #expect(!BoardPullRequestChecks.isWaiting(pullRequest))
+  }
+
+  @Test func cleanMergeStateKeepsGreenChecksGreen() {
+    let checks = [GithubPullRequestStatusCheck(name: "CI", status: "COMPLETED", conclusion: "SUCCESS")]
+    let pullRequest = makePullRequest(mergeStateStatus: "CLEAN", checks: checks)
+    #expect(BoardPullRequestChecks.outcome(pullRequest) == .completed(allPassed: true))
+    #expect(!BoardPullRequestChecks.isWaiting(pullRequest))
+  }
 }
 
 private func makePullRequest(
   state: String = "OPEN",
   isDraft: Bool = false,
   reviewDecision: String? = nil,
+  mergeStateStatus: String? = nil,
   checks: [GithubPullRequestStatusCheck] = []
 ) -> GithubPullRequest {
   GithubPullRequest(
@@ -128,7 +191,7 @@ private func makePullRequest(
     isDraft: isDraft,
     reviewDecision: reviewDecision,
     mergeable: nil,
-    mergeStateStatus: nil,
+    mergeStateStatus: mergeStateStatus,
     updatedAt: nil,
     url: "https://example.com/pull/42",
     headRefName: "feature",

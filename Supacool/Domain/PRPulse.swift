@@ -44,7 +44,14 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
 
   var checks: PullRequestCheckBreakdown { PullRequestCheckBreakdown(checks: statusChecks) }
   var ciOutcome: BoardPullRequestChecks.ChecksOutcome {
-    BoardPullRequestChecks.outcome(checks: statusChecks)
+    BoardPullRequestChecks.outcome(
+      checks: statusChecks,
+      hasUnreportedRequiredChecks: BoardPullRequestChecks.hasUnreportedRequiredChecks(
+        mergeStateStatus: mergeStateStatus,
+        reviewDecision: reviewDecision,
+        checks: statusChecks
+      )
+    )
   }
 
   /// Project this monitored PR into the per-reference snapshot shape so PR

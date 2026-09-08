@@ -9,10 +9,10 @@ import SwiftUI
 /// One-glyph CI summary for the inline reference chip. Hidden while no
 /// checks are known — the chip already shows the PR state icon.
 struct PRChecksGlyph: View {
-  let checks: [GithubPullRequestStatusCheck]
+  let snapshot: PullRequestSnapshot
 
   var body: some View {
-    switch BoardPullRequestChecks.outcome(checks: checks) {
+    switch snapshot.checksOutcome {
     case .unknown:
       EmptyView()
     case .pending:
@@ -155,12 +155,15 @@ extension PullRequestSnapshot {
   /// `" · 2 checks failed · Greptile 4/5"`. Empty when nothing is known.
   var statusHelpSuffix: String {
     var parts: [String] = []
-    switch BoardPullRequestChecks.outcome(checks: statusChecks) {
+    switch checksOutcome {
     case .unknown:
       break
     case .pending:
       let breakdown = PullRequestCheckBreakdown(checks: statusChecks)
-      parts.append("\(breakdown.inProgress + breakdown.expected) checks running")
+      let running = breakdown.inProgress + breakdown.expected
+      // Zero running with a pending outcome means GitHub is blocking on a
+      // required check that hasn't reported at all.
+      parts.append(running > 0 ? "\(running) checks running" : "checks pending")
     case .completed(let allPassed):
       let breakdown = PullRequestCheckBreakdown(checks: statusChecks)
       parts.append(allPassed ? "checks passed" : "\(breakdown.failed) checks failed")

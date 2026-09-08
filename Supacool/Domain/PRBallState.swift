@@ -384,7 +384,10 @@ extension PRBallState {
     }
 
     let checks = snapshot.statusChecks
-    if BoardPullRequestChecks.isWaiting(checks: checks) {
+    if BoardPullRequestChecks.isWaiting(
+      checks: checks,
+      hasUnreportedRequiredChecks: snapshot.hasUnreportedRequiredChecks
+    ) {
       self = .ciRunning
       return
     }
