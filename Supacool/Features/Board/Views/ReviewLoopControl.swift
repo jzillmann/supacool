@@ -175,10 +175,18 @@ private struct ReviewLoopPopover: View {
       }
 
       if state.phase == .needsDecision {
-        Button("Continue one round", systemImage: "forward.fill") {
+        let hasPendingFindings = state.pendingFixReport != nil
+        Button(
+          hasPendingFindings ? "Send findings to agent" : "Re-review",
+          systemImage: hasPendingFindings ? "arrowshape.turn.up.right.fill" : "forward.fill"
+        ) {
           onContinueOneRound()
         }
-        .help("Allow exactly one more review round")
+        .help(
+          hasPendingFindings
+            ? "Hand the reviewer's findings to the implementation agent"
+            : "Allow exactly one more review round"
+        )
       }
 
       if state.phase != .passed && state.phase != .stopped {

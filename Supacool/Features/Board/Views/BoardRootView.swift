@@ -1167,7 +1167,7 @@ private struct ReviewLoopDecisionAlertModifier: ViewModifier {
         Button("Diagnose Architecture") {
           store.send(.diagnoseReviewLoop(id: alert.sessionID))
         }
-        Button("Continue One Round") {
+        Button(alert.continueTitle) {
           store.send(.continueReviewLoopOneRound(id: alert.sessionID))
         }
         Button("Stop Review", role: .destructive) {

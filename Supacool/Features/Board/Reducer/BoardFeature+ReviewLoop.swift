@@ -175,7 +175,8 @@ extension BoardFeature {
       headSHA: headSHA,
       round: nextRound,
       maximumRounds: loop.maximumRounds,
-      previousSummary: loop.lastSummary
+      previousSummary: loop.lastSummary,
+      previousFindings: loop.lastFindings
     )
     return .run { _ in
       await terminalClient.send(
@@ -235,6 +236,14 @@ extension BoardFeature {
     }
   }
 
+  /// The user answered a parked decision with "continue".
+  ///
+  /// When the reviewer left actionable findings behind — `changes` *or*
+  /// `blocked` — continuing means handing those findings to the implementation
+  /// agent. Only a decision with nothing left to fix (a parse failure, a stale
+  /// report, an empty findings list) re-runs the reviewer, and even then the
+  /// commit has to have moved first: re-reviewing an unchanged tree spends a
+  /// round to reproduce the findings word for word.
   func reduceContinueReviewLoopOneRound(
     state: inout State,
     id: AgentSession.ID
@@ -245,13 +254,12 @@ extension BoardFeature {
     else { return .none }
 
     let now = date.now
-    let extendedMaximum = max(loop.maximumRounds + 1, loop.round + 1)
     state.reviewLoopDecisionAlert = nil
 
-    if let report = loop.lastReport.flatMap(ReviewLoopReportParser.parse), report.verdict == .changes {
+    if let report = loop.pendingFixReport {
       state.$sessions.withLock { sessions in
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        sessions[index].reviewLoop?.maximumRounds = extendedMaximum
+        sessions[index].reviewLoop?.maximumRounds = Self.extendedMaximumRounds(for: loop)
         sessions[index].reviewLoop?.phase = .fixing
         sessions[index].reviewLoop?.escalationReason = nil
         sessions[index].reviewLoop?.updatedAt = now
@@ -268,21 +276,62 @@ extension BoardFeature {
         reason: "The reviewer terminal is no longer running."
       )
     }
+
+    let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
+    return .run { [gitClient] send in
+      let history = try? await gitClient.commitHistory(workspaceURL, 1)
+      await send(._reviewLoopRereviewHeadResolved(id: id, headSHA: history?.first?.hash))
+    }
+  }
+
+  func reduceReviewLoopRereviewHeadResolved(
+    state: inout State,
+    id: AgentSession.ID,
+    headSHA: String?
+  ) -> Effect<Action> {
+    guard let session = state.sessions.first(where: { $0.id == id }),
+      let loop = session.reviewLoop,
+      loop.phase == .needsDecision,
+      let reviewerID = loop.reviewerTerminalID
+    else { return .none }
+    guard terminalClient.tabExists(session.worktreeID, TerminalTabID(rawValue: reviewerID)) else {
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: id,
+        reason: "The reviewer terminal is no longer running."
+      )
+    }
+
+    let resolvedHead = (headSHA?.isEmpty == false) ? headSHA : nil
+    if let resolvedHead, resolvedHead == loop.lastReviewedSHA {
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: id,
+        reason: "Nothing was committed since review round \(loop.round) — \(resolvedHead) is still "
+          + "the head, so another review pass would only repeat itself. Open the reviewer, let the "
+          + "agent commit a fix, diagnose the architecture, or stop."
+      )
+    }
+
+    let now = date.now
+    let extendedMaximum = Self.extendedMaximumRounds(for: loop)
     let nextRound = loop.round + 1
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].reviewLoop?.maximumRounds = extendedMaximum
       sessions[index].reviewLoop?.round = nextRound
       sessions[index].reviewLoop?.phase = .reviewing
+      sessions[index].reviewLoop?.expectedReviewSHA = resolvedHead
       sessions[index].reviewLoop?.escalationReason = nil
       sessions[index].reviewLoop?.updatedAt = now
     }
     let prompt = Self.rereviewPrompt(
       pullRequestURL: loop.pullRequestURL ?? "the current pull request",
-      headSHA: loop.lastReviewedSHA ?? "current HEAD",
+      headSHA: resolvedHead ?? loop.lastReviewedSHA ?? "current HEAD",
       round: nextRound,
       maximumRounds: extendedMaximum,
-      previousSummary: loop.lastSummary
+      previousSummary: loop.lastSummary,
+      previousFindings: loop.lastFindings
     )
     return .run { _ in
       await terminalClient.send(
@@ -474,7 +523,8 @@ extension BoardFeature {
       sessionID: sessionID,
       displayName: session.displayName,
       reason: reason,
-      isArmed: session.reviewLoop != nil
+      isArmed: session.reviewLoop != nil,
+      hasPendingFindings: session.reviewLoop?.pendingFixReport != nil
     )
     return .none
   }
@@ -514,15 +564,23 @@ extension BoardFeature {
     headSHA: String,
     round: Int,
     maximumRounds: Int,
-    previousSummary: String?
+    previousSummary: String?,
+    previousFindings: [String] = []
   ) -> String {
     reviewerPrompt(
       pullRequestURL: pullRequestURL,
       expectedSHA: headSHA,
       round: round,
       maximumRounds: maximumRounds,
-      previousSummary: previousSummary
+      previousSummary: previousSummary,
+      previousFindings: previousFindings
     )
+  }
+
+  /// How far "continue one round" extends the budget: always at least one
+  /// round beyond both the configured maximum and the round we are on.
+  nonisolated static func extendedMaximumRounds(for loop: ReviewLoopState) -> Int {
+    max(loop.maximumRounds + 1, loop.round + 1)
   }
 
   nonisolated static func reviewerPrompt(
@@ -530,19 +588,26 @@ extension BoardFeature {
     expectedSHA: String,
     round: Int,
     maximumRounds: Int,
-    previousSummary: String?
+    previousSummary: String?,
+    previousFindings: [String] = []
   ) -> String {
     let prior =
       previousSummary.map {
         "\nPrevious round summary (verify it; do not repeat resolved points):\n\($0)\n"
       } ?? ""
+    let priorFindings =
+      previousFindings.isEmpty
+      ? ""
+      : "\nPrevious round findings — state for each one whether it is now resolved:\n"
+        + previousFindings.enumerated().map { "\($0.offset + 1). \($0.element)" }
+        .joined(separator: "\n") + "\n"
     return """
       Review \(pullRequestURL) as a strict, read-only code reviewer. This is round \(round) of \(maximumRounds).
       Review the exact current PR commit (expected \(expectedSHA)). Do not edit files, commit, push, or broaden scope.
       Focus on correctness, regressions, security, data loss, concurrency, and missing tests. Ignore style-only nits.
       If individual findings share a deeper architectural or scope problem, return blocked instead of inventing
       an endless stream of local fixes.
-      \(prior)
+      \(prior)\(priorFindings)
       Your FINAL message must be this exact Markdown structure. It is a human-readable handoff, so keep every
       finding as one numbered list item and include both boundary markers:
 

@@ -95,6 +95,28 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   }
 }
 
+extension ReviewLoopState {
+  /// The findings of the last stored reviewer handoff, whatever its verdict.
+  /// Empty when no report is stored or the report does not parse — the
+  /// re-review prompt then falls back to the summary alone.
+  var lastFindings: [String] {
+    lastReport.flatMap(ReviewLoopReportParser.parse)?.findings ?? []
+  }
+
+  /// The last stored handoff when it still carries work for the
+  /// implementation agent. `blocked` counts: a blocked verdict parks the loop
+  /// for a human, but once the human says continue, the findings belong with
+  /// the agent, not with another read-only pass over the same commit.
+  /// `pass` reports and reports without findings are nil.
+  var pendingFixReport: ReviewLoopReport? {
+    guard let report = lastReport.flatMap(ReviewLoopReportParser.parse),
+      report.verdict != .pass,
+      !report.findings.isEmpty
+    else { return nil }
+    return report
+  }
+}
+
 nonisolated enum ReviewLoopVerdict: String, Codable, Equatable, Sendable {
   case pass
   case changes
