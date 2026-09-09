@@ -535,10 +535,16 @@ struct BoardFeature {
     let displayName: String
     let reason: String
     let isArmed: Bool
+    /// True when the reviewer left findings the agent has not seen yet, so the
+    /// continue button says whose turn it actually starts.
+    var hasPendingFindings: Bool = false
 
     var id: AgentSession.ID { sessionID }
     var title: String { isArmed ? "Review needs a decision" : "Review loop unavailable" }
     var message: String { "\(displayName): \(reason)" }
+    var continueTitle: String {
+      hasPendingFindings ? "Send Findings to Agent" : "Re-review"
+    }
   }
 
   enum Action: BindableAction, Equatable {
@@ -556,6 +562,9 @@ struct BoardFeature {
       message: String
     )
     case _reviewLoopImplementationHeadResolved(id: AgentSession.ID, headSHA: String?)
+    /// Workspace head resolved for a "continue one round" that has no findings
+    /// left to hand over, so the loop can refuse to re-review an unchanged tree.
+    case _reviewLoopRereviewHeadResolved(id: AgentSession.ID, headSHA: String?)
     case openReviewLoopReviewer(id: AgentSession.ID)
     case diagnoseReviewLoop(id: AgentSession.ID)
     case continueReviewLoopOneRound(id: AgentSession.ID)
@@ -1215,6 +1224,13 @@ struct BoardFeature {
 
       case ._reviewLoopImplementationHeadResolved(let id, let headSHA):
         return reduceReviewLoopImplementationHeadResolved(
+          state: &state,
+          id: id,
+          headSHA: headSHA
+        )
+
+      case ._reviewLoopRereviewHeadResolved(let id, let headSHA):
+        return reduceReviewLoopRereviewHeadResolved(
           state: &state,
           id: id,
           headSHA: headSHA

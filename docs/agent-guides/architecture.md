@@ -51,7 +51,12 @@ SessionTerminal (Codable, embedded in AgentSession.terminals)
 Codex `SessionTerminal`; the state records the reviewer terminal id, phase, round ceiling, expected/reviewed commit
 SHAs, convergence warning, and last structured result. `BoardFeature+ReviewLoop` owns the fixed
 `review → fix → new commit → re-review` transition sequence. A Stop hook is the only authoritative turn boundary,
-and any ambiguity moves the loop to `needsDecision` rather than dispatching another prompt.
+and any ambiguity moves the loop to `needsDecision` rather than dispatching another prompt. Resolving a
+`needsDecision` with "continue" is not always a review round: `ReviewLoopState.pendingFixReport` decides who wakes
+up. Any parked report that still holds findings — `blocked` as well as `changes` — goes to the implementer, because
+a verdict parked for a human is still work once the human says go. Only an empty decision re-runs the reviewer, and
+that path resolves the workspace head first: a re-review of the commit already in `lastReviewedSHA` can only
+reproduce its own findings, so the loop escalates instead of spending the round.
 
 **Key invariant**: `session.id == session.primaryTerminalID == primaryTerminal.id == its Ghostty tab id`. Newly created sessions always satisfy this; the model permits decoupling in the future but no code path does so today. Don't break it casually.
 

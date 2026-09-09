@@ -174,6 +174,142 @@ extension BoardFeatureTests {
     #expect(commands.value.isEmpty)
   }
 
+  @Test(.dependencies) func continueAfterBlockedRoutesFindingsToImplementer() async throws {
+    let reviewerID = UUID()
+    let report = reviewReport(
+      verdict: "blocked",
+      sha: "abc123",
+      summary: "The frontend duplicates the backend resolver.",
+      findings: ["Expose the backend-resolved dataset identity instead."]
+    )
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 1,
+        maximumRounds: 5,
+        lastReviewedSHA: "abc123",
+        lastSummary: "The frontend duplicates the backend resolver.",
+        lastReport: report,
+        escalationReason: "The frontend duplicates the backend resolver."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .fixing)
+    #expect(loop.round == 1)
+    #expect(loop.maximumRounds == 6)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the blocked findings to reach the implementation terminal")
+      return
+    }
+    #expect(tabID.rawValue == session.primaryTerminalID)
+    #expect(prompt.contains("Expose the backend-resolved dataset identity instead."))
+  }
+
+  @Test(.dependencies) func continueRefusesToRereviewAnUnchangedCommit() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "same-sha",
+        lastReport: "Codex stopped without a handoff block.",
+        escalationReason: "Codex finished without a valid SUPACOOL_REVIEW_RESULT payload."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(
+      session: session,
+      commands: commands,
+      headSHA: "same-sha"
+    )
+
+    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.receive(\._reviewLoopRereviewHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(loop.round == 2)
+    #expect(loop.maximumRounds == 5)
+    #expect(loop.escalationReason?.contains("Nothing was committed") == true)
+    #expect(store.state.reviewLoopDecisionAlert?.hasPendingFindings == false)
+    #expect(commands.value.isEmpty)
+  }
+
+  @Test(.dependencies) func continueRerunsTheReviewerOnceTheCommitMoved() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "old-sha",
+        lastSummary: "The handoff never parsed.",
+        lastReport: "Codex stopped without a handoff block."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "new-sha")
+
+    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.receive(\._reviewLoopRereviewHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.round == 3)
+    #expect(loop.maximumRounds == 6)
+    #expect(loop.expectedReviewSHA == "new-sha")
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the new commit to be sent to the reviewer")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("expected new-sha"))
+    #expect(prompt.contains("round 3 of 6"))
+  }
+
+  @Test(.dependencies) func rereviewCarriesThePreviousRoundFindings() async throws {
+    let reviewerID = UUID()
+    let loop = ReviewLoopState(
+      reviewerTerminalID: reviewerID,
+      phase: .fixing,
+      lastReviewedSHA: "old-sha",
+      lastSummary: "One correctness issue remains.",
+      lastReport: reviewReport(
+        verdict: "changes",
+        sha: "old-sha",
+        summary: "One correctness issue remains.",
+        findings: ["Handle an empty response before indexing."]
+      )
+    )
+    let session = reviewLoopSession(loop: loop)
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(
+      ._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "new-sha")
+    )
+    await store.finish()
+
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the new commit to be sent to the reviewer")
+      return
+    }
+    #expect(prompt.contains("Previous round findings"))
+    #expect(prompt.contains("1. Handle an empty response before indexing."))
+  }
+
   @Test(.dependencies) func reviewLoopInspectParksTheDecisionAndOpensTheReviewer() async throws {
     let reviewerID = UUID()
     let session = reviewLoopSession(
@@ -250,7 +386,8 @@ extension BoardFeatureTests {
 @MainActor
 private func reviewLoopStore(
   session: AgentSession,
-  commands: LockIsolated<[TerminalClient.Command]> = LockIsolated<[TerminalClient.Command]>([])
+  commands: LockIsolated<[TerminalClient.Command]> = LockIsolated<[TerminalClient.Command]>([]),
+  headSHA: String? = nil
 ) -> TestStoreOf<BoardFeature> {
   let state = BoardFeature.State()
   state.$sessions.withLock { $0 = [session] }
@@ -261,6 +398,18 @@ private func reviewLoopStore(
     $0.terminalClient.tabExists = { _, _ in true }
     $0.terminalClient.send = { command in
       commands.withValue { $0.append(command) }
+    }
+    $0[GitClientDependency.self].commitHistory = { _, _ in
+      guard let headSHA else { return [] }
+      return [
+        GitCommitHistoryEntry(
+          hash: headSHA,
+          shortHash: String(headSHA.prefix(7)),
+          date: Date(timeIntervalSince1970: 1_750_000_000),
+          author: "Tester",
+          subject: "Head"
+        ),
+      ]
     }
   }
   store.exhaustivity = .off
