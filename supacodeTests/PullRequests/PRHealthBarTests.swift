@@ -70,8 +70,10 @@ struct PRHealthBarTests {
     #expect(level(snapshot(checks: Self.failing, greptileScore: 3)) == .failing)
   }
 
-  @Test func runningChecksArePending() {
-    #expect(level(snapshot(checks: Self.running)) == .pending)
+  @Test func runningChecksAreRunningNotIdle() {
+    // Orange, like the clock glyph — distinct from a PR nothing has reported
+    // on at all.
+    #expect(level(snapshot(checks: Self.running)) == .running)
   }
 
   @Test func noSignalIsPending() {
@@ -114,7 +116,7 @@ struct PRHealthBarTests {
     let bars = snapshots.healthBars(of: references)
 
     #expect(bars.map(\.number) == [3, 4, 2, 1])
-    #expect(bars.map(\.level) == [.failing, .warning, .pending, .healthy])
+    #expect(bars.map(\.level) == [.failing, .warning, .running, .healthy])
   }
 
   @Test func unfetchedPullRequestStillGetsAPendingBar() {

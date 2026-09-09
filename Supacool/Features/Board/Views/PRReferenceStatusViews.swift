@@ -235,6 +235,7 @@ struct PRHealthBarStrip: View {
     switch level {
     case .failing: .red
     case .warning: .yellow
+    case .running: .orange
     case .pending: .secondary
     case .healthy: .green
     }

@@ -22,8 +22,13 @@ nonisolated struct PRHealthBar: Equatable, Sendable, Identifiable {
     /// Greptile scored below threshold, or a reviewer requested changes.
     /// Yellow — worth a look, nothing is broken.
     case warning
-    /// Checks still running, nothing has reported yet, or a draft that is
-    /// otherwise clean. Secondary — no signal to act on.
+    /// Checks are still running. Orange, matching the clock glyph and the
+    /// popover's "N running" text — the app has one colour for "CI is
+    /// working on it" and this is it.
+    case running
+    /// Nothing has reported yet, or a draft that is otherwise clean.
+    /// Secondary — no signal at all, which is not the same as waiting on a
+    /// build that is actually turning.
     case pending
     /// Checks green, mergeable, and Greptile (when present) at full score.
     case healthy
@@ -60,7 +65,7 @@ nonisolated struct PRHealthBar: Equatable, Sendable, Identifiable {
     if snapshot.state == .draft { return .pending }
     switch snapshot.checksOutcome {
     case .pending:
-      return .pending
+      return .running
     case .completed:
       // allPassed == true; the failing case returned above.
       return .healthy
