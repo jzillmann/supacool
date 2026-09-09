@@ -394,7 +394,9 @@ struct BoardRootView: View {
         },
         onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
         onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
-        onContinueReviewLoop: { store.send(.continueReviewLoopOneRound(id: session.id)) },
+        onContinueReviewLoop: { rounds in
+          store.send(.continueReviewLoop(id: session.id, additionalRounds: rounds))
+        },
         onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
         onDebug: {
           store.send(
@@ -1168,7 +1170,15 @@ private struct ReviewLoopDecisionAlertModifier: ViewModifier {
           store.send(.diagnoseReviewLoop(id: alert.sessionID))
         }
         Button(alert.continueTitle) {
-          store.send(.continueReviewLoopOneRound(id: alert.sessionID))
+          store.send(.continueReviewLoop(id: alert.sessionID, additionalRounds: 1))
+        }
+        Button(alert.multiRoundContinueTitle) {
+          store.send(
+            .continueReviewLoop(
+              id: alert.sessionID,
+              additionalRounds: BoardFeature.reviewLoopMultiRoundGrant
+            )
+          )
         }
         Button("Stop Review", role: .destructive) {
           store.send(.stopReviewLoop(id: alert.sessionID))

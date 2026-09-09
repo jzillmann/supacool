@@ -93,7 +93,7 @@ struct FullScreenTerminalView: View {
   var onStartReviewLoop: () -> Void = {}
   var onOpenReviewLoopReviewer: () -> Void = {}
   var onDiagnoseReviewLoop: () -> Void = {}
-  var onContinueReviewLoop: () -> Void = {}
+  var onContinueReviewLoop: (Int) -> Void = { _ in }
   var onStopReviewLoop: () -> Void = {}
 
   /// Mirrors the board card's right-click "Debug session…" action so the
@@ -299,7 +299,7 @@ struct FullScreenTerminalView: View {
           onStart: onStartReviewLoop,
           onOpenReviewer: onOpenReviewLoopReviewer,
           onDiagnose: onDiagnoseReviewLoop,
-          onContinueOneRound: onContinueReviewLoop,
+          onContinue: onContinueReviewLoop,
           onStop: onStopReviewLoop
         )
       }

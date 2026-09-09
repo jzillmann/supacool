@@ -877,7 +877,9 @@ struct BoardView: View {
       },
       onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
       onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
-      onContinueReviewLoop: { store.send(.continueReviewLoopOneRound(id: session.id)) },
+      onContinueReviewLoop: { rounds in
+        store.send(.continueReviewLoop(id: session.id, additionalRounds: rounds))
+      },
       onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
       onDebug: {
         store.send(
@@ -1362,7 +1364,7 @@ private struct SessionCardContainer: View {
   let onStartReviewLoop: () -> Void
   let onOpenReviewLoopReviewer: () -> Void
   let onDiagnoseReviewLoop: () -> Void
-  let onContinueReviewLoop: () -> Void
+  let onContinueReviewLoop: (Int) -> Void
   let onStopReviewLoop: () -> Void
   let onDebug: () -> Void
   let onServerLifecycleRefresh: () -> Void

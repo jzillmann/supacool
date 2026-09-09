@@ -545,6 +545,11 @@ struct BoardFeature {
     var continueTitle: String {
       hasPendingFindings ? "Send Findings to Agent" : "Re-review"
     }
+    /// The larger grant, spelled out so the user knows how long the loop runs
+    /// before it asks again.
+    var multiRoundContinueTitle: String {
+      "\(continueTitle), Then \(BoardFeature.reviewLoopMultiRoundGrant) More Rounds"
+    }
   }
 
   enum Action: BindableAction, Equatable {
@@ -564,10 +569,17 @@ struct BoardFeature {
     case _reviewLoopImplementationHeadResolved(id: AgentSession.ID, headSHA: String?)
     /// Workspace head resolved for a "continue one round" that has no findings
     /// left to hand over, so the loop can refuse to re-review an unchanged tree.
-    case _reviewLoopRereviewHeadResolved(id: AgentSession.ID, headSHA: String?)
+    case _reviewLoopRereviewHeadResolved(
+      id: AgentSession.ID,
+      headSHA: String?,
+      additionalRounds: Int
+    )
     case openReviewLoopReviewer(id: AgentSession.ID)
     case diagnoseReviewLoop(id: AgentSession.ID)
-    case continueReviewLoopOneRound(id: AgentSession.ID)
+    /// Grants the loop `additionalRounds` more review rounds before it must
+    /// escalate again. One round keeps the old short leash; a larger grant lets
+    /// the loop run unattended when the user judges it is still converging.
+    case continueReviewLoop(id: AgentSession.ID, additionalRounds: Int)
     case stopReviewLoop(id: AgentSession.ID)
     case dismissReviewLoopDecisionAlert
 
@@ -1229,11 +1241,12 @@ struct BoardFeature {
           headSHA: headSHA
         )
 
-      case ._reviewLoopRereviewHeadResolved(let id, let headSHA):
+      case ._reviewLoopRereviewHeadResolved(let id, let headSHA, let additionalRounds):
         return reduceReviewLoopRereviewHeadResolved(
           state: &state,
           id: id,
-          headSHA: headSHA
+          headSHA: headSHA,
+          additionalRounds: additionalRounds
         )
 
       case .openReviewLoopReviewer(let id):
@@ -1242,8 +1255,8 @@ struct BoardFeature {
       case .diagnoseReviewLoop(let id):
         return reduceDiagnoseReviewLoop(state: &state, id: id)
 
-      case .continueReviewLoopOneRound(let id):
-        return reduceContinueReviewLoopOneRound(state: &state, id: id)
+      case .continueReviewLoop(let id, let additionalRounds):
+        return reduceContinueReviewLoop(state: &state, id: id, additionalRounds: additionalRounds)
 
       case .stopReviewLoop(let id):
         return reduceStopReviewLoop(state: &state, id: id)

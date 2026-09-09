@@ -244,9 +244,10 @@ extension BoardFeature {
   /// report, an empty findings list) re-runs the reviewer, and even then the
   /// commit has to have moved first: re-reviewing an unchanged tree spends a
   /// round to reproduce the findings word for word.
-  func reduceContinueReviewLoopOneRound(
+  func reduceContinueReviewLoop(
     state: inout State,
-    id: AgentSession.ID
+    id: AgentSession.ID,
+    additionalRounds: Int
   ) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == id }),
       let loop = session.reviewLoop,
@@ -259,7 +260,10 @@ extension BoardFeature {
     if let report = loop.pendingFixReport {
       state.$sessions.withLock { sessions in
         guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-        sessions[index].reviewLoop?.maximumRounds = Self.extendedMaximumRounds(for: loop)
+        sessions[index].reviewLoop?.maximumRounds = Self.extendedMaximumRounds(
+          for: loop,
+          additionalRounds: additionalRounds
+        )
         sessions[index].reviewLoop?.phase = .fixing
         sessions[index].reviewLoop?.escalationReason = nil
         sessions[index].reviewLoop?.updatedAt = now
@@ -280,14 +284,21 @@ extension BoardFeature {
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
     return .run { [gitClient] send in
       let history = try? await gitClient.commitHistory(workspaceURL, 1)
-      await send(._reviewLoopRereviewHeadResolved(id: id, headSHA: history?.first?.hash))
+      await send(
+        ._reviewLoopRereviewHeadResolved(
+          id: id,
+          headSHA: history?.first?.hash,
+          additionalRounds: additionalRounds
+        )
+      )
     }
   }
 
   func reduceReviewLoopRereviewHeadResolved(
     state: inout State,
     id: AgentSession.ID,
-    headSHA: String?
+    headSHA: String?,
+    additionalRounds: Int
   ) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == id }),
       let loop = session.reviewLoop,
@@ -314,7 +325,7 @@ extension BoardFeature {
     }
 
     let now = date.now
-    let extendedMaximum = Self.extendedMaximumRounds(for: loop)
+    let extendedMaximum = Self.extendedMaximumRounds(for: loop, additionalRounds: additionalRounds)
     let nextRound = loop.round + 1
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
@@ -532,6 +543,8 @@ extension BoardFeature {
 
 extension BoardFeature {
   nonisolated static let defaultReviewLoopMaximumRounds = 5
+  /// The larger of the two continue grants offered at a decision point.
+  nonisolated static let reviewLoopMultiRoundGrant = 3
   nonisolated static let reviewLoopWarningRound = 3
   nonisolated static let maximumStoredReviewReportLength = 12_000
 
@@ -579,8 +592,16 @@ extension BoardFeature {
 
   /// How far "continue one round" extends the budget: always at least one
   /// round beyond both the configured maximum and the round we are on.
-  nonisolated static func extendedMaximumRounds(for loop: ReviewLoopState) -> Int {
-    max(loop.maximumRounds + 1, loop.round + 1)
+  /// The round limit after the user grants `additionalRounds` more rounds.
+  ///
+  /// Anchored on the *current* round as well as the old limit, so a grant is
+  /// always worth its full length even when the loop already ran past its limit.
+  nonisolated static func extendedMaximumRounds(
+    for loop: ReviewLoopState,
+    additionalRounds: Int = 1
+  ) -> Int {
+    let granted = max(1, additionalRounds)
+    return max(loop.maximumRounds + granted, loop.round + granted)
   }
 
   nonisolated static func reviewerPrompt(

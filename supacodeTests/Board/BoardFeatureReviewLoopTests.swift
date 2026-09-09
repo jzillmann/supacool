@@ -197,7 +197,7 @@ extension BoardFeatureTests {
     let commands = LockIsolated<[TerminalClient.Command]>([])
     let store = reviewLoopStore(session: session, commands: commands)
 
-    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
     await store.finish()
 
     let loop = try #require(store.state.sessions.first?.reviewLoop)
@@ -210,6 +210,42 @@ extension BoardFeatureTests {
     }
     #expect(tabID.rawValue == session.primaryTerminalID)
     #expect(prompt.contains("Expose the backend-resolved dataset identity instead."))
+  }
+
+  @Test(.dependencies) func continueWithAMultiRoundGrantExtendsTheBudgetByThatMuch() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 5,
+        maximumRounds: 5,
+        lastReviewedSHA: "old-sha",
+        lastSummary: "Round 5 still found changes."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "new-sha")
+
+    await store.send(
+      .continueReviewLoop(
+        id: session.id,
+        additionalRounds: BoardFeature.reviewLoopMultiRoundGrant
+      )
+    )
+    await store.receive(\._reviewLoopRereviewHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.round == 6)
+    // Round 6 of 8 — three more rounds before the loop must ask again.
+    #expect(loop.maximumRounds == 8)
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the re-review prompt to reach the reviewer")
+      return
+    }
+    #expect(prompt.contains("round 6 of 8"))
   }
 
   @Test(.dependencies) func continueRefusesToRereviewAnUnchangedCommit() async throws {
@@ -232,7 +268,7 @@ extension BoardFeatureTests {
       headSHA: "same-sha"
     )
 
-    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
     await store.receive(\._reviewLoopRereviewHeadResolved)
     await store.finish()
 
@@ -261,7 +297,7 @@ extension BoardFeatureTests {
     let commands = LockIsolated<[TerminalClient.Command]>([])
     let store = reviewLoopStore(session: session, commands: commands, headSHA: "new-sha")
 
-    await store.send(.continueReviewLoopOneRound(id: session.id))
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
     await store.receive(\._reviewLoopRereviewHeadResolved)
     await store.finish()
 

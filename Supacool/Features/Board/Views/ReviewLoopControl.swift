@@ -10,7 +10,7 @@ struct ReviewLoopControl: View {
   let onStart: () -> Void
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
-  let onContinueOneRound: () -> Void
+  let onContinue: (Int) -> Void
   let onStop: () -> Void
 
   @State private var isPopoverPresented = false
@@ -62,7 +62,7 @@ struct ReviewLoopControl: View {
         state: state,
         onOpenReviewer: onOpenReviewer,
         onDiagnose: onDiagnose,
-        onContinueOneRound: onContinueOneRound,
+        onContinue: onContinue,
         onStop: onStop
       )
     }
@@ -101,7 +101,7 @@ private struct ReviewLoopPopover: View {
   let state: ReviewLoopState
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
-  let onContinueOneRound: () -> Void
+  let onContinue: (Int) -> Void
   let onStop: () -> Void
 
   private var phaseLabel: String {
@@ -180,12 +180,23 @@ private struct ReviewLoopPopover: View {
           hasPendingFindings ? "Send findings to agent" : "Re-review",
           systemImage: hasPendingFindings ? "arrowshape.turn.up.right.fill" : "forward.fill"
         ) {
-          onContinueOneRound()
+          onContinue(1)
         }
         .help(
           hasPendingFindings
-            ? "Hand the reviewer's findings to the implementation agent"
+            ? "Hand the reviewer's findings to the implementation agent, then ask again after one round"
             : "Allow exactly one more review round"
+        )
+
+        Button(
+          "…then \(BoardFeature.reviewLoopMultiRoundGrant) more rounds",
+          systemImage: "forward.end.fill"
+        ) {
+          onContinue(BoardFeature.reviewLoopMultiRoundGrant)
+        }
+        .help(
+          "Same next step, but let the loop run \(BoardFeature.reviewLoopMultiRoundGrant) more "
+            + "rounds before it asks again"
         )
       }
 
