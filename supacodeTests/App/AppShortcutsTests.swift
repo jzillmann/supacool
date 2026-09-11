@@ -85,6 +85,19 @@ struct AppShortcutsTests {
     #expect(withOverrides.contains("--keybind=super+w=unbind"))
   }
 
+  // ⌘1–⌘9 select tabs in the session strip; Ghostty's default
+  // `super+N=goto_tab` would otherwise index the worktree's tab list instead,
+  // and only while the surface is first responder.
+  @Test func ghosttyCLIArgumentsUnbindCommandDigits() {
+    let arguments = AppShortcuts.ghosttyCLIKeybindArguments
+    for digit in 1...9 {
+      #expect(arguments.contains("--keybind=super+\(digit)=unbind"))
+      #expect(arguments.contains("--keybind=super+digit_\(digit)=unbind"))
+    }
+    // ⌘0 is the menu's "Show main window" — Ghostty has no default for it.
+    #expect(!arguments.contains("--keybind=super+0=unbind"))
+  }
+
   // MARK: - Shortcut identity.
 
   @Test func allShortcutsHaveUniqueIDs() {

@@ -247,6 +247,26 @@ struct FullScreenTerminalView: View {
     // ⌘⇧. nav scoped to "the terminals I pinned together". Fire unconditionally;
     // the reducer no-ops when the session isn't in a group.
     .background(groupCycleShortcuts)
+    // ⌘1–⌘8 pick that tab in the strip, ⌘9 the last one. Ghostty's own
+    // super+digit `goto_tab` defaults are unbound at launch
+    // (`AppShortcuts.reservedGhosttyUnbindArguments`), so these fire
+    // whatever holds focus.
+    .background(tabSelectionShortcuts)
+  }
+
+  private var tabSelectionShortcuts: some View {
+    let tabs = session.tabTerminals
+    return Group {
+      ForEach(Array(SessionTabShortcut.digits), id: \.self) { digit in
+        let index = SessionTabShortcut.tabIndex(forDigit: digit, tabCount: tabs.count)
+        Button("Select Tab \(digit)") {
+          if let index { onSelectTerminal(tabs[index].id) }
+        }
+        .keyboardShortcut(KeyEquivalent(Character(String(digit))), modifiers: .command)
+        .disabled(index == nil)
+      }
+    }
+    .hidden()
   }
 
   private var groupCycleShortcuts: some View {

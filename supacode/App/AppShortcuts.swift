@@ -375,9 +375,21 @@ enum AppShortcuts {
   // Unbinding it makes `GhosttySurfaceView.performKeyEquivalent` see ⌘W as a
   // non-binding and let it fall through to SwiftUI every single time.
   // Not an `AppShortcut` because it has no menu item and is not user-rebindable.
-  static let reservedGhosttyUnbindArguments: [String] = [
-    "--keybind=super+w=unbind",
-  ]
+  //
+  // ⌘1–⌘9 likewise: Ghostty's macOS defaults bind them to `goto_tab:N` /
+  // `last_tab`, which index the *worktree's* whole tab list (sibling sessions'
+  // terminals included) and only fire while a surface is first responder.
+  // The full-screen session view owns them instead, selecting tabs in its own
+  // strip (`SessionTabShortcut`). Both the unicode and the physical `digit_N`
+  // key are unbound because Ghostty registers both (AZERTY needs the latter).
+  static let reservedGhosttyUnbindArguments: [String] =
+    ["--keybind=super+w=unbind"]
+    + SessionTabShortcut.digits.flatMap { digit in
+      [
+        "--keybind=super+\(digit)=unbind",
+        "--keybind=super+digit_\(digit)=unbind",
+      ]
+    }
 
   // MARK: - Ghostty CLI arguments.
 

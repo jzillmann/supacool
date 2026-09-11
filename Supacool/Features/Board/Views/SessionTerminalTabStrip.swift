@@ -21,8 +21,8 @@ struct SessionTerminalTabStrip: View {
 
   var body: some View {
     HStack(spacing: 6) {
-      ForEach(terminals) { terminal in
-        tab(terminal)
+      ForEach(Array(terminals.enumerated()), id: \.element.id) { index, terminal in
+        tab(terminal, at: index)
       }
       addButton
       Spacer(minLength: 0)
@@ -38,7 +38,7 @@ struct SessionTerminalTabStrip: View {
   }
 
   @ViewBuilder
-  private func tab(_ terminal: SessionTerminal) -> some View {
+  private func tab(_ terminal: SessionTerminal, at index: Int) -> some View {
     let isActive = terminal.id == activeTerminalID
     let isPrimary = terminal.id == primaryTerminalID
     Button {
@@ -82,11 +82,7 @@ struct SessionTerminalTabStrip: View {
       )
     }
     .buttonStyle(.plain)
-    .help(
-      terminal.role == .agent
-        ? "\(AgentType.displayName(for: terminal.agent)) terminal"
-        : "Shell terminal"
-    )
+    .help(tooltip(for: terminal, at: index))
     .contextMenu {
       // The primary (agent) terminal is deliberately absent here: the
       // reducer refuses to remove it, so offering Close would be a lie.
@@ -124,6 +120,17 @@ struct SessionTerminalTabStrip: View {
     }
     .buttonStyle(.plain)
     .help("Add a shell tab to this session")
+  }
+
+  private func tooltip(for terminal: SessionTerminal, at index: Int) -> String {
+    let kind =
+      terminal.role == .agent
+      ? "\(AgentType.displayName(for: terminal.agent)) terminal"
+      : "Shell terminal"
+    guard let digit = SessionTabShortcut.digit(forTabAt: index, tabCount: terminals.count) else {
+      return kind
+    }
+    return "\(kind) (⌘\(digit))"
   }
 
   private func label(for terminal: SessionTerminal) -> String {
