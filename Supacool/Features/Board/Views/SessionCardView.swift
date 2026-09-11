@@ -46,7 +46,7 @@ struct SessionCardView: View {
   var onStartReviewLoop: (() -> Void)?
   var onOpenReviewLoopReviewer: (() -> Void)?
   var onDiagnoseReviewLoop: (() -> Void)?
-  var onContinueReviewLoop: ((Int) -> Void)?
+  var onChooseReviewDecision: ((ReviewDecisionChoice) -> Void)?
   var onStopReviewLoop: (() -> Void)?
   /// Right-click → "Debug session…" — opens the debug sheet that spawns
   /// a fresh agent in the supacool repo primed with this session's
@@ -119,7 +119,7 @@ struct SessionCardView: View {
             onStart: { onStartReviewLoop?() },
             onOpenReviewer: { onOpenReviewLoopReviewer?() },
             onDiagnose: { onDiagnoseReviewLoop?() },
-            onContinue: { rounds in onContinueReviewLoop?(rounds) },
+            onChoose: { choice in onChooseReviewDecision?(choice) },
             onStop: { onStopReviewLoop?() }
           )
         }

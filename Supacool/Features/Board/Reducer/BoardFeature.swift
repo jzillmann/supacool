@@ -149,10 +149,12 @@ struct BoardFeature {
     /// detached card and decide whether to resume, rerun, or remove it.
     var priorityTerminationAlert: PriorityTerminationAlertState?
 
-    /// Blocking handoff when an armed review loop cannot safely continue:
-    /// invalid output, no implementation commit, an architectural blocker,
-    /// or the configured round ceiling. The user chooses the next move.
-    var reviewLoopDecisionAlert: ReviewLoopDecisionAlertState?
+    /// Review decisions the user put off with "Later". Parked decisions
+    /// themselves are not stored here — every session whose loop is in
+    /// `.needsDecision` is one (see `pendingReviewDecisions`). A new
+    /// escalation for the same session removes it from this set again.
+    /// Transient: after a relaunch every parked decision shows again.
+    var snoozedReviewDecisionIDs: Set<AgentSession.ID> = []
 
     /// Presented when removing a session would also delete a dirty
     /// backing worktree. The user must explicitly confirm before the
@@ -530,28 +532,6 @@ struct BoardFeature {
     }
   }
 
-  nonisolated struct ReviewLoopDecisionAlertState: Equatable, Identifiable, Sendable {
-    let sessionID: AgentSession.ID
-    let displayName: String
-    let reason: String
-    let isArmed: Bool
-    /// True when the reviewer left findings the agent has not seen yet, so the
-    /// continue button says whose turn it actually starts.
-    var hasPendingFindings: Bool = false
-
-    var id: AgentSession.ID { sessionID }
-    var title: String { isArmed ? "Review needs a decision" : "Review loop unavailable" }
-    var message: String { "\(displayName): \(reason)" }
-    var continueTitle: String {
-      hasPendingFindings ? "Send Findings to Agent" : "Re-review"
-    }
-    /// The larger grant, spelled out so the user knows how long the loop runs
-    /// before it asks again.
-    var multiRoundContinueTitle: String {
-      "\(continueTitle), Then \(BoardFeature.reviewLoopMultiRoundGrant) More Rounds"
-    }
-  }
-
   enum Action: BindableAction, Equatable {
     case binding(BindingAction<State>)
 
@@ -580,8 +560,13 @@ struct BoardFeature {
     /// escalate again. One round keeps the old short leash; a larger grant lets
     /// the loop run unattended when the user judges it is still converging.
     case continueReviewLoop(id: AgentSession.ID, additionalRounds: Int)
+    /// Resumes a fix round that ended without a commit, without spending a
+    /// new round: re-review if the head moved meanwhile, else nudge the agent.
+    case resumeReviewLoopRound(id: AgentSession.ID)
+    case _reviewLoopResumeHeadResolved(id: AgentSession.ID, headSHA: String?)
     case stopReviewLoop(id: AgentSession.ID)
-    case dismissReviewLoopDecisionAlert
+    /// "Later": hides the decision card until the loop escalates again.
+    case snoozeReviewDecision(id: AgentSession.ID)
 
     // MARK: Session CRUD
     case createSession(AgentSession)
@@ -1258,11 +1243,17 @@ struct BoardFeature {
       case .continueReviewLoop(let id, let additionalRounds):
         return reduceContinueReviewLoop(state: &state, id: id, additionalRounds: additionalRounds)
 
+      case .resumeReviewLoopRound(let id):
+        return reduceResumeReviewLoopRound(state: &state, id: id)
+
+      case ._reviewLoopResumeHeadResolved(let id, let headSHA):
+        return reduceReviewLoopResumeHeadResolved(state: &state, id: id, headSHA: headSHA)
+
       case .stopReviewLoop(let id):
         return reduceStopReviewLoop(state: &state, id: id)
 
-      case .dismissReviewLoopDecisionAlert:
-        state.reviewLoopDecisionAlert = nil
+      case .snoozeReviewDecision(let id):
+        state.snoozedReviewDecisionIDs.insert(id)
         return .none
 
       // MARK: - Session lifecycle (create) — handlers live in BoardFeature+SessionLifecycle.swift
@@ -2573,6 +2564,9 @@ struct BoardFeature {
           // the user can Rerun from there.
           state.trayCards.remove(id: id)
           return .send(.focusSession(id: sessionID))
+        case .reviewLoopUnavailable(let sessionID, _, _):
+          state.trayCards.remove(id: id)
+          return .send(.focusSession(id: sessionID))
         }
 
       case .trayCardSecondaryTapped(let id):
@@ -2585,7 +2579,8 @@ struct BoardFeature {
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
         case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
-          .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed:
+          .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed,
+          .reviewLoopUnavailable:
           return .none
         }
 

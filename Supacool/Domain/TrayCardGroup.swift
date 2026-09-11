@@ -85,7 +85,7 @@ extension TrayCardKind {
     case .sessionCreating: .sessionCreating
     case .worktreeDeleting: .worktreeDeleting
     case .staleHooks, .hookInstallFailed, .worktreeDeleteFailed,
-      .sessionSpawnFailed, .sessionResumeFailed:
+      .sessionSpawnFailed, .sessionResumeFailed, .reviewLoopUnavailable:
       nil
     }
   }
@@ -97,6 +97,7 @@ extension TrayCardKind {
     case .worktreeDeleting(_, let displayName): displayName
     case .sessionSpawnFailed(let displayName, _, _): displayName
     case .sessionResumeFailed(_, let displayName, _): displayName
+    case .reviewLoopUnavailable(_, let displayName, _): displayName
     case .staleHooks, .hookInstallFailed, .worktreeDeleteFailed: nil
     }
   }

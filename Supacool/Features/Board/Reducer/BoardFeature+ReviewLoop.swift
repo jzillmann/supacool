@@ -133,7 +133,8 @@ extension BoardFeature {
       return escalateReviewLoop(
         state: &state,
         sessionID: id,
-        reason: "The implementation turn ended, but Supacool could not resolve its current commit."
+        reason: "The implementation turn ended, but Supacool could not resolve its current commit.",
+        pausedDuringFix: true
       )
     }
     guard headSHA != loop.lastReviewedSHA else {
@@ -141,7 +142,8 @@ extension BoardFeature {
         state: &state,
         sessionID: id,
         reason: "The implementation turn ended without a new commit after review round \(loop.round). "
-          + "The scope or architecture may need a decision."
+          + "The scope or architecture may need a decision.",
+        pausedDuringFix: true
       )
     }
     guard
@@ -192,12 +194,11 @@ extension BoardFeature {
   /// Opens the session full screen with the reviewer terminal active, and parks
   /// any pending decision instead of answering it.
   ///
-  /// The loop stays in `.needsDecision`, so the orange review pill on the card and
-  /// in the full-screen toolbar keeps offering the same choices. The user can read
-  /// the diff and the reviewer output first, then decide from there.
+  /// The loop stays in `.needsDecision`, so the decision card in the stack and the
+  /// orange review pill keep offering the same choices. The user can read the diff
+  /// and the reviewer output first, then decide from there.
   func reduceOpenReviewLoopReviewer(state: inout State, id: AgentSession.ID) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == id }) else { return .none }
-    state.reviewLoopDecisionAlert = nil
     state.focusedSessionID = id
     if let reviewerID = session.reviewLoop?.reviewerTerminalID {
       state.activeTerminalBySession[id] = reviewerID
@@ -218,7 +219,6 @@ extension BoardFeature {
       )
     }
     let now = date.now
-    state.reviewLoopDecisionAlert = nil
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].reviewLoop?.phase = .diagnosing
@@ -255,7 +255,6 @@ extension BoardFeature {
     else { return .none }
 
     let now = date.now
-    state.reviewLoopDecisionAlert = nil
 
     if let report = loop.pendingFixReport {
       state.$sessions.withLock { sessions in
@@ -266,6 +265,7 @@ extension BoardFeature {
         )
         sessions[index].reviewLoop?.phase = .fixing
         sessions[index].reviewLoop?.escalationReason = nil
+        sessions[index].reviewLoop?.pausedDuringFix = false
         sessions[index].reviewLoop?.updatedAt = now
       }
       return sendFixPrompt(state: &state, session: session, loop: loop, report: report)
@@ -330,6 +330,7 @@ extension BoardFeature {
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       sessions[index].reviewLoop?.maximumRounds = extendedMaximum
+      sessions[index].reviewLoop?.pausedDuringFix = false
       sessions[index].reviewLoop?.round = nextRound
       sessions[index].reviewLoop?.phase = .reviewing
       sessions[index].reviewLoop?.expectedReviewSHA = resolvedHead
@@ -355,14 +356,74 @@ extension BoardFeature {
     }
   }
 
+  /// "Continue round": the loop parked because the implementation agent's
+  /// turn ended without a commit, but the round is still open. Resolve the
+  /// head first — the agent may have committed while the decision waited.
+  func reduceResumeReviewLoopRound(state: inout State, id: AgentSession.ID) -> Effect<Action> {
+    guard let session = state.sessions.first(where: { $0.id == id }),
+      let loop = session.reviewLoop,
+      loop.phase == .needsDecision,
+      loop.pausedDuringFix
+    else { return .none }
+    let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
+    return .run { [gitClient] send in
+      let history = try? await gitClient.commitHistory(workspaceURL, 1)
+      await send(._reviewLoopResumeHeadResolved(id: id, headSHA: history?.first?.hash))
+    }
+  }
+
+  /// Reopens the fix round without spending a new one. A head that moved
+  /// since the last review goes straight to the reviewer, exactly as if the
+  /// agent's turn had just ended with that commit. Otherwise the agent gets a
+  /// short nudge, and its next turn end runs the usual new-commit check — so a
+  /// second turn without a commit parks the loop again.
+  func reduceReviewLoopResumeHeadResolved(
+    state: inout State,
+    id: AgentSession.ID,
+    headSHA: String?
+  ) -> Effect<Action> {
+    guard let session = state.sessions.first(where: { $0.id == id }),
+      let loop = session.reviewLoop,
+      loop.phase == .needsDecision,
+      loop.pausedDuringFix
+    else { return .none }
+
+    updateReviewLoop(state: &state, sessionID: id) { updated in
+      updated.phase = .fixing
+      updated.escalationReason = nil
+      updated.pausedDuringFix = false
+    }
+    if let headSHA, !headSHA.isEmpty, headSHA != loop.lastReviewedSHA {
+      return reduceReviewLoopImplementationHeadResolved(state: &state, id: id, headSHA: headSHA)
+    }
+
+    let primaryTabID = TerminalTabID(rawValue: session.primaryTerminalID)
+    guard terminalClient.tabExists(session.worktreeID, primaryTabID) else {
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: id,
+        reason: "The implementation terminal is no longer running."
+      )
+    }
+    let prompt = Self.resumeFixRoundPrompt(
+      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      round: loop.round
+    )
+    return .run { _ in
+      await terminalClient.send(
+        .sendPrompt(worktreeID: session.worktreeID, tabID: primaryTabID, text: prompt)
+      )
+    }
+  }
+
   func reduceStopReviewLoop(state: inout State, id: AgentSession.ID) -> Effect<Action> {
     let now = date.now
-    state.reviewLoopDecisionAlert = nil
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }),
         sessions[index].reviewLoop != nil
       else { return }
       sessions[index].reviewLoop?.phase = .stopped
+      sessions[index].reviewLoop?.pausedDuringFix = false
       sessions[index].reviewLoop?.escalationReason = "Stopped by user."
       sessions[index].reviewLoop?.updatedAt = now
     }
@@ -511,33 +572,76 @@ extension BoardFeature {
     }
   }
 
+  /// Parks the loop for the user. `pausedDuringFix` marks a fix round that is
+  /// still open, so the decision can offer to resume it.
   private func escalateReviewLoop(
     state: inout State,
     sessionID: AgentSession.ID,
-    reason: String
+    reason: String,
+    pausedDuringFix: Bool = false
   ) -> Effect<Action> {
     updateReviewLoop(state: &state, sessionID: sessionID) { loop in
       loop.phase = .needsDecision
       loop.convergenceWarning = true
       loop.escalationReason = reason
+      loop.pausedDuringFix = pausedDuringFix
     }
     return presentReviewLoopDecision(state: &state, sessionID: sessionID, reason: reason)
   }
 
+  /// The decision itself is the loop's `.needsDecision` phase — the stack
+  /// renders it from there, never blocking the window. This only makes sure
+  /// a fresh escalation shows even if an earlier one was put off with
+  /// "Later". Without an armed loop there is nothing to decide, so the reason
+  /// becomes a tray notice instead.
   private func presentReviewLoopDecision(
     state: inout State,
     sessionID: AgentSession.ID,
     reason: String
   ) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == sessionID }) else { return .none }
-    state.reviewLoopDecisionAlert = ReviewLoopDecisionAlertState(
-      sessionID: sessionID,
-      displayName: session.displayName,
-      reason: reason,
-      isArmed: session.reviewLoop != nil,
-      hasPendingFindings: session.reviewLoop?.pendingFixReport != nil
-    )
+    guard session.reviewLoop != nil else {
+      let kind = TrayCardKind.reviewLoopUnavailable(
+        sessionID: sessionID,
+        displayName: session.displayName,
+        message: reason
+      )
+      if !state.trayCards.contains(where: { $0.kind == kind }) {
+        state.trayCards.append(TrayCard(id: uuid(), kind: kind))
+      }
+      return .none
+    }
+    state.snoozedReviewDecisionIDs.remove(sessionID)
     return .none
+  }
+}
+
+extension BoardFeature.State {
+  /// Every review decision waiting on the user, newest first, minus the ones
+  /// put off with "Later". Derived from the persisted loop phase, so no
+  /// decision can be overwritten by another and all survive a relaunch.
+  var pendingReviewDecisions: [AgentSession] {
+    sessions
+      .filter { session in
+        session.reviewLoop?.phase == .needsDecision && !snoozedReviewDecisionIDs.contains(session.id)
+      }
+      .sorted { lhs, rhs in
+        (lhs.reviewLoop?.updatedAt ?? .distantPast) > (rhs.reviewLoop?.updatedAt ?? .distantPast)
+      }
+  }
+}
+
+extension BoardFeature.Action {
+  /// The action that answers a parked decision with `choice`.
+  static func reviewDecision(_ choice: ReviewDecisionChoice, sessionID: AgentSession.ID) -> Self {
+    switch choice {
+    case .resumeRound:
+      .resumeReviewLoopRound(id: sessionID)
+    case .resendFindings:
+      .continueReviewLoop(id: sessionID, additionalRounds: 1)
+    case .sendFindings(let additionalRounds), .rereview(let additionalRounds):
+      .continueReviewLoop(id: sessionID, additionalRounds: additionalRounds)
+    }
   }
 }
 
@@ -671,6 +775,14 @@ extension BoardFeature {
       Findings:
       \(findings)
       """
+  }
+
+  nonisolated static func resumeFixRoundPrompt(pullRequestURL: String, round: Int) -> String {
+    """
+    Review round \(round) for \(pullRequestURL) is still open: your last turn ended without a new commit.
+    Continue addressing that round's findings. Keep the fix within the ticket's intended scope, then commit and
+    push the result. If a finding is invalid or needs a decision you cannot make, say so clearly and stop.
+    """
   }
 
   nonisolated static func diagnosisPrompt(loop: ReviewLoopState) -> String {

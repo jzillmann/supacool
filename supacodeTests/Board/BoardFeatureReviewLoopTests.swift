@@ -137,7 +137,7 @@ extension BoardFeatureTests {
     let updated = try #require(store.state.sessions.first?.reviewLoop)
     #expect(updated.phase == .needsDecision)
     #expect(updated.escalationReason?.contains("stale findings") == true)
-    #expect(store.state.reviewLoopDecisionAlert?.sessionID == session.id)
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
   }
 
   @Test(.dependencies) func reviewLoopHardStopsAtConfiguredRoundLimit() async throws {
@@ -170,7 +170,7 @@ extension BoardFeatureTests {
     let updated = try #require(store.state.sessions.first?.reviewLoop)
     #expect(updated.phase == .needsDecision)
     #expect(updated.convergenceWarning)
-    #expect(store.state.reviewLoopDecisionAlert != nil)
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
     #expect(commands.value.isEmpty)
   }
 
@@ -277,7 +277,12 @@ extension BoardFeatureTests {
     #expect(loop.round == 2)
     #expect(loop.maximumRounds == 5)
     #expect(loop.escalationReason?.contains("Nothing was committed") == true)
-    #expect(store.state.reviewLoopDecisionAlert?.hasPendingFindings == false)
+    #expect(
+      loop.decisionChoices == [
+        .rereview(additionalRounds: 1),
+        .rereview(additionalRounds: BoardFeature.reviewLoopMultiRoundGrant),
+      ]
+    )
     #expect(commands.value.isEmpty)
   }
 
@@ -357,14 +362,8 @@ extension BoardFeatureTests {
         escalationReason: "The scope may be wrong."
       )
     )
-    var state = BoardFeature.State()
+    let state = BoardFeature.State()
     state.$sessions.withLock { $0 = [session] }
-    state.reviewLoopDecisionAlert = BoardFeature.ReviewLoopDecisionAlertState(
-      sessionID: session.id,
-      displayName: session.displayName,
-      reason: "The scope may be wrong.",
-      isArmed: true
-    )
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
@@ -375,7 +374,8 @@ extension BoardFeatureTests {
 
     await store.send(.openReviewLoopReviewer(id: session.id))
 
-    #expect(store.state.reviewLoopDecisionAlert == nil)
+    // Inspecting parks the decision: its card stays in the stack.
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
     #expect(store.state.focusedSessionID == session.id)
     #expect(store.state.activeTerminalBySession[session.id] == reviewerID)
     #expect(store.state.sessions.first?.reviewLoop?.phase == .needsDecision)
@@ -416,6 +416,152 @@ extension BoardFeatureTests {
     #expect(store.state.sessions[0].reviewLoop?.lastReviewedSHA == nil)
     #expect(store.state.sessions[1].reviewLoop?.phase == .passed)
     #expect(store.state.sessions[1].reviewLoop?.lastReviewedSHA == "second-sha")
+  }
+
+  @Test(.dependencies) func fixTurnWithoutACommitParksAResumableRound() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        phase: .fixing,
+        round: 1,
+        lastReviewedSHA: "same-sha",
+        lastReport: reviewReport(verdict: "changes", sha: "same-sha", findings: ["Fix the race."])
+      )
+    )
+    let store = reviewLoopStore(session: session)
+
+    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(loop.pausedDuringFix)
+    #expect(loop.decisionChoices == [.resumeRound, .resendFindings])
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
+  }
+
+  @Test(.dependencies) func continueRoundNudgesTheAgentWhenNothingWasCommitted() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "same-sha",
+        escalationReason: "The implementation turn ended without a new commit after review round 2.",
+        pausedDuringFix: true
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "same-sha")
+
+    await store.send(.resumeReviewLoopRound(id: session.id))
+    await store.receive(\._reviewLoopResumeHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .fixing)
+    // The round stays open: no new round is spent and the limit is untouched.
+    #expect(loop.round == 2)
+    #expect(loop.maximumRounds == 5)
+    #expect(!loop.pausedDuringFix)
+    #expect(loop.escalationReason == nil)
+    #expect(store.state.pendingReviewDecisions.isEmpty)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected a nudge to the implementation terminal")
+      return
+    }
+    #expect(tabID.rawValue == session.primaryTerminalID)
+    #expect(prompt.contains("Review round 2"))
+    #expect(prompt.contains("still open"))
+  }
+
+  @Test(.dependencies) func continueRoundReviewsACommitThatLandedMeanwhile() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "old-sha",
+        pausedDuringFix: true
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "new-sha")
+
+    await store.send(.resumeReviewLoopRound(id: session.id))
+    await store.receive(\._reviewLoopResumeHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.round == 3)
+    #expect(loop.expectedReviewSHA == "new-sha")
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the new commit to be sent to the reviewer")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("expected new-sha"))
+  }
+
+  @Test(.dependencies) func laterHidesADecisionUntilTheLoopAsksAgain() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        phase: .fixing,
+        lastReviewedSHA: "same-sha"
+      )
+    )
+    let store = reviewLoopStore(session: session, headSHA: "same-sha")
+
+    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
+
+    await store.send(.snoozeReviewDecision(id: session.id))
+    #expect(store.state.pendingReviewDecisions.isEmpty)
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .needsDecision)
+
+    // Resume, then a second turn without a commit: a fresh escalation shows again.
+    await store.send(.resumeReviewLoopRound(id: session.id))
+    await store.receive(\._reviewLoopResumeHeadResolved)
+    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
+  }
+
+  @Test(.dependencies) func reviewLoopThatCannotStartBecomesATrayNotice() async throws {
+    let session = reviewLoopSession()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.tabExists = { _, _ in false }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startReviewLoop(id: session.id, repositories: [reviewLoopRepository()]))
+
+    #expect(store.state.sessions.first?.reviewLoop == nil)
+    #expect(store.state.pendingReviewDecisions.isEmpty)
+    guard case .reviewLoopUnavailable(let sessionID, _, let message)? = store.state.trayCards.first?.kind
+    else {
+      Issue.record("Expected a reviewLoopUnavailable tray card")
+      return
+    }
+    #expect(sessionID == session.id)
+    #expect(message.contains("Resume the implementation terminal"))
+  }
+
+  @Test func reviewLoopStateDecodesOlderSnapshotsWithoutPausedDuringFix() throws {
+    let json = #"{"phase":"needsDecision","round":2,"maximumRounds":5}"#
+    let loop = try JSONDecoder().decode(ReviewLoopState.self, from: Data(json.utf8))
+    #expect(loop.phase == .needsDecision)
+    #expect(!loop.pausedDuringFix)
   }
 }
 

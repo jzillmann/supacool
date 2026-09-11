@@ -877,8 +877,8 @@ struct BoardView: View {
       },
       onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
       onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
-      onContinueReviewLoop: { rounds in
-        store.send(.continueReviewLoop(id: session.id, additionalRounds: rounds))
+      onChooseReviewDecision: { choice in
+        store.send(.reviewDecision(choice, sessionID: session.id))
       },
       onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
       onDebug: {
@@ -1364,7 +1364,7 @@ private struct SessionCardContainer: View {
   let onStartReviewLoop: () -> Void
   let onOpenReviewLoopReviewer: () -> Void
   let onDiagnoseReviewLoop: () -> Void
-  let onContinueReviewLoop: (Int) -> Void
+  let onChooseReviewDecision: (ReviewDecisionChoice) -> Void
   let onStopReviewLoop: () -> Void
   let onDebug: () -> Void
   let onServerLifecycleRefresh: () -> Void
@@ -1445,7 +1445,7 @@ private struct SessionCardContainer: View {
       onStartReviewLoop: onStartReviewLoop,
       onOpenReviewLoopReviewer: onOpenReviewLoopReviewer,
       onDiagnoseReviewLoop: onDiagnoseReviewLoop,
-      onContinueReviewLoop: onContinueReviewLoop,
+      onChooseReviewDecision: onChooseReviewDecision,
       onStopReviewLoop: onStopReviewLoop,
       onDebug: onDebug,
       onAppear: onAppear,

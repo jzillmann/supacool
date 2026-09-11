@@ -10,7 +10,7 @@ struct ReviewLoopControl: View {
   let onStart: () -> Void
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
-  let onContinue: (Int) -> Void
+  let onChoose: (ReviewDecisionChoice) -> Void
   let onStop: () -> Void
 
   @State private var isPopoverPresented = false
@@ -62,7 +62,7 @@ struct ReviewLoopControl: View {
         state: state,
         onOpenReviewer: onOpenReviewer,
         onDiagnose: onDiagnose,
-        onContinue: onContinue,
+        onChoose: onChoose,
         onStop: onStop
       )
     }
@@ -101,7 +101,7 @@ private struct ReviewLoopPopover: View {
   let state: ReviewLoopState
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
-  let onContinue: (Int) -> Void
+  let onChoose: (ReviewDecisionChoice) -> Void
   let onStop: () -> Void
 
   private var phaseLabel: String {
@@ -175,29 +175,12 @@ private struct ReviewLoopPopover: View {
       }
 
       if state.phase == .needsDecision {
-        let hasPendingFindings = state.pendingFixReport != nil
-        Button(
-          hasPendingFindings ? "Send findings to agent" : "Re-review",
-          systemImage: hasPendingFindings ? "arrowshape.turn.up.right.fill" : "forward.fill"
-        ) {
-          onContinue(1)
+        ForEach(state.decisionChoices, id: \.self) { choice in
+          Button(choice.title, systemImage: choice.systemImage) {
+            onChoose(choice)
+          }
+          .help(choice.help)
         }
-        .help(
-          hasPendingFindings
-            ? "Hand the reviewer's findings to the implementation agent, then ask again after one round"
-            : "Allow exactly one more review round"
-        )
-
-        Button(
-          "…then \(BoardFeature.reviewLoopMultiRoundGrant) more rounds",
-          systemImage: "forward.end.fill"
-        ) {
-          onContinue(BoardFeature.reviewLoopMultiRoundGrant)
-        }
-        .help(
-          "Same next step, but let the loop run \(BoardFeature.reviewLoopMultiRoundGrant) more "
-            + "rounds before it asks again"
-        )
       }
 
       if state.phase != .passed && state.phase != .stopped {

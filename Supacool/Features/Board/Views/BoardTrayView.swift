@@ -312,6 +312,14 @@ private struct TrayCardView: View {
         subtitle: message,
         helpText: "Tap to open the session — use Rerun to start it fresh."
       )
+    case .reviewLoopUnavailable(_, let displayName, let message):
+      return TrayCardPresentation(
+        icon: "checkmark.shield",
+        tint: .orange,
+        title: "Review loop unavailable: \(displayName)",
+        subtitle: message,
+        helpText: "Tap to open the session."
+      )
     }
   }
 

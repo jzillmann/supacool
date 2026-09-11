@@ -115,10 +115,14 @@ struct BoardRootView: View {
       )
     )
     // Floating tray (stale hooks, draft cards, etc.) hovers over whichever
-    // mode is active — board grid or full-screen terminal.
+    // mode is active — board grid or full-screen terminal. Parked review
+    // decisions stack above it: non-modal, so they never block the window.
     .overlay(alignment: .bottomTrailing) {
-      BoardTrayView(store: store, repositories: repositories)
-        .allowsHitTesting(!store.trayCards.isEmpty)
+      VStack(alignment: .trailing, spacing: 10) {
+        ReviewDecisionStackView(store: store, bottomInset: store.trayCards.isEmpty ? 16 : 0)
+        BoardTrayView(store: store, repositories: repositories)
+          .allowsHitTesting(!store.trayCards.isEmpty)
+      }
     }
     // Hidden per-session watchers. Live at the root so busy/awaiting-input
     // transitions still trigger the auto-observer (and persist
@@ -244,7 +248,6 @@ struct BoardRootView: View {
     // happy — the body's modifier chain is already long.
     .modifier(PruneAlertModifier(store: store))
     .modifier(PriorityTerminationAlertModifier(store: store))
-    .modifier(ReviewLoopDecisionAlertModifier(store: store))
     .modifier(DirtySessionRemovalConfirmationModifier(store: store))
     .modifier(WorktreeConflictAlertModifier(store: store))
     .modifier(
@@ -394,8 +397,8 @@ struct BoardRootView: View {
         },
         onOpenReviewLoopReviewer: { store.send(.openReviewLoopReviewer(id: session.id)) },
         onDiagnoseReviewLoop: { store.send(.diagnoseReviewLoop(id: session.id)) },
-        onContinueReviewLoop: { rounds in
-          store.send(.continueReviewLoop(id: session.id, additionalRounds: rounds))
+        onChooseReviewDecision: { choice in
+          store.send(.reviewDecision(choice, sessionID: session.id))
         },
         onStopReviewLoop: { store.send(.stopReviewLoop(id: session.id)) },
         onDebug: {
@@ -1143,49 +1146,6 @@ private struct PriorityTerminationAlertModifier: ViewModifier {
       }
       Button("Dismiss", role: .cancel) {
         store.send(.dismissPriorityTerminationAlert)
-      }
-    } message: { alert in
-      Text(alert.message)
-    }
-  }
-}
-
-private struct ReviewLoopDecisionAlertModifier: ViewModifier {
-  @Bindable var store: StoreOf<BoardFeature>
-
-  func body(content: Content) -> some View {
-    content.alert(
-      store.reviewLoopDecisionAlert?.title ?? "Review is not converging",
-      isPresented: Binding(
-        get: { store.reviewLoopDecisionAlert != nil },
-        set: { if !$0 { store.send(.dismissReviewLoopDecisionAlert) } }
-      ),
-      presenting: store.reviewLoopDecisionAlert
-    ) { alert in
-      if alert.isArmed {
-        Button("Inspect in Terminal") {
-          store.send(.openReviewLoopReviewer(id: alert.sessionID))
-        }
-        Button("Diagnose Architecture") {
-          store.send(.diagnoseReviewLoop(id: alert.sessionID))
-        }
-        Button(alert.continueTitle) {
-          store.send(.continueReviewLoop(id: alert.sessionID, additionalRounds: 1))
-        }
-        Button(alert.multiRoundContinueTitle) {
-          store.send(
-            .continueReviewLoop(
-              id: alert.sessionID,
-              additionalRounds: BoardFeature.reviewLoopMultiRoundGrant
-            )
-          )
-        }
-        Button("Stop Review", role: .destructive) {
-          store.send(.stopReviewLoop(id: alert.sessionID))
-        }
-      }
-      Button("Not Now", role: .cancel) {
-        store.send(.dismissReviewLoopDecisionAlert)
       }
     } message: { alert in
       Text(alert.message)

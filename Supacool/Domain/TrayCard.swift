@@ -76,13 +76,19 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// Rerun it.
   case sessionResumeFailed(sessionID: AgentSession.ID, displayName: String, message: String)
 
+  /// A review loop could not start (for example, its implementation terminal
+  /// is not running). There is no loop to decide about, so this is a notice,
+  /// not a decision card. Primary tap focuses the session.
+  case reviewLoopUnavailable(sessionID: AgentSession.ID, displayName: String, message: String)
+
   /// Whether this kind offers a secondary call-to-action button next to
   /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
   var hasSecondaryAction: Bool {
     switch self {
     case .staleHooks: true
     case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
-      .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed: false
+      .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed,
+      .reviewLoopUnavailable: false
     }
   }
 
@@ -92,7 +98,7 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   /// prompt. Non-error kinds return `nil`.
   var errorContent: (title: String, message: String)? {
     switch self {
-    case .staleHooks, .sessionCreating, .worktreeDeleting: return nil
+    case .staleHooks, .sessionCreating, .worktreeDeleting, .reviewLoopUnavailable: return nil
     case .hookInstallFailed(let slot, let message):
       let label: String = {
         switch slot {

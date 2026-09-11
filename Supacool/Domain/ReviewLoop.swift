@@ -29,6 +29,10 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   var repeatedFindingsCount: Int
   var convergenceWarning: Bool
   var escalationReason: String?
+  /// True when the loop parked while the implementation agent was on a fix
+  /// round (its turn ended without a new commit). The round is still open,
+  /// so the decision can resume it instead of spending a new one.
+  var pausedDuringFix: Bool
   var startedAt: Date
   var updatedAt: Date
 
@@ -46,6 +50,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     repeatedFindingsCount: Int = 0,
     convergenceWarning: Bool = false,
     escalationReason: String? = nil,
+    pausedDuringFix: Bool = false,
     startedAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -62,6 +67,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     self.repeatedFindingsCount = repeatedFindingsCount
     self.convergenceWarning = convergenceWarning
     self.escalationReason = escalationReason
+    self.pausedDuringFix = pausedDuringFix
     self.startedAt = startedAt
     self.updatedAt = updatedAt
   }
@@ -70,7 +76,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     case reviewerTerminalID, pullRequestURL, phase, round, maximumRounds
     case expectedReviewSHA, lastReviewedSHA, lastSummary, lastReport, lastFindingsFingerprint
     case repeatedFindingsCount
-    case convergenceWarning, escalationReason, startedAt, updatedAt
+    case convergenceWarning, escalationReason, pausedDuringFix, startedAt, updatedAt
   }
 
   // Persisted types must default every non-identity field when loading an
@@ -90,6 +96,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     repeatedFindingsCount = try c.decodeIfPresent(Int.self, forKey: .repeatedFindingsCount) ?? 0
     convergenceWarning = try c.decodeIfPresent(Bool.self, forKey: .convergenceWarning) ?? false
     escalationReason = try c.decodeIfPresent(String.self, forKey: .escalationReason)
+    pausedDuringFix = try c.decodeIfPresent(Bool.self, forKey: .pausedDuringFix) ?? false
     startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt) ?? Date()
     updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? startedAt
   }
@@ -115,6 +122,36 @@ extension ReviewLoopState {
     else { return nil }
     return report
   }
+
+  /// The ways a parked decision can move the loop forward, primary first.
+  /// Diagnose, inspect, and stop are always available and not listed here.
+  ///
+  /// - A fix round that ended without a commit is still open: resume it.
+  ///   Re-sending the same findings stays available as the fallback.
+  /// - Findings the agent has not seen yet: hand them over.
+  /// - Nothing left to fix: run the reviewer again.
+  var decisionChoices: [ReviewDecisionChoice] {
+    let grant = BoardFeature.reviewLoopMultiRoundGrant
+    if pausedDuringFix {
+      return pendingFixReport == nil ? [.resumeRound] : [.resumeRound, .resendFindings]
+    }
+    if pendingFixReport != nil {
+      return [.sendFindings(additionalRounds: 1), .sendFindings(additionalRounds: grant)]
+    }
+    return [.rereview(additionalRounds: 1), .rereview(additionalRounds: grant)]
+  }
+}
+
+/// One way to answer a parked review decision. Every surface that offers the
+/// decision (the stack card, the review pill's popover) renders this list, so
+/// they cannot drift apart.
+nonisolated enum ReviewDecisionChoice: Hashable, Sendable {
+  /// Keep the open fix round going without spending a new one.
+  case resumeRound
+  /// Hand the findings to the agent again while a fix round is open.
+  case resendFindings
+  case sendFindings(additionalRounds: Int)
+  case rereview(additionalRounds: Int)
 }
 
 nonisolated enum ReviewLoopVerdict: String, Codable, Equatable, Sendable {
