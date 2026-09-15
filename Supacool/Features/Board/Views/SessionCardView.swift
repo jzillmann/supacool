@@ -1396,16 +1396,12 @@ private struct ReferenceStackChip: View {
     case .tickets:
       return .blue
     case .pullRequests:
-      let states = references.compactMap { ref -> PRState? in
-        if case .pullRequest(_, _, _, let state, _) = ref { return state }
-        return nil
+      // Tint follows the PR the label names. Ranking states across the whole
+      // stack let a stale closed PR paint the chip red next to a live draft.
+      guard case .pullRequest(_, _, _, let state?, _) = featuredPullRequest else {
+        return .secondary
       }
-      // Open PRs signal active work, so green wins over stale closed/draft/merged refs.
-      if states.contains(.open) { return .green }
-      if states.contains(.closed) { return .red }
-      if states.contains(.draft) { return .gray }
-      if !states.isEmpty, states.allSatisfy({ $0 == .merged }) { return .purple }
-      return .secondary
+      return prStateColor(state)
     }
   }
 
