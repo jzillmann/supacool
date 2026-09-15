@@ -343,6 +343,7 @@ struct PRPulseButton: View {
             .truncationMode(.tail)
           Spacer(minLength: 12)
           conflictChip(pullRequest)
+          autoMergeChip(pullRequest)
           reviewDecisionIcon(pullRequest)
           scoreChip(pullRequest.greptileScore)
         }
@@ -358,6 +359,7 @@ struct PRPulseButton: View {
       }
       .help(rowHelp(pullRequest))
       checksToggle(pullRequest, expansionKey: expansionKey)
+      autoMergeToggle(pullRequest, repositoryID: repositoryID, key: expansionKey)
       sessionStatusGlyph(associatedSession)
       Button {
         isPresented = false
@@ -603,6 +605,66 @@ struct PRPulseButton: View {
   }
 
   @ViewBuilder
+  private func autoMergeChip(_ pullRequest: MonitoredPullRequest) -> some View {
+    if pullRequest.isAutoMergeEnabled {
+      HStack(spacing: 3) {
+        Image(systemName: "arrow.triangle.merge")
+          .font(.caption2.weight(.semibold))
+          .accessibilityHidden(true)
+        Text("Auto-merge")
+          .font(.caption)
+      }
+      .foregroundStyle(.green)
+      .padding(.horizontal, 5)
+      .padding(.vertical, 1)
+      .background(Color.green.opacity(0.15), in: Capsule())
+      .help(autoMergeStatusHelp(pullRequest))
+    }
+  }
+
+  /// Turns GitHub auto-merge on or off. Hidden for drafts — GitHub refuses
+  /// auto-merge until a PR is ready for review.
+  @ViewBuilder
+  private func autoMergeToggle(
+    _ pullRequest: MonitoredPullRequest,
+    repositoryID: String,
+    key: String
+  ) -> some View {
+    if store.prPulseAutoMergeInFlight.contains(key) {
+      ProgressView()
+        .controlSize(.mini)
+        .help(pullRequest.isAutoMergeEnabled ? "Disabling auto-merge…" : "Enabling auto-merge…")
+    } else if !pullRequest.isDraft {
+      let errorMessage = store.prPulseAutoMergeErrors[key]
+      Button {
+        store.send(.prPulseAutoMergeToggled(repositoryID: repositoryID, number: pullRequest.number))
+      } label: {
+        Image(systemName: errorMessage == nil ? "arrow.triangle.merge" : "exclamationmark.triangle.fill")
+          .font(.caption)
+          .foregroundStyle(errorMessage != nil ? .red : pullRequest.isAutoMergeEnabled ? .green : .secondary)
+          .accessibilityLabel(pullRequest.isAutoMergeEnabled ? "Disable auto-merge" : "Enable auto-merge")
+      }
+      .buttonStyle(.plain)
+      .help(autoMergeToggleHelp(pullRequest, errorMessage: errorMessage))
+    }
+  }
+
+  private func autoMergeStatusHelp(_ pullRequest: MonitoredPullRequest) -> String {
+    let method = pullRequest.autoMergeMethod?.lowercased() ?? "merge"
+    return "Auto-merge is on (\(method)) — GitHub merges this PR once its requirements pass"
+  }
+
+  private func autoMergeToggleHelp(_ pullRequest: MonitoredPullRequest, errorMessage: String?) -> String {
+    let action =
+      pullRequest.isAutoMergeEnabled
+      ? "Disable auto-merge"
+      : "Enable auto-merge — GitHub merges this PR once checks and reviews pass "
+        + "(merges right away if it already can). Uses the repo's merge strategy setting."
+    guard let errorMessage else { return action }
+    return "Last attempt failed: \(errorMessage)\n\(action)"
+  }
+
+  @ViewBuilder
   private func scoreChip(_ score: Int?) -> some View {
     if let score {
       Text("\(score)/5")
@@ -645,6 +707,9 @@ struct PRPulseButton: View {
     }
     if pullRequest.hasMergeConflict {
       parts.append("merge conflicts")
+    }
+    if pullRequest.isAutoMergeEnabled {
+      parts.append("auto-merge on")
     }
     parts.append("Click to open on GitHub")
     return parts.joined(separator: " · ")

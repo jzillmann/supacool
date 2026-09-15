@@ -18,6 +18,12 @@ struct PRMonitorClient: Sendable {
     @Sendable (_ owner: String, _ repo: String) async throws -> [MonitoredPullRequest]
   var fetchGreptileScore:
     @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> Int?
+  /// Turns GitHub auto-merge on with `strategy`, or off when `strategy` is nil.
+  /// Note: `gh pr merge --auto` merges at once when the PR is already mergeable.
+  var setAutoMerge:
+    @Sendable (
+      _ owner: String, _ repo: String, _ number: Int, _ strategy: PullRequestMergeStrategy?
+    ) async throws -> Void
 }
 
 extension PRMonitorClient: DependencyKey {
@@ -41,6 +47,12 @@ extension PRMonitorClient: DependencyKey {
           ]
         )
         return try decodeGreptileScore(stdout: stdout)
+      },
+      setAutoMerge: { owner, repo, number, strategy in
+        _ = try await runGh(
+          shell: shell,
+          arguments: autoMergeArguments(owner: owner, repo: repo, number: number, strategy: strategy)
+        )
       }
     )
   }
@@ -53,6 +65,10 @@ extension PRMonitorClient: DependencyKey {
     fetchGreptileScore: { _, _, _ in
       struct UnimplementedFetchGreptileScore: Error {}
       throw UnimplementedFetchGreptileScore()
+    },
+    setAutoMerge: { _, _, _, _ in
+      struct UnimplementedSetAutoMerge: Error {}
+      throw UnimplementedSetAutoMerge()
     }
   )
 }
@@ -77,10 +93,23 @@ private nonisolated func fetchOpenList(
       "--limit", "50",
       "--json",
       "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,"
-        + "mergeable,mergeStateStatus,statusCheckRollup",
+        + "mergeable,mergeStateStatus,statusCheckRollup,autoMergeRequest",
     ]
   )
   return try decodeOpenPullRequests(stdout: stdout)
+}
+
+/// `gh pr merge` arguments that enable auto-merge with `strategy`, or disable
+/// it when `strategy` is nil.
+nonisolated func autoMergeArguments(
+  owner: String,
+  repo: String,
+  number: Int,
+  strategy: PullRequestMergeStrategy?
+) -> [String] {
+  let base = ["pr", "merge", "\(number)", "--repo", "\(owner)/\(repo)"]
+  guard let strategy else { return base + ["--disable-auto"] }
+  return base + ["--auto", "--\(strategy.ghArgument)"]
 }
 
 /// Merge two PR lists, deduping by number while preserving first-seen order
@@ -120,6 +149,12 @@ private nonisolated struct PRListEntry: Decodable {
   let mergeable: String?
   let mergeStateStatus: String?
   let statusCheckRollup: [GithubPullRequestStatusCheck]?
+  /// `{ mergeMethod, enabledAt, … }` when auto-merge is on, null otherwise.
+  let autoMergeRequest: AutoMergeRequest?
+
+  struct AutoMergeRequest: Decodable {
+    let mergeMethod: String?
+  }
 }
 
 nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPullRequest] {
@@ -139,7 +174,10 @@ nonisolated func decodeOpenPullRequests(stdout: String) throws -> [MonitoredPull
       mergeable: entry.mergeable,
       mergeStateStatus: entry.mergeStateStatus,
       statusChecks: (entry.statusCheckRollup ?? []).latestRunPerCheck,
-      greptileScore: nil
+      greptileScore: nil,
+      // An enabled request always carries a method; fall back so a missing
+      // one still reads as "on".
+      autoMergeMethod: entry.autoMergeRequest.map { $0.mergeMethod ?? "MERGE" }
     )
   }
 }

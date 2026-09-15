@@ -280,6 +280,74 @@ extension BoardFeature {
     return .none
   }
 
+  // MARK: - PR Pulse auto-merge
+
+  func reducePRPulseAutoMergeToggled(
+    state: inout State,
+    repositoryID: String,
+    number: Int
+  ) -> Effect<Action> {
+    let key = PRPulseIgnoreKey.make(repositoryID: repositoryID, number: number)
+    guard !state.prPulseAutoMergeInFlight.contains(key),
+      let target = state.prPulseTargets.first(where: { $0.repositoryID == repositoryID }),
+      let snapshot = state.prPulseSnapshots[repositoryID],
+      let pullRequest = snapshot.pullRequests.first(where: { $0.number == number }),
+      let coordinates = PRPulseReference.coordinates(slug: snapshot.slug)
+    else {
+      return .none
+    }
+    state.prPulseAutoMergeInFlight.insert(key)
+    state.prPulseAutoMergeErrors.removeValue(forKey: key)
+    let enable = !pullRequest.isAutoMergeEnabled
+    // Not `.cancellable`: the in-flight key is only cleared by the terminal
+    // `_prPulseAutoMergeFinished` send.
+    return .run { [prMonitor] send in
+      let strategy: PullRequestMergeStrategy? =
+        enable ? Self.pullRequestMergeStrategy(rootPath: target.rootPath) : nil
+      do {
+        try await prMonitor.setAutoMerge(coordinates.owner, coordinates.repo, number, strategy)
+        await send(._prPulseAutoMergeFinished(repositoryID: repositoryID, number: number, errorMessage: nil))
+      } catch {
+        boardLogger.warning("PR Pulse auto-merge toggle failed for \(key): \(error)")
+        await send(
+          ._prPulseAutoMergeFinished(
+            repositoryID: repositoryID,
+            number: number,
+            errorMessage: error.localizedDescription
+          )
+        )
+      }
+    }
+  }
+
+  func reducePRPulseAutoMergeFinished(
+    state: inout State,
+    repositoryID: String,
+    number: Int,
+    errorMessage: String?
+  ) -> Effect<Action> {
+    let key = PRPulseIgnoreKey.make(repositoryID: repositoryID, number: number)
+    state.prPulseAutoMergeInFlight.remove(key)
+    if let errorMessage {
+      state.prPulseAutoMergeErrors[key] = errorMessage
+      return .none
+    }
+    guard let target = state.prPulseTargets.first(where: { $0.repositoryID == repositoryID }),
+      !state.prPulseInFlight.contains(repositoryID)
+    else {
+      return .none
+    }
+    return prPulseFetchEffect(target: target, previous: state.prPulseSnapshots[repositoryID])
+  }
+
+  /// The repository's merge strategy override, else the global default —
+  /// the same resolution the worktree "Merge" action uses.
+  nonisolated static func pullRequestMergeStrategy(rootPath: String) -> PullRequestMergeStrategy {
+    @Shared(.repositorySettings(URL(fileURLWithPath: rootPath))) var repositorySettings
+    @Shared(.settingsFile) var settingsFile
+    return repositorySettings.pullRequestMergeStrategy ?? settingsFile.global.pullRequestMergeStrategy
+  }
+
   // MARK: - PR Pulse fetch
 
   /// Fetch one repository's open-PR snapshot. Deliberately NOT

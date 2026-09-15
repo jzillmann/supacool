@@ -62,7 +62,7 @@ struct PRMonitorDecodingTests {
     #expect(calls.count == 2)
     let json =
       "number,title,url,author,isDraft,headRefName,updatedAt,reviewDecision,"
-        + "mergeable,mergeStateStatus,statusCheckRollup"
+        + "mergeable,mergeStateStatus,statusCheckRollup,autoMergeRequest"
     func expectedCall(filter: String) -> [String] {
       [
         "gh", "pr", "list",
@@ -138,6 +138,36 @@ struct PRMonitorDecodingTests {
     // One check still pending → rollup is pending, not failed.
     #expect(pullRequest.ciOutcome == .pending)
     #expect(pullRequest.greptileScore == nil)
+  }
+
+  @Test func decodesAutoMergeRequest() throws {
+    let json = """
+      [
+        {
+          "number": 1, "title": "On", "url": "u", "author": null, "isDraft": false,
+          "headRefName": "a", "updatedAt": "2026-06-10T07:55:18Z",
+          "autoMergeRequest": { "mergeMethod": "SQUASH", "enabledAt": "2026-06-10T07:55:18Z" }
+        },
+        {
+          "number": 2, "title": "Off", "url": "u", "author": null, "isDraft": false,
+          "headRefName": "b", "updatedAt": "2026-06-10T07:55:18Z", "autoMergeRequest": null
+        }
+      ]
+      """
+    let prs = try decodeOpenPullRequests(stdout: json)
+    #expect(prs.map(\.autoMergeMethod) == ["SQUASH", nil])
+    #expect(prs.map(\.isAutoMergeEnabled) == [true, false])
+  }
+
+  @Test func autoMergeArgumentsEnableWithStrategyOrDisable() {
+    #expect(
+      autoMergeArguments(owner: "acme", repo: "rocket", number: 7, strategy: .squash)
+        == ["pr", "merge", "7", "--repo", "acme/rocket", "--auto", "--squash"]
+    )
+    #expect(
+      autoMergeArguments(owner: "acme", repo: "rocket", number: 7, strategy: nil)
+        == ["pr", "merge", "7", "--repo", "acme/rocket", "--disable-auto"]
+    )
   }
 
   @Test func decodesEmptyRollup() throws {
@@ -505,6 +535,94 @@ struct PRPulseFeatureTests {
       $0.prPulseSuccessAt = ["keep": Self.fixedDate]
       $0.$prPulseIgnoredPRKeys.withLock { $0 = ["keep#1"] }
     }
+  }
+
+  // MARK: - Auto-merge
+
+  @Test(.dependencies) func autoMergeToggleEnablesThenRefetches() async {
+    let pullRequest = Self.samplePR()
+    let enabled = {
+      var copy = pullRequest
+      copy.autoMergeMethod = "MERGE"
+      return copy
+    }()
+    let target = PRPulseTarget(repositoryID: "repo-1", rootPath: "/tmp/repo-1")
+    let before = RepoPullRequestSnapshot(
+      repositoryID: "repo-1", slug: "acme/rocket", pullRequests: [pullRequest], fetchedAt: Self.fixedDate
+    )
+    var state = BoardFeature.State()
+    state.prPulseTargets = [target]
+    state.prPulseSnapshots = ["repo-1": before]
+    let calls = LockIsolated<[PullRequestMergeStrategy?]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.fixedDate)
+      $0[GitClientDependency.self].remoteInfo = { _ in
+        GithubRemoteInfo(host: "github.com", owner: "acme", repo: "rocket")
+      }
+      $0[PRMonitorClient.self].setAutoMerge = { owner, repo, number, strategy in
+        #expect(owner == "acme" && repo == "rocket" && number == 7)
+        calls.withValue { $0.append(strategy) }
+      }
+      // Same `updatedAt` as before → Greptile score is reused, not refetched.
+      $0[PRMonitorClient.self].fetchOpenPullRequests = { _, _ in [enabled] }
+    }
+
+    await store.send(.prPulseAutoMergeToggled(repositoryID: "repo-1", number: 7)) {
+      $0.prPulseAutoMergeInFlight = ["repo-1#7"]
+    }
+    await store.receive(\._prPulseAutoMergeFinished) {
+      $0.prPulseAutoMergeInFlight = []
+    }
+    await store.receive(\._prPulseFetchStarted) {
+      $0.prPulseInFlight = ["repo-1"]
+    }
+    await store.receive(\._prPulseSnapshotLoaded) {
+      $0.prPulseInFlight = []
+      $0.prPulseSuccessAt = ["repo-1": Self.fixedDate]
+      $0.prPulseSnapshots = [
+        "repo-1": RepoPullRequestSnapshot(
+          repositoryID: "repo-1", slug: "acme/rocket", pullRequests: [enabled], fetchedAt: Self.fixedDate
+        ),
+      ]
+    }
+    // Enabling passes a strategy (never nil, which would disable).
+    #expect(calls.value.count == 1)
+    #expect(calls.value.allSatisfy { $0 != nil })
+  }
+
+  @Test(.dependencies) func autoMergeToggleOnEnabledPRDisablesAndRecordsFailure() async {
+    struct Boom: Error {}
+    var pullRequest = Self.samplePR()
+    pullRequest.autoMergeMethod = "SQUASH"
+    let target = PRPulseTarget(repositoryID: "repo-1", rootPath: "/tmp/repo-1")
+    var state = BoardFeature.State()
+    state.prPulseTargets = [target]
+    state.prPulseSnapshots = [
+      "repo-1": RepoPullRequestSnapshot(
+        repositoryID: "repo-1", slug: "acme/rocket", pullRequests: [pullRequest], fetchedAt: Self.fixedDate
+      ),
+    ]
+    let calls = LockIsolated<[PullRequestMergeStrategy?]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Self.fixedDate)
+      $0[PRMonitorClient.self].setAutoMerge = { _, _, _, strategy in
+        calls.withValue { $0.append(strategy) }
+        throw Boom()
+      }
+    }
+
+    await store.send(.prPulseAutoMergeToggled(repositoryID: "repo-1", number: 7)) {
+      $0.prPulseAutoMergeInFlight = ["repo-1#7"]
+    }
+    await store.receive(\._prPulseAutoMergeFinished) {
+      $0.prPulseAutoMergeInFlight = []
+      $0.prPulseAutoMergeErrors = ["repo-1#7": Boom().localizedDescription]
+    }
+    #expect(calls.value == [nil])
   }
 
   // MARK: - Associated sessions

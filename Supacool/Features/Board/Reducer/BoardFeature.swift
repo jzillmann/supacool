@@ -249,6 +249,14 @@ struct BoardFeature {
     /// inside `prPulseFailureCooldown` (rate limits, offline, no `gh`).
     var prPulseFailureAt: [String: Date] = [:]
 
+    /// PRs whose auto-merge toggle is running, as `PRPulseIgnoreKey` strings.
+    /// Blocks a double click from sending a second `gh pr merge`.
+    var prPulseAutoMergeInFlight: Set<String> = []
+
+    /// Last auto-merge toggle error per PR (`PRPulseIgnoreKey`), shown on the
+    /// popover row. Cleared by the next attempt.
+    var prPulseAutoMergeErrors: [String: String] = [:]
+
     /// PRs the user explicitly ignored from the pulse, as
     /// `PRPulseIgnoreKey` strings ("repositoryID#number"). Ignored PRs are
     /// hidden from the badge/popover and excluded from its counts, but can
@@ -973,6 +981,12 @@ struct BoardFeature {
     /// Opens the session associated with this pulse PR, or opens New Terminal
     /// prefilled to create one when no matching session exists yet.
     case prPulseSessionRequested(repositoryID: String, number: Int, repositories: [Repository])
+    /// Turns GitHub auto-merge on (with the repo's merge strategy) or off,
+    /// from the pulse popover row.
+    case prPulseAutoMergeToggled(repositoryID: String, number: Int)
+    /// `gh pr merge --auto/--disable-auto` finished; nil `errorMessage` means
+    /// success, which refetches the repo so the row shows GitHub's state.
+    case _prPulseAutoMergeFinished(repositoryID: String, number: Int, errorMessage: String?)
 
     // MARK: Auto display name
     /// Fired when the background inference client returns a suggested
@@ -2486,6 +2500,17 @@ struct BoardFeature {
           repositoryID: repositoryID,
           number: number,
           repositories: repositories
+        )
+
+      case .prPulseAutoMergeToggled(let repositoryID, let number):
+        return reducePRPulseAutoMergeToggled(state: &state, repositoryID: repositoryID, number: number)
+
+      case ._prPulseAutoMergeFinished(let repositoryID, let number, let errorMessage):
+        return reducePRPulseAutoMergeFinished(
+          state: &state,
+          repositoryID: repositoryID,
+          number: number,
+          errorMessage: errorMessage
         )
 
       // MARK: - References (per-session PR status) — handler lives in BoardFeature+References.swift

@@ -39,8 +39,14 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   /// Greptile bot confidence score (1...5), nil when the PR has no
   /// Greptile review (bot not installed, or review still running).
   var greptileScore: Int?
+  /// Raw `gh` merge method of the pending auto-merge request ("MERGE" /
+  /// "SQUASH" / "REBASE"), nil when auto-merge is off. GitHub merges the PR
+  /// by itself once its requirements (checks, reviews) are met.
+  var autoMergeMethod: String?
 
   var id: Int { number }
+
+  var isAutoMergeEnabled: Bool { autoMergeMethod != nil }
 
   var checks: PullRequestCheckBreakdown { PullRequestCheckBreakdown(checks: statusChecks) }
   var ciOutcome: BoardPullRequestChecks.ChecksOutcome {
