@@ -715,7 +715,11 @@ struct NewTerminalFeatureTests {
     )
     #expect(
       displayNameFromLinearTitle(ticketID: "CEN-6690", title: "Streamline the foobar")
-        == "CEN-6690 · Streamline the foobar"
+        == "Streamline the foobar"
+    )
+    #expect(
+      displayNameFromLinearTitle(ticketID: "CEN-6690", title: "CEN-6690: Streamline the foobar")
+        == "Streamline the foobar"
     )
     // Empty title falls back to bare ticket id.
     #expect(branchNameFromLinearTitle(ticketID: "CEN-6690", title: "  ") == "cen-6690")
@@ -810,7 +814,11 @@ struct NewTerminalFeatureTests {
     state.linearTitleCache["CEN-6690"] = "Streamline the foobar"
     #expect(
       NewTerminalFeature.suggestedDisplayName(state: state)
-        == "CEN-6690 · Streamline the foobar"
+        == "Streamline the foobar"
+    )
+    #expect(
+      displayNameFromLinearTitle(ticketID: "CEN-6690", title: "CEN-6690: Streamline the foobar")
+        == "Streamline the foobar"
     )
   }
 
@@ -829,7 +837,7 @@ struct NewTerminalFeatureTests {
     var state = Self.makeState()
     state.prompt = "Investigate these logs: CEN-8255 leaves no cause log"
     state.linearTitleCache["CEN-8255"] = "gRPC ExecuteQuery 500s"
-    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == "CEN-8255 · gRPC ExecuteQuery 500s")
+    #expect(NewTerminalFeature.suggestedDisplayName(state: state) == "gRPC ExecuteQuery 500s")
 
     state.dismissedLinearTicketID = "CEN-8255"
     #expect(NewTerminalFeature.suggestedDisplayName(state: state) == nil)

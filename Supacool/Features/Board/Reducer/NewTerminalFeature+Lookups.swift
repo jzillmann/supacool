@@ -371,14 +371,16 @@ nonisolated func linearBranchNameStrippingOwner(_ raw: String, ticketID: String)
   return trimmed
 }
 
-/// Builds a card display name from a Linear ticket id and its title:
-/// `CEN-6690 · Streamline the foobar pipeline`. Capped at 80 chars so a
-/// pathological Linear title doesn't blow up the matrix card layout.
+/// Builds a card display name from a Linear ticket's title:
+/// `Streamline the foobar pipeline`. The id stays out — the ticket chip
+/// already sits beside the title on both the card and the header. Falls
+/// back to the bare id for an empty title, and strips an id the title itself
+/// leads with. Capped at 80 chars so a pathological Linear title doesn't blow
+/// up the matrix card layout.
 nonisolated func displayNameFromLinearTitle(ticketID: String, title: String) -> String {
   let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmedTitle.isEmpty else { return ticketID }
-  let combined = "\(ticketID) · \(trimmedTitle)"
-  return String(combined.prefix(80))
+  return String(AgentSession.title(trimmedTitle, strippingTicketPrefix: ticketID).prefix(80))
 }
 
 /// Turns a Linear lookup error into a short, user-facing chip message.

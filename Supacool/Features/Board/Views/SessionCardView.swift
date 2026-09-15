@@ -135,7 +135,8 @@ struct SessionCardView: View {
         statusChip
       }
 
-      Text(session.displayName)
+      // The ticket chip below already names the ticket, so don't repeat it.
+      Text(session.titleBesideTicketChip)
         .font(.headline)
         .lineLimit(2, reservesSpace: true)
         .foregroundStyle(.primary)
@@ -918,6 +919,19 @@ struct ReferenceChip: View {
   /// deep-links to Linear, so the preview is purely additive.
   var ticketPreview: LinearTicket?
 
+  /// The session's other tickets, listed in the hover preview under the
+  /// primary ticket (full-screen header only). Non-empty also enables the
+  /// preview when the primary ticket isn't in the inbox cache.
+  var relatedTickets: [SessionReference] = []
+  /// Inbox records used to put a title beside each related ticket id.
+  var relatedTicketPreviewSource: [LinearTicket] = []
+  /// Unlink a wrongly-associated related ticket. Nil hides the affordance.
+  var onRemoveRelatedTicket: ((SessionReference) -> Void)?
+
+  private var hasHoverPreview: Bool {
+    ticketPreview != nil || !relatedTickets.isEmpty
+  }
+
   /// Hover state machine. The preview shows while the pointer is over the
   /// chip *or* the popover, with a short reveal delay and an even shorter
   /// hide grace period so sliding the pointer from chip into the popover
@@ -965,17 +979,32 @@ struct ReferenceChip: View {
     .buttonStyle(.plain)
     .help(tooltip)
     .onHover { hovering in
-      guard ticketPreview != nil else { return }
+      guard hasHoverPreview else { return }
       isChipHovered = hovering
       schedulePreviewUpdate()
     }
     .popover(isPresented: $isPreviewShown, arrowEdge: .bottom) {
-      if let ticketPreview {
-        TicketPreviewCard(ticket: ticketPreview, linearOrgSlug: linearOrgSlug)
-          .onHover { hovering in
-            isPreviewHovered = hovering
-            schedulePreviewUpdate()
+      if hasHoverPreview {
+        VStack(alignment: .leading, spacing: 0) {
+          if let ticketPreview {
+            TicketPreviewCard(ticket: ticketPreview, linearOrgSlug: linearOrgSlug)
           }
+          if !relatedTickets.isEmpty {
+            if ticketPreview != nil {
+              Divider()
+            }
+            RelatedTicketsSection(
+              tickets: relatedTickets,
+              previewSource: relatedTicketPreviewSource,
+              linearOrgSlug: linearOrgSlug,
+              onRemove: onRemoveRelatedTicket
+            )
+          }
+        }
+        .onHover { hovering in
+          isPreviewHovered = hovering
+          schedulePreviewUpdate()
+        }
       }
     }
     .contextMenu {
@@ -1036,9 +1065,12 @@ struct ReferenceChip: View {
   private var tooltip: String {
     switch reference {
     case .ticket(let id):
-      return linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      let open = linearOrgSlug.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         ? "Open \(id) in the Linear desktop app"
         : "Open \(id) in Linear"
+      guard !relatedTickets.isEmpty else { return open }
+      let noun = relatedTickets.count == 1 ? "ticket" : "tickets"
+      return "\(open) · hover for \(relatedTickets.count) related \(noun)"
     case .pullRequest(let owner, let repo, let number, let state, let title):
       let stateLabel = state?.rawValue ?? "loading…"
       let statusSuffix = prSnapshot?.statusHelpSuffix ?? ""
@@ -1113,6 +1145,108 @@ private struct TicketPreviewCard: View {
   }
 }
 
+/// "Related tickets" block under the primary ticket's hover preview. Collapsed
+/// by default: ticket detection can attach dozens of incidental ids, and a
+/// wall of them would bury the ticket the session is actually about.
+private struct RelatedTicketsSection: View {
+  let tickets: [SessionReference]
+  let previewSource: [LinearTicket]
+  let linearOrgSlug: String
+  var onRemove: ((SessionReference) -> Void)?
+
+  @State private var isExpanded = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Button {
+        isExpanded.toggle()
+      } label: {
+        HStack(spacing: 6) {
+          Image(systemName: "tag")
+            .font(.caption)
+            .foregroundStyle(.blue)
+            .accessibilityHidden(true)
+          Text("Related tickets")
+            .font(.caption.weight(.semibold))
+          Text(verbatim: "\(tickets.count)")
+            .font(.caption2.weight(.semibold))
+            .monospacedDigit()
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(.quaternary, in: Capsule())
+          Spacer(minLength: 12)
+          Image(systemName: "chevron.right")
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .rotationEffect(.degrees(isExpanded ? 90 : 0))
+            .accessibilityHidden(true)
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .help(isExpanded ? "Hide related tickets" : "Show related tickets")
+
+      if isExpanded {
+        ScrollView {
+          VStack(alignment: .leading, spacing: 2) {
+            ForEach(tickets, id: \.dedupeKey) { ticket in
+              row(ticket)
+            }
+          }
+        }
+        .frame(maxHeight: 240)
+      }
+    }
+    .padding(14)
+    .frame(width: 360, alignment: .leading)
+  }
+
+  private func row(_ reference: SessionReference) -> some View {
+    Button {
+      if let url = reference.url(linearOrgSlug: linearOrgSlug) {
+        WebBrowser.open(url)
+      }
+    } label: {
+      HStack(spacing: 8) {
+        Text(reference.chipLabel)
+          .font(.caption.monospaced().weight(.medium))
+          .lineLimit(1)
+        if let title = title(for: reference) {
+          Text(title)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
+        Spacer(minLength: 8)
+        Image(systemName: "arrow.up.forward")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .accessibilityHidden(true)
+      }
+      .contentShape(Rectangle())
+      .padding(.vertical, 3)
+    }
+    .buttonStyle(.plain)
+    .help("Open \(reference.chipLabel) in Linear")
+    .contextMenu {
+      if let onRemove {
+        Button(role: .destructive) {
+          onRemove(reference)
+        } label: {
+          Label("Remove link", systemImage: "link.badge.minus")
+        }
+      }
+    }
+  }
+
+  private func title(for reference: SessionReference) -> String? {
+    guard case .ticket(let id) = reference else { return nil }
+    let match = previewSource.first { $0.identifier.caseInsensitiveCompare(id) == .orderedSame }
+    guard let title = match?.title, !title.isEmpty else { return nil }
+    return title
+  }
+}
+
 /// Compact reference summary used on board cards and the terminal header.
 /// Linear tickets stay visible; multiple PRs collapse into one stacked chip
 /// with a dropdown list so PR-heavy sessions do not flood the layout.
@@ -1142,6 +1276,24 @@ struct SessionReferenceSummaryChips: View {
   /// only the full-screen header passes its `@Shared(.linearInbox)` through.
   var ticketPreviewSource: [LinearTicket] = []
 
+  /// Which half of the summary to render. The full-screen header splits the
+  /// two so the session title can sit between the ticket and its PRs.
+  var parts: Parts = .all
+
+  /// Fold the other tickets into the primary ticket chip's hover preview
+  /// instead of a separate "+N" stack chip. The header opts in; cards keep
+  /// the stack chip because they have no hover preview.
+  var foldsRelatedTicketsIntoPreview = false
+
+  enum Parts {
+    case all
+    case tickets
+    case pullRequests
+
+    var showsTickets: Bool { self != .pullRequests }
+    var showsPullRequests: Bool { self != .tickets }
+  }
+
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
 
   private var tickets: [SessionReference] {
@@ -1168,49 +1320,66 @@ struct SessionReferenceSummaryChips: View {
 
   var body: some View {
     HStack(spacing: 4) {
-      if let ticket = tickets.first {
-        ReferenceChip(
-          reference: ticket,
-          linearOrgSlug: linearOrgSlug,
-          onRemove: onRemoveReference.map { remove in { remove(ticket) } },
-          onAddLink: onAddLink,
-          ticketPreview: ticketPreview(for: ticket)
-        )
+      if parts.showsTickets {
+        ticketChips
       }
-      if tickets.count > 1 {
-        ReferenceStackChip(
-          kind: .tickets,
-          references: Array(tickets.dropFirst()),
-          linearOrgSlug: linearOrgSlug,
-          onRemoveReference: onRemoveReference,
-          onAddLink: onAddLink
-        )
-      }
-      if pullRequests.count == 1, let pullRequest = pullRequests.first {
-        ReferenceChip(
-          reference: pullRequest,
-          linearOrgSlug: linearOrgSlug,
-          onTap: onPullRequestsPopoverOpened,
-          onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
-          onAddLink: onAddLink,
-          prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey],
-          suppressedIndicator: suppressedIndicator
-        )
-      } else if pullRequests.count > 1 {
-        ReferenceStackChip(
-          kind: .pullRequests,
-          references: pullRequests,
-          linearOrgSlug: linearOrgSlug,
-          onPopoverOpened: onPullRequestsPopoverOpened,
-          onRemoveReference: onRemoveReference,
-          onAddLink: onAddLink,
-          prReferenceSnapshots: prReferenceSnapshots,
-          actionablePullRequestKey: actionablePullRequestKey
-        )
+      if parts.showsPullRequests {
+        pullRequestChips
       }
     }
     .lineLimit(1)
     .fixedSize(horizontal: true, vertical: false)
+  }
+
+  @ViewBuilder
+  private var ticketChips: some View {
+    if let ticket = tickets.first {
+      ReferenceChip(
+        reference: ticket,
+        linearOrgSlug: linearOrgSlug,
+        onRemove: onRemoveReference.map { remove in { remove(ticket) } },
+        onAddLink: onAddLink,
+        ticketPreview: ticketPreview(for: ticket),
+        relatedTickets: foldsRelatedTicketsIntoPreview ? Array(tickets.dropFirst()) : [],
+        relatedTicketPreviewSource: ticketPreviewSource,
+        onRemoveRelatedTicket: onRemoveReference
+      )
+    }
+    if tickets.count > 1, !foldsRelatedTicketsIntoPreview {
+      ReferenceStackChip(
+        kind: .tickets,
+        references: Array(tickets.dropFirst()),
+        linearOrgSlug: linearOrgSlug,
+        onRemoveReference: onRemoveReference,
+        onAddLink: onAddLink
+      )
+    }
+  }
+
+  @ViewBuilder
+  private var pullRequestChips: some View {
+    if pullRequests.count == 1, let pullRequest = pullRequests.first {
+      ReferenceChip(
+        reference: pullRequest,
+        linearOrgSlug: linearOrgSlug,
+        onTap: onPullRequestsPopoverOpened,
+        onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
+        onAddLink: onAddLink,
+        prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey],
+        suppressedIndicator: suppressedIndicator
+      )
+    } else if pullRequests.count > 1 {
+      ReferenceStackChip(
+        kind: .pullRequests,
+        references: pullRequests,
+        linearOrgSlug: linearOrgSlug,
+        onPopoverOpened: onPullRequestsPopoverOpened,
+        onRemoveReference: onRemoveReference,
+        onAddLink: onAddLink,
+        prReferenceSnapshots: prReferenceSnapshots,
+        actionablePullRequestKey: actionablePullRequestKey
+      )
+    }
   }
 }
 

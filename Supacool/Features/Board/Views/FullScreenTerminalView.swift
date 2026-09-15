@@ -310,8 +310,12 @@ struct FullScreenTerminalView: View {
 
       repoChip
       pullRequestStatus
-      reasonChip
-      referenceChips
+      // Ticket and title sit side by side (title stripped of the ticket id),
+      // PRs follow. No PR reason pill here: the PR stack chip's health marks
+      // and the review control already say the same thing.
+      referenceChips(.tickets)
+      titleText
+      referenceChips(.pullRequests)
       if session.reviewLoop != nil || canStartReviewLoop {
         ReviewLoopControl(
           state: session.reviewLoop,
@@ -323,24 +327,6 @@ struct FullScreenTerminalView: View {
           onStop: onStopReviewLoop
         )
       }
-      Text(session.displayName)
-        .font(.headline)
-        .lineLimit(1)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2, perform: onRename)
-        .onHover(perform: handleTitleHover)
-        .contextMenu {
-          Button("Rename…", systemImage: "pencil", action: onRename)
-        }
-        .help("Hover for full title + description · double-click to rename")
-        .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
-          SessionInfoPopover(
-            session: session,
-            repositoryName: repositories[id: session.repositoryID]?.name,
-            worktreeLabel: worktreeLabel,
-            onRerun: resolveWorktree() == nil ? onRerun : nil
-          )
-        }
       priorityButton
       infoButton
       revealInFinderButton
@@ -358,6 +344,27 @@ struct FullScreenTerminalView: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
+  }
+
+  private var titleText: some View {
+    Text(session.titleBesideTicketChip)
+      .font(.headline)
+      .lineLimit(1)
+      .contentShape(Rectangle())
+      .onTapGesture(count: 2, perform: onRename)
+      .onHover(perform: handleTitleHover)
+      .contextMenu {
+        Button("Rename…", systemImage: "pencil", action: onRename)
+      }
+      .help("Hover for full title + description · double-click to rename")
+      .popover(isPresented: $isInfoPopoverShown, arrowEdge: .bottom) {
+        SessionInfoPopover(
+          session: session,
+          repositoryName: repositories[id: session.repositoryID]?.name,
+          worktreeLabel: worktreeLabel,
+          onRerun: resolveWorktree() == nil ? onRerun : nil
+        )
+      }
   }
 
   private var canStartReviewLoop: Bool {
@@ -480,50 +487,26 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  /// Mirrors the board card's PR ball-court annotation ("Conflicts", "CI
-  /// failed", …) off the same `prReferenceSnapshots` source, so a conflict
-  /// visible on the card doesn't vanish once the session is opened full-screen.
-  /// Unlike the card there's no status gating — you're looking at this one
-  /// session directly, so any ball-in-your-court reason is always worth showing.
-  @ViewBuilder
-  private var reasonChip: some View {
-    if let reason = prReferenceSnapshots.standaloneReason(for: session) {
-      PRReasonChip(ball: reason, pullRequestNumber: actionablePullRequestNumber)
-    }
-  }
-
-  /// `dedupeKey` of the PR whose ball is in the user's court — steers both the
-  /// reason pill's number and the reference stack chip's featured PR, so the
-  /// header can't spell out one PR's failure beside another PR's green check.
+  /// `dedupeKey` of the PR whose ball is in the user's court — the reference
+  /// stack chip features it, so its glyphs describe the PR that needs you.
   private var actionablePullRequestKey: String? {
     prReferenceSnapshots.actionableReference(for: session)?.dedupeKey
   }
 
-  /// The actionable PR's number, shown on the pill only when the session holds
-  /// more than one PR (see `PRReasonChip.pullRequestNumber`).
-  private var actionablePullRequestNumber: Int? {
-    guard session.references.count(where: { $0.isPullRequestReference }) > 1,
-      let key = actionablePullRequestKey,
-      let reference = session.references.first(where: { $0.dedupeKey == key }),
-      case .pullRequest(_, _, let number, _, _) = reference
-    else { return nil }
-    return number
-  }
-
   @ViewBuilder
-  private var referenceChips: some View {
+  private func referenceChips(_ parts: SessionReferenceSummaryChips.Parts) -> some View {
     if !session.references.isEmpty {
       SessionReferenceSummaryChips(
         references: session.references,
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
-        // The reason pill (`reasonChip`) is always shown here, so suppress the
-        // one glyph it already spells out. No status gate — you're looking at
-        // this session directly.
-        suppressedIndicator: prReferenceSnapshots.redundantIndicator(for: session),
+        // No reason pill in this header, so every glyph stays on the chip.
+        suppressedIndicator: nil,
         actionablePullRequestKey: actionablePullRequestKey,
-        ticketPreviewSource: inboxTickets[session.repositoryID] ?? []
+        ticketPreviewSource: inboxTickets[session.repositoryID] ?? [],
+        parts: parts,
+        foldsRelatedTicketsIntoPreview: true
       )
     }
   }
