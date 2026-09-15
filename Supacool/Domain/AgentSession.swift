@@ -83,6 +83,11 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// board can sort these into their own dormant bucket.
   var parkedActive: Bool
 
+  /// When set on a parked session, the board unparks it once this moment
+  /// passes ("snooze"). Ignored while `parked` is false; both park reducers
+  /// reset it, so a stale value never wakes a later plain Park.
+  var parkedUntil: Date?
+
   /// When true, the Auto-Observer monitors this session.
   var autoObserver: Bool
 
@@ -168,6 +173,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     agentNativeSessionID: String? = nil,
     parked: Bool = false,
     parkedActive: Bool = false,
+    parkedUntil: Date? = nil,
     autoObserver: Bool = false,
     autoObserverPrompt: String = "",
     reviewLoop: ReviewLoopState? = nil,
@@ -196,6 +202,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.model = model
     self.parked = parked
     self.parkedActive = parkedActive
+    self.parkedUntil = parkedUntil
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
     self.reviewLoop = reviewLoop
@@ -240,7 +247,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case sourceBookmarkID, debugSourceSessionID
     case createdAt
     case removeBackingWorktreeOnDelete, isPriority, planMode, remoteControl, model
-    case parked, parkedActive
+    case parked, parkedActive, parkedUntil
     case autoObserver, autoObserverPrompt, reviewLoop
     case references, referencesScannedAt, dismissedReferenceKeys
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
@@ -274,6 +281,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     model = try c.decodeIfPresent(String.self, forKey: .model)
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     parkedActive = try c.decodeIfPresent(Bool.self, forKey: .parkedActive) ?? false
+    parkedUntil = try c.decodeIfPresent(Date.self, forKey: .parkedUntil)
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     reviewLoop = try c.decodeIfPresent(ReviewLoopState.self, forKey: .reviewLoop)
@@ -363,6 +371,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encodeIfPresent(model, forKey: .model)
     try c.encode(parked, forKey: .parked)
     try c.encode(parkedActive, forKey: .parkedActive)
+    try c.encodeIfPresent(parkedUntil, forKey: .parkedUntil)
     try c.encode(autoObserver, forKey: .autoObserver)
     try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
     try c.encodeIfPresent(reviewLoop, forKey: .reviewLoop)

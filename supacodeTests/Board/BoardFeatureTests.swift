@@ -765,6 +765,62 @@ struct BoardFeatureTests {
     #expect(store.state.sessions[0].lastKnownBusy)
   }
 
+  @Test(.dependencies) func snoozeSessionParksAsStandbyWithWakeDate() async {
+    let now = Date(timeIntervalSince1970: 1_750_000_444)
+    let session = Self.sampleSession()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+      $0.terminalClient.send = { _ in }
+    }
+
+    await store.send(
+      .snoozeSession(id: session.id, option: .laterToday, keepAlive: true, repositories: [])
+    ) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = true
+        sessions[0].parkedActive = true
+        sessions[0].parkedUntil = now.addingTimeInterval(SnoozeOption.laterTodayInterval)
+        sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
+      }
+    }
+    await store.finish()
+  }
+
+  @Test(.dependencies) func wakeSnoozedSessionsUnparksOnlyDueSessionsAsPriority() async {
+    let now = Date(timeIntervalSince1970: 1_750_000_555)
+    var due = Self.sampleSession()
+    due.parked = true
+    due.parkedUntil = now.addingTimeInterval(-1)
+    var notYet = Self.sampleSession()
+    notYet.parked = true
+    notYet.parkedUntil = now.addingTimeInterval(3600)
+    // A stale deadline on an already-unparked session must not touch it.
+    var unparked = Self.sampleSession()
+    unparked.parkedUntil = now.addingTimeInterval(-1)
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [due, notYet, unparked] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+
+    await store.send(._wakeSnoozedSessions) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].parked = false
+        sessions[0].parkedUntil = nil
+        sessions[0].isPriority = true
+        sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
+      }
+    }
+  }
+
   @Test(.dependencies) func serverLifecycleStatusRequestedRunsStatusScript() async {
     let repositoryID = "/tmp/repo-lifecycle-status-\(UUID().uuidString)"
     let worktreeID = "\(repositoryID)/wt"

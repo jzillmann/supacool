@@ -869,6 +869,7 @@ struct BoardView: View {
       onPark: flow.onPark,
       onParkActive: flow.onParkActive,
       onUnpark: flow.onUnpark,
+      onSnooze: flow.onSnooze,
       onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
       onAutoObserverPromptChanged: { prompt in store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt)) },
       onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
@@ -964,6 +965,7 @@ struct BoardView: View {
     var onPark: (() -> Void)?
     var onParkActive: (() -> Void)?
     var onUnpark: (() -> Void)?
+    var onSnooze: ((SnoozeOption) -> Void)?
   }
 
   private func flowActions(
@@ -1059,7 +1061,19 @@ struct BoardView: View {
             store.send(.focusSession(id: session.id))
           }
         }
-        : nil
+        : nil,
+      // Available on parked cards too: snoozing again just moves the wake time.
+      // A live tab snoozes into Standby so the conversation is still there on wake.
+      onSnooze: { option in
+        store.send(
+          .snoozeSession(
+            id: session.id,
+            option: option,
+            keepAlive: sessionHasTab,
+            repositories: Array(repositories)
+          )
+        )
+      }
     )
   }
 
@@ -1358,6 +1372,7 @@ private struct SessionCardContainer: View {
   let onPark: (() -> Void)?
   let onParkActive: (() -> Void)?
   let onUnpark: (() -> Void)?
+  let onSnooze: ((SnoozeOption) -> Void)?
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
@@ -1439,6 +1454,7 @@ private struct SessionCardContainer: View {
       onPark: onPark,
       onParkActive: onParkActive,
       onUnpark: onUnpark,
+      onSnooze: onSnooze,
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
       onAutoObserverRunNow: onAutoObserverRunNow,

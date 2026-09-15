@@ -656,6 +656,16 @@ struct BoardFeature {
     case parkActiveSession(id: AgentSession.ID)
     /// Clears the parked bit for sessions whose tab is still alive.
     case unparkSession(id: AgentSession.ID)
+    /// Park until a preset moment, then bring the card back. `keepAlive`
+    /// picks Standby (tab stays up) over a cold Park.
+    case snoozeSession(
+      id: AgentSession.ID,
+      option: SnoozeOption,
+      keepAlive: Bool,
+      repositories: [Repository]
+    )
+    /// Periodic tick: unpark every snoozed session whose time has come.
+    case _wakeSnoozedSessions
 
     // MARK: Composition (multi-terminal sessions)
     /// User tapped the `+` in the session-scoped tab strip. Appends a
@@ -1634,6 +1644,7 @@ struct BoardFeature {
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].parked = false
           sessions[index].parkedActive = false
+          sessions[index].parkedUntil = nil
           sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
         }
         TranscriptRecorder.shared.append(
@@ -1641,6 +1652,18 @@ struct BoardFeature {
           tabID: TerminalTabID(rawValue: id)
         )
         return prepareAutoStartLifecycleEffect(&state, session: session)
+
+      case .snoozeSession(let id, let option, let keepAlive, let repositories):
+        return reduceSnoozeSession(
+          state: &state,
+          id: id,
+          option: option,
+          keepAlive: keepAlive,
+          repositories: repositories
+        )
+
+      case ._wakeSnoozedSessions:
+        return reduceWakeSnoozedSessions(state: &state)
 
       case .addShellTerminalToSession(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
@@ -2422,7 +2445,8 @@ struct BoardFeature {
       // MARK: - Global PR refresh scheduler — handlers live in BoardFeature+PRPulse.swift
 
       case ._startPRRefresher:
-        return reduceStartPRRefresher(state: &state)
+        // The snooze wake ticker rides the same once-per-launch start signal.
+        return .merge(reduceStartPRRefresher(state: &state), snoozeWakeTicker())
 
       case ._runPRRefreshTick:
         return reduceRunPRRefreshTick(state: &state)
@@ -3121,7 +3145,7 @@ struct BoardFeature {
     )
   }
 
-  fileprivate func prepareAutoStartLifecycleEffect(
+  func prepareAutoStartLifecycleEffect(
     _ state: inout State,
     session: AgentSession
   ) -> Effect<Action> {

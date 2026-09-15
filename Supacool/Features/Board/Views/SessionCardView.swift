@@ -38,6 +38,8 @@ struct SessionCardView: View {
   var onPark: (() -> Void)?
   var onParkActive: (() -> Void)?
   var onUnpark: (() -> Void)?
+  /// Park/Standby with a wake-up time (see `SnoozeOption`).
+  var onSnooze: ((SnoozeOption) -> Void)?
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
   var onAutoObserverRunNow: (() -> Void)?
@@ -290,8 +292,15 @@ struct SessionCardView: View {
       if let onUnpark {
         Button("Unpark", systemImage: "play.circle", action: onUnpark)
       }
+      if let onSnooze {
+        Menu("Snooze Until…", systemImage: "moon.zzz") {
+          ForEach(SnoozeOption.allCases) { option in
+            Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
+          }
+        }
+      }
       if onResume != nil || onResumePicker != nil || onRerun != nil
-        || onPark != nil || onParkActive != nil || onUnpark != nil
+        || onPark != nil || onParkActive != nil || onUnpark != nil || onSnooze != nil
       {
         Divider()
       }
@@ -573,15 +582,35 @@ struct SessionCardView: View {
     }
   }
 
+  private var snoozeWakeDate: Date? {
+    guard session.parked else { return nil }
+    return session.parkedUntil
+  }
+
+  /// "Snoozed · Tue 09:00" while a wake-up is pending, else the plain status.
+  private var statusChipLabel: String {
+    guard let wakeAt = snoozeWakeDate else { return status.label }
+    let format: Date.FormatStyle =
+      Calendar.current.isDateInToday(wakeAt)
+      ? .dateTime.hour().minute()
+      : .dateTime.weekday(.abbreviated).hour().minute()
+    return "Snoozed · \(wakeAt.formatted(format))"
+  }
+
+  private var snoozeTooltip: String? {
+    snoozeWakeDate.map { "Returns to the board \($0.formatted(date: .complete, time: .shortened))" }
+  }
+
   private var statusChip: some View {
     HStack(spacing: 4) {
       Image(systemName: status.systemImage)
         .font(.caption2)
         .accessibilityHidden(true)
-      Text(status.label)
+      Text(statusChipLabel)
         .font(.caption2.weight(.semibold))
         .lineLimit(1)
     }
+    .help(snoozeTooltip ?? "")
     .foregroundStyle(status.color)
     .padding(.horizontal, 6)
     .padding(.vertical, 2)
