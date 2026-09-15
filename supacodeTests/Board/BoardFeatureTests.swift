@@ -815,8 +815,25 @@ struct BoardFeatureTests {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = false
         sessions[0].parkedUntil = nil
+        sessions[0].wokeFromSnoozeAt = now
         sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
+    }
+  }
+
+  @Test(.dependencies) func openingAWokenSessionClearsTheSnoozeMarker() async {
+    var woken = Self.sampleSession()
+    woken.wokeFromSnoozeAt = Date(timeIntervalSince1970: 1_750_000_666)
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [woken] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusSession(id: woken.id)) {
+      $0.focusedSessionID = woken.id
+      $0.$sessions.withLock { $0[0].wokeFromSnoozeAt = nil }
     }
   }
 

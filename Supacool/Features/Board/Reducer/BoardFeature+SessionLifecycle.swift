@@ -49,6 +49,7 @@ extension BoardFeature {
       sessions[index].parked = true
       sessions[index].parkedActive = false
       sessions[index].parkedUntil = nil
+      sessions[index].wokeFromSnoozeAt = nil
       // Clear busy on ALL terminals — a parked card must never read
       // .interrupted off a stale secondary flag after the next quit.
       for terminalIndex in sessions[index].terminals.indices {
@@ -112,6 +113,7 @@ extension BoardFeature {
       sessions[index].parked = true
       sessions[index].parkedActive = true
       sessions[index].parkedUntil = nil
+      sessions[index].wokeFromSnoozeAt = nil
       sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
     }
     state.reinitializingSessionIDs.remove(id)

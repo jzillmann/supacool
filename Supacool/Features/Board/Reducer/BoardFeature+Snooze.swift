@@ -43,6 +43,7 @@ extension BoardFeature {
         sessions[index].parked = false
         sessions[index].parkedActive = false
         sessions[index].parkedUntil = nil
+        sessions[index].wokeFromSnoozeAt = now
         sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
     }
@@ -60,6 +61,18 @@ extension BoardFeature {
       }
     }
     return .merge(effects)
+  }
+
+  /// The first open of a woken card acknowledges it. Hooked on the focus
+  /// change itself, because a dozen actions set `focusedSessionID`.
+  func clearSnoozeWakeMarker(state: inout State, openedID: AgentSession.ID?) {
+    guard let openedID,
+      state.sessions.contains(where: { $0.id == openedID && $0.wokeFromSnoozeAt != nil })
+    else { return }
+    state.$sessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == openedID }) else { return }
+      sessions[index].wokeFromSnoozeAt = nil
+    }
   }
 
   /// Checks once right away (a deadline may have passed while the app was

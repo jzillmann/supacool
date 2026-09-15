@@ -16,6 +16,20 @@ struct BoardFrozenDeckTests {
     #expect(members.map(\.id) == sessions.map(\.id))
   }
 
+  @Test func aSessionWokenFromSnoozeStaysOutOfTheDeck() {
+    var woken = sampleSession()
+    woken.wokeFromSnoozeAt = Date()
+    let others = [sampleSession(), sampleSession()]
+
+    let members = BoardFrozenDeck.members(
+      visibleSessions: others + [woken],
+      isExpanded: false,
+      classify: { _ in .detached }
+    )
+
+    #expect(members.map(\.id) == others.map(\.id))
+  }
+
   @Test func aSingleDetachedSessionIsNotWorthStacking() {
     let members = BoardFrozenDeck.members(
       visibleSessions: [sampleSession()],

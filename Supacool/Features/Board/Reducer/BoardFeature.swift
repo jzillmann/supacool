@@ -2903,6 +2903,12 @@ struct BoardFeature {
         return .none
       }
     }
+    .onChange(of: \.focusedSessionID) { _, openedID in
+      Reduce { state, _ in
+        clearSnoozeWakeMarker(state: &state, openedID: openedID)
+        return .none
+      }
+    }
     .ifLet(\.$newTerminalSheet, action: \.newTerminalSheet) {
       NewTerminalFeature()
     }

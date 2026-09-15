@@ -8,7 +8,8 @@ import Foundation
 /// cracked-glass, but they mean something went wrong — burying them behind a
 /// stack would hide the one signal the user needs to act on. Priority-flagged
 /// sessions are likewise exempt: the flag *is* the user saying "keep this
-/// visible".
+/// visible". A card just woken from snooze is exempt until it is opened, for
+/// the same reason.
 nonisolated enum BoardFrozenDeck {
   /// A stack of one is noise, not a simplification.
   static let minimumCount = 2
@@ -20,7 +21,7 @@ nonisolated enum BoardFrozenDeck {
   ) -> [AgentSession] {
     guard !isExpanded else { return [] }
     let candidates = visibleSessions.filter { session in
-      classify(session) == .detached && !session.isPriority
+      classify(session) == .detached && !session.isPriority && session.wokeFromSnoozeAt == nil
     }
     guard candidates.count >= minimumCount else { return [] }
     return candidates

@@ -88,6 +88,12 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// reset it, so a stale value never wakes a later plain Park.
   var parkedUntil: Date?
 
+  /// Set when a snooze deadline unparked this session; cleared the first time
+  /// the user opens it. Drives the "Back" marker and keeps the card out of
+  /// the frozen deck, so a woken card is noticed. Persisted: a wake that
+  /// happens at launch must still be visible.
+  var wokeFromSnoozeAt: Date?
+
   /// When true, the Auto-Observer monitors this session.
   var autoObserver: Bool
 
@@ -174,6 +180,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     parked: Bool = false,
     parkedActive: Bool = false,
     parkedUntil: Date? = nil,
+    wokeFromSnoozeAt: Date? = nil,
     autoObserver: Bool = false,
     autoObserverPrompt: String = "",
     reviewLoop: ReviewLoopState? = nil,
@@ -203,6 +210,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.parked = parked
     self.parkedActive = parkedActive
     self.parkedUntil = parkedUntil
+    self.wokeFromSnoozeAt = wokeFromSnoozeAt
     self.autoObserver = autoObserver
     self.autoObserverPrompt = autoObserverPrompt
     self.reviewLoop = reviewLoop
@@ -247,7 +255,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case sourceBookmarkID, debugSourceSessionID
     case createdAt
     case removeBackingWorktreeOnDelete, isPriority, planMode, remoteControl, model
-    case parked, parkedActive, parkedUntil
+    case parked, parkedActive, parkedUntil, wokeFromSnoozeAt
     case autoObserver, autoObserverPrompt, reviewLoop
     case references, referencesScannedAt, dismissedReferenceKeys
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
@@ -282,6 +290,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     parked = try c.decodeIfPresent(Bool.self, forKey: .parked) ?? false
     parkedActive = try c.decodeIfPresent(Bool.self, forKey: .parkedActive) ?? false
     parkedUntil = try c.decodeIfPresent(Date.self, forKey: .parkedUntil)
+    wokeFromSnoozeAt = try c.decodeIfPresent(Date.self, forKey: .wokeFromSnoozeAt)
     autoObserver = try c.decodeIfPresent(Bool.self, forKey: .autoObserver) ?? false
     autoObserverPrompt = try c.decodeIfPresent(String.self, forKey: .autoObserverPrompt) ?? ""
     reviewLoop = try c.decodeIfPresent(ReviewLoopState.self, forKey: .reviewLoop)
@@ -372,6 +381,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(parked, forKey: .parked)
     try c.encode(parkedActive, forKey: .parkedActive)
     try c.encodeIfPresent(parkedUntil, forKey: .parkedUntil)
+    try c.encodeIfPresent(wokeFromSnoozeAt, forKey: .wokeFromSnoozeAt)
     try c.encode(autoObserver, forKey: .autoObserver)
     try c.encode(autoObserverPrompt, forKey: .autoObserverPrompt)
     try c.encodeIfPresent(reviewLoop, forKey: .reviewLoop)

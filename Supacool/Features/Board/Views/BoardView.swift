@@ -1488,6 +1488,19 @@ private struct SessionCardContainer: View {
         .strokeBorder(Color.accentColor, lineWidth: (isHighlighted || isSelected) ? 2 : 0)
         .allowsHitTesting(false)
     )
+    .overlay(alignment: .topLeading) {
+      if session.wokeFromSnoozeAt != nil {
+        Label("Back from Snooze", systemImage: "sunrise.fill")
+          .font(.caption2.weight(.semibold))
+          .foregroundStyle(.white)
+          .padding(.horizontal, 6)
+          .padding(.vertical, 2)
+          .background(Capsule().fill(Color.orange))
+          .offset(x: 10, y: -8)
+          .help("This card returned from snooze. The marker goes away when you open the card.")
+          .allowsHitTesting(false)
+      }
+    }
     .overlay(alignment: .topTrailing) {
       if isSelected {
         Image(systemName: "checkmark.circle.fill")
