@@ -791,7 +791,7 @@ struct BoardFeatureTests {
     await store.finish()
   }
 
-  @Test(.dependencies) func wakeSnoozedSessionsUnparksOnlyDueSessionsAsPriority() async {
+  @Test(.dependencies) func wakeSnoozedSessionsUnparksOnlyDueSessions() async {
     let now = Date(timeIntervalSince1970: 1_750_000_555)
     var due = Self.sampleSession()
     due.parked = true
@@ -815,7 +815,6 @@ struct BoardFeatureTests {
       $0.$sessions.withLock { sessions in
         sessions[0].parked = false
         sessions[0].parkedUntil = nil
-        sessions[0].isPriority = true
         sessions[0].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
     }

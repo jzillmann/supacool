@@ -43,9 +43,6 @@ extension BoardFeature {
         sessions[index].parked = false
         sessions[index].parkedActive = false
         sessions[index].parkedUntil = nil
-        // Priority is what makes it "jump back": it sorts first in its bucket
-        // and keeps a woken idle card out of the collapsed frozen deck.
-        sessions[index].isPriority = true
         sessions[index].updatePrimaryTerminal { $0.lastActivityAt = now }
       }
     }

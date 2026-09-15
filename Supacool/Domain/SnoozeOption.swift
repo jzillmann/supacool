@@ -2,8 +2,8 @@ import Foundation
 
 /// Presets for "park this card and bring it back later". A snoozed session is
 /// parked (or put on Standby when its tab is alive) with `parkedUntil` set; the
-/// board's wake ticker unparks it once that moment passes and flags it priority
-/// so it lands back at the top of the live board instead of in the idle deck.
+/// board's wake ticker unparks it once that moment passes. Its priority
+/// flag is left untouched.
 nonisolated enum SnoozeOption: String, CaseIterable, Identifiable, Sendable {
   case laterToday
   case tomorrowMorning
