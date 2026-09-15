@@ -99,6 +99,55 @@ struct ReviewLoopTests {
         ))
   }
 
+  @Test func reportParserAcceptsDriftedReviewerFormats() {
+    // Verbatim shape of two real Codex handoffs the strict parser rejected.
+    let report = ReviewLoopReportParser.parse(
+      """
+      SUPACOOL_REVIEW_RESULT_START
+      Verdict: changes
+      PR: #5521
+      Commit: faba198e0b874021c5348fa66b3d907482a00a2b
+
+      Findings:
+
+      1. [P1] Restored imported runs lose their solved state.
+      - [P2] Reload coverage is missing.
+
+      CI is green. Only the exact PR commit above was reviewed.
+      SUPACOOL_REVIEW_RESULT_END
+      """
+    )
+
+    #expect(
+      report
+        == ReviewLoopReport(
+          verdict: .changes,
+          reviewedSHA: "faba198e0b874021c5348fa66b3d907482a00a2b",
+          summary: "",
+          findings: [
+            "[P1] Restored imported runs lose their solved state.",
+            "[P2] Reload coverage is missing.",
+          ],
+        ))
+  }
+
+  @Test func reportParserReadsAnInlineSummary() {
+    let report = ReviewLoopReportParser.parse(
+      """
+      SUPACOOL_REVIEW_RESULT
+      Verdict: pass
+      Reviewed commit: `def456`
+      Summary: Ready to merge.
+      Findings: none
+      SUPACOOL_REVIEW_RESULT_END
+      """
+    )
+
+    #expect(report?.verdict == .pass)
+    #expect(report?.summary == "Ready to merge.")
+    #expect(report?.findings == [])
+  }
+
   @Test func reportParserTreatsNoFindingsAsAnEmptyList() {
     let report = ReviewLoopReportParser.parse(
       """

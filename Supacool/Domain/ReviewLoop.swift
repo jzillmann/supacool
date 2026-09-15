@@ -33,6 +33,13 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   /// round (its turn ended without a new commit). The round is still open,
   /// so the decision can resume it instead of spending a new one.
   var pausedDuringFix: Bool
+  /// Implementation turns in the current fix round that ended without a new
+  /// pushed commit. Agents often end a turn while tests or a push still run
+  /// in the background, so one quiet turn is not a reason to park the loop.
+  var commitlessTurnCount: Int
+  /// The implementation agent's final message from its last turn, so a
+  /// parked decision can say what the agent is doing instead of guessing.
+  var lastAgentMessage: String?
   var startedAt: Date
   var updatedAt: Date
 
@@ -51,6 +58,8 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     convergenceWarning: Bool = false,
     escalationReason: String? = nil,
     pausedDuringFix: Bool = false,
+    commitlessTurnCount: Int = 0,
+    lastAgentMessage: String? = nil,
     startedAt: Date = Date(),
     updatedAt: Date = Date()
   ) {
@@ -68,6 +77,8 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     self.convergenceWarning = convergenceWarning
     self.escalationReason = escalationReason
     self.pausedDuringFix = pausedDuringFix
+    self.commitlessTurnCount = commitlessTurnCount
+    self.lastAgentMessage = lastAgentMessage
     self.startedAt = startedAt
     self.updatedAt = updatedAt
   }
@@ -76,7 +87,8 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     case reviewerTerminalID, pullRequestURL, phase, round, maximumRounds
     case expectedReviewSHA, lastReviewedSHA, lastSummary, lastReport, lastFindingsFingerprint
     case repeatedFindingsCount
-    case convergenceWarning, escalationReason, pausedDuringFix, startedAt, updatedAt
+    case convergenceWarning, escalationReason, pausedDuringFix, commitlessTurnCount, lastAgentMessage
+    case startedAt, updatedAt
   }
 
   // Persisted types must default every non-identity field when loading an
@@ -97,6 +109,8 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     convergenceWarning = try c.decodeIfPresent(Bool.self, forKey: .convergenceWarning) ?? false
     escalationReason = try c.decodeIfPresent(String.self, forKey: .escalationReason)
     pausedDuringFix = try c.decodeIfPresent(Bool.self, forKey: .pausedDuringFix) ?? false
+    commitlessTurnCount = try c.decodeIfPresent(Int.self, forKey: .commitlessTurnCount) ?? 0
+    lastAgentMessage = try c.decodeIfPresent(String.self, forKey: .lastAgentMessage)
     startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt) ?? Date()
     updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? startedAt
   }
@@ -127,13 +141,14 @@ extension ReviewLoopState {
   /// Diagnose, inspect, and stop are always available and not listed here.
   ///
   /// - A fix round that ended without a commit is still open: resume it.
-  ///   Re-sending the same findings stays available as the fallback.
+  ///   The agent already has the findings, so they are never sent twice —
+  ///   a second copy only makes the agent repeat its last answer.
   /// - Findings the agent has not seen yet: hand them over.
   /// - Nothing left to fix: run the reviewer again.
   var decisionChoices: [ReviewDecisionChoice] {
     let grant = BoardFeature.reviewLoopMultiRoundGrant
     if pausedDuringFix {
-      return pendingFixReport == nil ? [.resumeRound] : [.resumeRound, .resendFindings]
+      return [.resumeRound]
     }
     if pendingFixReport != nil {
       return [.sendFindings(additionalRounds: 1), .sendFindings(additionalRounds: grant)]
@@ -148,8 +163,6 @@ extension ReviewLoopState {
 nonisolated enum ReviewDecisionChoice: Hashable, Sendable {
   /// Keep the open fix round going without spending a new one.
   case resumeRound
-  /// Hand the findings to the agent again while a fix round is open.
-  case resendFindings
   case sendFindings(additionalRounds: Int)
   case rereview(additionalRounds: Int)
 }
@@ -191,6 +204,10 @@ enum ReviewLoopReportParser {
     return parseLegacyJSON(suffix)
   }
 
+  /// Reviewers drift from the requested shape (`Commit:` for
+  /// `Reviewed commit:`, `Findings:` for `## Findings`, no summary, `-`
+  /// bullets), so headings and labels are matched loosely. The end marker,
+  /// a verdict, a commit, and a findings section stay mandatory.
   private static func parseMarkdown(_ suffix: Substring) -> ReviewLoopReport? {
     guard let endRange = suffix.range(of: endMarker) else { return nil }
     let block = String(suffix[..<endRange.lowerBound])
@@ -199,10 +216,10 @@ enum ReviewLoopReportParser {
 
     guard
       let verdictLine = lines.first(where: { hasPrefix($0, prefix: "Verdict:") }),
-      let reviewedSHALine = lines.first(where: { hasPrefix($0, prefix: "Reviewed commit:") }),
-      let summaryHeading = lines.firstIndex(where: { normalized($0) == "## summary" }),
-      let findingsHeading = lines.firstIndex(where: { normalized($0) == "## findings" }),
-      summaryHeading < findingsHeading
+      let reviewedSHALine = lines.first(where: { line in
+        commitLabels.contains { hasPrefix(line, prefix: $0) }
+      }),
+      let findingsHeading = lines.firstIndex(where: { sectionHeading($0)?.name == "findings" })
     else { return nil }
 
     let verdictValue = value(after: "Verdict:", in: verdictLine).lowercased()
@@ -214,15 +231,26 @@ enum ReviewLoopReportParser {
     default: return nil
     }
 
-    let reviewedSHA = value(after: "Reviewed commit:", in: reviewedSHALine)
+    let commitLabel = commitLabels.first { hasPrefix(reviewedSHALine, prefix: $0) } ?? ""
+    let reviewedSHA = value(after: commitLabel, in: reviewedSHALine)
       .trimmingCharacters(in: CharacterSet(charactersIn: "`"))
       .trimmingCharacters(in: .whitespacesAndNewlines)
     guard !reviewedSHA.isEmpty else { return nil }
 
-    let summary = lines[(summaryHeading + 1)..<findingsHeading]
-      .joined(separator: "\n")
-      .trimmingCharacters(in: .whitespacesAndNewlines)
-    let findings = parseFindings(lines[(findingsHeading + 1)...])
+    var summary = ""
+    if let summaryHeading = lines.firstIndex(where: { sectionHeading($0)?.name == "summary" }),
+      summaryHeading < findingsHeading,
+      let heading = sectionHeading(lines[summaryHeading])
+    {
+      summary = ([heading.inline] + lines[(summaryHeading + 1)..<findingsHeading])
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    var findingLines = Array(lines[(findingsHeading + 1)...])
+    if let inline = sectionHeading(lines[findingsHeading])?.inline, !inline.isEmpty {
+      findingLines.insert(inline, at: 0)
+    }
+    let findings = parseFindings(findingLines[...])
 
     return ReviewLoopReport(
       verdict: verdict,
@@ -230,6 +258,24 @@ enum ReviewLoopReportParser {
       summary: summary,
       findings: findings
     )
+  }
+
+  private static let commitLabels = ["Reviewed commit:", "Reviewed SHA:", "Commit:"]
+
+  /// `## Summary`, `Summary`, `Summary:` or `Summary: text on the same line`.
+  private static func sectionHeading(_ line: String) -> (name: String, inline: String)? {
+    let stripped = line.trimmingCharacters(in: .whitespaces)
+      .drop(while: { $0 == "#" })
+      .trimmingCharacters(in: .whitespaces)
+    for name in ["summary", "findings"] {
+      guard stripped.lowercased().hasPrefix(name) else { continue }
+      let rest = stripped.dropFirst(name.count)
+      if rest.isEmpty { return (name, "") }
+      if rest.first == ":" {
+        return (name, rest.dropFirst().trimmingCharacters(in: .whitespaces))
+      }
+    }
+    return nil
   }
 
   private static func parseLegacyJSON(_ suffix: Substring) -> ReviewLoopReport? {
@@ -242,12 +288,19 @@ enum ReviewLoopReportParser {
 
   private static func parseFindings(_ lines: ArraySlice<String>) -> [String] {
     var findings: [String] = []
+    // A wrapped line continues the finding above it; after a blank line, a
+    // non-list line is trailing prose ("CI is green."), not part of a finding.
+    var continues = false
     for line in lines {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
-      guard !trimmed.isEmpty else { continue }
-      if let finding = orderedListValue(trimmed) {
+      guard !trimmed.isEmpty else {
+        continues = false
+        continue
+      }
+      if let finding = listItemValue(trimmed) {
         findings.append(finding)
-      } else if !findings.isEmpty {
+        continues = true
+      } else if continues, !findings.isEmpty {
         findings[findings.count - 1] += " " + trimmed
       }
     }
@@ -259,7 +312,11 @@ enum ReviewLoopReportParser {
     return findings
   }
 
-  private static func orderedListValue(_ line: String) -> String? {
+  private static func listItemValue(_ line: String) -> String? {
+    if line.hasPrefix("- ") || line.hasPrefix("* ") {
+      let value = line.dropFirst(2).trimmingCharacters(in: .whitespaces)
+      return value.isEmpty ? nil : value
+    }
     guard let period = line.firstIndex(of: "."), period != line.startIndex else { return nil }
     let number = line[..<period]
     guard number.allSatisfy(\.isNumber) else { return nil }

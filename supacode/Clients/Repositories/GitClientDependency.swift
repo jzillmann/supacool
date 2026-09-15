@@ -75,6 +75,9 @@ struct GitClientDependency: Sendable {
   /// Recent commits reachable from HEAD in the given worktree.
   var commitHistory:
     @Sendable (_ worktreeURL: URL, _ limit: Int) async throws -> [GitCommitHistoryEntry]
+  /// SHA of the current branch's upstream (`@{upstream}`), or nil when the
+  /// branch tracks nothing.
+  var publishedHeadSHA: @Sendable (_ worktreeURL: URL) async -> String?
   /// Per-file added/removed counts via `git diff HEAD --numstat`.
   /// Returns `nil` for binary files or unparseable output.
   var numstatForFile:
@@ -156,6 +159,7 @@ extension GitClientDependency: DependencyKey {
     commitHistory: { worktreeURL, limit in
       try await GitClient().commitHistory(at: worktreeURL, limit: limit)
     },
+    publishedHeadSHA: { await GitClient().publishedHeadSHA(at: $0) },
     numstatForFile: { worktreeURL, path in
       await GitClient().numstatForFile(at: worktreeURL, path: path)
     }

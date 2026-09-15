@@ -144,6 +144,20 @@ private struct ReviewDecisionCard: View {
           .help(reason)
       }
 
+      if let agentMessage = loop.lastAgentMessage, !agentMessage.isEmpty {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Agent's last message")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          Text(agentMessage)
+            .font(.callout)
+            .foregroundStyle(.primary)
+            .lineLimit(5)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(agentMessage)
+        }
+      }
+
       actions
     }
     .padding(12)
@@ -186,7 +200,11 @@ private struct ReviewDecisionCard: View {
           .help(primary.help)
       }
       Button("Inspect", action: onInspect)
-        .help("Open the session with the reviewer terminal active — the decision stays here")
+        .help(
+          loop.pausedDuringFix
+            ? "Open the session with the agent terminal active — the decision stays here"
+            : "Open the session with the reviewer terminal active — the decision stays here"
+        )
       Menu("More") {
         ForEach(choices.dropFirst(), id: \.self) { choice in
           Button(choice.title, systemImage: choice.systemImage) { onChoose(choice) }
@@ -230,7 +248,6 @@ extension ReviewDecisionChoice {
   var title: String {
     switch self {
     case .resumeRound: "Continue round"
-    case .resendFindings: "Send findings again"
     case .sendFindings(let rounds) where rounds > 1: "Send findings, then \(rounds) more rounds"
     case .sendFindings: "Send findings to agent"
     case .rereview(let rounds) where rounds > 1: "Re-review, then \(rounds) more rounds"
@@ -241,7 +258,6 @@ extension ReviewDecisionChoice {
   var systemImage: String {
     switch self {
     case .resumeRound: "play.fill"
-    case .resendFindings: "arrow.uturn.right"
     case .sendFindings(let rounds), .rereview(let rounds):
       rounds > 1 ? "forward.end.fill" : "forward.fill"
     }
@@ -251,8 +267,6 @@ extension ReviewDecisionChoice {
     switch self {
     case .resumeRound:
       "Keep this round open: review the new commit if the agent made one, otherwise ask the agent to finish"
-    case .resendFindings:
-      "Hand the same findings to the agent again"
     case .sendFindings(let rounds) where rounds > 1:
       "Hand the findings to the agent, and let the loop run \(rounds) more rounds before it asks again"
     case .sendFindings:

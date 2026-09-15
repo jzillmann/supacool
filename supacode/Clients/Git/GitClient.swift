@@ -28,6 +28,7 @@ enum GitOperation: String {
   case numstatFile = "numstat_file"
   case diffAgainstBase = "diff_against_base"
   case commitHistory = "commit_history"
+  case publishedHead = "published_head"
 }
 
 enum GitClientError: LocalizedError {
@@ -683,6 +684,20 @@ struct GitClient {
     }
     let arrowParts = raw.components(separatedBy: "=>")
     return arrowParts.last?.trimmingCharacters(in: .whitespaces) ?? raw
+  }
+
+  /// The commit the current branch's upstream points at — what the last push
+  /// published, as far as this worktree knows. Nil when the branch has no
+  /// upstream (never pushed, or pushed without tracking).
+  nonisolated func publishedHeadSHA(at worktreeURL: URL) async -> String? {
+    let output = try? await runGit(
+      operation: .publishedHead,
+      arguments: [
+        "-C", worktreeURL.path(percentEncoded: false), "rev-parse", "--verify", "--quiet", "@{upstream}",
+      ]
+    )
+    let sha = output?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return sha.isEmpty ? nil : sha
   }
 
   /// Recent commits reachable from HEAD in this worktree.

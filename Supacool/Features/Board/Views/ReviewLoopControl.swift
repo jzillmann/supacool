@@ -148,6 +148,18 @@ private struct ReviewLoopPopover: View {
           .foregroundStyle(.primary)
           .fixedSize(horizontal: false, vertical: true)
       }
+      if let agentMessage = state.lastAgentMessage, !agentMessage.isEmpty {
+        VStack(alignment: .leading, spacing: 3) {
+          Text("Agent's last message")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          Text(agentMessage)
+            .font(.callout)
+            .lineLimit(6)
+            .fixedSize(horizontal: false, vertical: true)
+            .help(agentMessage)
+        }
+      }
       if shouldEscalate {
         Label(
           state.escalationReason

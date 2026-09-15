@@ -418,7 +418,7 @@ extension BoardFeatureTests {
     #expect(store.state.sessions[1].reviewLoop?.lastReviewedSHA == "second-sha")
   }
 
-  @Test(.dependencies) func fixTurnWithoutACommitParksAResumableRound() async throws {
+  @Test(.dependencies) func quietFixTurnsKeepWaitingUntilTheLimit() async throws {
     let session = reviewLoopSession(
       loop: ReviewLoopState(
         reviewerTerminalID: UUID(),
@@ -428,15 +428,165 @@ extension BoardFeatureTests {
         lastReport: reviewReport(verdict: "changes", sha: "same-sha", findings: ["Fix the race."])
       )
     )
-    let store = reviewLoopStore(session: session)
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    // An agent that ends a turn while its tests or push still run is not stuck.
+    for quietTurn in 1..<BoardFeature.reviewLoopCommitlessTurnLimit {
+      await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+      let loop = try #require(store.state.sessions.first?.reviewLoop)
+      #expect(loop.phase == .fixing)
+      #expect(loop.commitlessTurnCount == quietTurn)
+      #expect(store.state.pendingReviewDecisions.isEmpty)
+    }
 
     await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
 
     let loop = try #require(store.state.sessions.first?.reviewLoop)
     #expect(loop.phase == .needsDecision)
     #expect(loop.pausedDuringFix)
-    #expect(loop.decisionChoices == [.resumeRound, .resendFindings])
+    #expect(loop.decisionChoices == [.resumeRound])
     #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
+    #expect(commands.value.isEmpty)
+  }
+
+  @Test(.dependencies) func implementationTurnEndKeepsTheAgentMessage() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        phase: .fixing,
+        lastReviewedSHA: "old-sha"
+      )
+    )
+    let store = reviewLoopStore(session: session, headSHA: "old-sha")
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: session.primaryTerminalID,
+        surfaceID: UUID(),
+        agent: "claude",
+        message: "Verification is running; I commit and push once it is green."
+      )
+    )
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .fixing)
+    #expect(loop.lastAgentMessage == "Verification is running; I commit and push once it is green.")
+    #expect(loop.commitlessTurnCount == 1)
+  }
+
+  @Test(.dependencies) func anUnpushedLocalCommitIsNotReviewedYet() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .fixing,
+        lastReviewedSHA: "old-sha"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let publishedSHA = LockIsolated<String?>("old-sha")
+    let store = reviewLoopStore(
+      session: session,
+      commands: commands,
+      headSHA: "local-sha",
+      publishedSHA: publishedSHA
+    )
+    let turnEnded = BoardFeature.Action.reviewLoopAgentTurnEnded(
+      worktreeID: session.worktreeID,
+      tabID: session.primaryTerminalID,
+      surfaceID: UUID(),
+      agent: "claude",
+      message: "Committed; pushing now."
+    )
+
+    await store.send(turnEnded)
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .fixing)
+    #expect(commands.value.isEmpty)
+
+    publishedSHA.withValue { $0 = "pushed-sha" }
+    await store.send(turnEnded)
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.expectedReviewSHA == "pushed-sha")
+    #expect(loop.commitlessTurnCount == 0)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the pushed commit to be sent to the reviewer")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("expected pushed-sha"))
+  }
+
+  @Test(.dependencies) func continueOnAPausedRoundNeverResendsTheFindings() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        phase: .needsDecision,
+        round: 1,
+        lastReviewedSHA: "same-sha",
+        lastReport: reviewReport(verdict: "blocked", sha: "same-sha", findings: ["Decide the boundary."]),
+        pausedDuringFix: true
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "same-sha")
+
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
+    await store.receive(\._reviewLoopResumeHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .fixing)
+    #expect(loop.maximumRounds == 5)
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected a nudge to the implementation terminal")
+      return
+    }
+    #expect(prompt.contains("still open"))
+    #expect(!prompt.contains("Decide the boundary."))
+  }
+
+  @Test(.dependencies) func blockedFindingsAskTheAgentForOptionsNotCode() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        phase: .needsDecision,
+        lastReviewedSHA: "abc123",
+        lastReport: reviewReport(verdict: "blocked", sha: "abc123", findings: ["Pick a recovery region."])
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
+    await store.finish()
+
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the blocked findings to reach the implementation terminal")
+      return
+    }
+    #expect(prompt.contains("is blocked at abc123"))
+    #expect(prompt.contains("wait for the answer"))
+    #expect(prompt.contains("Pick a recovery region."))
+  }
+
+  @Test(.dependencies) func inspectingAPausedRoundOpensTheAgentTerminal() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(reviewerTerminalID: UUID(), phase: .needsDecision, pausedDuringFix: true)
+    )
+    let store = reviewLoopStore(session: session)
+
+    await store.send(.openReviewLoopReviewer(id: session.id))
+
+    #expect(store.state.activeTerminalBySession[session.id] == session.primaryTerminalID)
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .needsDecision)
   }
 
   @Test(.dependencies) func continueRoundNudgesTheAgentWhenNothingWasCommitted() async throws {
@@ -516,18 +666,23 @@ extension BoardFeatureTests {
       )
     )
     let store = reviewLoopStore(session: session, headSHA: "same-sha")
+    let limit = BoardFeature.reviewLoopCommitlessTurnLimit
 
-    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    for _ in 0..<limit {
+      await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    }
     #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
 
     await store.send(.snoozeReviewDecision(id: session.id))
     #expect(store.state.pendingReviewDecisions.isEmpty)
     #expect(store.state.sessions.first?.reviewLoop?.phase == .needsDecision)
 
-    // Resume, then a second turn without a commit: a fresh escalation shows again.
+    // Resume, then the quiet-turn limit again: a fresh escalation shows again.
     await store.send(.resumeReviewLoopRound(id: session.id))
     await store.receive(\._reviewLoopResumeHeadResolved)
-    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    for _ in 0..<limit {
+      await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "same-sha"))
+    }
     #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
   }
 
@@ -569,7 +724,8 @@ extension BoardFeatureTests {
 private func reviewLoopStore(
   session: AgentSession,
   commands: LockIsolated<[TerminalClient.Command]> = LockIsolated<[TerminalClient.Command]>([]),
-  headSHA: String? = nil
+  headSHA: String? = nil,
+  publishedSHA: LockIsolated<String?> = LockIsolated<String?>(nil)
 ) -> TestStoreOf<BoardFeature> {
   let state = BoardFeature.State()
   state.$sessions.withLock { $0 = [session] }
@@ -581,6 +737,7 @@ private func reviewLoopStore(
     $0.terminalClient.send = { command in
       commands.withValue { $0.append(command) }
     }
+    $0[GitClientDependency.self].publishedHeadSHA = { _ in publishedSHA.value }
     $0[GitClientDependency.self].commitHistory = { _, _ in
       guard let headSHA else { return [] }
       return [

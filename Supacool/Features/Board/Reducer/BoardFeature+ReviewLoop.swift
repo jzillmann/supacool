@@ -110,12 +110,29 @@ extension BoardFeature {
       })
     else { return .none }
 
+    let agentMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    updateReviewLoop(state: &state, sessionID: session.id) { loop in
+      loop.lastAgentMessage = agentMessage.isEmpty ? nil : Self.capped(agentMessage, limit: 2_000)
+    }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
     return .run { [gitClient] send in
-      let history = try? await gitClient.commitHistory(workspaceURL, 1)
-      let headSHA = history?.first?.hash
+      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
       await send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: headSHA))
     }
+  }
+
+  /// The commit a review round should look at: the pushed upstream head when
+  /// the branch tracks one, else local HEAD. The reviewer reads the PR on
+  /// GitHub, so a commit that is only local is not reviewable yet — using
+  /// local HEAD made the loop expect a commit the reviewer could not see.
+  nonisolated static func reviewHeadSHA(
+    gitClient: GitClientDependency,
+    workspaceURL: URL
+  ) async -> String? {
+    if let published = await gitClient.publishedHeadSHA(workspaceURL), !published.isEmpty {
+      return published
+    }
+    return try? await gitClient.commitHistory(workspaceURL, 1).first?.hash
   }
 
   func reduceReviewLoopImplementationHeadResolved(
@@ -138,11 +155,20 @@ extension BoardFeature {
       )
     }
     guard headSHA != loop.lastReviewedSHA else {
+      // Agents end turns while tests, hooks, or a push still run, and they end
+      // turns to ask the user a question. Both are normal inside a fix round:
+      // keep waiting for a pushed commit, and only park after several quiet
+      // turns in a row.
+      let quietTurns = loop.commitlessTurnCount + 1
+      updateReviewLoop(state: &state, sessionID: id) { updated in
+        updated.commitlessTurnCount = quietTurns
+      }
+      guard quietTurns >= Self.reviewLoopCommitlessTurnLimit else { return .none }
       return escalateReviewLoop(
         state: &state,
         sessionID: id,
-        reason: "The implementation turn ended without a new commit after review round \(loop.round). "
-          + "The scope or architecture may need a decision.",
+        reason: "The agent ended \(quietTurns) turns in a row without pushing a new commit "
+          + "after review round \(loop.round).",
         pausedDuringFix: true
       )
     }
@@ -168,6 +194,7 @@ extension BoardFeature {
       sessions[index].reviewLoop?.phase = .reviewing
       sessions[index].reviewLoop?.round = nextRound
       sessions[index].reviewLoop?.expectedReviewSHA = headSHA
+      sessions[index].reviewLoop?.commitlessTurnCount = 0
       sessions[index].reviewLoop?.escalationReason = nil
       sessions[index].reviewLoop?.convergenceWarning = nextRound >= Self.reviewLoopWarningRound
       sessions[index].reviewLoop?.updatedAt = now
@@ -191,8 +218,9 @@ extension BoardFeature {
     }
   }
 
-  /// Opens the session full screen with the reviewer terminal active, and parks
-  /// any pending decision instead of answering it.
+  /// Opens the session full screen with the terminal the decision is about
+  /// active — the implementation terminal when a fix round paused, else the
+  /// reviewer — and parks any pending decision instead of answering it.
   ///
   /// The loop stays in `.needsDecision`, so the decision card in the stack and the
   /// orange review pill keep offering the same choices. The user can read the diff
@@ -200,7 +228,9 @@ extension BoardFeature {
   func reduceOpenReviewLoopReviewer(state: inout State, id: AgentSession.ID) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == id }) else { return .none }
     state.focusedSessionID = id
-    if let reviewerID = session.reviewLoop?.reviewerTerminalID {
+    if session.reviewLoop?.pausedDuringFix == true {
+      state.activeTerminalBySession[id] = session.primaryTerminalID
+    } else if let reviewerID = session.reviewLoop?.reviewerTerminalID {
       state.activeTerminalBySession[id] = reviewerID
     }
     return .none
@@ -254,6 +284,12 @@ extension BoardFeature {
       loop.phase == .needsDecision
     else { return .none }
 
+    // The open round's findings already reached the agent. Sending them again
+    // only makes it repeat its last answer, so continue the round instead.
+    if loop.pausedDuringFix {
+      return reduceResumeReviewLoopRound(state: &state, id: id)
+    }
+
     let now = date.now
 
     if let report = loop.pendingFixReport {
@@ -283,11 +319,11 @@ extension BoardFeature {
 
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
     return .run { [gitClient] send in
-      let history = try? await gitClient.commitHistory(workspaceURL, 1)
+      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
       await send(
         ._reviewLoopRereviewHeadResolved(
           id: id,
-          headSHA: history?.first?.hash,
+          headSHA: headSHA,
           additionalRounds: additionalRounds
         )
       )
@@ -333,6 +369,7 @@ extension BoardFeature {
       sessions[index].reviewLoop?.pausedDuringFix = false
       sessions[index].reviewLoop?.round = nextRound
       sessions[index].reviewLoop?.phase = .reviewing
+      sessions[index].reviewLoop?.commitlessTurnCount = 0
       sessions[index].reviewLoop?.expectedReviewSHA = resolvedHead
       sessions[index].reviewLoop?.escalationReason = nil
       sessions[index].reviewLoop?.updatedAt = now
@@ -367,8 +404,8 @@ extension BoardFeature {
     else { return .none }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
     return .run { [gitClient] send in
-      let history = try? await gitClient.commitHistory(workspaceURL, 1)
-      await send(._reviewLoopResumeHeadResolved(id: id, headSHA: history?.first?.hash))
+      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+      await send(._reviewLoopResumeHeadResolved(id: id, headSHA: headSHA))
     }
   }
 
@@ -392,6 +429,7 @@ extension BoardFeature {
       updated.phase = .fixing
       updated.escalationReason = nil
       updated.pausedDuringFix = false
+      updated.commitlessTurnCount = 0
     }
     if let headSHA, !headSHA.isEmpty, headSHA != loop.lastReviewedSHA {
       return reduceReviewLoopImplementationHeadResolved(state: &state, id: id, headSHA: headSHA)
@@ -540,6 +578,10 @@ extension BoardFeature {
       )
     }
 
+    updateReviewLoop(state: &state, sessionID: session.id) { updated in
+      updated.commitlessTurnCount = 0
+      updated.lastAgentMessage = nil
+    }
     let prompt = Self.implementationPrompt(
       pullRequestURL: loop.pullRequestURL ?? "the current pull request",
       round: loop.round,
@@ -637,8 +679,6 @@ extension BoardFeature.Action {
     switch choice {
     case .resumeRound:
       .resumeReviewLoopRound(id: sessionID)
-    case .resendFindings:
-      .continueReviewLoop(id: sessionID, additionalRounds: 1)
     case .sendFindings(let additionalRounds), .rereview(let additionalRounds):
       .continueReviewLoop(id: sessionID, additionalRounds: additionalRounds)
     }
@@ -650,6 +690,9 @@ extension BoardFeature {
   /// The larger of the two continue grants offered at a decision point.
   nonisolated static let reviewLoopMultiRoundGrant = 3
   nonisolated static let reviewLoopWarningRound = 3
+  /// Implementation turns in a row without a new pushed commit before a fix
+  /// round parks for the user.
+  nonisolated static let reviewLoopCommitlessTurnLimit = 3
   nonisolated static let maximumStoredReviewReportLength = 12_000
 
   nonisolated static func actionablePullRequestURL(in session: AgentSession) -> String? {
@@ -765,6 +808,20 @@ extension BoardFeature {
     let findings = report.findings.enumerated().map { index, finding in
       "\(index + 1). \(finding)"
     }.joined(separator: "\n")
+    if report.verdict == .blocked {
+      // A blocked verdict asks the user for a decision. The agent's job is to
+      // lay out the options once and wait, not to refuse on every re-send.
+      return """
+        Review round \(round) for \(pullRequestURL) is blocked at \(report.reviewedSHA): the reviewer says the
+        architecture or scope needs a decision from the user. Check each finding against the code. Then give the user
+        a short list of options with your recommendation, and wait for the answer. Do not change code before the user
+        decides. After the decision, implement it, add or update tests, then commit and push the result.
+
+        Reviewer summary: \(report.summary)
+        Findings:
+        \(findings)
+        """
+    }
     return """
       Review round \(round) for \(pullRequestURL) requested changes at \(report.reviewedSHA).
       Address every actionable finding below. Keep the fix within the ticket's intended scope, add or update tests,
