@@ -7,6 +7,8 @@ import SwiftUI
 nonisolated enum AppShortcutID: Codable, Hashable, Sendable, CodingKeyRepresentable {
   case commandPalette, openSettings, checkForUpdates
   case nextTerminalInState, previousTerminalInState
+  /// Dead since the sidebar was deleted; kept only so an override saved under
+  /// these keys still decodes. Not registered (no menu item, no Ghostty unbind).
   case toggleLeftSidebar, revealInSidebar
   case newWorktree, refreshWorktrees, archivedWorktrees, archiveWorktree
   case deleteWorktree, confirmWorktreeAction
@@ -224,7 +226,6 @@ struct AppShortcut: Identifiable {
 enum AppShortcutCategory: String, CaseIterable, Sendable {
   case general
   case matrixBoard
-  case sidebar
   case worktrees
   case worktreeSelection
   case actions
@@ -233,7 +234,6 @@ enum AppShortcutCategory: String, CaseIterable, Sendable {
     switch self {
     case .general: "General"
     case .matrixBoard: "Matrix Board"
-    case .sidebar: "Sidebar"
     case .worktrees: "Worktrees"
     case .worktreeSelection: "Worktree Selection"
     case .actions: "Actions"
@@ -281,9 +281,6 @@ enum AppShortcuts {
     key: ".",
     modifiers: [.command, .shift]
   )
-
-  static let toggleLeftSidebar = AppShortcut(id: .toggleLeftSidebar, key: "[", modifiers: .command)
-  static let revealInSidebar = AppShortcut(id: .revealInSidebar, key: "e", modifiers: [.command, .shift])
 
   static let newWorktree = AppShortcut(id: .newWorktree, key: "n", modifiers: .command)
   static let refreshWorktrees = AppShortcut(id: .refreshWorktrees, key: "r", modifiers: [.command, .shift])
@@ -337,7 +334,6 @@ enum AppShortcuts {
   static let groups: [AppShortcutGroup] = [
     AppShortcutGroup(category: .general, shortcuts: [commandPalette, openSettings, checkForUpdates]),
     AppShortcutGroup(category: .matrixBoard, shortcuts: [nextTerminalInState, previousTerminalInState]),
-    AppShortcutGroup(category: .sidebar, shortcuts: [toggleLeftSidebar, revealInSidebar]),
     AppShortcutGroup(
       category: .worktrees,
       shortcuts: [
@@ -382,6 +378,13 @@ enum AppShortcuts {
   // The full-screen session view owns them instead, selecting tabs in its own
   // strip (`SessionTabShortcut`). Both the unicode and the physical `digit_N`
   // key are unbound because Ghostty registers both (AZERTY needs the latter).
+  //
+  // ⌘⇧[ / ⌘⇧] (Ghostty: previous_tab / next_tab) have the same wrong-list
+  // problem and cycle the session strip instead. ⌘⌥arrows (Ghostty:
+  // goto_split:up/down/left/right) collide with the session switcher the
+  // full-screen view binds on the same keys; the switcher owns them, and
+  // panes are walked with Ghostty's ⌘[ / ⌘] (goto_split:previous/next) —
+  // which is why the dead sidebar shortcut that used to unbind ⌘[ is gone.
   static let reservedGhosttyUnbindArguments: [String] =
     ["--keybind=super+w=unbind"]
     + SessionTabShortcut.digits.flatMap { digit in
@@ -390,6 +393,14 @@ enum AppShortcuts {
         "--keybind=super+digit_\(digit)=unbind",
       ]
     }
+    + [
+      "--keybind=shift+super+[=unbind",
+      "--keybind=shift+super+]=unbind",
+      "--keybind=alt+super+arrow_up=unbind",
+      "--keybind=alt+super+arrow_down=unbind",
+      "--keybind=alt+super+arrow_left=unbind",
+      "--keybind=alt+super+arrow_right=unbind",
+    ]
 
   // MARK: - Ghostty CLI arguments.
 

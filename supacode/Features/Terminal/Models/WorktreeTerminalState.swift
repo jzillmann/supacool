@@ -107,6 +107,11 @@ final class WorktreeTerminalState {
   var onNotificationReceived: ((String, String) -> Void)?
   var onNotificationIndicatorChanged: (() -> Void)?
   var onTabCreated: (() -> Void)?
+  /// Supacool: Ghostty's `new_tab` (⌘T) from the surface with this id. The
+  /// manager returns true after adding a shell tab to the surface's
+  /// *session*; a plain worktree tab is only created when nobody claims it —
+  /// on the board such a tab belongs to no session, so no view ever shows it.
+  var onNewTabRequested: ((UUID) -> Bool)?
   var onTabClosed: (() -> Void)?
   var onFocusChanged: ((UUID) -> Void)?
   var onTaskStatusChanged: ((WorktreeTaskStatus) -> Void)?
@@ -1775,6 +1780,7 @@ final class WorktreeTerminalState {
     }
     view.bridge.onNewTab = { [weak self, weak view] in
       guard let self, let view else { return false }
+      if self.onNewTabRequested?(view.id) == true { return true }
       return self.createTab(inheritingFromSurfaceId: view.id) != nil
     }
     view.bridge.onCloseTab = { [weak self] _ in
@@ -2036,7 +2042,7 @@ final class WorktreeTerminalState {
     #endif
   }
 
-  private func tabId(containing surfaceId: UUID) -> TerminalTabID? {
+  func tabId(containing surfaceId: UUID) -> TerminalTabID? {
     for (tabId, tree) in trees where tree.find(id: surfaceId) != nil {
       return tabId
     }

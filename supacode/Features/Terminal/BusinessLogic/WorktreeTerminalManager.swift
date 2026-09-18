@@ -1291,6 +1291,14 @@ final class WorktreeTerminalManager {
     state.onTabCreated = { [weak self] in
       self?.emit(.tabCreated(worktreeID: worktree.id))
     }
+    state.onNewTabRequested = { [weak self, weak state] surfaceID in
+      guard let self, let state, let tabID = state.tabId(containing: surfaceID),
+        let sessionID = self.agentSessions.first(where: { session in
+          session.terminals.contains { $0.id == tabID.rawValue }
+        })?.id
+      else { return false }
+      return self.addShellTerminal(toSession: sessionID, in: worktree) != nil
+    }
     state.onTabClosed = { [weak self] in
       self?.emit(.tabClosed(worktreeID: worktree.id))
     }

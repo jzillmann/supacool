@@ -254,8 +254,13 @@ struct FullScreenTerminalView: View {
     .background(tabSelectionShortcuts)
   }
 
+  /// ⌘1–⌘9 pick a tab, ⌘⇧[ / ⌘⇧] step through them with wrap-around.
+  /// Panes inside a tab are Ghostty's business: ⌘[ / ⌘] (goto_split).
   private var tabSelectionShortcuts: some View {
     let tabs = session.tabTerminals
+    let activeIndex = tabs.firstIndex { $0.id == activeTerminalID }
+    let previous = SessionTabShortcut.adjacentTabIndex(from: activeIndex, step: -1, tabCount: tabs.count)
+    let next = SessionTabShortcut.adjacentTabIndex(from: activeIndex, step: 1, tabCount: tabs.count)
     return Group {
       ForEach(Array(SessionTabShortcut.digits), id: \.self) { digit in
         let index = SessionTabShortcut.tabIndex(forDigit: digit, tabCount: tabs.count)
@@ -265,6 +270,16 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut(KeyEquivalent(Character(String(digit))), modifiers: .command)
         .disabled(index == nil)
       }
+      Button("Previous Tab") {
+        if let previous { onSelectTerminal(tabs[previous].id) }
+      }
+      .keyboardShortcut("[", modifiers: [.command, .shift])
+      .disabled(previous == nil)
+      Button("Next Tab") {
+        if let next { onSelectTerminal(tabs[next].id) }
+      }
+      .keyboardShortcut("]", modifiers: [.command, .shift])
+      .disabled(next == nil)
     }
     .hidden()
   }

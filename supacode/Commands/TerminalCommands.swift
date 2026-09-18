@@ -5,7 +5,8 @@ import SwiftUI
 // Since that deletion (8dae4c31) nothing set them, so the items were
 // permanently disabled *while still reserving ⌘W / ⌘⌥W / ⌘T at the menu
 // level* — which is what made ⌘W ambiguous. They are gone; ⌘T and ⌘⌥W now
-// fall straight through to Ghostty's own new_tab / close_tab bindings, and
+// fall straight through to Ghostty's own new_tab / close_tab bindings (the
+// manager then routes new_tab into the surface's session as a shell tab), and
 // ⌘W belongs to the board (see AppShortcuts.reservedGhosttyUnbindArguments).
 struct TerminalCommands: Commands {
   let ghosttyShortcuts: GhosttyShortcutManager

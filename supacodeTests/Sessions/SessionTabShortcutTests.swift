@@ -19,6 +19,19 @@ struct SessionTabShortcutTests {
     #expect(SessionTabShortcut.tabIndex(forDigit: 10, tabCount: 12) == nil)
   }
 
+  @Test func adjacentTabWrapsAtBothEnds() {
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 0, step: 1, tabCount: 3) == 1)
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 2, step: 1, tabCount: 3) == 0)
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 0, step: -1, tabCount: 3) == 2)
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 1, step: -1, tabCount: 3) == 0)
+  }
+
+  @Test func adjacentTabNeedsSomethingToCycleTo() {
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 0, step: 1, tabCount: 1) == nil)
+    #expect(SessionTabShortcut.adjacentTabIndex(from: nil, step: 1, tabCount: 3) == nil)
+    #expect(SessionTabShortcut.adjacentTabIndex(from: 5, step: 1, tabCount: 3) == nil)
+  }
+
   @Test func tooltipDigitIsTheInverseOfSelection() {
     for tabCount in 1...12 {
       for index in 0..<tabCount {

@@ -98,6 +98,31 @@ struct AppShortcutsTests {
     #expect(!arguments.contains("--keybind=super+0=unbind"))
   }
 
+  // ⌘⇧[ / ⌘⇧] cycle the session strip; ⌘⌥arrows belong to the session
+  // switcher. ⌘[ / ⌘] stay Ghostty's goto_split — the deleted sidebar's ⌘[
+  // used to unbind them for nothing.
+  @Test func ghosttyCLIArgumentsReserveTabCycleAndSwitcherKeys() {
+    let arguments = AppShortcuts.ghosttyCLIKeybindArguments
+    #expect(arguments.contains("--keybind=shift+super+[=unbind"))
+    #expect(arguments.contains("--keybind=shift+super+]=unbind"))
+    for arrow in ["up", "down", "left", "right"] {
+      #expect(arguments.contains("--keybind=alt+super+arrow_\(arrow)=unbind"))
+    }
+    #expect(!arguments.contains("--keybind=super+[=unbind"))
+    #expect(!arguments.contains("--keybind=super+]=unbind"))
+  }
+
+  // Overrides persisted under the deleted sidebar shortcuts still decode.
+  @Test func legacySidebarOverrideKeysStillDecode() throws {
+    let saved: [AppShortcutID: AppShortcutOverride] = [
+      .toggleLeftSidebar: AppShortcutOverride(keyCode: UInt16(kVK_ANSI_LeftBracket), modifiers: [.command])
+    ]
+    let json = try JSONEncoder().encode(saved)
+    let overrides = try JSONDecoder().decode([AppShortcutID: AppShortcutOverride].self, from: json)
+    #expect(overrides.keys.contains(.toggleLeftSidebar))
+    #expect(AppShortcuts.all.contains { $0.id == .toggleLeftSidebar } == false)
+  }
+
   // MARK: - Shortcut identity.
 
   @Test func allShortcutsHaveUniqueIDs() {
@@ -110,7 +135,6 @@ struct AppShortcutsTests {
     #expect(AppShortcuts.openPullRequest.displayName == "Open Pull Request")
     #expect(AppShortcuts.nextTerminalInState.displayName == "Next Session in State")
     #expect(AppShortcuts.previousTerminalInState.displayName == "Previous Session (Back)")
-    #expect(AppShortcuts.toggleLeftSidebar.displayName == "Toggle Left Sidebar")
     #expect(AppShortcuts.selectWorktree1.displayName == "Select Worktree 1")
     #expect(AppShortcuts.selectWorktree0.displayName == "Select Worktree 10")
   }
@@ -196,7 +220,7 @@ struct AppShortcutsTests {
   @Test func categoryDisplayNames() {
     expectNoDifference(
       AppShortcutCategory.allCases.map(\.displayName),
-      ["General", "Matrix Board", "Sidebar", "Worktrees", "Worktree Selection", "Actions"]
+      ["General", "Matrix Board", "Worktrees", "Worktree Selection", "Actions"]
     )
   }
 
