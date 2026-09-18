@@ -162,7 +162,11 @@ extension BoardFeature {
         boardLogger.warning(
           "Failed to fetch PR state for \(owner)/\(repo)#\(number): \(error)"
         )
-        await send(._prRefreshFailed(refKey: ref.dedupeKey))
+        await send(
+          Self.isPullRequestNotFound(error)
+            ? ._prReferenceNotFound(refKey: ref.dedupeKey)
+            : ._prRefreshFailed(refKey: ref.dedupeKey)
+        )
       }
     }
     .cancellable(id: PRRefreshCancelID(refKey: ref.dedupeKey), cancelInFlight: true)
@@ -178,6 +182,37 @@ extension BoardFeature {
     )
     state.prRefreshInFlight.remove(refKey)
     return .none
+  }
+
+  func reducePRReferenceNotFound(state: inout State, refKey: String) -> Effect<Action> {
+    state.$sessions.withLock { sessions in
+      for index in sessions.indices {
+        // Only a reference that never resolved is dropped. One that loaded
+        // before is a real PR, so a later "not found" means lost access
+        // (expired SSO grant, token scope) — not a typo — and the chip must
+        // stay; the ordinary failure cooldown handles the retry.
+        let isUnresolvedTwin = sessions[index].references.contains { ref in
+          guard case .pullRequest(_, _, _, nil, _) = ref else { return false }
+          return ref.dedupeKey == refKey
+        }
+        guard isUnresolvedTwin else { continue }
+        sessions[index].references.removeAll { $0.dedupeKey == refKey }
+        sessions[index].dismissedReferenceKeys.insert(refKey)
+      }
+    }
+    // Sessions where the reference had resolved keep it; give them the same
+    // backoff a transient failure gets instead of re-spawning `gh` each tick.
+    return reducePRRefreshFailed(state: &state, refKey: refKey)
+  }
+
+  /// True when `gh pr view` failed because GitHub has no such repository or
+  /// PR number (`GraphQL: Could not resolve to a Repository …` /
+  /// `… to a PullRequest …`), as opposed to a network, auth, or rate-limit
+  /// failure that can succeed on retry.
+  nonisolated static func isPullRequestNotFound(_ error: any Error) -> Bool {
+    guard case .commandFailed(let message) = error as? GithubCLIError else { return false }
+    return message.contains("Could not resolve to a Repository")
+      || message.contains("Could not resolve to a PullRequest")
   }
 
   func reducePRStatusUpdated(

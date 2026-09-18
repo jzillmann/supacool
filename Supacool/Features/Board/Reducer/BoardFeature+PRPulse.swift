@@ -781,7 +781,11 @@ extension BoardFeature {
       boardLogger.warning(
         "PR refresh tick failed for \(owner)/\(repo)#\(number): \(error)"
       )
-      await send(._prRefreshFailed(refKey: refKey))
+      await send(
+        Self.isPullRequestNotFound(error)
+          ? ._prReferenceNotFound(refKey: refKey)
+          : ._prRefreshFailed(refKey: refKey)
+      )
     }
   }
 

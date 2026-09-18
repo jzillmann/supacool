@@ -207,6 +207,61 @@ struct BoardFeatureTests {
     }
   }
 
+  /// An agent that mistypes a PR URL (`centramai/…` for `centrumai/…`) left a
+  /// twin row stuck on "Loading…" forever, because `gh pr view` on a repo
+  /// that does not exist can never succeed. A not-found answer drops the
+  /// never-resolved twin and dismisses it so a rescan can't re-add it.
+  @Test(.dependencies) func prReferenceNotFoundDropsUnresolvedTwinOnly() async {
+    let real = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 5723, state: .open, title: "Real"
+    )
+    let typo = SessionReference.pullRequest(
+      owner: "acmee", repo: "widgets", number: 5723, state: nil, title: nil
+    )
+    var withTypo = Self.sampleSession()
+    withTypo.references = [real, typo]
+    // Same key, but it resolved once — a later not-found means lost access,
+    // not a typo, so this session keeps its chip.
+    let resolvedTypo = SessionReference.pullRequest(
+      owner: "acmee", repo: "widgets", number: 5723, state: .merged, title: "Old"
+    )
+    var withResolved = Self.sampleSession()
+    withResolved.references = [resolvedTypo]
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [withTypo, withResolved] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+    }
+    // The failure cooldown jitter is random; only the session edits matter.
+    store.exhaustivity = .off
+
+    await store.send(._prReferenceNotFound(refKey: typo.dedupeKey)) {
+      $0.$sessions.withLock { sessions in
+        sessions[0].references = [real]
+        sessions[0].dismissedReferenceKeys = [typo.dedupeKey]
+      }
+    }
+    #expect(store.state.sessions[1].references == [resolvedTypo])
+    #expect(store.state.sessions[1].dismissedReferenceKeys.isEmpty)
+    #expect(store.state.prRefreshFailureAt[typo.dedupeKey] != nil)
+  }
+
+  @Test func pullRequestNotFoundClassifiesOnlyMissingRepoOrNumber() {
+    let missingRepo = GithubCLIError.commandFailed(
+      "stderr:\nGraphQL: Could not resolve to a Repository with the name 'o/r'. (repository)"
+    )
+    let missingNumber = GithubCLIError.commandFailed(
+      "stderr:\nGraphQL: Could not resolve to a PullRequest with the number of 9. (repository.pullRequest)"
+    )
+    let rateLimited = GithubCLIError.commandFailed("stderr:\nGraphQL: API rate limit exceeded")
+    #expect(BoardFeature.isPullRequestNotFound(missingRepo))
+    #expect(BoardFeature.isPullRequestNotFound(missingNumber))
+    #expect(!BoardFeature.isPullRequestNotFound(rateLimited))
+    #expect(!BoardFeature.isPullRequestNotFound(PRRefreshTimeoutError()))
+  }
+
   @Test(.dependencies) func addReferencesParsesRawTextAndClearsDismissal() async {
     let existing = SessionReference.pullRequest(
       owner: "acme", repo: "widgets", number: 1, state: .open, title: nil

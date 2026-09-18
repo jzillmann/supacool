@@ -936,6 +936,13 @@ struct BoardFeature {
     /// spawning the same subprocess (especially relevant under
     /// GitHub rate-limit pressure).
     case _prRefreshFailed(refKey: String)
+    /// GitHub answered that the PR's repository or number does not exist —
+    /// typically a URL the agent mistyped in its transcript (it once wrote
+    /// `centramai/…` and corrected itself in the same breath). Unlike a
+    /// transient failure this never heals, so the row would sit on
+    /// "Loading…" forever. Drops the never-resolved reference from every
+    /// session and dismisses its key so a rescan does not bring it back.
+    case _prReferenceNotFound(refKey: String)
 
     // MARK: - Global PR refresh scheduler (architectural fix for storm)
     //
@@ -2455,6 +2462,9 @@ struct BoardFeature {
 
       case ._prRefreshFailed(let refKey):
         return reducePRRefreshFailed(state: &state, refKey: refKey)
+
+      case ._prReferenceNotFound(let refKey):
+        return reducePRReferenceNotFound(state: &state, refKey: refKey)
 
       // MARK: - Global PR refresh scheduler — handlers live in BoardFeature+PRPulse.swift
 
