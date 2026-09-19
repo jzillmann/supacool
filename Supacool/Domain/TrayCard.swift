@@ -82,11 +82,13 @@ nonisolated enum TrayCardKind: Equatable, Sendable {
   case reviewLoopUnavailable(sessionID: AgentSession.ID, displayName: String, message: String)
 
   /// Whether this kind offers a secondary call-to-action button next to
-  /// the main tap target. Only `.staleHooks` currently does ("Reinstall").
+  /// the main tap target: `.staleHooks` ("Reinstall") and
+  /// `.sessionCreating` ("Cancel" — the escape hatch for a bookmark pill
+  /// hit by accident).
   var hasSecondaryAction: Bool {
     switch self {
-    case .staleHooks: true
-    case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
+    case .staleHooks, .sessionCreating: true
+    case .worktreeDeleting, .hookInstallFailed,
       .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed,
       .reviewLoopUnavailable: false
     }

@@ -45,6 +45,16 @@ struct BoardView: View {
   /// flood of detached cards, so every launch should start it collapsed.
   @State private var frozenDeckExpanded: Bool = false
 
+  /// Whether the launch pills (drafts, bookmarks) accept clicks. Off for a
+  /// short grace period every time the board (re)appears: the common way
+  /// to hit one by accident is a double-tap on "back" from a sluggish
+  /// full-screen terminal, where the second click lands on the pill row
+  /// that just materialised under the pointer — and a bookmark pill starts
+  /// an agent. The pills stay visible but inert (and slightly dimmed)
+  /// until the window passes.
+  @State private var launchPillsArmed: Bool = false
+  private static let launchPillArmingDelay: Duration = .milliseconds(700)
+
   /// Visible width of each bucket's carousel rail, keyed by section title.
   /// Populated via `onScrollGeometryChange`. Used to suppress the
   /// reveal-highlighted-card scroll when every card already fits — that
@@ -80,6 +90,13 @@ struct BoardView: View {
         // Grant focus once the view is on screen. Without this, `.focusable()`
         // just marks the view focus-eligible — arrow keys still beep.
         hasKeyboardFocus = true
+      }
+      .task {
+        // Re-arms on every appearance (the task restarts when the board
+        // comes back from a full-screen terminal), so reset first.
+        launchPillsArmed = false
+        try? await Task.sleep(for: Self.launchPillArmingDelay)
+        withAnimation(.easeOut(duration: 0.2)) { launchPillsArmed = true }
       }
       .onKeyPress(.leftArrow) { moveHighlight(by: -1); return .handled }
       .onKeyPress(.upArrow) { moveVertical(direction: -1); return .handled }
@@ -397,6 +414,8 @@ struct BoardView: View {
                   store.send(.draftDeleteRequested(id: draft.id))
                 }
               )
+              .allowsHitTesting(launchPillsArmed)
+              .opacity(launchPillsArmed ? 1 : 0.6)
             }
             // Bookmark pills render above "Waiting on Me" when a specific
             // repo is selected (not "All repos") and that repo has at
@@ -434,6 +453,8 @@ struct BoardView: View {
                   store.send(.bookmarkDeleteRequested(id: bookmark.id))
                 }
               )
+              .allowsHitTesting(launchPillsArmed)
+              .opacity(launchPillsArmed ? 1 : 0.6)
             }
             // "Waiting on Me" always renders — when empty it shows a subtle
             // "Nothing waiting on you" message so the bucket stays visible and

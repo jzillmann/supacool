@@ -46,6 +46,13 @@ struct BoardFeature {
     /// don't fan out duplicate sessions.
     var bookmarkSpawnInFlight: Set<Bookmark.ID> = []
 
+    /// Sessions whose "Starting session" tray card was cancelled while
+    /// `SessionSpawner` was still running. The spawn effect can't be
+    /// aborted mid-worktree-creation, so the completion handlers consult
+    /// this set and tear the freshly built session down (worktree
+    /// included) instead of putting a card on the board.
+    var cancelledSpawnSessionIDs: Set<AgentSession.ID> = []
+
     /// Detached/disconnected sessions whose terminal tab is currently
     /// being recreated by Resume, Restore Layout, or Reconnect. The board
     /// treats these as In Progress even before `WorktreeTerminalManager`
@@ -2068,6 +2075,9 @@ struct BoardFeature {
         if let bookmarkID = session.sourceBookmarkID {
           state.bookmarkSpawnInFlight.remove(bookmarkID)
         }
+        if let discard = discardCancelledSpawn(&state, session: session) {
+          return discard
+        }
         if let index = state.trayCards.firstIndex(where: { $0.id == session.id }) {
           state.trayCards[index].kind = .sessionCreating(
             sessionID: session.id,
@@ -2078,6 +2088,7 @@ struct BoardFeature {
 
       case ._bookmarkSpawnFailed(let bookmarkID, let sessionID, let message):
         state.bookmarkSpawnInFlight.remove(bookmarkID)
+        state.cancelledSpawnSessionIDs.remove(sessionID)
         state.trayCards.removeAll(where: { $0.id == sessionID })
         boardLogger.warning("Bookmark \(bookmarkID) spawn failed: \(message)")
         return .none
@@ -2314,6 +2325,12 @@ struct BoardFeature {
         )
 
       case let ._sessionSpawnConflict(sessionID, placeholderDisplayName, request, branch, existing):
+        // Cancelled while the spawn was still resolving its worktree —
+        // nothing was created, so there is nothing to ask the user about.
+        if state.cancelledSpawnSessionIDs.remove(sessionID) != nil {
+          state.trayCards.removeAll(where: { $0.id == sessionID })
+          return .none
+        }
         boardLogger.info(
           "Branch '\(branch)' for session \(sessionID) is already checked out at "
             + "\(existing.workingDirectory.path(percentEncoded: false))"
@@ -2643,7 +2660,9 @@ struct BoardFeature {
           // `.hookInstallFailed` card describing the failure.
           state.trayCards.remove(id: id)
           return .send(.delegate(.reinstallHooksRequested(slots: slots)))
-        case .sessionCreating, .worktreeDeleting, .hookInstallFailed,
+        case .sessionCreating(let sessionID, _):
+          return cancelStartingSession(&state, cardID: id, sessionID: sessionID)
+        case .worktreeDeleting, .hookInstallFailed,
           .worktreeDeleteFailed, .sessionSpawnFailed, .sessionResumeFailed,
           .reviewLoopUnavailable:
           return .none
@@ -3310,6 +3329,57 @@ struct BoardFeature {
       return .running
     }
     return .stopped
+  }
+
+  /// "Cancel" on a "Starting session" tray card. Two shapes, depending on
+  /// how far the spawn got:
+  /// - The session already reached the board (`createSession` ran, the
+  ///   terminal may be launching): the ordinary remove path handles it —
+  ///   trash entry, tab teardown, worktree cleanup.
+  /// - `SessionSpawner` is still running: the effect can't be interrupted
+  ///   safely (a worktree may be half-built), so the card just disappears
+  ///   now and the completion handler discards the result via
+  ///   `discardCancelledSpawn`.
+  fileprivate func cancelStartingSession(
+    _ state: inout State,
+    cardID: TrayCard.ID,
+    sessionID: AgentSession.ID
+  ) -> Effect<Action> {
+    state.trayCards.remove(id: cardID)
+    if state.sessions.contains(where: { $0.id == sessionID }) {
+      return removeSessionFromState(&state, id: sessionID)
+    }
+    state.cancelledSpawnSessionIDs.insert(sessionID)
+    // A Linear-inbox ticket stamped as started by this spawn would
+    // otherwise keep showing "Open session" for a card that never comes.
+    LinearInboxFeature.clearStartedStamp(forSessionID: sessionID)
+    return .none
+  }
+
+  /// Completion-side half of `cancelStartingSession`. Returns the teardown
+  /// effect when the finished spawn was cancelled meanwhile (caller must
+  /// return it instead of creating the session), `nil` otherwise.
+  func discardCancelledSpawn(
+    _ state: inout State,
+    session: AgentSession
+  ) -> Effect<Action>? {
+    guard state.cancelledSpawnSessionIDs.remove(session.id) != nil else { return nil }
+    state.trayCards.removeAll(where: { $0.id == session.id })
+    boardLogger.info("Discarding cancelled spawn \(session.id)")
+    // No card ever hit the board, so there's no tab to destroy and no
+    // trash entry to keep — only a possibly fresh worktree to fold back.
+    let cleanupPlan = Self.cleanupPlan(for: session, sessions: state.sessions)
+    return .send(
+      .delegate(
+        .sessionRemoved(
+          sessionID: session.id,
+          repositoryID: session.repositoryID,
+          worktreeID: session.worktreeID,
+          deleteBackingWorktree: cleanupPlan.deleteBackingWorktree,
+          additionalWorktreeIDsToDelete: cleanupPlan.additionalWorktreeIDsToDelete
+        )
+      )
+    )
   }
 
   fileprivate func removeSessionFromState(

@@ -603,6 +603,12 @@ extension BoardFeature {
   }
 
   func reduceSessionSpawnCompleted(state: inout State, session: AgentSession) -> Effect<Action> {
+    if let discard = discardCancelledSpawn(&state, session: session) {
+      // The rerun's original card stays put — cancelling means "as if
+      // nothing happened", same as dismissing the sheet.
+      state.pendingRerunSessionID = nil
+      return discard
+    }
     var sessionToCreate = session
     // Preserve lineage across rerun so coupled cards/bookmarks stay
     // linked for the replacement incarnation too.
@@ -638,6 +644,13 @@ extension BoardFeature {
     draftSnapshot: Draft?
   ) -> Effect<Action> {
     boardLogger.warning("Local session \(sessionID) spawn failed: \(message)")
+    // Cancelled before it failed — the user already walked away from
+    // this one; a red card would only resurrect it.
+    if state.cancelledSpawnSessionIDs.remove(sessionID) != nil {
+      state.trayCards.removeAll(where: { $0.id == sessionID })
+      LinearInboxFeature.clearStartedStamp(forSessionID: sessionID)
+      return .none
+    }
     // Convert the in-flight placeholder card into a red failure
     // card so the user sees what went wrong instead of watching
     // the "Starting session" toast disappear silently. Falls back

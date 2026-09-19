@@ -298,6 +298,108 @@ struct BookmarkTests {
     }
   }
 
+  // MARK: - Cancelling a starting session
+
+  @Test(.dependencies) func cancelOnStartingCardDiscardsSpawnThatIsStillInFlight() async {
+    let bookmarkID = UUID()
+    let sessionID = UUID()
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(sessionID: sessionID, displayName: "Investigate")
+    )
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.bookmarkSpawnInFlight.insert(bookmarkID)
+        state.trayCards = [placeholder]
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+
+    await store.send(.trayCardSecondaryTapped(id: placeholder.id)) {
+      $0.trayCards = []
+      $0.cancelledSpawnSessionIDs = [sessionID]
+    }
+
+    // Spawn finishes after the cancel: no card, no session — only the
+    // worktree teardown delegate for the directory the spawn built.
+    var spawned = AgentSession(
+      id: sessionID,
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/.worktrees/investigate",
+      agent: .claude,
+      initialPrompt: "/investigate",
+      sourceBookmarkID: bookmarkID
+    )
+    spawned.removeBackingWorktreeOnDelete = true
+    await store.send(._bookmarkSpawnCompleted(session: spawned)) {
+      $0.bookmarkSpawnInFlight = []
+      $0.cancelledSpawnSessionIDs = []
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: sessionID,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/.worktrees/investigate",
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+    #expect(store.state.sessions.isEmpty)
+    #expect(store.state.trayCards.isEmpty)
+  }
+
+  @Test(.dependencies) func cancelledSpawnThatFailsShowsNoErrorCard() async {
+    let sessionID = UUID()
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.cancelledSpawnSessionIDs = [sessionID]
+        return state
+      }()
+    ) {
+      BoardFeature()
+    }
+
+    await store.send(._sessionSpawnFailed(sessionID: sessionID, message: "boom", draftSnapshot: nil)) {
+      $0.cancelledSpawnSessionIDs = []
+    }
+    #expect(store.state.trayCards.isEmpty)
+  }
+
+  @Test(.dependencies) func cancelOnStartingCardRemovesSessionAlreadyOnTheBoard() async {
+    let sessionID = UUID()
+    let session = Self.sampleSession(id: sessionID)
+    let placeholder = TrayCard(
+      id: sessionID,
+      kind: .sessionCreating(sessionID: sessionID, displayName: session.displayName)
+    )
+    let store = TestStore(
+      initialState: {
+        var state = BoardFeature.State()
+        state.$sessions.withLock { $0 = [session] }
+        state.trayCards = [placeholder]
+        return state
+      }()
+    ) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+    }
+    store.exhaustivity = .off
+
+    await store.send(.trayCardSecondaryTapped(id: placeholder.id)) {
+      $0.trayCards = []
+      $0.$sessions.withLock { $0 = [] }
+    }
+    await store.receive(\.delegate.sessionRemoved)
+    #expect(store.state.trashedSessions.map(\.id) == [sessionID])
+  }
+
   // MARK: - Helpers
 
   private static func sampleBookmark(

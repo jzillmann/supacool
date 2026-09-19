@@ -46,7 +46,10 @@ struct BoardTrayView: View {
                 )
               }
             },
-            onSecondary: group.lead.kind.hasSecondaryAction
+            // A folded group has no single card to act on either, so the
+            // secondary button (Cancel on a spawn spinner) only shows on
+            // a lone card.
+            onSecondary: group.lead.kind.hasSecondaryAction && !group.isCollapsed
               ? { store.send(.trayCardSecondaryTapped(id: group.id)) }
               : nil,
             onCopy: group.lead.kind.errorContent != nil
@@ -140,8 +143,7 @@ private struct TrayCardView: View {
       .frame(maxWidth: 220, alignment: .leading)
 
       if let onSecondary, let secondaryTitle = presentation.secondaryTitle {
-        Button(secondaryTitle, action: onSecondary)
-          .buttonStyle(.borderedProminent)
+        secondaryButton(secondaryTitle, action: onSecondary)
           .controlSize(.small)
           .help(presentation.secondaryHelp ?? secondaryTitle)
       }
@@ -175,6 +177,17 @@ private struct TrayCardView: View {
       .buttonStyle(.plain)
       .opacity(isHovering ? 1 : 0.6)
       .help("Dismiss")
+    }
+  }
+
+  /// Prominent for "do the thing" (Reinstall), plain-bordered for "undo
+  /// the thing" (Cancel) so the card's tint tells the two apart.
+  @ViewBuilder
+  private func secondaryButton(_ title: String, action: @escaping () -> Void) -> some View {
+    if presentation.secondaryIsProminent {
+      Button(title, action: action).buttonStyle(.borderedProminent)
+    } else {
+      Button(title, action: action).buttonStyle(.bordered)
     }
   }
 
@@ -267,7 +280,10 @@ private struct TrayCardView: View {
         tint: Color.secondary,
         title: "Starting session",
         subtitle: displayName,
-        helpText: "Open this session"
+        helpText: "Open this session",
+        secondaryTitle: "Cancel",
+        secondaryHelp: "Stop this session before it starts. A worktree it created is removed again.",
+        secondaryIsProminent: false
       )
     case .worktreeDeleting(_, let displayName):
       return TrayCardPresentation(
@@ -362,6 +378,7 @@ private struct TrayCardPresentation {
   let helpText: String
   var secondaryTitle: String?
   var secondaryHelp: String?
+  var secondaryIsProminent: Bool = true
 
   /// Hover tooltip — shows the full subtitle (which the in-card label
   /// truncates to 2 lines) above the call-to-action hint, so users can
