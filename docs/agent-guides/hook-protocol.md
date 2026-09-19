@@ -218,7 +218,13 @@ green). Two invariants worth keeping:
 
 Cost is bounded: a tab that shows neither a hook nor a hint for `screenWorkingQuietTickLimit`
 ticks (~2 min) drops out of the scan until the next hook or submit re-arms it, so a board of
-long-idle cards costs no screen reads.
+long-idle cards costs no screen reads. Tabs of **parked** sessions (Standby) are skipped
+outright — the classifier answers `.parked` before it looks at activity, so a read there
+changes nothing on the board. And every fingerprint read uses the `.active` scope
+(`GhosttySurfaceBridge.ScreenReadScope`): ghostty's `GHOSTTY_POINT_SCREEN` is *scrollback
+plus written rows*, not the viewport, so the former `.screen` read dragged a long-lived
+agent's whole scrollback through `String` and `split` once a second per tab — the main
+thread stalls that made a 40+ terminal board feel sluggish.
 
 ### One state, not three booleans
 

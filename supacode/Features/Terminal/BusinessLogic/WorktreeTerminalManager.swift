@@ -2163,6 +2163,16 @@ final class WorktreeTerminalManager {
         session.terminals.compactMap { $0.agent == nil ? nil : $0.id }
       }
     )
+    // Tabs of parked sessions (cold Park keeps no tab, so in practice this
+    // is the Standby bucket). The classifier answers `.parked` before it
+    // looks at activity, so a screen read here can't change what the board
+    // shows — it only costs main-thread time. Hooks still land, so a
+    // Standby agent that finishes is not lost.
+    let parkedTabIDs: Set<UUID> = Set(
+      agentSessions.flatMap { session in
+        session.parked ? session.terminals.map(\.id) : []
+      }
+    )
 
     // Snapshot the tab list up-front so the iteration is stable across
     // yields — tabs added or removed mid-scan get picked up next tick.
@@ -2177,6 +2187,16 @@ final class WorktreeTerminalManager {
       // Hooks say it's busy: authoritative, and no read needed. Keep the tab
       // armed so the scan is live the moment that latch drops.
       if states[worktreeID]?.isTabBusy(tabID) == true {
+        noteAgentSignal(tabID: rawTabID)
+        clearScreenWorking(tabID: rawTabID)
+        awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
+        continue
+      }
+
+      // Parked: nothing we read changes the card. Keep the tab armed so the
+      // first tick after Unpark scans it with a clean slate instead of
+      // trusting a working-lease or prompt candidate from before the park.
+      if parkedTabIDs.contains(rawTabID) {
         noteAgentSignal(tabID: rawTabID)
         clearScreenWorking(tabID: rawTabID)
         awaitingInputPromptCandidates.removeValue(forKey: rawTabID)
@@ -2586,6 +2606,12 @@ final class WorktreeTerminalManager {
   /// anyway), or a test harness that injects surfaces without live Ghostty
   /// views. A registered-but-unreadable surface yields nil, which callers
   /// treat as "no evidence" rather than falling back to a sibling pane.
+  ///
+  /// Reads the `.active` scope only. A fingerprint keeps the last
+  /// `awaitingInputFingerprintLineCount` lines, so the bottom screenful is
+  /// all the evidence it needs — and this runs once a second per tab, where
+  /// the default `.screen` scope would drag the whole scrollback through
+  /// `String` + `split` every tick.
   private func screenContentsForFingerprint(
     worktreeID: Worktree.ID,
     tabID: TerminalTabID,
@@ -2596,11 +2622,11 @@ final class WorktreeTerminalManager {
         return readSurfaceContentsOverride(worktreeID, tabID, surfaceID)
       }
       if states[worktreeID]?.containsSurface(surfaceID) == true {
-        return states[worktreeID]?.readSurfaceContents(surfaceID: surfaceID)
+        return states[worktreeID]?.readSurfaceContents(surfaceID: surfaceID, scope: .active)
       }
     }
     return readScreenContentsOverride?(worktreeID, tabID)
-      ?? states[worktreeID]?.readScreenContents(tabID: tabID)
+      ?? states[worktreeID]?.readScreenContents(tabID: tabID, scope: .active)
   }
 
   /// Tail-of-screen fingerprint used as idle evidence.

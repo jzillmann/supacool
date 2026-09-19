@@ -812,6 +812,64 @@ struct WorktreeTerminalManagerTests {
     }
   }
 
+  /// A parked (Standby) session's tab is skipped by the 1 s scan: the board
+  /// shows "Parked" regardless of what its screen says, so the read is pure
+  /// main-thread cost. Unparking must re-scan from a clean slate, so a
+  /// working-lease raised before the park must not outlive it.
+  @Test func parkedSessionTabIsNotScannedAndDropsItsWorkingLease() async {
+    await withMainSerialExecutor {
+      await withDependencies {
+        $0.date.now = Date(timeIntervalSince1970: 1234)
+      } operation: {
+        let clock = TestClock()
+        let readCount = LockIsolated(0)
+        let worktree = makeWorktree()
+        let manager = WorktreeTerminalManager(
+          runtime: GhosttyRuntime(),
+          awaitingInputActivityPollInterval: .seconds(1),
+          startPromptScreenScanning: false,
+          clock: clock,
+          readScreenContents: { _, _ in
+            readCount.withValue { $0 += 1 }
+            return "Cooking up a plan… (esc to interrupt)"
+          }
+        )
+
+        let sessionID = UUID()
+        let state = manager.state(for: worktree)
+        let tab = state.registerTestTab(tabID: sessionID)
+        let tabID = tab.tabId
+
+        @Shared(.agentSessions) var sessions: [AgentSession]
+        $sessions.withLock {
+          $0 = [
+            AgentSession(
+              id: sessionID,
+              repositoryID: worktree.id,
+              worktreeID: worktree.id,
+              agent: .claude,
+              initialPrompt: "Edit the widget",
+            ),
+          ]
+        }
+
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(readCount.value == 1)
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .working)
+
+        $sessions.withLock { $0[0].parked = true }
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(readCount.value == 1)
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .idle)
+
+        $sessions.withLock { $0[0].parked = false }
+        await manager.sampleAwaitingInputPromptScreensForTesting()
+        #expect(readCount.value == 2)
+        #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .working)
+      }
+    }
+  }
+
   /// A permission prompt is the *opposite* of working, and its footer reads
   /// "Esc to cancel" — one word away from the interrupt hint. The working-screen
   /// scan must not promote it, or a card silently blocked on the user would sit
