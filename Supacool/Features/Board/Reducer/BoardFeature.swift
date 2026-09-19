@@ -571,6 +571,9 @@ struct BoardFeature {
     /// Resumes a fix round that ended without a commit, without spending a
     /// new round: re-review if the head moved meanwhile, else nudge the agent.
     case resumeReviewLoopRound(id: AgentSession.ID)
+    /// Sends the implementer's last message to the reviewer; its reply comes
+    /// back to the implementer in the same round.
+    case askReviewLoopReviewer(id: AgentSession.ID)
     case _reviewLoopResumeHeadResolved(id: AgentSession.ID, headSHA: String?)
     case stopReviewLoop(id: AgentSession.ID)
     /// "Later": hides the decision card until the loop escalates again.
@@ -1276,6 +1279,9 @@ struct BoardFeature {
 
       case .resumeReviewLoopRound(let id):
         return reduceResumeReviewLoopRound(state: &state, id: id)
+
+      case .askReviewLoopReviewer(let id):
+        return reduceAskReviewLoopReviewer(state: &state, id: id)
 
       case ._reviewLoopResumeHeadResolved(let id, let headSHA):
         return reduceReviewLoopResumeHeadResolved(state: &state, id: id, headSHA: headSHA)

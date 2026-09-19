@@ -718,6 +718,187 @@ extension BoardFeatureTests {
     #expect(loop.phase == .needsDecision)
     #expect(!loop.pausedDuringFix)
   }
+
+  @Test(.dependencies) func askReviewerSendsTheAgentPushbackToTheReviewer() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .needsDecision,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "abc123",
+        lastReport: reviewReport(
+          verdict: "changes",
+          sha: "abc123",
+          findings: ["Guard against an empty response."]
+        ),
+        escalationReason: "The agent ended 3 turns in a row without pushing a new commit after review round 2.",
+        pausedDuringFix: true,
+        commitlessTurnCount: 3,
+        lastAgentMessage: "The response can never be empty here: the upstream validator rejects it. "
+          + "Is finding 1 still needed?"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+    let loopBefore = try #require(session.reviewLoop)
+    #expect(loopBefore.decisionChoices == [.resumeRound, .askReviewer])
+
+    await store.send(.askReviewLoopReviewer(id: session.id))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .conferring)
+    #expect(loop.round == 2)
+    #expect(!loop.pausedDuringFix)
+    #expect(loop.commitlessTurnCount == 0)
+    #expect(store.state.pendingReviewDecisions.isEmpty)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the agent's message to reach the reviewer terminal")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("upstream validator rejects it"))
+    #expect(prompt.contains("1. Guard against an empty response."))
+    #expect(prompt.contains("SUPACOOL_REVIEW_RESULT_END"))
+  }
+
+  @Test(.dependencies) func askReviewerIsAvailableMidRoundWithoutParking() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .fixing,
+        round: 1,
+        lastReviewedSHA: "abc123",
+        commitlessTurnCount: 1,
+        lastAgentMessage: "Which of the two resolvers should own the dataset id?"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+    #expect(session.reviewLoop?.canAskReviewer == true)
+
+    await store.send(.askReviewLoopReviewer(id: session.id))
+    await store.finish()
+
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .conferring)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the question to reach the reviewer terminal")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("Which of the two resolvers"))
+  }
+
+  @Test(.dependencies) func reviewerAnswerWithStandingFindingsGoesBackToTheAgentInTheSameRound() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .conferring,
+        round: 2,
+        maximumRounds: 5,
+        lastReviewedSHA: "abc123",
+        lastAgentMessage: "Is finding 1 still needed?"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: reviewerID,
+        surfaceID: reviewerID,
+        agent: "codex",
+        message: reviewReport(
+          verdict: "changes",
+          sha: "abc123",
+          summary: "Finding 1 stands: the validator runs only on the write path.",
+          findings: ["Guard the read path against an empty response."]
+        )
+      )
+    )
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .fixing)
+    #expect(loop.round == 2)
+    #expect(loop.lastAgentMessage == nil)
+    #expect(loop.lastSummary == "Finding 1 stands: the validator runs only on the write path.")
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the reviewer's answer to reach the implementation terminal")
+      return
+    }
+    #expect(tabID.rawValue == session.primaryTerminalID)
+    #expect(prompt.contains("Round 2 is still open"))
+    #expect(prompt.contains("validator runs only on the write path"))
+    #expect(prompt.contains("1. Guard the read path against an empty response."))
+  }
+
+  @Test(.dependencies) func reviewerWithdrawingEveryFindingPassesTheLoop() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .conferring,
+        round: 2,
+        lastReviewedSHA: "abc123"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: reviewerID,
+        surfaceID: reviewerID,
+        agent: "codex",
+        message: reviewReport(verdict: "pass", sha: "abc123", summary: "Agreed, the validator covers it.")
+      )
+    )
+
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .passed)
+    #expect(commands.value.isEmpty)
+  }
+
+  @Test(.dependencies) func reviewerAnswerThatIsBlockedParksForTheUser() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .conferring,
+        round: 2,
+        lastReviewedSHA: "abc123"
+      )
+    )
+    let store = reviewLoopStore(session: session)
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: reviewerID,
+        surfaceID: reviewerID,
+        agent: "codex",
+        message: reviewReport(
+          verdict: "blocked",
+          sha: "abc123",
+          summary: "We disagree on who owns the resolver; the user must decide.",
+          findings: ["Pick one owner for dataset resolution."]
+        )
+      )
+    )
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(!loop.pausedDuringFix)
+    #expect(loop.escalationReason?.contains("user must decide") == true)
+    #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
+  }
+
 }
 
 @MainActor

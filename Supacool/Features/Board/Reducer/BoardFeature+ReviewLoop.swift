@@ -488,6 +488,9 @@ extension BoardFeature {
         reason: "The architecture diagnosis is ready. Open the reviewer, change scope, continue one round, or stop."
       )
     }
+    if loop.phase == .conferring {
+      return reduceReviewerReplied(state: &state, session: session, loop: loop, message: message)
+    }
     guard loop.phase == .reviewing else { return .none }
     guard let report = ReviewLoopReportParser.parse(message) else {
       updateReviewLoop(state: &state, sessionID: session.id) { updated in
@@ -556,6 +559,126 @@ extension BoardFeature {
         updated.escalationReason = nil
       }
       return sendFixPrompt(state: &state, session: session, loop: loop, report: report)
+    }
+  }
+
+  /// "Ask reviewer": the implementer pushed back or asked something during a
+  /// fix round. Send its last message to the reviewer and wait for the answer.
+  /// The round stays open; a paused decision is answered by this.
+  func reduceAskReviewLoopReviewer(state: inout State, id: AgentSession.ID) -> Effect<Action> {
+    guard let session = state.sessions.first(where: { $0.id == id }),
+      let loop = session.reviewLoop,
+      loop.canAskReviewer,
+      let agentMessage = loop.lastAgentMessage,
+      let reviewerID = loop.reviewerTerminalID
+    else { return .none }
+    guard terminalClient.tabExists(session.worktreeID, TerminalTabID(rawValue: reviewerID)) else {
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: id,
+        reason: "The reviewer terminal is no longer running."
+      )
+    }
+    updateReviewLoop(state: &state, sessionID: id) { updated in
+      updated.phase = .conferring
+      updated.pausedDuringFix = false
+      updated.commitlessTurnCount = 0
+      updated.escalationReason = nil
+    }
+    let prompt = Self.reviewerReplyPrompt(
+      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      round: loop.round,
+      reviewedSHA: loop.lastReviewedSHA,
+      previousFindings: loop.lastFindings,
+      agentMessage: agentMessage
+    )
+    return .run { _ in
+      await terminalClient.send(
+        .sendPrompt(
+          worktreeID: session.worktreeID,
+          tabID: TerminalTabID(rawValue: reviewerID),
+          text: prompt
+        )
+      )
+    }
+  }
+
+  /// The reviewer answered the implementer. Its reply uses the same handoff
+  /// block: `pass` withdraws every finding and the loop passes; `changes`
+  /// carries the answer and the findings that still stand back to the
+  /// implementer in the same round; `blocked` parks for the user.
+  private func reduceReviewerReplied(
+    state: inout State,
+    session: AgentSession,
+    loop: ReviewLoopState,
+    message: String
+  ) -> Effect<Action> {
+    guard let report = ReviewLoopReportParser.parse(message) else {
+      updateReviewLoop(state: &state, sessionID: session.id) { updated in
+        updated.lastReport = Self.capped(message, limit: Self.maximumStoredReviewReportLength)
+      }
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: session.id,
+        reason: "The reviewer answered the agent without a valid SUPACOOL_REVIEW_RESULT payload. "
+          + "Supacool paused rather than guessing."
+      )
+    }
+    updateReviewLoop(state: &state, sessionID: session.id) { updated in
+      updated.lastSummary = report.summary
+      updated.lastReport = Self.capped(message, limit: Self.maximumStoredReviewReportLength)
+      updated.lastFindingsFingerprint = Self.findingsFingerprint(report.findings)
+      updated.lastAgentMessage = nil
+    }
+
+    switch report.verdict {
+    case .pass:
+      updateReviewLoop(state: &state, sessionID: session.id) { updated in
+        updated.phase = .passed
+        updated.escalationReason = nil
+      }
+      return .none
+
+    case .blocked:
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: session.id,
+        reason: report.summary.isEmpty
+          ? "The reviewer found an architectural or scope blocker."
+          : report.summary
+      )
+
+    case .changes:
+      updateReviewLoop(state: &state, sessionID: session.id) { updated in
+        updated.phase = .fixing
+        updated.escalationReason = nil
+      }
+      guard
+        terminalClient.tabExists(
+          session.worktreeID,
+          TerminalTabID(rawValue: session.primaryTerminalID)
+        )
+      else {
+        return escalateReviewLoop(
+          state: &state,
+          sessionID: session.id,
+          reason: "The implementation terminal is no longer running."
+        )
+      }
+      let prompt = Self.reviewerAnswerPrompt(
+        pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+        round: loop.round,
+        report: report
+      )
+      return .run { _ in
+        await terminalClient.send(
+          .sendPrompt(
+            worktreeID: session.worktreeID,
+            tabID: TerminalTabID(rawValue: session.primaryTerminalID),
+            text: prompt
+          )
+        )
+      }
     }
   }
 
@@ -679,6 +802,8 @@ extension BoardFeature.Action {
     switch choice {
     case .resumeRound:
       .resumeReviewLoopRound(id: sessionID)
+    case .askReviewer:
+      .askReviewLoopReviewer(id: sessionID)
     case .sendFindings(let additionalRounds), .rereview(let additionalRounds):
       .continueReviewLoop(id: sessionID, additionalRounds: additionalRounds)
     }
@@ -840,6 +965,73 @@ extension BoardFeature {
     Continue addressing that round's findings. Keep the fix within the ticket's intended scope, then commit and
     push the result. If a finding is invalid or needs a decision you cannot make, say so clearly and stop.
     """
+  }
+
+  nonisolated static func reviewerReplyPrompt(
+    pullRequestURL: String,
+    round: Int,
+    reviewedSHA: String?,
+    previousFindings: [String],
+    agentMessage: String
+  ) -> String {
+    let findings =
+      previousFindings.isEmpty
+      ? "(no stored findings)"
+      : previousFindings.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+    return """
+      The implementation agent replied to your round \(round) findings for \(pullRequestURL) instead of committing.
+      Answer it as the reviewer. Do not edit files, commit, push, or start a new review pass. Read the code only where
+      the reply makes you doubt a finding.
+
+      Your round \(round) findings:
+      \(findings)
+
+      The agent's reply:
+      \(agentMessage)
+
+      For each finding, decide: it stands (say why, concretely), it is withdrawn, or it changes (state the new
+      finding). Answer every question the agent asked. Keep it short; the agent reads this and continues the round.
+
+      Your FINAL message must be this exact Markdown structure, including both boundary markers:
+
+      SUPACOOL_REVIEW_RESULT
+      # Review handoff — copy this entire block
+
+      Verdict: pass|changes|blocked
+      Reviewed commit: `\(reviewedSHA ?? "the commit you reviewed in round \(round)")`
+
+      ## Summary
+
+      Your answer to the agent.
+
+      ## Findings
+
+      1. Each finding that still stands or changed, as one actionable item.
+      SUPACOOL_REVIEW_RESULT_END
+
+      Use pass when every finding is withdrawn (write `1. No findings.`), changes when at least one finding still
+      needs a fix, and blocked when the disagreement needs a decision from the user.
+      Do not put anything after SUPACOOL_REVIEW_RESULT_END.
+      """
+  }
+
+  nonisolated static func reviewerAnswerPrompt(
+    pullRequestURL: String,
+    round: Int,
+    report: ReviewLoopReport
+  ) -> String {
+    let findings = report.findings.enumerated().map { index, finding in
+      "\(index + 1). \(finding)"
+    }.joined(separator: "\n")
+    return """
+      The reviewer answered your reply in review round \(round) for \(pullRequestURL). Round \(round) is still open.
+      Address the findings that still stand below. Keep the fix within the ticket's intended scope, add or update
+      tests, then commit and push the result. If you still disagree or a decision is needed, say so clearly and stop.
+
+      Reviewer's answer: \(report.summary)
+      Findings that stand:
+      \(findings)
+      """
   }
 
   nonisolated static func diagnosisPrompt(loop: ReviewLoopState) -> String {

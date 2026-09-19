@@ -4,6 +4,9 @@ import Foundation
 nonisolated enum ReviewLoopPhase: String, Codable, Hashable, Sendable {
   case reviewing
   case fixing
+  /// The reviewer is answering the implementer's pushback or question. The
+  /// round stays open; the reply goes back to the implementer.
+  case conferring
   case diagnosing
   case needsDecision
   case passed
@@ -137,18 +140,26 @@ extension ReviewLoopState {
     return report
   }
 
+  /// The implementer said something during a fix round that the reviewer has
+  /// not seen. True while the round is open (fixing, or paused mid-fix).
+  var canAskReviewer: Bool {
+    guard let lastAgentMessage, !lastAgentMessage.isEmpty else { return false }
+    return phase == .fixing || (phase == .needsDecision && pausedDuringFix)
+  }
+
   /// The ways a parked decision can move the loop forward, primary first.
   /// Diagnose, inspect, and stop are always available and not listed here.
   ///
-  /// - A fix round that ended without a commit is still open: resume it.
-  ///   The agent already has the findings, so they are never sent twice —
-  ///   a second copy only makes the agent repeat its last answer.
+  /// - A fix round that ended without a commit is still open: resume it, or
+  ///   send the agent's pushback to the reviewer. The agent already has the
+  ///   findings, so they are never sent twice — a second copy only makes the
+  ///   agent repeat its last answer.
   /// - Findings the agent has not seen yet: hand them over.
   /// - Nothing left to fix: run the reviewer again.
   var decisionChoices: [ReviewDecisionChoice] {
     let grant = BoardFeature.reviewLoopMultiRoundGrant
     if pausedDuringFix {
-      return [.resumeRound]
+      return canAskReviewer ? [.resumeRound, .askReviewer] : [.resumeRound]
     }
     if pendingFixReport != nil {
       return [.sendFindings(additionalRounds: 1), .sendFindings(additionalRounds: grant)]
@@ -163,6 +174,9 @@ extension ReviewLoopState {
 nonisolated enum ReviewDecisionChoice: Hashable, Sendable {
   /// Keep the open fix round going without spending a new one.
   case resumeRound
+  /// Send the implementer's last message (pushback, a question) to the
+  /// reviewer and route the answer back. The round stays open.
+  case askReviewer
   case sendFindings(additionalRounds: Int)
   case rereview(additionalRounds: Int)
 }

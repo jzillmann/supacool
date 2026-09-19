@@ -72,6 +72,7 @@ struct ReviewLoopControl: View {
     switch state.phase {
     case .reviewing: "Review \(state.round)/\(state.maximumRounds)"
     case .fixing: "Fix \(state.round)/\(state.maximumRounds)"
+    case .conferring: "Confer \(state.round)/\(state.maximumRounds)"
     case .diagnosing: "Diagnose"
     case .needsDecision: "Decision"
     case .passed: "Passed"
@@ -84,6 +85,7 @@ struct ReviewLoopControl: View {
     case .passed: return "checkmark.circle.fill"
     case .needsDecision, .stopped: return "exclamationmark.triangle.fill"
     case .fixing: return "wrench.and.screwdriver"
+    case .conferring: return "bubble.left.and.bubble.right"
     case .reviewing, .diagnosing: return "arrow.triangle.2.circlepath"
     }
   }
@@ -92,7 +94,7 @@ struct ReviewLoopControl: View {
     switch state.phase {
     case .passed: return .green
     case .needsDecision, .stopped: return .orange
-    case .reviewing, .fixing, .diagnosing: return .accentColor
+    case .reviewing, .fixing, .conferring, .diagnosing: return .accentColor
     }
   }
 }
@@ -108,6 +110,7 @@ private struct ReviewLoopPopover: View {
     switch state.phase {
     case .reviewing: "Reviewing"
     case .fixing: "Fixing"
+    case .conferring: "Reviewer answering the agent"
     case .diagnosing: "Diagnosing"
     case .needsDecision: "Needs decision"
     case .passed: "Passed"
@@ -193,6 +196,13 @@ private struct ReviewLoopPopover: View {
           }
           .help(choice.help)
         }
+      } else if state.canAskReviewer {
+        // Mid-round: the agent pushed back or asked something. No need to
+        // wait for the loop to park before the reviewer hears it.
+        Button(ReviewDecisionChoice.askReviewer.title, systemImage: ReviewDecisionChoice.askReviewer.systemImage) {
+          onChoose(.askReviewer)
+        }
+        .help(ReviewDecisionChoice.askReviewer.help)
       }
 
       if state.phase != .passed && state.phase != .stopped {
