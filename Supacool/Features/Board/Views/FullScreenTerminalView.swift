@@ -342,18 +342,15 @@ struct FullScreenTerminalView: View {
           onStop: onStopReviewLoop
         )
       }
-      priorityButton
+      overflowMenu
       infoButton
-      revealInFinderButton
       openDiffButton
-      debugButton
       splitButton
       groupCycleButton
       Spacer()
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
       }
-      overflowMenu
       parkControl
       removeButton
     }
@@ -389,24 +386,47 @@ struct FullScreenTerminalView: View {
       && BoardFeature.actionablePullRequestURL(in: session) != nil
   }
 
-  /// Catch-all "⋯" menu for less-frequent session actions. Keep entries
-  /// here that don't warrant dedicated toolbar real estate.
+  /// Catch-all "⋮" menu right after the title for less-frequent session
+  /// actions (priority, rename, Finder, debug, refresh). Keep entries here
+  /// that don't warrant dedicated toolbar real estate.
   private var overflowMenu: some View {
     Menu {
+      Button(action: onTogglePriority) {
+        Label(
+          session.isPriority ? "Remove priority" : "Mark as priority",
+          systemImage: session.isPriority ? "flag.fill" : "flag"
+        )
+      }
+      Button("Rename…", systemImage: "pencil", action: onRename)
+      Divider()
+      if let url = Self.finderRevealURL(session: session) {
+        Button {
+          NSWorkspace.shared.activateFileViewerSelecting([url])
+        } label: {
+          Label("Reveal in Finder", systemImage: "folder")
+        }
+      }
       Button {
         onRefreshWorktree()
       } label: {
         Label("Refresh worktree", systemImage: "arrow.clockwise")
       }
+      Divider()
+      Button(action: onDebug) {
+        Label("Debug session…", systemImage: "ladybug")
+      }
     } label: {
-      Image(systemName: "ellipsis.circle")
-        .font(.body)
+      Image(systemName: "ellipsis")
+        .font(.system(size: 13, weight: .medium))
+        .rotationEffect(.degrees(90))
+        .modifier(HeaderIconTintStyle(tint: session.isPriority ? .pink : .secondary))
         .accessibilityLabel("More session actions")
+        .accessibilityValue(session.isPriority ? "Priority session" : "")
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help("More session actions")
+    .help(session.isPriority ? "More session actions (priority session)" : "More session actions")
   }
 
   private func serverLifecycleControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
@@ -628,25 +648,6 @@ struct FullScreenTerminalView: View {
     return String(trimmed.prefix(40))
   }
 
-  /// Opens Finder with the session's current workspace selected. Hidden
-  /// for remote sessions because their workspace path lives on the host,
-  /// not this Mac.
-  @ViewBuilder
-  private var revealInFinderButton: some View {
-    if let url = Self.finderRevealURL(session: session) {
-      Button {
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-      } label: {
-        Image(systemName: "folder")
-          .font(.system(size: 13, weight: .medium))
-          .modifier(HeaderIconStyle())
-          .accessibilityLabel("Reveal in Finder")
-      }
-      .buttonStyle(.plain)
-      .help("Reveal workspace in Finder")
-    }
-  }
-
   /// Combined diff button: left-click opens the in-house QuickDiffSheet;
   /// right-click lets the user pick between the built-in view and any
   /// external git GUI (Fork, Tower, etc.). The currently selected
@@ -803,21 +804,6 @@ struct FullScreenTerminalView: View {
     }
   }
 
-  private var priorityButton: some View {
-    Button(action: onTogglePriority) {
-      Image(systemName: session.isPriority ? "flag.fill" : "flag")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconTintStyle(tint: session.isPriority ? .pink : .secondary))
-        .accessibilityLabel(session.isPriority ? "Remove priority from session" : "Mark session as priority")
-    }
-    .buttonStyle(.plain)
-    .help(
-      session.isPriority
-        ? "Priority session - click to remove priority"
-        : "Mark session as priority"
-    )
-  }
-
   /// Header button that pops up a list of reconstructed prompts from the
   /// session's transcript file. Selecting one fires Ghostty's search
   /// binding pre-populated with that prompt's first ~40 chars, so the
@@ -894,23 +880,6 @@ struct FullScreenTerminalView: View {
     } message: {
       Text("Removes the session card and its terminal. Worktree directories created by Supacool are also deleted.")
     }
-  }
-
-  /// Mirrors the board card's sparkle button so the user can toggle the
-  /// auto-observer (and edit its instructions) without leaving the
-  /// terminal. Glows in accent color when the observer is active.
-  /// Header button that mirrors the board card's right-click "Debug
-  /// session…" action — opens the debug sheet that spawns a fresh agent
-  /// in the supacool repo, primed with this session's trace.
-  private var debugButton: some View {
-    Button(action: onDebug) {
-      Image(systemName: "ladybug")
-        .font(.system(size: 13, weight: .medium))
-        .modifier(HeaderIconStyle())
-        .accessibilityLabel("Debug session")
-    }
-    .buttonStyle(.plain)
-    .help("Debug session…")
   }
 
   /// Header button that toggles a single shell split beside the agent
