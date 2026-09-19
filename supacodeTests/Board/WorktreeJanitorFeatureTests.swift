@@ -450,6 +450,120 @@ struct WorktreeJanitorFeatureTests {
     #expect(store.state.deleteErrors[0].contains("rm failed"))
   }
 
+  // MARK: - Delete script
+
+  /// The sweep never reaches the blocking delete-script flow, so it has to run
+  /// the repo's delete script itself — and must run it while the worktree is
+  /// still on disk, or a repo that drops a per-worktree database on delete has
+  /// nothing left to drop it from.
+  @Test(.dependencies) func deleteConfirmedRunsDeleteScriptBeforeRemoval() async {
+    Self.configureDeleteScript(repositoryID: "/r", script: "dev worktree remove --force \"$PWD\"")
+    let calls = LockIsolated<[String]>([])
+    let scriptedWorktrees = LockIsolated<[String]>([])
+    let events = LockIsolated<[String]>([])
+
+    let store = TestStore(initialState: Self.singleOrphanDeleteState()) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0[WorktreeDeleteScriptClient.self].run = { worktree, script, context in
+        calls.withValue { $0.append("script") }
+        scriptedWorktrees.withValue { $0.append(worktree.workingDirectory.path(percentEncoded: false)) }
+        events.withValue { $0.append(context.event) }
+        #expect(script == "dev worktree remove --force \"$PWD\"")
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "", stderr: "")
+      }
+      $0.gitClient.removeWorktree = { _, _ in
+        calls.withValue { $0.append("remove") }
+        return URL(fileURLWithPath: "/ok")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteConfirmed)
+    await store.receive(\._deleteCompleted)
+
+    #expect(calls.value == ["script", "remove"])
+    #expect(scriptedWorktrees.value == ["/r/a"])
+    #expect(events.value == ["janitor_sweep"])
+    #expect(store.state.rows.isEmpty)
+    #expect(store.state.deleteErrors.isEmpty)
+  }
+
+  /// A failed teardown must not be followed by a removal: deleting the
+  /// directory anyway is exactly the leak this path exists to prevent.
+  @Test(.dependencies) func deleteScriptFailureAbortsRemovalAndKeepsRow() async {
+    Self.configureDeleteScript(repositoryID: "/r", script: "dev worktree remove")
+    let removeCalled = LockIsolated(false)
+
+    let store = TestStore(initialState: Self.singleOrphanDeleteState()) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0[WorktreeDeleteScriptClient.self].run = { _, _, _ in
+        ServerLifecycleScriptResult(exitCode: 3, stdout: "database still in use", stderr: "")
+      }
+      $0.gitClient.removeWorktree = { _, _ in
+        removeCalled.setValue(true)
+        return URL(fileURLWithPath: "/ok")
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteConfirmed)
+    await store.receive(\._deleteCompleted)
+
+    #expect(removeCalled.value == false)
+    #expect(store.state.rows.count == 1)
+    #expect(store.state.deletingIDs.isEmpty)
+    #expect(store.state.deleteErrors.count == 1)
+    #expect(store.state.deleteErrors[0].contains("database still in use"))
+  }
+
+  /// An unconfigured repo — the common case — must not gain a script step.
+  @Test(.dependencies) func deleteConfirmedSkipsScriptWhenRepositoryHasNone() async {
+    Self.configureDeleteScript(repositoryID: "/r", script: "")
+    let scriptCalled = LockIsolated(false)
+
+    let store = TestStore(initialState: Self.singleOrphanDeleteState()) {
+      WorktreeJanitorFeature()
+    } withDependencies: {
+      $0[WorktreeDeleteScriptClient.self].run = { _, _, _ in
+        scriptCalled.setValue(true)
+        return ServerLifecycleScriptResult(exitCode: 0, stdout: "", stderr: "")
+      }
+      $0.gitClient.removeWorktree = { _, _ in URL(fileURLWithPath: "/ok") }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.deleteConfirmed)
+    await store.receive(\._deleteCompleted)
+
+    #expect(scriptCalled.value == false)
+    #expect(store.state.rows.isEmpty)
+  }
+
+  private static func configureDeleteScript(repositoryID: String, script: String) {
+    @Shared(.repositorySettings(URL(fileURLWithPath: repositoryID))) var settings: RepositorySettings
+    $settings.withLock {
+      $0 = .default
+      $0.deleteScript = script
+    }
+  }
+
+  private static func singleOrphanDeleteState() -> WorktreeJanitorFeature.State {
+    var state = WorktreeJanitorFeature.State(
+      repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []
+    )
+    state.rows = [
+      .init(id: "/r/a", name: "a", branch: "b1", head: "a", status: .orphan)
+    ]
+    state.selectedIDs = ["/r/a"]
+    state.deleteConfirmation = .init(
+      id: UUID(),
+      targets: [.init(id: "/r/a", name: "a", branch: "b1", sizeBytes: nil, isDirty: false)]
+    )
+    return state
+  }
+
   @Test func deleteConfirmationCancelledClearsPendingState() async {
     var state = WorktreeJanitorFeature.State(
       repositoryID: "/r", repositoryName: "r", sessionsSnapshot: []

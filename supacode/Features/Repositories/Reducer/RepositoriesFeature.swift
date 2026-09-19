@@ -354,6 +354,7 @@ struct RepositoriesFeature {
   @Dependency(RepositoryPersistenceClient.self) private var repositoryPersistence
   @Dependency(ShellClient.self) private var shellClient
   @Dependency(TerminalClient.self) private var terminalClient
+  @Dependency(WorktreeDeleteScriptClient.self) private var deleteScriptClient
   @Dependency(\.date.now) private var now
   @Dependency(\.uuid) private var uuid
 
@@ -1403,8 +1404,31 @@ struct RepositoriesFeature {
         }
         if let cleanupWorktree = cleanup.worktree {
           let repositoryRootURL = cleanupWorktree.repositoryRootURL
+          @Shared(.repositorySettings(repositoryRootURL)) var repositorySettings
+          let deleteScript = repositorySettings.deleteScript
+            .trimmingCharacters(in: .whitespacesAndNewlines)
           effects.append(
             .run { send in
+              // Creation can fail after the setup script provisioned per-worktree
+              // resources (services, a database), and this path never reaches the
+              // blocking delete script — so run it here. Best-effort: the user is
+              // already looking at a creation failure, and a half-created worktree
+              // left on disk would be the worse outcome.
+              if !deleteScript.isEmpty {
+                do {
+                  _ = try await deleteScriptClient.run(
+                    cleanupWorktree,
+                    deleteScript,
+                    ServerLifecycleScriptContext(
+                      event: WorktreeDeleteScriptClient.Event.creationFailed.rawValue
+                    )
+                  )
+                } catch {
+                  repositoriesLogger.warning(
+                    "Delete script failed during creation cleanup: \(error.localizedDescription)"
+                  )
+                }
+              }
               _ = try? await gitClient.removeWorktree(cleanupWorktree, true)
               _ = try? await gitClient.pruneWorktrees(repositoryRootURL)
               await send(.reloadRepositories(animated: true))

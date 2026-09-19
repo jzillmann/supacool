@@ -86,6 +86,26 @@ nonisolated private func runServerLifecycleScript(
   script: String,
   context: ServerLifecycleScriptContext
 ) async throws -> ServerLifecycleScriptResult {
+  try await runWorktreeScript(
+    worktree: worktree,
+    kindRawValue: kind.rawValue,
+    script: script,
+    context: context
+  )
+}
+
+/// Runs a per-repository script in a worktree and captures its outcome.
+///
+/// Shared by the server-lifecycle scripts (status/start/stop) and the
+/// worktree delete script, which teardown paths with no terminal tab to
+/// host a blocking script run headlessly — see `WorktreeDeleteScriptClient`.
+/// `kindRawValue` is what the script reads back as `$SUPACOOL_LIFECYCLE_KIND`.
+nonisolated func runWorktreeScript(
+  worktree: Worktree,
+  kindRawValue: String,
+  script: String,
+  context: ServerLifecycleScriptContext
+) async throws -> ServerLifecycleScriptResult {
   let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
   guard !trimmed.isEmpty else {
     return ServerLifecycleScriptResult(exitCode: 0, stdout: "", stderr: "")
@@ -107,7 +127,7 @@ nonisolated private func runServerLifecycleScript(
   process.currentDirectoryURL = worktree.workingDirectory
   var environment = ProcessInfo.processInfo.environment
   environment.merge(worktree.scriptEnvironment) { _, new in new }
-  environment["SUPACOOL_LIFECYCLE_KIND"] = kind.rawValue
+  environment["SUPACOOL_LIFECYCLE_KIND"] = kindRawValue
   environment["SUPACOOL_EVENT"] = context.event
   if let sessionID = context.sessionID {
     environment["SUPACOOL_SESSION_ID"] = sessionID
@@ -135,7 +155,7 @@ nonisolated private func runServerLifecycleScript(
   }
 
   serverLifecycleLogger.debug(
-    "Running \(kind.rawValue) lifecycle script in \(worktree.workingDirectory.path(percentEncoded: false))"
+    "Running \(kindRawValue) script in \(worktree.workingDirectory.path(percentEncoded: false))"
   )
   try process.run()
 

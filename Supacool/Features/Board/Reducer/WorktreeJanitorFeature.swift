@@ -312,6 +312,7 @@ struct WorktreeJanitorFeature {
   @Dependency(WorktreeInventoryClient.self) var inventory
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(SupacoolWorktreePruneClient.self) var worktreePrune
+  @Dependency(WorktreeDeleteScriptClient.self) var deleteScriptClient
 
   /// Fallback when `defaultBranchRef` throws. Git treats `origin/HEAD`
   /// as a symbolic alias in most contexts, so rev-list / diff calls
@@ -542,15 +543,23 @@ struct WorktreeJanitorFeature {
         state.deleteConfirmation = nil
         state.deleteErrors = []
         let repositoryRootURL = URL(fileURLWithPath: state.repositoryID)
+        // The sweep bypasses the blocking-script delete flow, so it has to run
+        // the repo's delete script itself — otherwise a repo that stops
+        // services or drops a per-worktree database on delete leaks both here.
+        @Shared(.repositorySettings(repositoryRootURL)) var repositorySettings
+        let deleteScript = repositorySettings.deleteScript
+          .trimmingCharacters(in: .whitespacesAndNewlines)
         let targets = confirmation.targets
         for target in targets {
           state.deletingIDs.insert(target.id)
         }
         state.deleteScheduledTotal = targets.count
-        return .run { [gitClient] send in
+        return .run { [gitClient, deleteScriptClient] send in
           for target in targets {
             let result = await removeOrphanWorktree(
               gitClient: gitClient,
+              deleteScriptClient: deleteScriptClient,
+              deleteScript: deleteScript,
               target: target,
               repositoryRootURL: repositoryRootURL
             )
@@ -650,10 +659,16 @@ struct WorktreeJanitorFeature {
 
 // MARK: - Delete side effect
 
-/// Call `gitClient.removeWorktree` against a synthesized `Worktree`
-/// value built from the inventory row.
+/// Run the repository's delete script, then call `gitClient.removeWorktree`
+/// against a synthesized `Worktree` value built from the inventory row.
+///
+/// A non-zero script exit aborts the removal for that row. Removing the
+/// directory after its teardown failed is precisely the leak this path is
+/// meant to close, and the row stays visible so the sweep can be retried.
 private func removeOrphanWorktree(
   gitClient: GitClientDependency,
+  deleteScriptClient: WorktreeDeleteScriptClient,
+  deleteScript: String,
   target: WorktreeJanitorFeature.DeleteConfirmation.Target,
   repositoryRootURL: URL
 ) async -> WorktreeJanitorFeature.DeleteResult {
@@ -667,6 +682,27 @@ private func removeOrphanWorktree(
     createdAt: nil,
     branch: target.branch
   )
+  if !deleteScript.isEmpty {
+    do {
+      let result = try await deleteScriptClient.run(
+        synthetic,
+        deleteScript,
+        ServerLifecycleScriptContext(
+          event: WorktreeDeleteScriptClient.Event.janitorSweep.rawValue
+        )
+      )
+      guard result.exitCode == 0 else {
+        let detail = result.firstOutputLine ?? "exit \(result.exitCode)"
+        janitorLogger.warning("Delete script failed for \(target.id): \(detail)")
+        return .failure(message: "delete script failed: \(detail)")
+      }
+    } catch {
+      janitorLogger.warning(
+        "Delete script could not run for \(target.id): \(error.localizedDescription)"
+      )
+      return .failure(message: "delete script failed: \(error.localizedDescription)")
+    }
+  }
   do {
     _ = try await gitClient.removeWorktree(
       synthetic,
