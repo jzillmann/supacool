@@ -60,8 +60,9 @@ status logic, touch the classifier — not either call site.
 - `read_session(session_id, scope: "screen"|"scrollback" = "screen",
   transcript_tail: 0..200 = 0)` → `{session, screen?,
   screenUnavailableReason?, transcript?}`. `screen` nil ⇔ no live surface
-  (detached/disconnected) ⇔ `screenUnavailableReason` present. Scrollback is
-  tail-capped at 200k chars; transcript entries are flattened to
+  (detached/disconnected) ⇔ `screenUnavailableReason` present. `"screen"` is
+  the last screenful (ghostty's *active* area), `"scrollback"` the whole
+  buffer including that screenful. Scrollback is tail-capped at 200k chars; transcript entries are flattened to
   `{kind, at, text, detail}` (see `MCPTranscriptEntry`).
 
 Write tools (Phase 2a) — gated by `remoteControlServerAllowsWrites`

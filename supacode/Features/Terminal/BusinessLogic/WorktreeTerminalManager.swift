@@ -1438,7 +1438,7 @@ final class WorktreeTerminalManager {
   func readScreenContents(
     worktreeID: Worktree.ID,
     tabID: TerminalTabID,
-    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+    scope: GhosttySurfaceBridge.ScreenReadScope = .active
   ) -> String? {
     readScreenContentsOverride?(worktreeID, tabID)
       ?? states[worktreeID]?.readScreenContents(tabID: tabID, scope: scope)
@@ -1452,7 +1452,7 @@ final class WorktreeTerminalManager {
   func readPrimarySurfaceContents(
     worktreeID: Worktree.ID,
     tabID: TerminalTabID,
-    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+    scope: GhosttySurfaceBridge.ScreenReadScope = .active
   ) -> String? {
     readScreenContentsOverride?(worktreeID, tabID)
       ?? states[worktreeID]?.readPrimarySurfaceContents(tabID: tabID, scope: scope)
@@ -2610,8 +2610,8 @@ final class WorktreeTerminalManager {
   /// Reads the `.active` scope only. A fingerprint keeps the last
   /// `awaitingInputFingerprintLineCount` lines, so the bottom screenful is
   /// all the evidence it needs — and this runs once a second per tab, where
-  /// the default `.screen` scope would drag the whole scrollback through
-  /// `String` + `split` every tick.
+  /// a `.surface` read would drag the whole scrollback through `String` +
+  /// `split` every tick.
   private func screenContentsForFingerprint(
     worktreeID: Worktree.ID,
     tabID: TerminalTabID,

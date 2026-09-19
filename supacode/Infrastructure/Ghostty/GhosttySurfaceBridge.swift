@@ -116,27 +116,26 @@ final class GhosttySurfaceBridge {
   ///   - `.active`: the bottom `rows` lines the running program can address —
   ///      the last screenful, regardless of where the user scrolled. Cheap
   ///      and bounded; the only scope a 1 s poll may use.
-  ///   - `.screen`: scrollback history PLUS the written rows. NOT the
-  ///      viewport — a long-lived agent tab makes this a multi-megabyte read.
-  ///   - `.surface`: ghostty's `history` tag — the scrollback up to (and
-  ///      excluding) the active area. Used by the transcript recorder.
+  ///   - `.surface`: everything the surface holds — scrollback history PLUS
+  ///      the written rows (ghostty's `screen` tag). Multi-megabyte on a
+  ///      long-lived agent tab; for the transcript recorder and on-demand
+  ///      reads only. Deliberately NOT `GHOSTTY_POINT_SURFACE`, which is
+  ///      ghostty's `history` tag and stops just short of the active area —
+  ///      a "full" read through it drops the agent's last screenful.
   enum ScreenReadScope {
     case active
-    case screen
     case surface
   }
 
   /// Reads the terminal contents as plain text using the GhosttyKit C API.
   /// Returns an empty string when the surface is unavailable or the read fails.
-  /// Default scope preserves existing call-site behavior.
-  func readScreenContents(scope: ScreenReadScope = .screen) -> String {
+  func readScreenContents(scope: ScreenReadScope = .active) -> String {
     guard let surface else { return "" }
     var text = ghostty_text_s()
     let tag: ghostty_point_tag_e =
       switch scope {
       case .active: GHOSTTY_POINT_ACTIVE
-      case .screen: GHOSTTY_POINT_SCREEN
-      case .surface: GHOSTTY_POINT_SURFACE
+      case .surface: GHOSTTY_POINT_SCREEN
       }
     let selection = ghostty_selection_s(
       top_left: ghostty_point_s(

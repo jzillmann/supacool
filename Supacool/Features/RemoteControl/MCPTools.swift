@@ -59,7 +59,7 @@ struct MCPToolBox {
       name: readSessionName,
       description: """
         Read a session's terminal contents and/or transcript tail. `scope` "screen" \
-        returns the visible viewport, "scrollback" the full buffer. `transcript_tail` \
+        returns the last screenful, "scrollback" the full buffer. `transcript_tail` \
         returns the last N transcript entries (prompts, agent turns, lifecycle events).
         """,
       inputSchema: .object([
@@ -263,7 +263,7 @@ struct MCPToolBox {
     let scope: GhosttySurfaceBridge.ScreenReadScope
     switch arguments?["scope"] {
     case nil, .string("screen"):
-      scope = .screen
+      scope = .active
     case .string("scrollback"):
       scope = .surface
     default:

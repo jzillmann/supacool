@@ -663,13 +663,13 @@ final class WorktreeTerminalState {
   }
 
   /// Reads the screen contents of the focused surface in the given tab.
-  /// Default scope is `.screen` (visible viewport only — what existing
-  /// awaiting-input callers expect). Pass `.surface` to get the full
+  /// Default scope is `.active` (the last screenful — what the 1 s
+  /// awaiting-input scan needs). Pass `.surface` to get the full
   /// scrollback included, used by the Supacool transcript recorder.
   /// Returns nil when the tab or focused surface is not found.
   func readScreenContents(
     tabID: TerminalTabID,
-    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+    scope: GhosttySurfaceBridge.ScreenReadScope = .active
   ) -> String? {
     guard let surfaceID = focusedSurfaceIdByTab[tabID],
       let surface = surfaces[surfaceID]
@@ -698,7 +698,7 @@ final class WorktreeTerminalState {
   /// Returns nil when the surface is not registered here.
   func readSurfaceContents(
     surfaceID: UUID,
-    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+    scope: GhosttySurfaceBridge.ScreenReadScope = .active
   ) -> String? {
     surfaces[surfaceID]?.bridge.readScreenContents(scope: scope)
   }
@@ -725,7 +725,7 @@ final class WorktreeTerminalState {
   /// Returns nil when the tab has no live surface.
   func readPrimarySurfaceContents(
     tabID: TerminalTabID,
-    scope: GhosttySurfaceBridge.ScreenReadScope = .screen
+    scope: GhosttySurfaceBridge.ScreenReadScope = .active
   ) -> String? {
     guard let surface = primarySurface(tabID: tabID) else { return nil }
     return surface.bridge.readScreenContents(scope: scope)

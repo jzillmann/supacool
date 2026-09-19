@@ -579,18 +579,21 @@ final class GhosttySurfaceView: NSView, Identifiable {
     }
   }
 
+  // Accessibility value: what the user currently sees. `VIEWPORT` follows
+  // the scroll position; `SCREEN` would be the whole scrollback, re-read
+  // every 500 ms while an AX client is asking.
   private func readScreenContents() -> String {
     guard let surface else { return "" }
     var text = ghostty_text_s()
     let selection = ghostty_selection_s(
       top_left: ghostty_point_s(
-        tag: GHOSTTY_POINT_SCREEN,
+        tag: GHOSTTY_POINT_VIEWPORT,
         coord: GHOSTTY_POINT_COORD_TOP_LEFT,
         x: 0,
         y: 0
       ),
       bottom_right: ghostty_point_s(
-        tag: GHOSTTY_POINT_SCREEN,
+        tag: GHOSTTY_POINT_VIEWPORT,
         coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
         x: 0,
         y: 0
