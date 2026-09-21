@@ -850,6 +850,9 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories
         )
+        if store.focusedSessionID == nil {
+          BoardSearchField(store: store)
+        }
         if !store.visibleSessions.isEmpty {
           BoardVitalsChip(vitals: boardVitals)
         }

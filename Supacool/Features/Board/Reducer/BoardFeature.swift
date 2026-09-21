@@ -62,6 +62,11 @@ struct BoardFeature {
     /// Whether the trash sheet is open (browse + restore + permanent delete).
     var isTrashSheetPresented: Bool = false
 
+    /// Free-text card search typed into the toolbar. Narrows
+    /// `visibleSessions` on top of the repo filter. Not persisted — a
+    /// fresh launch always shows the whole board.
+    var searchQuery: String = ""
+
     /// When non-nil, a blocking script's terminal tab is shown over the
     /// board so the user can read why the script failed. See
     /// `ScriptTerminalPresentation`.
@@ -733,6 +738,7 @@ struct BoardFeature {
     case toggleRepository(id: String)
     case focusRepository(id: String)
     case showAllRepositories
+    case searchQueryChanged(String)
 
     // MARK: Linear inbox
     case openLinearInbox(repositories: [Repository])
@@ -1810,6 +1816,10 @@ struct BoardFeature {
 
       case .showAllRepositories:
         state.$filters.withLock { $0.selectedRepositoryIDs = [] }
+        return .none
+
+      case .searchQueryChanged(let query):
+        state.searchQuery = query
         return .none
 
       case .openLinearInbox(let repositories):
@@ -3814,9 +3824,13 @@ private func filteredPreferredRepositoryID(
 // MARK: - Derived queries
 
 extension BoardFeature.State {
-  /// Sessions visible under the current repo filter, preserving insertion order.
+  /// Sessions visible under the current repo filter and toolbar search,
+  /// preserving insertion order.
   var visibleSessions: [AgentSession] {
-    sessions.filter { filters.includes(repositoryID: $0.repositoryID) }
+    let query = BoardSessionSearch.normalized(searchQuery)
+    return sessions.filter {
+      filters.includes(repositoryID: $0.repositoryID) && BoardSessionSearch.matches($0, query: query)
+    }
   }
 
   /// Bookmark ids that should not be launchable right now:

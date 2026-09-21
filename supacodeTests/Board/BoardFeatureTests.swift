@@ -2940,6 +2940,56 @@ struct BoardFeatureTests {
     }
   }
 
+  // MARK: - Card search
+
+  @Test(.dependencies) func searchQueryChangedUpdatesState() async {
+    let store = TestStore(initialState: BoardFeature.State()) {
+      BoardFeature()
+    }
+
+    await store.send(.searchQueryChanged("auth")) {
+      $0.searchQuery = "auth"
+    }
+    await store.send(.searchQueryChanged("")) {
+      $0.searchQuery = ""
+    }
+  }
+
+  @Test(.dependencies) func visibleSessionsMatchesSearchAcrossNamePromptAndRepo() {
+    let auth = Self.sampleSession(repositoryID: "/tmp/centrum", displayName: "Auth flow")
+    let tests = Self.sampleSession(repositoryID: "/tmp/supacool", displayName: "Card search")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [auth, tests] }
+
+    state.searchQuery = "AUTH"
+    #expect(state.visibleSessions.map(\.id) == [auth.id])
+
+    // Prompt text ("Fix the failing tests") is searchable too.
+    state.searchQuery = "failing"
+    #expect(state.visibleSessions.map(\.id) == [auth.id, tests.id])
+
+    // Every term must match: repo name + display name narrows to one.
+    state.searchQuery = "supacool card"
+    #expect(state.visibleSessions.map(\.id) == [tests.id])
+
+    state.searchQuery = "nope"
+    #expect(state.visibleSessions.isEmpty)
+
+    state.searchQuery = "   "
+    #expect(state.visibleSessions.map(\.id) == [auth.id, tests.id])
+  }
+
+  @Test(.dependencies) func searchStacksOnTopOfRepoFilter() {
+    let a = Self.sampleSession(repositoryID: "/tmp/a", displayName: "Auth")
+    let b = Self.sampleSession(repositoryID: "/tmp/b", displayName: "Auth")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a, b] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    state.searchQuery = "auth"
+
+    #expect(state.visibleSessions.map(\.id) == [b.id])
+  }
+
   // MARK: - Visibility query
 
   @Test(.dependencies) func visibleSessionsFiltersByRepo() {
