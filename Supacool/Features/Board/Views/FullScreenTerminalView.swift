@@ -183,7 +183,7 @@ struct FullScreenTerminalView: View {
   var body: some View {
     VStack(spacing: 0) {
       header
-      Divider()
+      headerDivider
       terminalBody
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -330,6 +330,9 @@ struct FullScreenTerminalView: View {
       // and the review control already say the same thing.
       referenceChips(.tickets)
       titleText
+      if session.isPriority {
+        priorityFlag
+      }
       referenceChips(.pullRequests)
       if session.reviewLoop != nil || canStartReviewLoop {
         ReviewLoopControl(
@@ -356,6 +359,39 @@ struct FullScreenTerminalView: View {
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 8)
+    // Priority sessions carry the card's pink accent into the terminal
+    // view: a tinted header plus the accent rule below. The flag beside the
+    // title is the explicit marker; the tint is what you notice from across
+    // the room.
+    .background(session.isPriority ? priorityColor.opacity(0.10) : .clear)
+  }
+
+  /// Hairline under the header — a 2 pt pink rule for priority sessions,
+  /// mirroring the card's thicker pink border.
+  @ViewBuilder
+  private var headerDivider: some View {
+    if session.isPriority {
+      priorityColor.opacity(0.85).frame(height: 2)
+    } else {
+      Divider()
+    }
+  }
+
+  /// Same color the board card uses for its priority border and flag.
+  private var priorityColor: Color { .pink }
+
+  /// Filled pink flag beside the title, shown only while the session is
+  /// marked priority. Clicking it clears the flag (the overflow menu is
+  /// the way to set it), so the badge doubles as the undo.
+  private var priorityFlag: some View {
+    Button(action: onTogglePriority) {
+      Image(systemName: "flag.fill")
+        .font(.callout.weight(.semibold))
+        .foregroundStyle(priorityColor)
+        .accessibilityLabel("Priority session")
+    }
+    .buttonStyle(.plain)
+    .help("Priority session — click to remove priority")
   }
 
   private var titleText: some View {
@@ -419,14 +455,13 @@ struct FullScreenTerminalView: View {
       Image(systemName: "ellipsis")
         .font(.system(size: 13, weight: .medium))
         .rotationEffect(.degrees(90))
-        .modifier(HeaderIconTintStyle(tint: session.isPriority ? .pink : .secondary))
+        .modifier(HeaderIconTintStyle(tint: .secondary))
         .accessibilityLabel("More session actions")
-        .accessibilityValue(session.isPriority ? "Priority session" : "")
     }
     .menuStyle(.borderlessButton)
     .menuIndicator(.hidden)
     .fixedSize()
-    .help(session.isPriority ? "More session actions (priority session)" : "More session actions")
+    .help("More session actions")
   }
 
   private func serverLifecycleControl(_ lifecycle: BoardFeature.ServerLifecycleViewState) -> some View {
