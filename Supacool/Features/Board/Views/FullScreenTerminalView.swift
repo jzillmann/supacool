@@ -338,6 +338,7 @@ struct FullScreenTerminalView: View {
         ReviewLoopControl(
           state: session.reviewLoop,
           canStart: canStartReviewLoop,
+          startSubject: session.reviewablePullRequestsLabel,
           onStart: onStartReviewLoop,
           onOpenReviewer: onOpenReviewLoopReviewer,
           onDiagnose: onDiagnoseReviewLoop,
@@ -416,10 +417,7 @@ struct FullScreenTerminalView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    session.reviewLoop == nil
-      && session.agent != nil
-      && !session.isRemote
-      && BoardFeature.actionablePullRequestURL(in: session) != nil
+    session.canStartReviewLoop
   }
 
   /// Catch-all "⋮" menu right after the title for less-frequent session

@@ -6,7 +6,10 @@ import SwiftUI
 /// presents the current snapshot and invokes the supplied intents.
 struct ReviewLoopControl: View {
   let state: ReviewLoopState?
+  /// True when a loop can start, or start over on top of a finished /
+  /// parked one. `startSubject` names the PRs it would read (`#42, #43`).
   let canStart: Bool
+  var startSubject: String = ""
   let onStart: () -> Void
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
@@ -33,7 +36,11 @@ struct ReviewLoopControl: View {
         .accessibilityLabel("Start review loop")
     }
     .buttonStyle(.plain)
-    .help("Start review loop")
+    .help(startHelp)
+  }
+
+  private var startHelp: String {
+    startSubject.isEmpty ? "Start review loop" : "Start review loop on \(startSubject)"
   }
 
   private func activeControl(_ state: ReviewLoopState) -> some View {
@@ -60,6 +67,8 @@ struct ReviewLoopControl: View {
     .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
       ReviewLoopPopover(
         state: state,
+        restartSubject: canStart ? startSubject : nil,
+        onStart: onStart,
         onOpenReviewer: onOpenReviewer,
         onDiagnose: onDiagnose,
         onChoose: onChoose,
@@ -101,6 +110,9 @@ struct ReviewLoopControl: View {
 
 private struct ReviewLoopPopover: View {
   let state: ReviewLoopState
+  /// Non-nil when a fresh loop may replace this one; names its PRs.
+  let restartSubject: String?
+  let onStart: () -> Void
   let onOpenReviewer: () -> Void
   let onDiagnose: () -> Void
   let onChoose: (ReviewDecisionChoice) -> Void
@@ -134,6 +146,9 @@ private struct ReviewLoopPopover: View {
       }
 
       LabeledContent("Phase", value: phaseLabel)
+      if state.pullRequestURLs.count > 1 {
+        LabeledContent("Reviewing", value: state.pullRequestURLs.map(Self.pullRequestLabel).joined(separator: ", "))
+      }
       if let lastReviewedSHA = state.lastReviewedSHA, !lastReviewedSHA.isEmpty {
         VStack(alignment: .leading, spacing: 3) {
           Text("Last commit")
@@ -205,6 +220,19 @@ private struct ReviewLoopPopover: View {
         .help(ReviewDecisionChoice.askReviewer.help)
       }
 
+      if let restartSubject {
+        // A finished or parked loop is the end of one cycle, not of the
+        // session: the next PR (or the same one, after a human fixed what
+        // parked the loop) gets a fresh round 1 from here.
+        Button(
+          restartSubject.isEmpty ? "Start new review" : "Start new review on \(restartSubject)",
+          systemImage: "arrow.counterclockwise"
+        ) {
+          onStart()
+        }
+        .help("Replace this loop with a fresh one, round 1, on every PR the session has open now")
+      }
+
       if state.phase != .passed && state.phase != .stopped {
         Button("Stop review", systemImage: "stop.fill", role: .destructive) {
           onStop()
@@ -214,5 +242,10 @@ private struct ReviewLoopPopover: View {
     }
     .padding(16)
     .frame(width: 300, alignment: .leading)
+  }
+
+  /// `#42` from a PR URL, for the popover's PR list.
+  private static func pullRequestLabel(_ url: String) -> String {
+    url.split(separator: "/").last.map { "#\($0)" } ?? url
   }
 }

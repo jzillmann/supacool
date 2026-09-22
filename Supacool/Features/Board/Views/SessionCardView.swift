@@ -118,6 +118,7 @@ struct SessionCardView: View {
           ReviewLoopControl(
             state: session.reviewLoop,
             canStart: canStartReviewLoop,
+            startSubject: session.reviewablePullRequestsLabel,
             onStart: { onStartReviewLoop?() },
             onOpenReviewer: { onOpenReviewLoopReviewer?() },
             onDiagnose: { onDiagnoseReviewLoop?() },
@@ -313,6 +314,13 @@ struct SessionCardView: View {
         Button("Start Review Loop", systemImage: "arrow.triangle.2.circlepath", action: onStartReviewLoop)
         Divider()
       } else if session.reviewLoop != nil {
+        if canStartReviewLoop, let onStartReviewLoop {
+          Button(
+            "New Review Loop on \(session.reviewablePullRequestsLabel)",
+            systemImage: "arrow.counterclockwise",
+            action: onStartReviewLoop
+          )
+        }
         if let onOpenReviewLoopReviewer {
           Button("Open Reviewer", systemImage: "eye", action: onOpenReviewLoopReviewer)
         }
@@ -371,11 +379,7 @@ struct SessionCardView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    guard onStartReviewLoop != nil, session.agent != nil, !session.isRemote else { return false }
-    return session.references.contains { reference in
-      guard case .pullRequest(_, _, _, let state, _) = reference else { return false }
-      return state == nil || state == .open || state == .draft
-    }
+    onStartReviewLoop != nil && session.canStartReviewLoop
   }
 
   private func priorityButton(action: @escaping () -> Void) -> some View {

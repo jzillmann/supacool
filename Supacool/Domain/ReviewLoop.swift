@@ -18,7 +18,13 @@ nonisolated enum ReviewLoopPhase: String, Codable, Hashable, Sendable {
 /// be inspected after relaunch without relying on live terminal state.
 nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   var reviewerTerminalID: UUID?
+  /// The first pull request under review. Kept as its own field so older
+  /// snapshots decode; `pullRequestURLs` is the list every prompt reads.
   var pullRequestURL: String?
+  /// The other open pull requests the session held when the loop started.
+  /// A session with several open PRs is one piece of work in flight, so the
+  /// reviewer reads them together instead of only the first one.
+  var additionalPullRequestURLs: [String]
   var phase: ReviewLoopPhase
   var round: Int
   var maximumRounds: Int
@@ -49,6 +55,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   init(
     reviewerTerminalID: UUID? = nil,
     pullRequestURL: String? = nil,
+    additionalPullRequestURLs: [String] = [],
     phase: ReviewLoopPhase = .reviewing,
     round: Int = 1,
     maximumRounds: Int = 5,
@@ -68,6 +75,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   ) {
     self.reviewerTerminalID = reviewerTerminalID
     self.pullRequestURL = pullRequestURL
+    self.additionalPullRequestURLs = additionalPullRequestURLs
     self.phase = phase
     self.round = round
     self.maximumRounds = maximumRounds
@@ -87,7 +95,7 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   }
 
   enum CodingKeys: String, CodingKey {
-    case reviewerTerminalID, pullRequestURL, phase, round, maximumRounds
+    case reviewerTerminalID, pullRequestURL, additionalPullRequestURLs, phase, round, maximumRounds
     case expectedReviewSHA, lastReviewedSHA, lastSummary, lastReport, lastFindingsFingerprint
     case repeatedFindingsCount
     case convergenceWarning, escalationReason, pausedDuringFix, commitlessTurnCount, lastAgentMessage
@@ -100,6 +108,8 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
     let c = try decoder.container(keyedBy: CodingKeys.self)
     reviewerTerminalID = try c.decodeIfPresent(UUID.self, forKey: .reviewerTerminalID)
     pullRequestURL = try c.decodeIfPresent(String.self, forKey: .pullRequestURL)
+    additionalPullRequestURLs =
+      try c.decodeIfPresent([String].self, forKey: .additionalPullRequestURLs) ?? []
     phase = (try? c.decodeIfPresent(ReviewLoopPhase.self, forKey: .phase)) ?? .reviewing
     round = try c.decodeIfPresent(Int.self, forKey: .round) ?? 1
     maximumRounds = try c.decodeIfPresent(Int.self, forKey: .maximumRounds) ?? 5
@@ -120,6 +130,39 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
 }
 
 extension ReviewLoopState {
+  /// Every pull request this loop reviews, first one first.
+  nonisolated var pullRequestURLs: [String] {
+    (pullRequestURL.map { [$0] } ?? []) + additionalPullRequestURLs
+  }
+
+  /// What the prompts call the work under review: the one PR URL, or the
+  /// whole list with an instruction to read them as one change.
+  nonisolated var reviewSubject: String {
+    Self.reviewSubject(for: pullRequestURLs)
+  }
+
+  nonisolated static func reviewSubject(for pullRequestURLs: [String]) -> String {
+    switch pullRequestURLs.count {
+    case 0: return "the current pull request"
+    case 1: return pullRequestURLs[0]
+    default:
+      return "these pull requests together, as one piece of work: "
+        + pullRequestURLs.joined(separator: ", ")
+    }
+  }
+
+  /// A finished or parked loop can be replaced by a fresh one on the same
+  /// session: a new round 1 against whatever PRs are open *now*. That is how
+  /// a session moves on to a follow-up PR after the first one merged, and how
+  /// a loop that ended in a human's hands gets going again once they fixed
+  /// what parked it.
+  nonisolated var canRestart: Bool {
+    switch phase {
+    case .passed, .stopped, .needsDecision: true
+    case .reviewing, .fixing, .conferring, .diagnosing: false
+    }
+  }
+
   /// The findings of the last stored reviewer handoff, whatever its verdict.
   /// Empty when no report is stored or the report does not parse — the
   /// re-review prompt then falls back to the summary alone.
@@ -384,5 +427,27 @@ enum ReviewLoopReportParser {
       index = text.index(after: index)
     }
     return nil
+  }
+}
+
+nonisolated extension AgentSession {
+  /// The PRs a review loop would read if it started now: every open, draft,
+  /// or not-yet-resolved PR on the session. Merged and closed PRs are done.
+  var reviewablePullRequests: [SessionReference] {
+    references.filter { reference in
+      guard case .pullRequest(_, _, _, let state, _) = reference else { return false }
+      return state == nil || state == .open || state == .draft
+    }
+  }
+
+  /// `#42, #43` — what the start / restart controls name as their subject.
+  var reviewablePullRequestsLabel: String {
+    reviewablePullRequests.map(\.chipLabel).joined(separator: ", ")
+  }
+
+  /// A review loop can start (no loop yet) or start over (the loop ended or
+  /// is waiting on a human) as long as there is something open to review.
+  var canStartReviewLoop: Bool {
+    agent != nil && !isRemote && (reviewLoop?.canRestart ?? true) && !reviewablePullRequests.isEmpty
   }
 }

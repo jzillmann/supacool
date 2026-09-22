@@ -119,7 +119,11 @@ struct BoardRootView: View {
     // decisions stack above it: non-modal, so they never block the window.
     .overlay(alignment: .bottomTrailing) {
       VStack(alignment: .trailing, spacing: 10) {
-        ReviewDecisionStackView(store: store, bottomInset: store.trayCards.isEmpty ? 16 : 0)
+        ReviewDecisionStackView(
+          store: store,
+          repositories: repositories,
+          bottomInset: store.trayCards.isEmpty ? 16 : 0
+        )
         BoardTrayView(store: store, repositories: repositories)
           .allowsHitTesting(!store.trayCards.isEmpty)
       }

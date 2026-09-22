@@ -477,6 +477,168 @@ extension BoardFeatureTests {
     #expect(loop.commitlessTurnCount == 1)
   }
 
+  @Test(.dependencies) func aNewCommitCarriesTheAgentNotesToTheReviewer() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        phase: .fixing,
+        lastReviewedSHA: "old-sha",
+        lastAgentMessage: "Fixed 1 and 2. Finding 3 is invalid: the index is bounds-checked two lines up."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: "new-sha"))
+    await store.finish()
+
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the new commit to be sent to the reviewer")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("The implementation agent's notes on this commit"))
+    #expect(prompt.contains("Finding 3 is invalid: the index is bounds-checked two lines up."))
+  }
+
+  @Test(.dependencies) func aPassedLoopCanStartOverInTheSameReviewerTerminal() async throws {
+    let reviewerID = UUID()
+    let now = Date(timeIntervalSince1970: 1_750_000_000)
+    var session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        phase: .passed,
+        round: 3,
+        lastReviewedSHA: "abc123",
+        lastSummary: "Clean."
+      )
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: reviewerID,
+        role: .agent,
+        agent: .codex,
+        initialPrompt: "review",
+        displayName: "Reviewer",
+        createdAt: now,
+        lastActivityAt: now
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(.startReviewLoop(id: session.id, repositories: [reviewLoopRepository()]))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.round == 1)
+    #expect(loop.reviewerTerminalID == reviewerID)
+    #expect(loop.lastReviewedSHA == nil)
+    #expect(loop.lastSummary == nil)
+    #expect(store.state.sessions.first?.terminals.filter { $0.id == reviewerID }.count == 1)
+    guard case .sendPrompt(_, let tabID, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the fresh review to be sent to the existing reviewer terminal")
+      return
+    }
+    #expect(tabID.rawValue == reviewerID)
+    #expect(prompt.contains("round 1 of 5"))
+  }
+
+  @Test(.dependencies) func aStoppedLoopStartsOverOnTheFollowUpPullRequest() async throws {
+    let oldReviewerID = UUID()
+    let newReviewerID = UUID(uuidString: "00000000-0000-0000-0000-000000000077")!
+    var session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: oldReviewerID,
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        phase: .stopped,
+        escalationReason: "Reviewer terminal closed by user."
+      )
+    )
+    // #42 merged; the same session opened the follow-up #43. The old
+    // reviewer tab is gone, so its terminal is no longer on the session.
+    session.references = [
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .merged, title: "Fix"),
+      .pullRequest(owner: "acme", repo: "widgets", number: 43, state: .open, title: "Follow-up"),
+    ]
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .constant(newReviewerID)
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.tabExists = { _, tab in tab.rawValue != oldReviewerID }
+      $0.terminalClient.send = { command in commands.withValue { $0.append(command) } }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startReviewLoop(id: session.id, repositories: [reviewLoopRepository()]))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.reviewerTerminalID == newReviewerID)
+    #expect(loop.pullRequestURLs == ["https://github.com/acme/widgets/pull/43"])
+    #expect(loop.escalationReason == nil)
+    guard case .createTabWithInput(_, let input, false, newReviewerID) = try #require(commands.value.first) else {
+      Issue.record("Expected a new Codex reviewer tab")
+      return
+    }
+    #expect(input.contains("pull/43"))
+    #expect(!input.contains("pull/42"))
+  }
+
+  @Test(.dependencies) func aSessionWithSeveralOpenPullRequestsReviewsThemTogether() async throws {
+    var session = reviewLoopSession()
+    session.references = [
+      .pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open, title: "Part 1"),
+      .pullRequest(owner: "acme", repo: "widgets", number: 43, state: .draft, title: "Part 2"),
+      .pullRequest(owner: "acme", repo: "widgets", number: 41, state: .closed, title: "Abandoned"),
+    ]
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+    store.dependencies.uuid = .constant(UUID())
+
+    await store.send(.startReviewLoop(id: session.id, repositories: [reviewLoopRepository()]))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(
+      loop.pullRequestURLs == [
+        "https://github.com/acme/widgets/pull/42",
+        "https://github.com/acme/widgets/pull/43",
+      ]
+    )
+    guard case .createTabWithInput(_, let input, _, _) = try #require(commands.value.first) else {
+      Issue.record("Expected a Codex reviewer tab")
+      return
+    }
+    #expect(input.contains("these pull requests together"))
+    #expect(input.contains("pull/42"))
+    #expect(input.contains("pull/43"))
+    #expect(!input.contains("pull/41"))
+  }
+
+  @Test(.dependencies) func aRunningLoopCannotBeRestarted() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(reviewerTerminalID: UUID(), phase: .fixing, round: 2)
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands)
+
+    await store.send(.startReviewLoop(id: session.id, repositories: [reviewLoopRepository()]))
+    await store.finish()
+
+    #expect(store.state.sessions.first?.reviewLoop?.round == 2)
+    #expect(store.state.sessions.first?.reviewLoop?.phase == .fixing)
+    #expect(commands.value.isEmpty)
+  }
+
   @Test(.dependencies) func anUnpushedLocalCommitIsNotReviewedYet() async throws {
     let reviewerID = UUID()
     let session = reviewLoopSession(

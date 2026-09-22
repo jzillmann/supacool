@@ -5,18 +5,23 @@ import Foundation
 private nonisolated let reviewLoopLogger = SupaLogger("Board.ReviewLoop")
 
 extension BoardFeature {
+  /// Starts a review loop on a session, or replaces a finished / parked one
+  /// with a fresh loop. The subject is every PR the session holds open right
+  /// now, so a session that merged its first PR and opened a follow-up gets
+  /// the follow-up reviewed, and a session with stacked PRs gets them read
+  /// together. A reviewer terminal that is still running is reused; otherwise
+  /// a new Codex reviewer tab is created.
   func reduceStartReviewLoop(
     state: inout State,
     id: AgentSession.ID,
     repositories: [Repository]
   ) -> Effect<Action> {
     guard let session = state.sessions.first(where: { $0.id == id }),
-      session.reviewLoop == nil,
-      session.agent != nil,
-      !session.isRemote,
-      let pullRequestURL = Self.actionablePullRequestURL(in: session),
+      session.canStartReviewLoop,
       let repository = repositories.first(where: { $0.id == session.repositoryID })
     else { return .none }
+    let pullRequestURLs = Self.actionablePullRequestURLs(in: session)
+    guard let firstPullRequestURL = pullRequestURLs.first else { return .none }
 
     let primaryTabID = TerminalTabID(rawValue: session.primaryTerminalID)
     guard terminalClient.tabExists(session.worktreeID, primaryTabID) else {
@@ -27,34 +32,55 @@ extension BoardFeature {
       )
     }
 
-    let reviewerTerminalID = uuid()
     let now = date.now
     let prompt = Self.initialReviewerPrompt(
-      pullRequestURL: pullRequestURL,
+      pullRequests: ReviewLoopState.reviewSubject(for: pullRequestURLs),
       round: 1,
       maximumRounds: Self.defaultReviewLoopMaximumRounds
     )
-    let reviewer = SessionTerminal(
-      id: reviewerTerminalID,
-      role: .agent,
-      agent: .codex,
-      initialPrompt: prompt,
-      displayName: "Reviewer",
-      createdAt: now,
-      lastActivityAt: now
-    )
+    let existingReviewerID = session.reviewLoop?.reviewerTerminalID.flatMap { reviewerID in
+      session.terminals.contains(where: { $0.id == reviewerID })
+        && terminalClient.tabExists(session.worktreeID, TerminalTabID(rawValue: reviewerID))
+        ? reviewerID : nil
+    }
+    let reviewerTerminalID = existingReviewerID ?? uuid()
+    state.snoozedReviewDecisionIDs.remove(id)
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
-      sessions[index].terminals.append(reviewer)
+      if existingReviewerID == nil {
+        sessions[index].terminals.append(
+          SessionTerminal(
+            id: reviewerTerminalID,
+            role: .agent,
+            agent: .codex,
+            initialPrompt: prompt,
+            displayName: "Reviewer",
+            createdAt: now,
+            lastActivityAt: now
+          )
+        )
+      }
       sessions[index].reviewLoop = ReviewLoopState(
         reviewerTerminalID: reviewerTerminalID,
-        pullRequestURL: pullRequestURL,
+        pullRequestURL: firstPullRequestURL,
+        additionalPullRequestURLs: Array(pullRequestURLs.dropFirst()),
         maximumRounds: Self.defaultReviewLoopMaximumRounds,
         startedAt: now,
         updatedAt: now
       )
     }
 
+    if existingReviewerID != nil {
+      return .run { _ in
+        await terminalClient.send(
+          .sendPrompt(
+            worktreeID: session.worktreeID,
+            tabID: TerminalTabID(rawValue: reviewerTerminalID),
+            text: prompt
+          )
+        )
+      }
+    }
     let worktree = Self.resumeWorktree(for: session, repository: repository)
     let command = AgentType.codex.command(
       prompt: prompt,
@@ -200,12 +226,13 @@ extension BoardFeature {
       sessions[index].reviewLoop?.updatedAt = now
     }
     let prompt = Self.rereviewPrompt(
-      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      pullRequests: loop.reviewSubject,
       headSHA: headSHA,
       round: nextRound,
       maximumRounds: loop.maximumRounds,
       previousSummary: loop.lastSummary,
-      previousFindings: loop.lastFindings
+      previousFindings: loop.lastFindings,
+      implementerNotes: loop.lastAgentMessage
     )
     return .run { _ in
       await terminalClient.send(
@@ -375,12 +402,13 @@ extension BoardFeature {
       sessions[index].reviewLoop?.updatedAt = now
     }
     let prompt = Self.rereviewPrompt(
-      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      pullRequests: loop.reviewSubject,
       headSHA: resolvedHead ?? loop.lastReviewedSHA ?? "current HEAD",
       round: nextRound,
       maximumRounds: extendedMaximum,
       previousSummary: loop.lastSummary,
-      previousFindings: loop.lastFindings
+      previousFindings: loop.lastFindings,
+      implementerNotes: loop.lastAgentMessage
     )
     return .run { _ in
       await terminalClient.send(
@@ -444,7 +472,7 @@ extension BoardFeature {
       )
     }
     let prompt = Self.resumeFixRoundPrompt(
-      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      pullRequests: loop.reviewSubject,
       round: loop.round
     )
     return .run { _ in
@@ -586,7 +614,7 @@ extension BoardFeature {
       updated.escalationReason = nil
     }
     let prompt = Self.reviewerReplyPrompt(
-      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      pullRequests: loop.reviewSubject,
       round: loop.round,
       reviewedSHA: loop.lastReviewedSHA,
       previousFindings: loop.lastFindings,
@@ -666,7 +694,7 @@ extension BoardFeature {
         )
       }
       let prompt = Self.reviewerAnswerPrompt(
-        pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+        pullRequests: loop.reviewSubject,
         round: loop.round,
         report: report
       )
@@ -706,7 +734,7 @@ extension BoardFeature {
       updated.lastAgentMessage = nil
     }
     let prompt = Self.implementationPrompt(
-      pullRequestURL: loop.pullRequestURL ?? "the current pull request",
+      pullRequests: loop.reviewSubject,
       round: loop.round,
       report: report
     )
@@ -821,23 +849,26 @@ extension BoardFeature {
   nonisolated static let maximumStoredReviewReportLength = 12_000
 
   nonisolated static func actionablePullRequestURL(in session: AgentSession) -> String? {
-    for reference in session.references {
-      guard case .pullRequest(let owner, let repo, let number, let state, _) = reference,
-        state == nil || state == .open || state == .draft
-      else { continue }
+    actionablePullRequestURLs(in: session).first
+  }
+
+  /// Every PR on the session that a review can act on: open, draft, or not
+  /// yet resolved. Merged and closed PRs are history, not review subjects.
+  nonisolated static func actionablePullRequestURLs(in session: AgentSession) -> [String] {
+    session.reviewablePullRequests.compactMap { reference in
+      guard case .pullRequest(let owner, let repo, let number, _, _) = reference else { return nil }
       return "https://github.com/\(owner)/\(repo)/pull/\(number)"
     }
-    return nil
   }
 
   nonisolated static func initialReviewerPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     round: Int,
     maximumRounds: Int
   ) -> String {
     reviewerPrompt(
-      pullRequestURL: pullRequestURL,
-      expectedSHA: "current pull-request HEAD",
+      pullRequests: pullRequests,
+      expectedSHA: "the pushed head of the branch checked out in this workspace",
       round: round,
       maximumRounds: maximumRounds,
       previousSummary: nil
@@ -845,20 +876,22 @@ extension BoardFeature {
   }
 
   nonisolated static func rereviewPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     headSHA: String,
     round: Int,
     maximumRounds: Int,
     previousSummary: String?,
-    previousFindings: [String] = []
+    previousFindings: [String] = [],
+    implementerNotes: String? = nil
   ) -> String {
     reviewerPrompt(
-      pullRequestURL: pullRequestURL,
+      pullRequests: pullRequests,
       expectedSHA: headSHA,
       round: round,
       maximumRounds: maximumRounds,
       previousSummary: previousSummary,
-      previousFindings: previousFindings
+      previousFindings: previousFindings,
+      implementerNotes: implementerNotes
     )
   }
 
@@ -877,13 +910,25 @@ extension BoardFeature {
   }
 
   nonisolated static func reviewerPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     expectedSHA: String,
     round: Int,
     maximumRounds: Int,
     previousSummary: String?,
-    previousFindings: [String] = []
+    previousFindings: [String] = [],
+    implementerNotes: String? = nil
   ) -> String {
+    // The implementer's closing message travels with the commit. Without it
+    // the reviewer re-reads a diff blind, re-raises findings the agent
+    // explained away, and the loop stalls on the same points every round.
+    let notes =
+      implementerNotes.flatMap { notes -> String? in
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty
+          ? nil
+          : "\nThe implementation agent's notes on this commit. Verify each claim against the code; where it "
+            + "says a finding is invalid, decide that yourself and say so:\n\(trimmed)\n"
+      } ?? ""
     let prior =
       previousSummary.map {
         "\nPrevious round summary (verify it; do not repeat resolved points):\n\($0)\n"
@@ -895,12 +940,12 @@ extension BoardFeature {
         + previousFindings.enumerated().map { "\($0.offset + 1). \($0.element)" }
         .joined(separator: "\n") + "\n"
     return """
-      Review \(pullRequestURL) as a strict, read-only code reviewer. This is round \(round) of \(maximumRounds).
+      Review \(pullRequests) as a strict, read-only code reviewer. This is round \(round) of \(maximumRounds).
       Review the exact current PR commit (expected \(expectedSHA)). Do not edit files, commit, push, or broaden scope.
       Focus on correctness, regressions, security, data loss, concurrency, and missing tests. Ignore style-only nits.
       If individual findings share a deeper architectural or scope problem, return blocked instead of inventing
       an endless stream of local fixes.
-      \(prior)\(priorFindings)
+      \(prior)\(priorFindings)\(notes)
       Your FINAL message must be this exact Markdown structure. It is a human-readable handoff, so keep every
       finding as one numbered list item and include both boundary markers:
 
@@ -926,7 +971,7 @@ extension BoardFeature {
   }
 
   nonisolated static func implementationPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     round: Int,
     report: ReviewLoopReport
   ) -> String {
@@ -937,7 +982,7 @@ extension BoardFeature {
       // A blocked verdict asks the user for a decision. The agent's job is to
       // lay out the options once and wait, not to refuse on every re-send.
       return """
-        Review round \(round) for \(pullRequestURL) is blocked at \(report.reviewedSHA): the reviewer says the
+        Review round \(round) for \(pullRequests) is blocked at \(report.reviewedSHA): the reviewer says the
         architecture or scope needs a decision from the user. Check each finding against the code. Then give the user
         a short list of options with your recommendation, and wait for the answer. Do not change code before the user
         decides. After the decision, implement it, add or update tests, then commit and push the result.
@@ -948,10 +993,12 @@ extension BoardFeature {
         """
     }
     return """
-      Review round \(round) for \(pullRequestURL) requested changes at \(report.reviewedSHA).
+      Review round \(round) for \(pullRequests) requested changes at \(report.reviewedSHA).
       Address every actionable finding below. Keep the fix within the ticket's intended scope, add or update tests,
       then commit and push the result. If a finding is invalid or exposes an architectural decision you cannot make,
       stop and explain that clearly instead of making speculative changes.
+      End your turn with a short note for the reviewer: what you changed for each finding, and which findings you
+      left alone and why. The reviewer reads that note together with your commit.
 
       Reviewer summary: \(report.summary)
       Findings:
@@ -959,16 +1006,16 @@ extension BoardFeature {
       """
   }
 
-  nonisolated static func resumeFixRoundPrompt(pullRequestURL: String, round: Int) -> String {
+  nonisolated static func resumeFixRoundPrompt(pullRequests: String, round: Int) -> String {
     """
-    Review round \(round) for \(pullRequestURL) is still open: your last turn ended without a new commit.
+    Review round \(round) for \(pullRequests) is still open: your last turn ended without a new commit.
     Continue addressing that round's findings. Keep the fix within the ticket's intended scope, then commit and
     push the result. If a finding is invalid or needs a decision you cannot make, say so clearly and stop.
     """
   }
 
   nonisolated static func reviewerReplyPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     round: Int,
     reviewedSHA: String?,
     previousFindings: [String],
@@ -979,7 +1026,7 @@ extension BoardFeature {
       ? "(no stored findings)"
       : previousFindings.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
     return """
-      The implementation agent replied to your round \(round) findings for \(pullRequestURL) instead of committing.
+      The implementation agent replied to your round \(round) findings for \(pullRequests) instead of committing.
       Answer it as the reviewer. Do not edit files, commit, push, or start a new review pass. Read the code only where
       the reply makes you doubt a finding.
 
@@ -1016,7 +1063,7 @@ extension BoardFeature {
   }
 
   nonisolated static func reviewerAnswerPrompt(
-    pullRequestURL: String,
+    pullRequests: String,
     round: Int,
     report: ReviewLoopReport
   ) -> String {
@@ -1024,7 +1071,7 @@ extension BoardFeature {
       "\(index + 1). \(finding)"
     }.joined(separator: "\n")
     return """
-      The reviewer answered your reply in review round \(round) for \(pullRequestURL). Round \(round) is still open.
+      The reviewer answered your reply in review round \(round) for \(pullRequests). Round \(round) is still open.
       Address the findings that still stand below. Keep the fix within the ticket's intended scope, add or update
       tests, then commit and push the result. If you still disagree or a decision is needed, say so clearly and stop.
 

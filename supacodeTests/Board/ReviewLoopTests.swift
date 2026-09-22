@@ -38,6 +38,9 @@ struct ReviewLoopTests {
 
     #expect(decoded.reviewerTerminalID == nil)
     #expect(decoded.pullRequestURL == nil)
+    #expect(decoded.additionalPullRequestURLs == [])
+    #expect(decoded.pullRequestURLs == [])
+    #expect(decoded.reviewSubject == "the current pull request")
     #expect(decoded.phase == .reviewing)
     #expect(decoded.round == 1)
     #expect(decoded.maximumRounds == 5)
@@ -46,6 +49,29 @@ struct ReviewLoopTests {
     #expect(decoded.repeatedFindingsCount == 0)
     #expect(decoded.convergenceWarning == false)
     #expect(decoded.escalationReason == nil)
+  }
+
+  @Test func severalPullRequestsBecomeOneReviewSubject() {
+    let single = ReviewLoopState(pullRequestURL: "https://github.com/acme/widgets/pull/42")
+    #expect(single.reviewSubject == "https://github.com/acme/widgets/pull/42")
+
+    let stacked = ReviewLoopState(
+      pullRequestURL: "https://github.com/acme/widgets/pull/42",
+      additionalPullRequestURLs: ["https://github.com/acme/widgets/pull/43"]
+    )
+    #expect(stacked.pullRequestURLs.count == 2)
+    #expect(stacked.reviewSubject.hasPrefix("these pull requests together"))
+    #expect(stacked.reviewSubject.contains("pull/42, https://github.com/acme/widgets/pull/43"))
+  }
+
+  @Test func onlyAFinishedOrParkedLoopCanRestart() {
+    #expect(ReviewLoopState(phase: .passed).canRestart)
+    #expect(ReviewLoopState(phase: .stopped).canRestart)
+    #expect(ReviewLoopState(phase: .needsDecision).canRestart)
+    #expect(!ReviewLoopState(phase: .reviewing).canRestart)
+    #expect(!ReviewLoopState(phase: .fixing).canRestart)
+    #expect(!ReviewLoopState(phase: .conferring).canRestart)
+    #expect(!ReviewLoopState(phase: .diagnosing).canRestart)
   }
 
   @Test func reportParserExtractsPayloadFromFinalMessage() {

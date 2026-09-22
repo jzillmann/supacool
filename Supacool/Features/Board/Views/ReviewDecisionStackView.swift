@@ -11,6 +11,7 @@ import SwiftUI
 /// The top card is one decision; the layers behind it say more are waiting.
 struct ReviewDecisionStackView: View {
   @Bindable var store: StoreOf<BoardFeature>
+  let repositories: IdentifiedArrayOf<Repository>
   /// Space below the stack. Zero when tray cards sit underneath it.
   var bottomInset: CGFloat = 16
 
@@ -40,6 +41,9 @@ struct ReviewDecisionStackView: View {
               onOpen: { store.send(.focusSession(id: current.id)) },
               onInspect: { store.send(.openReviewLoopReviewer(id: current.id)) },
               onChoose: { choice in store.send(.reviewDecision(choice, sessionID: current.id)) },
+              onRestart: current.canStartReviewLoop
+                ? { store.send(.startReviewLoop(id: current.id, repositories: Array(repositories))) }
+                : nil,
               onDiagnose: { store.send(.diagnoseReviewLoop(id: current.id)) },
               onStop: { store.send(.stopReviewLoop(id: current.id)) },
               onLater: { store.send(.snoozeReviewDecision(id: current.id)) }
@@ -117,6 +121,8 @@ private struct ReviewDecisionCard: View {
   let onOpen: () -> Void
   let onInspect: () -> Void
   let onChoose: (ReviewDecisionChoice) -> Void
+  /// Nil when the session has nothing open to review any more.
+  let onRestart: (() -> Void)?
   let onDiagnose: () -> Void
   let onStop: () -> Void
   let onLater: () -> Void
@@ -212,6 +218,14 @@ private struct ReviewDecisionCard: View {
         }
         Button("Diagnose architecture", systemImage: "magnifyingglass", action: onDiagnose)
           .help("Run one bounded pass to identify the root cause of non-convergence")
+        if let onRestart {
+          Button(
+            "Start new review on \(session.reviewablePullRequestsLabel)",
+            systemImage: "arrow.counterclockwise",
+            action: onRestart
+          )
+          .help("Drop this loop and start round 1 again on every PR the session has open now")
+        }
         Divider()
         Button("Stop review", systemImage: "stop.fill", role: .destructive, action: onStop)
           .help("Stop the review loop")
