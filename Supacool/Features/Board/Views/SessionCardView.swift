@@ -295,7 +295,14 @@ struct SessionCardView: View {
         Button("Unpark", systemImage: "play.circle", action: onUnpark)
       }
       if let onSnooze {
-        Menu("Snooze Until…", systemImage: "moon.zzz") {
+        // A labelled section, not a nested `Menu` — see the Set Status note
+        // above for why a submenu collapses mid-travel here.
+        if onResume != nil || onResumePicker != nil || onRerun != nil
+          || onPark != nil || onParkActive != nil || onUnpark != nil
+        {
+          Divider()
+        }
+        Section("Snooze Until") {
           ForEach(SnoozeOption.allCases) { option in
             Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
           }
