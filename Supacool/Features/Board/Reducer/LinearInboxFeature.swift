@@ -578,7 +578,13 @@ struct LinearInboxFeature {
           break
         }
         state.pendingSessionTicketID = ticketID
-        var newTerminal = NewTerminalFeature.State(availableRepositories: state.availableRepositories)
+        // The inbox is repo-scoped: the ticket belongs to the repo whose
+        // bucket is on screen, so the session starts there — not in the
+        // first repo of the list.
+        var newTerminal = NewTerminalFeature.State(
+          availableRepositories: state.availableRepositories,
+          preferredRepositoryID: state.selectedRepositoryID
+        )
         newTerminal.prompt = ticket.sessionPrompt
         // Setting the prompt programmatically bypasses the `binding(\.prompt)`
         // path that normally resolves the ticket title and arms the worktree.

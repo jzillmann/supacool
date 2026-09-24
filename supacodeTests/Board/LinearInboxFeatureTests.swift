@@ -745,6 +745,34 @@ struct LinearInboxFeatureTests {
     #expect(store.state.newTerminal?.selectedWorkspace == .newBranch(name: "cen-1-do-thing"))
   }
 
+  @Test(.dependencies) func startSessionTargetsTheInboxSelectedRepository() async {
+    // Regression: the embedded New Terminal defaulted to the first repo in
+    // the list, so a ticket imported under "trace" launched in "centrum".
+    // `Self.repo` sits second, so the old first-repo default picks the wrong one.
+    let firstRepo = Repository(
+      id: "/tmp/repo-first",
+      rootURL: URL(fileURLWithPath: "/tmp/repo-first"),
+      name: "repo-first",
+      worktrees: []
+    )
+    resetInbox([LinearTicket(identifier: "TRA-1", title: "Do thing")])
+
+    let store = TestStore(
+      initialState: LinearInboxFeature.State(
+        availableRepositories: [firstRepo, Self.repo],
+        selectedRepositoryID: Self.repo.id
+      )
+    ) {
+      LinearInboxFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_000))
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startSessionTapped(ticketID: "TRA-1"))
+    #expect(store.state.newTerminal?.selectedRepositoryID == Self.repo.id)
+  }
+
   @Test(.dependencies) func startSessionWithoutTitleLeavesWorkspaceUntouched() async {
     resetInbox([LinearTicket(identifier: "CEN-2")])
 
