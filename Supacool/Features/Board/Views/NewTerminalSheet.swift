@@ -469,9 +469,14 @@ struct NewTerminalSheet: View {
   /// rule silently *clipped* the trailing segment once the names got long
   /// (four repos with a name like `centrum_backend` already overflow the
   /// 460pt sheet), so a freshly added repo looked like it had never been
-  /// registered at all. `ViewThatFits` sits inside the `LabeledContent`
-  /// value slot so it's proposed the real content width; the menu picker
-  /// is width-flexible and therefore always wins as the fallback.
+  /// registered at all. The menu picker is width-flexible and therefore
+  /// always wins as the fallback.
+  ///
+  /// The `maxWidth: .infinity` frame is load-bearing: inside a grouped
+  /// `Form`, a bare `LabeledContent` value slot does NOT bound the width it
+  /// proposes, so `ViewThatFits` accepted the 520pt equal-width segmented
+  /// control and the Form clipped the overflow. The flexible frame makes the
+  /// row hand `ViewThatFits` the real content-column width.
   @ViewBuilder
   private var repositoryRow: some View {
     if store.availableRepositories.count > 1 {
@@ -486,6 +491,7 @@ struct NewTerminalSheet: View {
           repositoryPicker
             .pickerStyle(.menu)
         }
+        .frame(maxWidth: .infinity, alignment: .trailing)
       } label: {
         Text("Repository")
         Text("Terminal runs inside this repo's working directory.")
