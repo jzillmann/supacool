@@ -118,13 +118,22 @@ struct ContentView: View {
   }
 
   private var commandPaletteOverlay: some View {
+    // Built only while the palette is open. The item list walks every
+    // session and renders a search subtitle and prompt text per row, and
+    // this getter runs on every ContentView body pass — i.e. on every board
+    // redraw, for a palette nobody had opened. A closed palette reads no
+    // items (the overlay's refresh hooks all key off `isPresented`), and the
+    // store change that opens it delivers `isPresented` and the full list in
+    // the same update, so the first refresh still sees every row.
     CommandPaletteOverlayView(
       store: store.scope(state: \.commandPalette, action: \.commandPalette),
-      items: CommandPaletteFeature.commandPaletteItems(
-        from: store.repositories,
-        sessions: store.board.sessions,
-        ghosttyCommands: ghosttyShortcuts.commandPaletteEntries
-      )
+      items: store.commandPalette.isPresented
+        ? CommandPaletteFeature.commandPaletteItems(
+          from: store.repositories,
+          sessions: store.board.sessions,
+          ghosttyCommands: ghosttyShortcuts.commandPaletteEntries
+        )
+        : []
     )
   }
 
