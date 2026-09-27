@@ -460,50 +460,62 @@ struct NewTerminalSheet: View {
 
   /// Repository picker. Hidden entirely with zero or one registered repo
   /// — the single-repo case is unambiguous, and the zero-repo case is
-  /// caught by the footer validation message. Renders as a
-  /// trailing-anchored segmented picker (matches the Scope row) whenever
-  /// the segments fit the content column, and falls back to the standard
-  /// menu style when they don't.
+  /// caught by the footer validation message.
   ///
-  /// The fit is measured, not guessed from the repo count. A count-based
-  /// rule silently *clipped* the trailing segment once the names got long
-  /// (four repos with a name like `centrum_backend` already overflow the
-  /// 460pt sheet), so a freshly added repo looked like it had never been
-  /// registered at all. The menu picker is width-flexible and therefore
-  /// always wins as the fallback.
+  /// The picker sits leading-aligned *under* the label (the long subtitle
+  /// left no room beside it anyway) and degrades in three steps, first fit
+  /// wins:
+  /// 1. one segmented switcher,
+  /// 2. the same switcher split over two rows (two pickers on one binding —
+  ///    the row without the selection shows no highlighted segment),
+  /// 3. a menu picker, which is width-flexible and so always fits.
   ///
-  /// The `maxWidth: .infinity` frame is load-bearing: inside a grouped
-  /// `Form`, a bare `LabeledContent` value slot does NOT bound the width it
-  /// proposes, so `ViewThatFits` accepted the 520pt equal-width segmented
-  /// control and the Form clipped the overflow. The flexible frame makes the
-  /// row hand `ViewThatFits` the real content-column width.
+  /// The fit is measured, not guessed from the repo count: a count-based
+  /// rule silently *clipped* the trailing segment once the names got long,
+  /// so a freshly added repo looked like it had never been registered.
+  /// The `maxWidth: .infinity` frame hands `ViewThatFits` the real
+  /// content-column width — inside a grouped `Form` nothing else bounds it.
   @ViewBuilder
   private var repositoryRow: some View {
-    if store.availableRepositories.count > 1 {
-      LabeledContent {
-        ViewThatFits(in: .horizontal) {
-          HStack(spacing: 0) {
-            repositoryPicker
-              .pickerStyle(.segmented)
-              .fixedSize()
-            Spacer(minLength: 0)
-          }
-          repositoryPicker
-            .pickerStyle(.menu)
+    let repositories = Array(store.availableRepositories)
+    if repositories.count > 1 {
+      VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Repository")
+          Text("Terminal runs inside this repo's working directory.")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-      } label: {
-        Text("Repository")
-        Text("Terminal runs inside this repo's working directory.")
+        ViewThatFits(in: .horizontal) {
+          repositoryPicker(repositories)
+            .pickerStyle(.segmented)
+            .fixedSize()
+          VStack(alignment: .leading, spacing: 6) {
+            let split = (repositories.count + 1) / 2
+            // Stretch the shorter row to the longer one's width so the
+            // two rows read as one switcher, not two stray controls.
+            repositoryPicker(Array(repositories[..<split]))
+              .pickerStyle(.segmented)
+              .frame(maxWidth: .infinity)
+            repositoryPicker(Array(repositories[split...]))
+              .pickerStyle(.segmented)
+              .frame(maxWidth: .infinity)
+          }
+          .fixedSize()
+          repositoryPicker(repositories)
+            .pickerStyle(.menu)
+            .fixedSize()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
     }
   }
 
-  /// Shared picker body for both the segmented and menu presentations of
-  /// `repositoryRow` — the label lives on the enclosing `LabeledContent`.
-  private var repositoryPicker: some View {
+  /// Shared picker body for every presentation of `repositoryRow` — the
+  /// label lives on the enclosing row.
+  private func repositoryPicker(_ repositories: [Repository]) -> some View {
     Picker(selection: $store.selectedRepositoryID) {
-      ForEach(store.availableRepositories) { repo in
+      ForEach(repositories) { repo in
         Text(repo.name).tag(Optional(repo.id))
       }
     } label: {
