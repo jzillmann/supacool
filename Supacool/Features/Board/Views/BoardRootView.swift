@@ -350,6 +350,19 @@ struct BoardRootView: View {
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
           : nil,
+        // A live tab snoozes into Standby so the conversation is still there on wake.
+        onSnooze: (sessionStatus != .parked)
+          ? { option in
+            store.send(
+              .snoozeSession(
+                id: session.id,
+                option: option,
+                keepAlive: sessionHasTab,
+                repositories: Array(repositories)
+              )
+            )
+          }
+          : nil,
         onRemove: {
           store.send(
             .requestRemoveFocusedSession(
