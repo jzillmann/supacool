@@ -256,6 +256,11 @@ struct FullScreenTerminalView: View {
 
   /// ⌘1–⌘9 pick a tab, ⌘⇧[ / ⌘⇧] step through them with wrap-around.
   /// Panes inside a tab are Ghostty's business: ⌘[ / ⌘] (goto_split).
+  ///
+  /// Shifted punctuation is spelled as the character the keystroke produces
+  /// (`{`, `}`, `>`) with shift left out of the modifiers — AppKit's key
+  /// equivalent convention. SwiftUI matches `"["` + ⌘⇧ against the event's
+  /// `{` and never fires, so the key fell through to the terminal instead.
   private var tabSelectionShortcuts: some View {
     let tabs = session.tabTerminals
     let activeIndex = tabs.firstIndex { $0.id == activeTerminalID }
@@ -273,12 +278,12 @@ struct FullScreenTerminalView: View {
       Button("Previous Tab") {
         if let previous { onSelectTerminal(tabs[previous].id) }
       }
-      .keyboardShortcut("[", modifiers: [.command, .shift])
+      .keyboardShortcut("{", modifiers: .command)
       .disabled(previous == nil)
       Button("Next Tab") {
         if let next { onSelectTerminal(tabs[next].id) }
       }
-      .keyboardShortcut("]", modifiers: [.command, .shift])
+      .keyboardShortcut("}", modifiers: .command)
       .disabled(next == nil)
     }
     .hidden()
@@ -289,7 +294,8 @@ struct FullScreenTerminalView: View {
       Button("Next in Group") { onCycleGroup(.forward) }
         .keyboardShortcut(".", modifiers: [.command, .option])
       Button("Previous in Group") { onCycleGroup(.backward) }
-        .keyboardShortcut(".", modifiers: [.command, .option, .shift])
+        // ⌘⌥⇧. — spelled `>` for the same reason as ⌘⇧[ / ⌘⇧] above.
+        .keyboardShortcut(">", modifiers: [.command, .option])
     }
     .hidden()
   }
