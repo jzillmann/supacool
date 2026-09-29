@@ -1,3 +1,4 @@
+import AppKit
 import ComposableArchitecture
 import SwiftUI
 
@@ -466,8 +467,9 @@ struct NewTerminalSheet: View {
   /// left no room beside it anyway) and degrades in three steps, first fit
   /// wins:
   /// 1. one segmented switcher,
-  /// 2. the same switcher split over two rows (two pickers on one binding —
-  ///    the row without the selection shows no highlighted segment),
+  /// 2. the same switcher split over two full-width rows (two controls on
+  ///    one binding — the row without the selection shows no highlighted
+  ///    segment),
   /// 3. a menu picker, which is width-flexible and so always fits.
   ///
   /// The fit is measured, not guessed from the repo count: a count-based
@@ -487,21 +489,12 @@ struct NewTerminalSheet: View {
             .foregroundStyle(.secondary)
         }
         ViewThatFits(in: .horizontal) {
-          repositoryPicker(repositories)
-            .pickerStyle(.segmented)
-            .fixedSize()
-          VStack(alignment: .leading, spacing: 6) {
+          repositorySwitcher(repositories)
+          VStack(spacing: 6) {
             let split = (repositories.count + 1) / 2
-            // Stretch the shorter row to the longer one's width so the
-            // two rows read as one switcher, not two stray controls.
-            repositoryPicker(Array(repositories[..<split]))
-              .pickerStyle(.segmented)
-              .frame(maxWidth: .infinity)
-            repositoryPicker(Array(repositories[split...]))
-              .pickerStyle(.segmented)
-              .frame(maxWidth: .infinity)
+            repositorySwitcher(Array(repositories[..<split]))
+            repositorySwitcher(Array(repositories[split...]))
           }
-          .fixedSize()
           repositoryPicker(repositories)
             .pickerStyle(.menu)
             .fixedSize()
@@ -511,8 +504,20 @@ struct NewTerminalSheet: View {
     }
   }
 
-  /// Shared picker body for every presentation of `repositoryRow` — the
-  /// label lives on the enclosing row.
+  /// One row of the repository switcher. Fills the row width, so the two
+  /// rows of the split layout line up segment for segment — a SwiftUI
+  /// segmented `Picker` keeps its natural width on macOS, which left the
+  /// shorter row floating.
+  private func repositorySwitcher(_ repositories: [Repository]) -> some View {
+    let selection = $store.selectedRepositoryID
+    return FillingSegmentedControl(
+      labels: repositories.map(\.name),
+      selectedIndex: repositories.firstIndex { $0.id == selection.wrappedValue },
+      onSelect: { selection.wrappedValue = repositories[$0].id }
+    )
+  }
+
+  /// Menu fallback of `repositoryRow` — the label lives on the enclosing row.
   private func repositoryPicker(_ repositories: [Repository]) -> some View {
     Picker(selection: $store.selectedRepositoryID) {
       ForEach(repositories) { repo in
@@ -1282,6 +1287,62 @@ private struct LinearTicketBannerView: View {
       return "Suggested branch \(branch)"
     case .note:
       return nil
+    }
+  }
+}
+
+/// `NSSegmentedControl` with equal segments that stretches to the width it
+/// is offered, and reports its natural width when asked for an ideal size —
+/// so `ViewThatFits` still measures whether the labels fit. A `nil`
+/// selection shows no highlighted segment (used by the row of a split
+/// switcher that doesn't hold the selection).
+private struct FillingSegmentedControl: NSViewRepresentable {
+  let labels: [String]
+  let selectedIndex: Int?
+  let onSelect: (Int) -> Void
+
+  func makeNSView(context: Context) -> NSSegmentedControl {
+    let control = NSSegmentedControl(
+      labels: labels,
+      trackingMode: .selectOne,
+      target: context.coordinator,
+      action: #selector(Coordinator.segmentSelected(_:))
+    )
+    control.segmentDistribution = .fillEqually
+    control.setContentHuggingPriority(.defaultLow, for: .horizontal)
+    return control
+  }
+
+  func updateNSView(_ control: NSSegmentedControl, context: Context) {
+    context.coordinator.onSelect = onSelect
+    if control.segmentCount != labels.count {
+      control.segmentCount = labels.count
+    }
+    for (index, label) in labels.enumerated() where control.label(forSegment: index) != label {
+      control.setLabel(label, forSegment: index)
+    }
+    control.selectedSegment = selectedIndex ?? -1
+    control.isEnabled = context.environment.isEnabled
+  }
+
+  func sizeThatFits(_ proposal: ProposedViewSize, nsView control: NSSegmentedControl, context: Context) -> CGSize? {
+    let natural = control.intrinsicContentSize
+    guard let width = proposal.width, width.isFinite else { return natural }
+    return CGSize(width: max(width, natural.width), height: natural.height)
+  }
+
+  func makeCoordinator() -> Coordinator { Coordinator(onSelect: onSelect) }
+
+  final class Coordinator: NSObject {
+    var onSelect: (Int) -> Void
+
+    init(onSelect: @escaping (Int) -> Void) {
+      self.onSelect = onSelect
+    }
+
+    @objc func segmentSelected(_ sender: NSSegmentedControl) {
+      guard sender.selectedSegment >= 0 else { return }
+      onSelect(sender.selectedSegment)
     }
   }
 }
