@@ -817,20 +817,39 @@ struct BoardView: View {
     return LazyVStack(alignment: .leading, spacing: 2) {
       ForEach(sessions, id: \.id) { session in
         let sessionStatus = status(session)
-        CompactSessionRow(
+        let flow = flowActions(for: session, status: sessionStatus)
+        let row = CompactSessionRow(
           session: session,
           repositoryName: repositories[id: session.repositoryID]?.name,
           status: sessionStatus,
-          tags: tags.filter { $0.contains(session.id) },
+          allTags: tags,
           isHighlighted: highlightedSessionID == session.id,
+          isSelected: selectedSessionIDs.contains(session.id),
           onTap: { handleCardTap(session) },
-          onUnpark: flowActions(for: session, status: sessionStatus).onUnpark,
+          onRename: { onRenameSession(session) },
+          onTogglePriority: { store.send(.togglePriority(id: session.id)) },
+          onUnpark: flow.onUnpark,
+          onResumePicker: flow.onResumePicker,
+          onSnooze: flow.onSnooze,
+          onToggleTag: { tagID in toggleTag(tagID, for: session) },
+          onNewTag: { name in store.send(.pinSessionToNewGroup(id: session.id, name: name)) },
           onRemove: { store.send(.requestRemoveSession(id: session.id)) }
         )
-        .id(session.id)
+        cardDragAndDrop(row, session: session)
+          .id(session.id)
       }
     }
     .frame(maxWidth: 720, alignment: .leading)
+  }
+
+  /// Read-then-send (allowed in views): flip a session's membership in a
+  /// tag based on its current state there.
+  private func toggleTag(_ tagID: SessionGroup.ID, for session: AgentSession) {
+    if store.sessionGroups.first(where: { $0.id == tagID })?.contains(session.id) == true {
+      store.send(.removeSessionFromGroup(id: session.id, groupID: tagID))
+    } else {
+      store.send(.addSessionToGroup(id: session.id, groupID: tagID))
+    }
   }
 
   /// Per-card wiring shared by both bucket layouts (carousel rail and
@@ -987,15 +1006,7 @@ struct BoardView: View {
         pulseFallback: store.state.prPulseSnapshots
       ),
       sessionGroups: store.sessionGroups,
-      onToggleGroupMembership: { groupID in
-        // Read-then-send (allowed in views): flip membership based on the
-        // session's current state in that group.
-        if store.sessionGroups.first(where: { $0.id == groupID })?.contains(session.id) == true {
-          store.send(.removeSessionFromGroup(id: session.id, groupID: groupID))
-        } else {
-          store.send(.addSessionToGroup(id: session.id, groupID: groupID))
-        }
-      },
+      onToggleGroupMembership: { groupID in toggleTag(groupID, for: session) },
       onPinToNewGroup: { name in
         store.send(.pinSessionToNewGroup(id: session.id, name: name))
       },

@@ -16,8 +16,15 @@ import SwiftUI
 /// than covering it, and Ghostty's own ⌘-digit bindings are unbound
 /// (`AppShortcuts.reservedGhosttyUnbindArguments`). ⌘0 is taken by the
 /// Window menu, so "All" has no digit — press the active tag's digit again.
+/// The keys are live only while the board's window is key (see
+/// `controlActiveState`), so a sheet's own ⌘-digits always win.
 struct TagFilterBar: View {
   @Bindable var store: StoreOf<BoardFeature>
+  /// `.key` only while the board's window is the key window. A sheet over
+  /// the board (the New Terminal sheet binds ⌘1/⌘2 for its agent picker)
+  /// takes key status, so the chips' ⌘-digits switch off instead of
+  /// competing with the sheet's.
+  @Environment(\.controlActiveState) private var controlActiveState
 
   var body: some View {
     let liveIDs = Set(store.sessions.map(\.id))
@@ -36,7 +43,7 @@ struct TagFilterBar: View {
           store.send(.tagFilterSelected(nil))
         }
         ForEach(Array(store.sessionGroups.enumerated()), id: \.element.id) { index, tag in
-          let digit = index < 9 ? index + 1 : nil
+          let digit = index < 9 && controlActiveState == .key ? index + 1 : nil
           chip(
             title: tag.name,
             systemImage: tag.shelves ? "archivebox" : "tag",
