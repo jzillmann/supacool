@@ -346,18 +346,18 @@ struct SessionCardView: View {
       if onPinToNewGroup != nil {
         // Flat buttons, never a nested `Menu` — see the Set Status note above
         // for why a submenu collapses mid-travel here. Existing groups render
-        // as membership toggles; "Pin to New Group…" opens a name prompt.
+        // as membership toggles; "New Tag…" opens a name prompt.
         ForEach(sessionGroups) { group in
           Button {
             onToggleGroupMembership?(group.id)
           } label: {
             Label(
               group.name,
-              systemImage: group.contains(session.id) ? "pin.circle.fill" : "pin.circle"
+              systemImage: group.contains(session.id) ? "tag.fill" : "tag"
             )
           }
         }
-        Button("Pin to New Group…", systemImage: "pin") {
+        Button("New Tag…", systemImage: "tag.badge.plus") {
           newGroupName = ""
           isPinToGroupPromptShown = true
         }
@@ -374,14 +374,14 @@ struct SessionCardView: View {
     } message: {
       Text("Paste a GitHub pull-request URL or type a ticket id (e.g. CEN-1234) to attach it to this session.")
     }
-    .alert("New group", isPresented: $isPinToGroupPromptShown) {
-      TextField("Group name", text: $newGroupName)
+    .alert("New tag", isPresented: $isPinToGroupPromptShown) {
+      TextField("Tag name", text: $newGroupName)
       Button("Cancel", role: .cancel) {}
       Button("Create") {
         onPinToNewGroup?(newGroupName)
       }
     } message: {
-      Text("Pin this session into a new group, then add related terminals and flip between them with ⌘⌥. .")
+      Text("Tag this session. Filter the board by tag, flip between tagged sessions with ⌘⌥. , or shelve a tag.")
     }
   }
 
@@ -583,6 +583,16 @@ struct SessionCardView: View {
       // status/reason chips and was overflowing on PR-backed cards.
       if let serverLifecycle {
         serverLifecycleChip(serverLifecycle)
+      }
+      ForEach(sessionGroups.filter { $0.contains(session.id) }) { tag in
+        HStack(spacing: 2) {
+          Image(systemName: tag.shelves ? "archivebox" : "tag")
+            .accessibilityHidden(true)
+          Text(tag.name)
+            .lineLimit(1)
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
       }
       Spacer(minLength: 8)
       Text(relativeTimestamp)

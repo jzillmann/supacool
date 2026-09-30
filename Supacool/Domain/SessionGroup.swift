@@ -6,9 +6,15 @@ nonisolated enum GroupCycleDirection: Equatable, Sendable {
   case backward
 }
 
-/// A named set of agent sessions the user has *pinned* together so they can
-/// flip between related terminals without hunting the board (e.g. a "feature +
-/// its test runner" pair, or a cluster of sessions all chasing one incident).
+/// A **tag**: a named set of agent sessions. The UI says "tag"; the type keeps
+/// its historical name `SessionGroup` (and its `session-groups.json` file) so
+/// existing groups carry over as tags without a migration.
+///
+/// Tags are orthogonal to the board's status lanes: a card keeps its live
+/// status (Waiting on Me / External / In Progress) and can carry any number
+/// of tags. Every tag is a quick filter, and ⌘⌥. / ⌘⌥⇧. flip between its
+/// members (e.g. a "feature + its test runner" pair). A tag can also carry a
+/// *behavior* — see `shelves`.
 ///
 /// A group is **durable**: it survives a member session ending, detaching, or
 /// being rerun. A dead member stays in the group (greyed in the UI, offering
@@ -30,17 +36,25 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   /// deliberately keeps them.
   var sessionIDs: [UUID]
   let createdAt: Date
+  /// Shelf behavior: members leave the live lanes (and ⌘. navigation) and
+  /// collect behind one pill per tag — for work worth keeping but not
+  /// pursuing now, like spikes. Any active tag filter lifts every shelf: the
+  /// filtered tag's members show in their normal lanes, whatever else they
+  /// carry — a filter is an explicit "show me these".
+  var shelves: Bool
 
   init(
     id: UUID = UUID(),
     name: String,
     sessionIDs: [UUID] = [],
-    createdAt: Date = Date()
+    createdAt: Date = Date(),
+    shelves: Bool = false
   ) {
     self.id = id
     self.name = name
     self.sessionIDs = sessionIDs
     self.createdAt = createdAt
+    self.shelves = shelves
   }
 
   // MARK: - Membership helpers
@@ -48,6 +62,15 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   var isEmpty: Bool { sessionIDs.isEmpty }
 
   func contains(_ sessionID: UUID) -> Bool { sessionIDs.contains(sessionID) }
+
+  /// Ids of sessions that carry at least one shelving tag.
+  static func shelvedSessionIDs(in groups: [SessionGroup]) -> Set<UUID> {
+    var ids: Set<UUID> = []
+    for group in groups where group.shelves {
+      ids.formUnion(group.sessionIDs)
+    }
+    return ids
+  }
 
   /// The member after `sessionID` in pin order, wrapping around. `nil` when
   /// the session isn't a member or the group has fewer than two members
@@ -84,7 +107,7 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
-    case id, name, sessionIDs, createdAt
+    case id, name, sessionIDs, createdAt, shelves
   }
 
   init(from decoder: Decoder) throws {
@@ -93,5 +116,6 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
     name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
     sessionIDs = try c.decodeIfPresent([UUID].self, forKey: .sessionIDs) ?? []
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    shelves = try c.decodeIfPresent(Bool.self, forKey: .shelves) ?? false
   }
 }

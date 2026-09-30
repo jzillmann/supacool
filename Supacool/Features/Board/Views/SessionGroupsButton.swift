@@ -1,10 +1,10 @@
 import ComposableArchitecture
 import SwiftUI
 
-/// Toolbar button + popover for **session groups** ("pins"). Lists every
-/// group and its members; clicking a member jumps straight to that session's
-/// full-screen terminal (the "quick open"). Groups are created from a card's
-/// context menu ("Pin to New Group…"); this panel manages and navigates them.
+/// Toolbar button + popover for **tags** (`SessionGroup`). Lists every tag
+/// and its members; clicking a member jumps straight to that session's
+/// full-screen terminal (the "quick open"). Tags are created from a card's
+/// context menu ("New Tag…"); this panel renames, shelves and deletes them.
 ///
 /// Mirrors `RepoPickerButton` / `PRPulseButton`: a plain toolbar `Button` that
 /// owns its own popover and takes the board store directly.
@@ -17,7 +17,7 @@ struct SessionGroupsButton: View {
       isPresented.toggle()
     } label: {
       HStack(spacing: 6) {
-        Image(systemName: "pin.fill")
+        Image(systemName: "tag.fill")
           .foregroundStyle(.orange)
           .accessibilityHidden(true)
         Text("\(store.sessionGroups.count)")
@@ -28,7 +28,7 @@ struct SessionGroupsButton: View {
           .accessibilityHidden(true)
       }
     }
-    .help("Session groups — flip between pinned, related terminals (⌘⌥. to cycle)")
+    .help("Tags — jump between tagged sessions (⌘⌥. to cycle), rename, shelve or delete tags")
     .popover(isPresented: $isPresented, arrowEdge: .bottom) {
       SessionGroupsPanel(store: store, isPresented: $isPresented)
     }
@@ -75,7 +75,7 @@ private struct SessionGroupsPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(spacing: 8) {
-        Text("Groups")
+        Text("Tags")
           .font(.headline)
         Spacer(minLength: 8)
         if showsScopePicker {
@@ -87,7 +87,7 @@ private struct SessionGroupsPanel: View {
           .labelsHidden()
           .fixedSize()
           .controlSize(.small)
-          .help("Show only the group of the session you have open, or every group")
+          .help("Show only the tag of the session you have open, or every tag")
         }
       }
       .padding(.horizontal, 14)
@@ -95,7 +95,7 @@ private struct SessionGroupsPanel: View {
       .padding(.bottom, 6)
 
       if store.sessionGroups.isEmpty {
-        Text("No groups yet. Right-click a card → “Pin to New Group…”.")
+        Text("No tags yet. Right-click a card → “New Tag…”.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .padding(.horizontal, 14)
@@ -120,14 +120,14 @@ private struct SessionGroupsPanel: View {
   private func groupSection(_ group: SessionGroup) -> some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 6) {
-        Image(systemName: "pin.fill")
+        Image(systemName: group.shelves ? "archivebox.fill" : "tag.fill")
           .font(.caption)
           .foregroundStyle(.orange)
           .accessibilityHidden(true)
         // Inline rename: commit on submit; blank names are ignored by the
         // reducer, so an accidental clear can't wipe the label.
         TextField(
-          "Group name",
+          "Tag name",
           text: Binding(
             get: { group.name },
             set: { store.send(.renameGroup(id: group.id, name: $0)) }
@@ -137,15 +137,29 @@ private struct SessionGroupsPanel: View {
         .font(.subheadline.weight(.semibold))
         Spacer()
         Button {
+          store.send(.toggleTagShelves(id: group.id))
+        } label: {
+          Image(systemName: group.shelves ? "archivebox.fill" : "archivebox")
+            .font(.caption)
+            .accessibilityLabel(group.shelves ? "Keep \(group.name) on the board" : "Shelve \(group.name)")
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(group.shelves ? .orange : .secondary)
+        .help(
+          group.shelves
+            ? "Shelved: members stay off the board until you pick this tag's filter. Click to keep them on the board."
+            : "Shelve: hide this tag's sessions from the board behind one pill (for spikes and parked ideas)"
+        )
+        Button {
           store.send(.deleteGroup(id: group.id))
         } label: {
           Image(systemName: "trash")
             .font(.caption)
-            .accessibilityLabel("Delete group \(group.name)")
+            .accessibilityLabel("Delete tag \(group.name)")
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .help("Delete this group (the sessions themselves are untouched)")
+        .help("Delete this tag (the sessions themselves are untouched)")
       }
 
       ForEach(group.sessionIDs, id: \.self) { sessionID in
@@ -200,13 +214,13 @@ private struct SessionGroupsPanel: View {
       Button {
         store.send(.removeSessionFromGroup(id: sessionID, groupID: group.id))
       } label: {
-        Image(systemName: "pin.slash")
+        Image(systemName: "tag.slash")
           .font(.caption2)
-          .accessibilityLabel("Remove from group")
+          .accessibilityLabel("Remove tag")
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
-      .help("Remove from group")
+      .help("Remove this tag from the session")
     }
     .padding(.leading, 18)
   }

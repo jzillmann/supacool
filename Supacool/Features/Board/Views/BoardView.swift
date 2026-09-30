@@ -81,6 +81,11 @@ struct BoardView: View {
     // to the window title. What's left here is just the board body.
     bodyContent
       .frame(maxWidth: .infinity, maxHeight: .infinity)
+      .safeAreaInset(edge: .top, spacing: 0) {
+        if !store.sessionGroups.isEmpty {
+          TagFilterBar(store: store)
+        }
+      }
       .coordinateSpace(name: Self.boardGridCoordSpace)
       .onPreferenceChange(BoardCardFramesKey.self) { cardFrames = $0 }
       .focusable()
@@ -384,6 +389,7 @@ struct BoardView: View {
       let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
       let standby = parked.filter(\.parkedActive)
       let coldParked = parked.filter { !$0.parkedActive }
+      let shelves = store.shelves
       // Only show the repo caption above each card when the visible set
       // actually spans multiple repos. With a single-repo filter (or only
       // one repo on disk) the caption is implied, so we keep the cards
@@ -497,10 +503,27 @@ struct BoardView: View {
                 showsRepoLabelAbove: showsRepoLabelAbove
               )
             }
-            if !standby.isEmpty || !coldParked.isEmpty {
+            if !standby.isEmpty || !coldParked.isEmpty || !shelves.isEmpty {
               Divider()
                 .padding(.vertical, 4)
               HStack(spacing: 8) {
+                // A shelf pill opens its tag as the board filter, so the
+                // shelved cards show in their normal lanes — no second,
+                // inline copy of the lane layout to render.
+                ForEach(shelves, id: \.tag.id) { shelf in
+                  DormantBucketPill(
+                    title: shelf.tag.name,
+                    count: shelf.sessions.count,
+                    systemImage: "archivebox",
+                    // Orange when a shelved agent asks for input: the shelf
+                    // wins over the lane, but the pill still tells you.
+                    color: shelf.sessions.contains { [.waitingOnMe, .awaitingInput].contains(classify($0)) }
+                      ? .orange : .secondary,
+                    isExpanded: false,
+                    help: "Open the \(shelf.tag.name) shelf",
+                    action: { store.send(.tagFilterSelected(shelf.tag.id)) }
+                  )
+                }
                 if !standby.isEmpty {
                   DormantBucketPill(
                     title: "Standby",
@@ -1578,6 +1601,7 @@ private struct DormantBucketPill: View {
   let systemImage: String
   let color: Color
   let isExpanded: Bool
+  var help: String?
   let action: () -> Void
 
   @State private var isHovered: Bool = false
@@ -1617,7 +1641,7 @@ private struct DormantBucketPill: View {
       )
     }
     .buttonStyle(.plain)
-    .help("\(isExpanded ? "Collapse" : "Expand") \(title.lowercased()) sessions")
+    .help(help ?? "\(isExpanded ? "Collapse" : "Expand") \(title.lowercased()) sessions")
     .onHover { isHovered = $0 }
   }
 }

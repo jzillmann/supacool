@@ -53,6 +53,9 @@ extension BoardFeature {
         groups.remove(at: index)
       }
     }
+    if let filterID = state.tagFilterID, !state.sessionGroups.contains(where: { $0.id == filterID }) {
+      state.tagFilterID = nil
+    }
     return .none
   }
 
@@ -66,6 +69,17 @@ extension BoardFeature {
     state.$sessionGroups.withLock { groups in
       guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
       groups[index].name = trimmed
+    }
+    return .none
+  }
+
+  func reduceToggleTagShelves(
+    state: inout State,
+    id: SessionGroup.ID
+  ) -> Effect<Action> {
+    state.$sessionGroups.withLock { groups in
+      guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+      groups[index].shelves.toggle()
     }
     return .none
   }

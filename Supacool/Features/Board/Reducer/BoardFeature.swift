@@ -67,6 +67,11 @@ struct BoardFeature {
     /// fresh launch always shows the whole board.
     var searchQuery: String = ""
 
+    /// Tag (`SessionGroup`) the board is filtered to. `nil` shows every tag
+    /// except shelved ones (see `SessionGroup.shelves`). Not persisted, like
+    /// `searchQuery`.
+    var tagFilterID: SessionGroup.ID?
+
     /// When non-nil, a blocking script's terminal tab is shown over the
     /// board so the user can read why the script failed. See
     /// `ScriptTerminalPresentation`.
@@ -877,6 +882,10 @@ struct BoardFeature {
     case removeSessionFromGroup(id: AgentSession.ID, groupID: SessionGroup.ID)
     case renameGroup(id: SessionGroup.ID, name: String)
     case deleteGroup(id: SessionGroup.ID)
+    /// Toggle a tag's shelf behavior (see `SessionGroup.shelves`).
+    case toggleTagShelves(id: SessionGroup.ID)
+    /// Filter the board to one tag; `nil` clears the filter.
+    case tagFilterSelected(SessionGroup.ID?)
     /// Cycle full-screen focus to the next/previous member of the group
     /// containing `from`. Drives ⌘⌥. / ⌘⌥⇧. . No-op if `from` isn't in a
     /// group or the group has a single member.
@@ -2130,7 +2139,15 @@ struct BoardFeature {
       case .renameGroup(let id, let name):
         return reduceRenameGroup(state: &state, id: id, name: name)
 
+      case .toggleTagShelves(let id):
+        return reduceToggleTagShelves(state: &state, id: id)
+
+      case .tagFilterSelected(let id):
+        state.tagFilterID = id
+        return .none
+
       case .deleteGroup(let id):
+        if state.tagFilterID == id { state.tagFilterID = nil }
         state.$sessionGroups.withLock { $0.removeAll { $0.id == id } }
         return .none
 
@@ -3828,8 +3845,28 @@ extension BoardFeature.State {
   /// preserving insertion order.
   var visibleSessions: [AgentSession] {
     let query = BoardSessionSearch.normalized(searchQuery)
+    let tagFilter = tagFilterID.flatMap { id in sessionGroups.first { $0.id == id } }
+    let shelved = tagFilter == nil ? SessionGroup.shelvedSessionIDs(in: sessionGroups) : []
     return sessions.filter {
-      filters.includes(repositoryID: $0.repositoryID) && BoardSessionSearch.matches($0, query: query)
+      filters.includes(repositoryID: $0.repositoryID)
+        && BoardSessionSearch.matches($0, query: query)
+        && (tagFilter?.contains($0.id) ?? !shelved.contains($0.id))
+    }
+  }
+
+  /// Sessions behind each shelving tag's pill, under the same repo and search
+  /// filters as `visibleSessions`. Empty while a tag filter is active — the
+  /// filter already lifted every shelf.
+  var shelves: [(tag: SessionGroup, sessions: [AgentSession])] {
+    guard tagFilterID == nil else { return [] }
+    let query = BoardSessionSearch.normalized(searchQuery)
+    return sessionGroups.filter(\.shelves).compactMap { tag in
+      let members = sessions.filter {
+        tag.contains($0.id)
+          && filters.includes(repositoryID: $0.repositoryID)
+          && BoardSessionSearch.matches($0, query: query)
+      }
+      return members.isEmpty ? nil : (tag, members)
     }
   }
 

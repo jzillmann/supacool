@@ -305,7 +305,89 @@ struct SessionGroupTests {
     #expect(store.state.sessionGroups.isEmpty)
   }
 
+  // MARK: - Tags: shelf behavior + filter
+
+  @Test func decodingLegacyGroupDefaultsToNotShelving() throws {
+    let json = #"{"id": "00000000-0000-0000-0000-000000000009", "name": "Old group"}"#
+    let tag = try JSONDecoder().decode(SessionGroup.self, from: Data(json.utf8))
+    #expect(tag.shelves == false)
+  }
+
+  @Test func shelvedSessionIDsUnionsOnlyShelvingTags() {
+    let a = UUID(), b = UUID(), c = UUID()
+    let spikes = SessionGroup(name: "spike", sessionIDs: [a, b], shelves: true)
+    let feature = SessionGroup(name: "billing", sessionIDs: [b, c])
+    #expect(SessionGroup.shelvedSessionIDs(in: [spikes, feature]) == [a, b])
+  }
+
+  @Test(.dependencies) func toggleTagShelvesFlipsTheBehavior() async {
+    let tag = SessionGroup(name: "spike", sessionIDs: [UUID()])
+    let store = TestStore(initialState: Self.state(tags: [tag])) {
+      BoardFeature()
+    }
+
+    await store.send(.toggleTagShelves(id: tag.id)) {
+      $0.$sessionGroups.withLock { $0[0].shelves = true }
+    }
+    await store.send(.toggleTagShelves(id: tag.id)) {
+      $0.$sessionGroups.withLock { $0[0].shelves = false }
+    }
+  }
+
+  @Test func shelvedSessionsLeaveTheBoardUntilTheirTagIsFiltered() {
+    let spike = Self.sampleSession(prompt: "Spike")
+    let live = Self.sampleSession(prompt: "Live")
+    let both = Self.sampleSession(prompt: "Both")
+    let spikes = SessionGroup(name: "spike", sessionIDs: [spike.id, both.id], shelves: true)
+    let billing = SessionGroup(name: "billing", sessionIDs: [both.id])
+    var state = Self.state(tags: [spikes, billing], sessions: [spike, live, both])
+
+    // Unfiltered: shelved cards hide behind the shelf pill.
+    #expect(state.visibleSessions.map(\.id) == [live.id])
+    #expect(state.shelves.map(\.tag.id) == [spikes.id])
+    #expect(state.shelves.first?.sessions.map(\.id) == [spike.id, both.id])
+
+    // Filtering to the shelf opens it; no shelf pills while filtered.
+    state.tagFilterID = spikes.id
+    #expect(state.visibleSessions.map(\.id) == [spike.id, both.id])
+    #expect(state.shelves.isEmpty)
+
+    // A filter on another tag still shows its members, shelved or not.
+    state.tagFilterID = billing.id
+    #expect(state.visibleSessions.map(\.id) == [both.id])
+  }
+
+  @Test(.dependencies) func deletingOrEmptyingTheFilteredTagClearsTheFilter() async {
+    let a = UUID()
+    let solo = SessionGroup(name: "solo", sessionIDs: [a])
+    let other = SessionGroup(name: "other", sessionIDs: [UUID()])
+    let store = TestStore(initialState: Self.state(tags: [solo, other])) {
+      BoardFeature()
+    }
+
+    store.exhaustivity = .off
+
+    await store.send(.tagFilterSelected(solo.id))
+    #expect(store.state.tagFilterID == solo.id)
+    await store.send(.removeSessionFromGroup(id: a, groupID: solo.id))
+    #expect(store.state.sessionGroups.map(\.id) == [other.id])
+    #expect(store.state.tagFilterID == nil)
+
+    await store.send(.tagFilterSelected(other.id))
+    #expect(store.state.tagFilterID == other.id)
+    await store.send(.deleteGroup(id: other.id))
+    #expect(store.state.sessionGroups.isEmpty)
+    #expect(store.state.tagFilterID == nil)
+  }
+
   // MARK: - Helpers
+
+  private static func state(tags: [SessionGroup], sessions: [AgentSession] = []) -> BoardFeature.State {
+    let state = BoardFeature.State()
+    state.$sessionGroups.withLock { $0 = tags }
+    state.$sessions.withLock { $0 = sessions }
+    return state
+  }
 
   private static func sampleSession(
     id: UUID = UUID(),
