@@ -40,6 +40,9 @@ struct FullScreenTerminalView: View {
   let onParkActive: (() -> Void)?
   /// Clear the parked bit for active parked sessions.
   let onUnpark: (() -> Void)?
+  /// Park/Standby with a wake-up time (see `SnoozeOption`). Offered in the
+  /// park control's menu, next to Park and Standby.
+  let onSnooze: ((SnoozeOption) -> Void)?
   let onRemove: () -> Void
   /// Present only for remote sessions whose ssh link has dropped. Clicked
   /// by the user from the disconnected state to re-spawn ssh and
@@ -256,6 +259,11 @@ struct FullScreenTerminalView: View {
 
   /// ⌘1–⌘9 pick a tab, ⌘⇧[ / ⌘⇧] step through them with wrap-around.
   /// Panes inside a tab are Ghostty's business: ⌘[ / ⌘] (goto_split).
+  ///
+  /// Shifted punctuation is spelled as the character the keystroke produces
+  /// (`{`, `}`, `>`) with shift left out of the modifiers — AppKit's key
+  /// equivalent convention. SwiftUI matches `"["` + ⌘⇧ against the event's
+  /// `{` and never fires, so the key fell through to the terminal instead.
   private var tabSelectionShortcuts: some View {
     let tabs = session.tabTerminals
     let activeIndex = tabs.firstIndex { $0.id == activeTerminalID }
@@ -273,12 +281,12 @@ struct FullScreenTerminalView: View {
       Button("Previous Tab") {
         if let previous { onSelectTerminal(tabs[previous].id) }
       }
-      .keyboardShortcut("[", modifiers: [.command, .shift])
+      .keyboardShortcut("{", modifiers: .command)
       .disabled(previous == nil)
       Button("Next Tab") {
         if let next { onSelectTerminal(tabs[next].id) }
       }
-      .keyboardShortcut("]", modifiers: [.command, .shift])
+      .keyboardShortcut("}", modifiers: .command)
       .disabled(next == nil)
     }
     .hidden()
@@ -289,7 +297,8 @@ struct FullScreenTerminalView: View {
       Button("Next in Group") { onCycleGroup(.forward) }
         .keyboardShortcut(".", modifiers: [.command, .option])
       Button("Previous in Group") { onCycleGroup(.backward) }
-        .keyboardShortcut(".", modifiers: [.command, .option, .shift])
+        // ⌘⌥⇧. — spelled `>` for the same reason as ⌘⇧[ / ⌘⇧] above.
+        .keyboardShortcut(">", modifiers: [.command, .option])
     }
     .hidden()
   }
@@ -841,20 +850,30 @@ struct FullScreenTerminalView: View {
   /// session's transcript file. Selecting one fires Ghostty's search
   /// binding pre-populated with that prompt's first ~40 chars, so the
   /// user lands on the matching spot in the scrollback.
-  /// Park control beside delete. When the session is live, a primary-action
-  /// menu makes both options first-class: clicking the label parks and tears
-  /// down the tab, while the disclosure chevron reveals Standby (hide the
-  /// card without interrupting the running terminal). When no live terminal
-  /// backs the session, Standby is meaningless so it falls back to a plain
+  /// Park control beside delete. A primary-action menu: clicking the label
+  /// parks and tears down the tab, while the disclosure chevron reveals
+  /// Standby (hide the card without interrupting the running terminal) and
+  /// the Snooze presets. Standby only shows when a live terminal backs the
+  /// session; with neither Standby nor Snooze it falls back to a plain
   /// one-click Park button. When viewing a standby session, the same slot
   /// becomes Unpark.
   @ViewBuilder
   private var parkControl: some View {
     if let onPark {
-      if let onParkActive {
+      if onParkActive != nil || onSnooze != nil {
         Menu {
           Button("Park", systemImage: "parkingsign", action: onPark)
-          Button("Standby", systemImage: "bolt.circle", action: onParkActive)
+          if let onParkActive {
+            Button("Standby", systemImage: "bolt.circle", action: onParkActive)
+          }
+          if let onSnooze {
+            Divider()
+            Section("Snooze Until") {
+              ForEach(SnoozeOption.allCases) { option in
+                Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
+              }
+            }
+          }
         } label: {
           Image(systemName: "pause.fill")
             .font(.system(size: 13, weight: .medium))
@@ -865,7 +884,7 @@ struct FullScreenTerminalView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("Park and stop the terminal. Open the menu for Standby (park but keep the terminal running).")
+        .help("Park and stop the terminal. Open the menu for Standby (park but keep the terminal running) or Snooze.")
       } else {
         Button(action: onPark) {
           Image(systemName: "pause.fill")

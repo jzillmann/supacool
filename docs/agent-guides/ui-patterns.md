@@ -185,6 +185,10 @@ Rules:
   `AppShortcuts.reservedGhosttyUnbindArguments` for keys that have no menu item and are not
   user-rebindable (⌘W; ⌘1–⌘9 and ⌘⇧[ / ⌘⇧] for the session tab strip; ⌘⌥arrows for the session switcher). Dead `AppShortcut`s are not free either: the deleted sidebar's ⌘[ kept unbinding Ghostty's `goto_split:previous` for nothing — drop the registration, keep the `AppShortcutID` case so saved overrides still decode. Once unbound, `bindingFlags(for:)` returns nil and the event falls
   through to SwiftUI **every** time — no first-responder lottery.
+- **Spell shifted punctuation as the produced character.** `.keyboardShortcut("[",
+  modifiers: [.command, .shift])` never fires: SwiftUI matches it against the event's `{`.
+  Write `"{"` with `.command` (shift implied), likewise `"}"` for ⌘⇧] and `">"` for ⌘⌥⇧.
+  The dead shortcut is silent — the key just falls through to the terminal.
 - **Never gate a menu shortcut on a `@FocusedValue` nobody sets.** `WindowCommands` used
   `closeSurfaceAction == nil` to decide whether ⌘W overlapped Ghostty's `close_surface`.
   The only setter was deleted with the sidebar in `8dae4c31`, so the guard silently inverted

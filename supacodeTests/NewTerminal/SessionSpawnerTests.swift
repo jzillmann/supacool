@@ -52,7 +52,7 @@ struct SessionSpawnerTests {
     } operation: {
       _ = try await SessionSpawner.spawnLocal(request)
     }
-    #expect(spawnedInput.value == "codex --dangerously-bypass-approvals-and-sandbox 'List the tests'\r")
+    #expect(spawnedInput.value == "codex --no-daemon --dangerously-bypass-approvals-and-sandbox 'List the tests'\r")
   }
 
   @Test(.dependencies) func piAgentAutoInstallsExtensionBeforeSpawn() async throws {

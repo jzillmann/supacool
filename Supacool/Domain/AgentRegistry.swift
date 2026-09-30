@@ -100,9 +100,14 @@ nonisolated enum AgentRegistry {
     knownModels: ["gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5.1-codex-mini"],
     icon: .asset("codex-mark"),
     tintColorName: "indigo",
-    launchTemplate: "{binary}{flags} {prompt}",
-    resumeTemplate: "{binary} resume {id}{flags}",
-    resumePickerTemplate: "{binary} resume{flags}",
+    // `--no-daemon` keeps each turn in this terminal's own process. Codex
+    // 0.158+ otherwise runs turns in a shared app-server daemon, and hooks
+    // run inside that daemon with the environment of whichever terminal
+    // started it — so every Codex Stop reported one stale SUPACOOL_TAB_ID,
+    // and review loops, busy state and resume ids never reached their tab.
+    launchTemplate: "{binary} --no-daemon{flags} {prompt}",
+    resumeTemplate: "{binary} resume {id} --no-daemon{flags}",
+    resumePickerTemplate: "{binary} resume --no-daemon{flags}",
     skillSyntax: AgentSkillSyntax(triggerCharacter: "$", separatesUserInvocable: false),
     isBuiltin: true
   )

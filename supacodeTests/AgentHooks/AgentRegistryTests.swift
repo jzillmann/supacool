@@ -148,7 +148,7 @@ struct AgentRegistryTests {
 
   @Test func codexSilentlyDropsRemoteControlWhenUnsupported() {
     let cmd = AgentType.codex.command(prompt: "hi", remoteControl: true)
-    #expect(cmd == "codex 'hi'")
+    #expect(cmd == "codex --no-daemon 'hi'")
   }
 
   @Test func piSilentlyDropsBypassFlagWhenAgentHasNone() {
@@ -163,7 +163,7 @@ struct AgentRegistryTests {
 
   @Test func codexResumeAppendsBypassFlag() {
     let cmd = AgentType.codex.resumeCommand(sessionID: "abc-123", bypassPermissions: true)
-    #expect(cmd == "codex resume 'abc-123' --dangerously-bypass-approvals-and-sandbox")
+    #expect(cmd == "codex resume 'abc-123' --no-daemon --dangerously-bypass-approvals-and-sandbox")
   }
 
   @Test func placeholderAgentHasNoResumeCommand() {
@@ -209,7 +209,7 @@ struct AgentRegistryTests {
 
   @Test func codexRendersShortModelFlag() {
     let cmd = AgentType.codex.command(prompt: "hi", model: "gpt-5.1-codex")
-    #expect(cmd == "codex -m 'gpt-5.1-codex' 'hi'")
+    #expect(cmd == "codex --no-daemon -m 'gpt-5.1-codex' 'hi'")
   }
 
   @Test func piSilentlyDropsModelWhenAgentHasNoFlag() {
@@ -285,7 +285,7 @@ struct AgentRegistryTests {
 
   @Test func codexSilentlyDropsAdditionalDirectories() {
     let cmd = AgentType.codex.command(prompt: "hi", additionalDirectories: ["/a/b"])
-    #expect(cmd == "codex 'hi'")
+    #expect(cmd == "codex --no-daemon 'hi'")
   }
 
   @Test func piSilentlyDropsAdditionalDirectories() {

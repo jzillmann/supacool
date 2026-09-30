@@ -126,6 +126,12 @@ Event wiring (see `ClaudeHookSettings` / `CodexHookSettings` for the current tru
   `session_id` rides along).
 - Codex mirrors the Claude wiring with an explicit Bash matcher on PreToolUse; pi is
   handled via a pi extension.
+- **Hooks route by the hook process's environment**, so the agent must run its turns in
+  the terminal's own process tree. Codex 0.158+ otherwise hands turns to a shared
+  app-server daemon that inherits the `SUPACOOL_*` env of whichever terminal started it;
+  every Codex hook then reported that one tab, and review loops never saw their
+  reviewer's Stop. Supacool launches and resumes Codex with `--no-daemon`
+  (`AgentRegistry.codexBuiltin`) for this reason — keep it.
 
 ## Remote sessions (ssh + tmux)
 
