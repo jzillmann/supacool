@@ -851,7 +851,7 @@ struct SessionCardView: View {
     AnyShapeStyle(.background.secondary)
   }
 
-  private var priorityColor: Color { .pink }
+  private var priorityColor: Color { .orange }
 
   private var relativeTimestamp: String {
     let formatter = RelativeDateTimeFormatter()

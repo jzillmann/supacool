@@ -388,7 +388,7 @@ struct FullScreenTerminalView: View {
   }
 
   /// Same color the board card uses for its priority border and flag.
-  private var priorityColor: Color { .pink }
+  private var priorityColor: Color { .orange }
 
   /// Filled pink flag beside the title, shown only while the session is
   /// marked priority. Clicking it clears the flag (the overflow menu is
