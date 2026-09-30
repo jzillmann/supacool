@@ -185,22 +185,50 @@ private struct SessionGroupsPanel: View {
     }
   }
 
-  @ViewBuilder
   private func memberRow(sessionID: AgentSession.ID, group: SessionGroup) -> some View {
-    let session = store.sessions.first(where: { $0.id == sessionID })
+    SessionGroupMemberRow(
+      session: store.sessions.first(where: { $0.id == sessionID }),
+      isCurrent: store.focusedSessionID == sessionID,
+      onOpen: {
+        store.send(.focusForward(to: sessionID))
+        isPresented = false
+      },
+      onRemove: {
+        store.send(.removeSessionFromGroup(id: sessionID, groupID: group.id))
+      }
+    )
+  }
+}
+
+/// One member of a tag in the panel. Marks the session the user is inside
+/// right now (accent tint + filled icon) and lights up under the pointer, so
+/// the list reads as clickable and "where am I" is answered at a glance.
+private struct SessionGroupMemberRow: View {
+  let session: AgentSession?
+  let isCurrent: Bool
+  let onOpen: () -> Void
+  let onRemove: () -> Void
+  @State private var isHovered = false
+
+  private var rowFill: Color {
+    if isCurrent { return Color.accentColor.opacity(isHovered ? 0.3 : 0.2) }
+    if isHovered, session != nil { return Color.primary.opacity(0.08) }
+    return .clear
+  }
+
+  var body: some View {
     HStack(spacing: 6) {
       Button {
         guard session != nil else { return }
-        store.send(.focusForward(to: sessionID))
-        isPresented = false
+        onOpen()
       } label: {
         HStack(spacing: 6) {
-          Image(systemName: session == nil ? "questionmark.circle" : "terminal")
+          Image(systemName: iconName)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(isCurrent ? Color.accentColor : .secondary)
             .accessibilityHidden(true)
           Text(session?.displayName ?? "Unavailable")
-            .font(.callout)
+            .font(isCurrent ? .callout.weight(.semibold) : .callout)
             .lineLimit(1)
             .truncationMode(.tail)
             .foregroundStyle(session == nil ? .secondary : .primary)
@@ -210,18 +238,29 @@ private struct SessionGroupsPanel: View {
       }
       .buttonStyle(.plain)
       .disabled(session == nil)
+      .help(isCurrent ? "You are in this session" : "Open this session")
+      .accessibilityAddTraits(isCurrent ? .isSelected : [])
 
-      Button {
-        store.send(.removeSessionFromGroup(id: sessionID, groupID: group.id))
-      } label: {
+      Button(action: onRemove) {
         Image(systemName: "tag.slash")
           .font(.caption2)
           .accessibilityLabel("Remove tag")
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
+      .opacity(isHovered || isCurrent ? 1 : 0.5)
       .help("Remove this tag from the session")
     }
-    .padding(.leading, 18)
+    .padding(.vertical, 3)
+    .padding(.horizontal, 6)
+    .background(RoundedRectangle(cornerRadius: 5).fill(rowFill))
+    .padding(.leading, 12)
+    .onHover { isHovered = $0 }
+    .animation(.easeOut(duration: 0.12), value: isHovered)
+  }
+
+  private var iconName: String {
+    guard session != nil else { return "questionmark.circle" }
+    return isCurrent ? "terminal.fill" : "terminal"
   }
 }
