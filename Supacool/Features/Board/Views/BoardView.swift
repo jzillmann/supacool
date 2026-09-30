@@ -365,28 +365,33 @@ struct BoardView: View {
         emptyState
       }
     } else {
-      let live = visible.filter { classify($0) != .parked }
+      // Classify each session once per render: `classify` probes the
+      // terminal manager and PR state, and the lane split below used to call
+      // it five or six times per card.
+      let statusByID = Dictionary(visible.map { ($0.id, classify($0)) }, uniquingKeysWith: { first, _ in first })
+      let status: (AgentSession) -> BoardSessionStatus = { statusByID[$0.id] ?? classify($0) }
+      let live = visible.filter { status($0) != .parked }
       // The deck swallows the idle cards, but "Waiting on Me (n)" keeps
       // counting them — a collapsed pile is hidden, not gone.
       let deck = frozenDeckSessions
       let deckIDs = Set(deck.map(\.id))
-      let allWaiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(classify($0)) })
+      let allWaiting = BoardNavOrder.priorityFirst(live.filter { isWaitingStatus(status($0)) })
       let waiting = deckIDs.isEmpty ? allWaiting : allWaiting.filter { !deckIDs.contains($0.id) }
       let waitingCount = allWaiting.count
       // Once expanded, the header offers the way back — otherwise a fanned-out
       // pile could only be restacked by relaunching the app.
       let canRestack = frozenDeckExpanded
-        && live.filter { classify($0) == .detached && !$0.isPriority }.count >= BoardFrozenDeck.minimumCount
+        && live.filter { status($0) == .detached && !$0.isPriority }.count >= BoardFrozenDeck.minimumCount
       let checksPending = BoardNavOrder.priorityFirst(
-        live.filter { BoardNavOrder.isChecksPendingStatus(classify($0)) }
+        live.filter { BoardNavOrder.isChecksPendingStatus(status($0)) }
       )
       let inProgress = BoardNavOrder.priorityFirst(
         live.filter {
-          let status = classify($0)
-          return !isWaitingStatus(status) && !BoardNavOrder.isChecksPendingStatus(status)
+          let sessionStatus = status($0)
+          return !isWaitingStatus(sessionStatus) && !BoardNavOrder.isChecksPendingStatus(sessionStatus)
         }
       )
-      let parked = BoardNavOrder.priorityFirst(visible.filter { classify($0) == .parked })
+      let parked = BoardNavOrder.priorityFirst(visible.filter { status($0) == .parked })
       let standby = parked.filter(\.parkedActive)
       let coldParked = parked.filter { !$0.parkedActive }
       let shelves = store.shelves
@@ -571,16 +576,7 @@ struct BoardView: View {
                 )
               }
               if parkedBucketExpanded && !coldParked.isEmpty {
-                section(
-                  title: "Parked",
-                  systemImage: "parkingsign",
-                  color: .secondary,
-                  sessions: coldParked,
-                  dimmed: true,
-                  emptyMessage: nil,
-                  hidesHeader: true,
-                  showsRepoLabelAbove: showsRepoLabelAbove
-                )
+                compactRows(sessions: coldParked, status: status)
               }
             }
           }
@@ -809,6 +805,32 @@ struct BoardView: View {
       }
       Spacer(minLength: 0)
     }
+  }
+
+  /// Dormant pile as one-line rows instead of full cards — see
+  /// `CompactSessionRow` for why parked cards don't need the full card.
+  private func compactRows(
+    sessions: [AgentSession],
+    status: @escaping (AgentSession) -> BoardSessionStatus
+  ) -> some View {
+    let tags = store.sessionGroups
+    return LazyVStack(alignment: .leading, spacing: 2) {
+      ForEach(sessions, id: \.id) { session in
+        let sessionStatus = status(session)
+        CompactSessionRow(
+          session: session,
+          repositoryName: repositories[id: session.repositoryID]?.name,
+          status: sessionStatus,
+          tags: tags.filter { $0.contains(session.id) },
+          isHighlighted: highlightedSessionID == session.id,
+          onTap: { handleCardTap(session) },
+          onUnpark: flowActions(for: session, status: sessionStatus).onUnpark,
+          onRemove: { store.send(.requestRemoveSession(id: session.id)) }
+        )
+        .id(session.id)
+      }
+    }
+    .frame(maxWidth: 720, alignment: .leading)
   }
 
   /// Per-card wiring shared by both bucket layouts (carousel rail and

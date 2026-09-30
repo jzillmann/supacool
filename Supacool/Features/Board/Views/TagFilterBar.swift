@@ -10,6 +10,12 @@ import SwiftUI
 /// one card onto another; a chip's context menu toggles the shelf behavior,
 /// sets a review cadence, marks the tag reviewed and deletes it. A tag whose
 /// review is due carries an orange dot.
+///
+/// ⌘1–⌘9 toggle the first nine tags. Safe on the board: the full-screen
+/// terminal (which owns ⌘1–⌘9 for its tab strip) replaces the board rather
+/// than covering it, and Ghostty's own ⌘-digit bindings are unbound
+/// (`AppShortcuts.reservedGhosttyUnbindArguments`). ⌘0 is taken by the
+/// Window menu, so "All" has no digit — press the active tag's digit again.
 struct TagFilterBar: View {
   @Bindable var store: StoreOf<BoardFeature>
 
@@ -24,17 +30,20 @@ struct TagFilterBar: View {
           count: nil,
           isSelected: store.tagFilterID == nil,
           isReviewDue: false,
+          shortcutDigit: nil,
           help: "Show every session except shelved ones"
         ) {
           store.send(.tagFilterSelected(nil))
         }
-        ForEach(store.sessionGroups) { tag in
+        ForEach(Array(store.sessionGroups.enumerated()), id: \.element.id) { index, tag in
+          let digit = index < 9 ? index + 1 : nil
           chip(
             title: tag.name,
             systemImage: tag.shelves ? "archivebox" : "tag",
             count: tag.sessionIDs.filter(liveIDs.contains).count,
             isSelected: store.tagFilterID == tag.id,
             isReviewDue: tag.isReviewDue(now: now),
+            shortcutDigit: digit,
             help: (tag.shelves
               ? "Open the \(tag.name) shelf (its sessions are hidden from the board otherwise)"
               : "Show only sessions tagged \(tag.name)")
@@ -98,6 +107,7 @@ struct TagFilterBar: View {
     count: Int?,
     isSelected: Bool,
     isReviewDue: Bool,
+    shortcutDigit: Int?,
     help: String,
     action: @escaping () -> Void
   ) -> some View {
@@ -137,6 +147,7 @@ struct TagFilterBar: View {
       .contentShape(.capsule)
     }
     .buttonStyle(.plain)
-    .help(help)
+    .keyboardShortcut(shortcutDigit.map { KeyboardShortcut(KeyEquivalent(Character(String($0))), modifiers: .command) })
+    .help(shortcutDigit.map { "\(help) (⌘\($0))" } ?? help)
   }
 }
