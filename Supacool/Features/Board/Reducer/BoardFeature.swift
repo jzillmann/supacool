@@ -884,6 +884,10 @@ struct BoardFeature {
     case deleteGroup(id: SessionGroup.ID)
     /// Toggle a tag's shelf behavior (see `SessionGroup.shelves`).
     case toggleTagShelves(id: SessionGroup.ID)
+    /// Set a tag's review cadence in days; `nil` turns reviews off.
+    case setTagReviewInterval(id: SessionGroup.ID, days: Int?)
+    /// The user went through a tag's cards: restart its review cadence.
+    case markTagReviewed(id: SessionGroup.ID)
     /// Filter the board to one tag; `nil` clears the filter.
     case tagFilterSelected(SessionGroup.ID?)
     /// Cycle full-screen focus to the next/previous member of the group
@@ -2141,6 +2145,12 @@ struct BoardFeature {
 
       case .toggleTagShelves(let id):
         return reduceToggleTagShelves(state: &state, id: id)
+
+      case .setTagReviewInterval(let id, let days):
+        return reduceSetTagReviewInterval(state: &state, id: id, days: days)
+
+      case .markTagReviewed(let id):
+        return reduceMarkTagReviewed(state: &state, id: id)
 
       case .tagFilterSelected(let id):
         state.tagFilterID = id

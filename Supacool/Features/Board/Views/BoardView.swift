@@ -511,8 +511,9 @@ struct BoardView: View {
                 // shelved cards show in their normal lanes — no second,
                 // inline copy of the lane layout to render.
                 ForEach(shelves, id: \.tag.id) { shelf in
+                  let reviewDue = shelf.tag.isReviewDue(now: Date())
                   DormantBucketPill(
-                    title: shelf.tag.name,
+                    title: reviewDue ? "\(shelf.tag.name) · review due" : shelf.tag.name,
                     count: shelf.sessions.count,
                     systemImage: "archivebox",
                     // Orange when a shelved agent asks for input: the shelf
@@ -520,7 +521,10 @@ struct BoardView: View {
                     color: shelf.sessions.contains { [.waitingOnMe, .awaitingInput].contains(classify($0)) }
                       ? .orange : .secondary,
                     isExpanded: false,
-                    help: "Open the \(shelf.tag.name) shelf",
+                    help: reviewDue
+                      ? "Open the \(shelf.tag.name) shelf — review due; "
+                        + "right-click its tag chip → Mark Reviewed when done"
+                      : "Open the \(shelf.tag.name) shelf",
                     action: { store.send(.tagFilterSelected(shelf.tag.id)) }
                   )
                 }

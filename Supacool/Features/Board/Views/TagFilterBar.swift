@@ -7,13 +7,15 @@ import SwiftUI
 /// the unfiltered board and only appear while their chip is selected.
 ///
 /// Tags are created from a card's context menu ("New Tag…") or by dragging
-/// one card onto another; a chip's context menu toggles the shelf behavior
-/// and deletes the tag.
+/// one card onto another; a chip's context menu toggles the shelf behavior,
+/// sets a review cadence, marks the tag reviewed and deletes it. A tag whose
+/// review is due carries an orange dot.
 struct TagFilterBar: View {
   @Bindable var store: StoreOf<BoardFeature>
 
   var body: some View {
     let liveIDs = Set(store.sessions.map(\.id))
+    let now = Date()
     ScrollView(.horizontal) {
       HStack(spacing: 6) {
         chip(
@@ -21,6 +23,7 @@ struct TagFilterBar: View {
           systemImage: nil,
           count: nil,
           isSelected: store.tagFilterID == nil,
+          isReviewDue: false,
           help: "Show every session except shelved ones"
         ) {
           store.send(.tagFilterSelected(nil))
@@ -31,9 +34,11 @@ struct TagFilterBar: View {
             systemImage: tag.shelves ? "archivebox" : "tag",
             count: tag.sessionIDs.filter(liveIDs.contains).count,
             isSelected: store.tagFilterID == tag.id,
-            help: tag.shelves
+            isReviewDue: tag.isReviewDue(now: now),
+            help: (tag.shelves
               ? "Open the \(tag.name) shelf (its sessions are hidden from the board otherwise)"
-              : "Show only sessions tagged \(tag.name)"
+              : "Show only sessions tagged \(tag.name)")
+              + (tag.isReviewDue(now: now) ? " — review due; right-click → Mark Reviewed when done" : "")
           ) {
             store.send(.tagFilterSelected(store.tagFilterID == tag.id ? nil : tag.id))
           }
@@ -43,6 +48,24 @@ struct TagFilterBar: View {
               systemImage: tag.shelves ? "rectangle.stack" : "archivebox"
             ) {
               store.send(.toggleTagShelves(id: tag.id))
+            }
+            Divider()
+            // Flat items, never a nested `Menu`: the live-refreshing board
+            // collapses submenus mid-hover (same reason as Snooze Until).
+            if tag.reviewIntervalDays != nil {
+              Button("Mark Reviewed", systemImage: "checkmark.circle") {
+                store.send(.markTagReviewed(id: tag.id))
+              }
+            }
+            ForEach(Self.reviewCadences, id: \.days) { cadence in
+              Button {
+                store.send(.setTagReviewInterval(id: tag.id, days: cadence.days))
+              } label: {
+                Label(
+                  cadence.title,
+                  systemImage: tag.reviewIntervalDays == cadence.days ? "checkmark" : "calendar"
+                )
+              }
             }
             Divider()
             Button("Delete Tag", systemImage: "trash", role: .destructive) {
@@ -63,11 +86,18 @@ struct TagFilterBar: View {
     .scrollIndicators(.never)
   }
 
+  private static let reviewCadences: [(title: String, days: Int?)] = [
+    ("Review Weekly", 7),
+    ("Review Every 2 Weeks", 14),
+    ("No Review", nil),
+  ]
+
   private func chip(
     title: String,
     systemImage: String?,
     count: Int?,
     isSelected: Bool,
+    isReviewDue: Bool,
     help: String,
     action: @escaping () -> Void
   ) -> some View {
@@ -85,6 +115,12 @@ struct TagFilterBar: View {
           Text("\(count)")
             .font(.caption.monospacedDigit())
             .foregroundStyle(.secondary)
+        }
+        if isReviewDue {
+          Circle()
+            .fill(.orange)
+            .frame(width: 6, height: 6)
+            .accessibilityLabel("Review due")
         }
       }
       .padding(.horizontal, 10)

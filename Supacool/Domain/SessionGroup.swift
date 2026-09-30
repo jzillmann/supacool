@@ -42,19 +42,31 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   /// filtered tag's members show in their normal lanes, whatever else they
   /// carry — a filter is an explicit "show me these".
   var shelves: Bool
+  /// Review cadence in days (`nil` = never asks). A tag whose last review is
+  /// older than this is "review due": its chip and shelf pill say so until
+  /// the user marks it reviewed — the weekly "anything parked that matters
+  /// now?" pass, without a calendar reminder.
+  var reviewIntervalDays: Int?
+  /// When the user last marked this tag reviewed. `nil` counts from
+  /// `createdAt`.
+  var lastReviewedAt: Date?
 
   init(
     id: UUID = UUID(),
     name: String,
     sessionIDs: [UUID] = [],
     createdAt: Date = Date(),
-    shelves: Bool = false
+    shelves: Bool = false,
+    reviewIntervalDays: Int? = nil,
+    lastReviewedAt: Date? = nil
   ) {
     self.id = id
     self.name = name
     self.sessionIDs = sessionIDs
     self.createdAt = createdAt
     self.shelves = shelves
+    self.reviewIntervalDays = reviewIntervalDays
+    self.lastReviewedAt = lastReviewedAt
   }
 
   // MARK: - Membership helpers
@@ -62,6 +74,17 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   var isEmpty: Bool { sessionIDs.isEmpty }
 
   func contains(_ sessionID: UUID) -> Bool { sessionIDs.contains(sessionID) }
+
+  /// Whether the review cadence has run out. Counts calendar time, so a tag
+  /// reviewed Monday 09:00 with a 7-day cadence is due again next Monday 09:00.
+  func isReviewDue(now: Date) -> Bool {
+    guard let reviewIntervalDays, reviewIntervalDays > 0 else { return false }
+    let since = lastReviewedAt ?? createdAt
+    guard let dueAt = Calendar.current.date(byAdding: .day, value: reviewIntervalDays, to: since) else {
+      return false
+    }
+    return now >= dueAt
+  }
 
   /// Ids of sessions that carry at least one shelving tag.
   static func shelvedSessionIDs(in groups: [SessionGroup]) -> Set<UUID> {
@@ -107,7 +130,7 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
   // MARK: - Codable (forward-compatible)
 
   enum CodingKeys: String, CodingKey {
-    case id, name, sessionIDs, createdAt, shelves
+    case id, name, sessionIDs, createdAt, shelves, reviewIntervalDays, lastReviewedAt
   }
 
   init(from decoder: Decoder) throws {
@@ -117,5 +140,7 @@ nonisolated struct SessionGroup: Identifiable, Equatable, Hashable, Codable, Sen
     sessionIDs = try c.decodeIfPresent([UUID].self, forKey: .sessionIDs) ?? []
     createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
     shelves = try c.decodeIfPresent(Bool.self, forKey: .shelves) ?? false
+    reviewIntervalDays = try c.decodeIfPresent(Int.self, forKey: .reviewIntervalDays)
+    lastReviewedAt = try c.decodeIfPresent(Date.self, forKey: .lastReviewedAt)
   }
 }

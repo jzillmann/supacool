@@ -380,6 +380,47 @@ struct SessionGroupTests {
     #expect(store.state.tagFilterID == nil)
   }
 
+  // MARK: - Tags: review cadence
+
+  @Test func reviewIsDueOnlyAfterTheCadenceRunsOut() {
+    let reviewed = Date(timeIntervalSince1970: 1_700_000_000)
+    let tag = SessionGroup(name: "parked", reviewIntervalDays: 7, lastReviewedAt: reviewed)
+    let day: TimeInterval = 86_400
+    #expect(tag.isReviewDue(now: reviewed.addingTimeInterval(6 * day)) == false)
+    #expect(tag.isReviewDue(now: reviewed.addingTimeInterval(7 * day)) == true)
+    #expect(SessionGroup(name: "spike").isReviewDue(now: reviewed.addingTimeInterval(365 * day)) == false)
+  }
+
+  @Test func reviewCountsFromCreationWhenNeverReviewed() {
+    let created = Date(timeIntervalSince1970: 1_700_000_000)
+    let tag = SessionGroup(name: "parked", createdAt: created, reviewIntervalDays: 7)
+    #expect(tag.isReviewDue(now: created.addingTimeInterval(8 * 86_400)))
+  }
+
+  @Test(.dependencies) func settingACadenceStartsItNowAndMarkReviewedRestartsIt() async {
+    let created = Date(timeIntervalSince1970: 1_600_000_000)
+    let tag = SessionGroup(name: "parked", sessionIDs: [UUID()], createdAt: created)
+    let now = Date(timeIntervalSince1970: 1_700_000_000)
+    let store = TestStore(initialState: Self.state(tags: [tag])) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    // An old tag doesn't light up as due the moment it gets a cadence.
+    await store.send(.setTagReviewInterval(id: tag.id, days: 7))
+    #expect(store.state.sessionGroups[0].reviewIntervalDays == 7)
+    #expect(store.state.sessionGroups[0].lastReviewedAt == now)
+    #expect(store.state.sessionGroups[0].isReviewDue(now: now) == false)
+
+    await store.send(.setTagReviewInterval(id: tag.id, days: nil))
+    #expect(store.state.sessionGroups[0].reviewIntervalDays == nil)
+
+    await store.send(.markTagReviewed(id: tag.id))
+    #expect(store.state.sessionGroups[0].lastReviewedAt == now)
+  }
+
   // MARK: - Helpers
 
   private static func state(tags: [SessionGroup], sessions: [AgentSession] = []) -> BoardFeature.State {

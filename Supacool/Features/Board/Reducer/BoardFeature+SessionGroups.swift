@@ -84,6 +84,37 @@ extension BoardFeature {
     return .none
   }
 
+  /// Turning a cadence on starts it now, so an old tag doesn't light up as
+  /// "review due" the moment it gets one.
+  func reduceSetTagReviewInterval(
+    state: inout State,
+    id: SessionGroup.ID,
+    days: Int?
+  ) -> Effect<Action> {
+    let now = date.now
+    state.$sessionGroups.withLock { groups in
+      guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+      let resolved = days.flatMap { $0 > 0 ? $0 : nil }
+      if resolved != nil, groups[index].reviewIntervalDays == nil {
+        groups[index].lastReviewedAt = now
+      }
+      groups[index].reviewIntervalDays = resolved
+    }
+    return .none
+  }
+
+  func reduceMarkTagReviewed(
+    state: inout State,
+    id: SessionGroup.ID
+  ) -> Effect<Action> {
+    let now = date.now
+    state.$sessionGroups.withLock { groups in
+      guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+      groups[index].lastReviewedAt = now
+    }
+    return .none
+  }
+
   func reduceCycleGroup(
     state: inout State,
     from: AgentSession.ID,
