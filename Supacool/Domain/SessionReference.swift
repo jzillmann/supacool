@@ -2,7 +2,7 @@ import Foundation
 
 /// External work-item references parsed from a session's conversation.
 /// Surfaced as chips on the board card so the user can jump from session
-/// to Linear ticket / GitHub PR in one click.
+/// to Linear ticket / GitHub PR / Claude artifact in one click.
 nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   /// Linear-style ticket id, e.g. `CEN-1234`. The prefix is the Linear
   /// team key. URL is computed at display time from the configured org
@@ -14,12 +14,18 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   /// resolved". `title` is display-only — it never participates in
   /// `dedupeKey`, so a title change can't duplicate a reference.
   case pullRequest(owner: String, repo: String, number: Int, state: PRState?, title: String?)
+  /// Claude artifact page, parsed from `https://claude.ai/artifact/<id>` or
+  /// `https://claude.ai/code/artifact/<uuid>`. `isCode` records which route
+  /// the link used, so the chip reopens the exact URL the agent printed.
+  /// The page sits behind a claude.ai login, so there is no title to fetch.
+  case artifact(id: String, isCode: Bool)
 
   // MARK: - Codable (forward-compatible per docs/agent-guides/persistence.md)
 
   enum DiscriminantKeys: String, CodingKey { case kind }
   enum TicketKeys: String, CodingKey { case id }
   enum PRKeys: String, CodingKey { case owner, repo, number, state, title }
+  enum ArtifactKeys: String, CodingKey { case id, isCode }
 
   init(from decoder: Decoder) throws {
     let d = try decoder.container(keyedBy: DiscriminantKeys.self)
@@ -37,6 +43,11 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       let state = try c.decodeIfPresent(PRState.self, forKey: .state)
       let title = try c.decodeIfPresent(String.self, forKey: .title)
       self = .pullRequest(owner: owner, repo: repo, number: number, state: state, title: title)
+    case "artifact":
+      let c = try decoder.container(keyedBy: ArtifactKeys.self)
+      let id = try c.decode(String.self, forKey: .id)
+      let isCode = try c.decodeIfPresent(Bool.self, forKey: .isCode) ?? false
+      self = .artifact(id: id, isCode: isCode)
     default:
       throw DecodingError.dataCorruptedError(
         forKey: .kind,
@@ -62,6 +73,12 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       try c.encode(number, forKey: .number)
       try c.encodeIfPresent(state, forKey: .state)
       try c.encodeIfPresent(title, forKey: .title)
+    case .artifact(let id, let isCode):
+      var d = encoder.container(keyedBy: DiscriminantKeys.self)
+      try d.encode("artifact", forKey: .kind)
+      var c = encoder.container(keyedBy: ArtifactKeys.self)
+      try c.encode(id, forKey: .id)
+      try c.encode(isCode, forKey: .isCode)
     }
   }
 
@@ -84,12 +101,13 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
   // MARK: - Stable keys for dedup / UI diffing
 
   /// Canonical string used to dedupe references across messages.
-  /// E.g. `ticket:CEN-1234` or `pr:foo/bar#42`.
+  /// E.g. `ticket:CEN-1234`, `pr:foo/bar#42` or `artifact:L9foDc6Pn3`.
   var dedupeKey: String {
     switch self {
     case .ticket(let id): return "ticket:\(id)"
     case .pullRequest(let owner, let repo, let number, _, _):
       return "pr:\(owner)/\(repo)#\(number)"
+    case .artifact(let id, _): return "artifact:\(id)"
     }
   }
 
@@ -100,11 +118,17 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
     return false
   }
 
+  var isArtifactReference: Bool {
+    if case .artifact = self { return true }
+    return false
+  }
+
   /// Short chip label for the board card.
   var chipLabel: String {
     switch self {
     case .ticket(let id): return id
     case .pullRequest(_, _, let number, _, _): return "#\(number)"
+    case .artifact: return "Artifact"
     }
   }
 
@@ -120,6 +144,8 @@ nonisolated enum SessionReference: Codable, Equatable, Hashable, Sendable {
       return URL(string: "https://linear.app/\(slug)/issue/\(id)")
     case .pullRequest(let owner, let repo, let number, _, _):
       return URL(string: "https://github.com/\(owner)/\(repo)/pull/\(number)")
+    case .artifact(let id, let isCode):
+      return URL(string: "https://claude.ai/\(isCode ? "code/" : "")artifact/\(id)")
     }
   }
 }

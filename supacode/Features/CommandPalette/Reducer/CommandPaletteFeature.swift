@@ -335,6 +335,8 @@ private func sessionReferenceLabels(_ references: [SessionReference]) -> [String
         labels.append(title)
       }
       return labels
+    case .artifact(let id, _):
+      return ["Artifact", id]
     }
   }
 }

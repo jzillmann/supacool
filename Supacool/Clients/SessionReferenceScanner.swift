@@ -1,9 +1,9 @@
 import ComposableArchitecture
 import Foundation
 
-/// Extracts ticket IDs (e.g. `CEN-1234`) and GitHub PR URLs from a Claude
-/// Code session's native transcript file, so the board card can surface
-/// them as clickable chips.
+/// Extracts ticket IDs (e.g. `CEN-1234`), GitHub PR URLs and Claude artifact
+/// URLs from a Claude Code session's native transcript file, so the board
+/// card can surface them as clickable chips.
 ///
 /// The Claude transcript lives at `~/.claude/projects/<hashed>/<session-id>.jsonl`
 /// where `<hashed>` is the session's CWD with `/` replaced by `-`. Supacool
@@ -336,6 +336,7 @@ nonisolated enum SessionReferenceScannerLive {
     // Regex values (Regex isn't Sendable).
     let ticketRegex = /\b([A-Z][A-Z0-9]{1,9}-\d+)\b/
     let prURLRegex = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/
+    let artifactURLRegex = /https:\/\/claude\.ai\/(code\/)?artifact\/([A-Za-z0-9-]+)/
 
     for match in text.matches(of: ticketRegex) {
       let id = String(match.output.1)
@@ -357,6 +358,13 @@ nonisolated enum SessionReferenceScannerLive {
       let ref = SessionReference.pullRequest(
         owner: owner, repo: repo, number: number, state: nil, title: nil
       )
+      if seen.insert(ref.dedupeKey).inserted {
+        results.append(ref)
+      }
+    }
+
+    for match in text.matches(of: artifactURLRegex) {
+      let ref = SessionReference.artifact(id: String(match.output.2), isCode: match.output.1 != nil)
       if seen.insert(ref.dedupeKey).inserted {
         results.append(ref)
       }

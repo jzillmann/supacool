@@ -976,6 +976,12 @@ struct ReferenceChip: View {
             .foregroundStyle(prStateColor(state))
             .accessibilityLabel("Pull request \(state.rawValue)")
         }
+        if reference.isArtifactReference {
+          Image(systemName: "sparkles")
+            .font(.caption2)
+            .foregroundStyle(.teal)
+            .accessibilityHidden(true)
+        }
         Text(reference.chipLabel)
           .font(.caption2.weight(.medium))
           .lineLimit(1)
@@ -1071,6 +1077,8 @@ struct ReferenceChip: View {
     case .pullRequest(_, _, _, let state, _):
       guard let state else { return AnyShapeStyle(Color.secondary.opacity(0.12)) }
       return AnyShapeStyle(prStateColor(state).opacity(0.15))
+    case .artifact:
+      return AnyShapeStyle(Color.teal.opacity(0.15))
     }
   }
 
@@ -1097,6 +1105,8 @@ struct ReferenceChip: View {
       let statusSuffix = prSnapshot?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
       return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+    case .artifact(let id, _):
+      return "Open Claude artifact \(id) in the browser"
     }
   }
 }
@@ -1313,6 +1323,8 @@ struct SessionReferenceSummaryChips: View {
 
     var showsTickets: Bool { self != .pullRequests }
     var showsPullRequests: Bool { self != .tickets }
+    /// Artifacts are work output, like PRs, so they travel with that half.
+    var showsArtifacts: Bool { self != .tickets }
   }
 
   @AppStorage("supacool.references.linearOrg") private var linearOrgSlug: String = ""
@@ -1325,10 +1337,11 @@ struct SessionReferenceSummaryChips: View {
   }
 
   private var pullRequests: [SessionReference] {
-    references.filter {
-      if case .pullRequest = $0 { return true }
-      return false
-    }
+    references.filter(\.isPullRequestReference)
+  }
+
+  private var artifacts: [SessionReference] {
+    references.filter(\.isArtifactReference)
   }
 
   /// Matching cached inbox record for a ticket reference, if any. Returns
@@ -1346,6 +1359,9 @@ struct SessionReferenceSummaryChips: View {
       }
       if parts.showsPullRequests {
         pullRequestChips
+      }
+      if parts.showsArtifacts {
+        artifactChips
       }
     }
     .lineLimit(1)
@@ -1399,6 +1415,26 @@ struct SessionReferenceSummaryChips: View {
         onAddLink: onAddLink,
         prReferenceSnapshots: prReferenceSnapshots,
         actionablePullRequestKey: actionablePullRequestKey
+      )
+    }
+  }
+
+  @ViewBuilder
+  private var artifactChips: some View {
+    if artifacts.count == 1, let artifact = artifacts.first {
+      ReferenceChip(
+        reference: artifact,
+        linearOrgSlug: linearOrgSlug,
+        onRemove: onRemoveReference.map { remove in { remove(artifact) } },
+        onAddLink: onAddLink
+      )
+    } else if artifacts.count > 1 {
+      ReferenceStackChip(
+        kind: .artifacts,
+        references: artifacts,
+        linearOrgSlug: linearOrgSlug,
+        onRemoveReference: onRemoveReference,
+        onAddLink: onAddLink
       )
     }
   }
@@ -1484,11 +1520,13 @@ private struct ReferenceStackChip: View {
   enum Kind {
     case pullRequests
     case tickets
+    case artifacts
 
     var title: String {
       switch self {
       case .pullRequests: return "Pull requests"
       case .tickets: return "Other tickets"
+      case .artifacts: return "Claude artifacts"
       }
     }
 
@@ -1496,6 +1534,7 @@ private struct ReferenceStackChip: View {
       switch self {
       case .pullRequests: return "rectangle.stack.fill"
       case .tickets: return "tag.fill"
+      case .artifacts: return "sparkles"
       }
     }
   }
@@ -1594,6 +1633,8 @@ private struct ReferenceStackChip: View {
       return "#\(number) +\(references.count - 1)"
     case .tickets:
       return "+\(references.count)"
+    case .artifacts:
+      return "\(references.count) artifacts"
     }
   }
 
@@ -1607,6 +1648,8 @@ private struct ReferenceStackChip: View {
     case .tickets:
       let noun = references.count == 1 ? "ticket" : "tickets"
       return "Show \(references.count) more \(noun)"
+    case .artifacts:
+      return "Show \(references.count) Claude artifacts"
     }
   }
 
@@ -1614,6 +1657,8 @@ private struct ReferenceStackChip: View {
     switch kind {
     case .tickets:
       return .blue
+    case .artifacts:
+      return .teal
     case .pullRequests:
       // Tint follows the PR the label names. Ranking states across the whole
       // stack let a stale closed PR paint the chip red next to a live draft.
@@ -1797,6 +1842,8 @@ private struct ReferenceStackChip: View {
       return "tag.fill"
     case .pullRequest:
       return "number.circle"
+    case .artifact:
+      return "sparkles"
     }
   }
 
@@ -1807,6 +1854,8 @@ private struct ReferenceStackChip: View {
     case .pullRequest(_, _, _, let state, _):
       guard let state else { return .secondary }
       return prStateColor(state)
+    case .artifact:
+      return .teal
     }
   }
 
@@ -1820,6 +1869,8 @@ private struct ReferenceStackChip: View {
     case .pullRequest(_, _, let number, _, let title):
       guard let title, !title.isEmpty else { return "#\(number)" }
       return "#\(number) \(title)"
+    case .artifact(let id, _):
+      return id
     }
   }
 
@@ -1831,6 +1882,8 @@ private struct ReferenceStackChip: View {
         : "Linear issue"
     case .pullRequest(let owner, let repo, _, let state, _):
       return "\(owner)/\(repo) · \((state?.rawValue ?? "loading…").capitalized)"
+    case .artifact(_, let isCode):
+      return isCode ? "Claude Code artifact" : "Claude artifact"
     }
   }
 
@@ -1845,6 +1898,8 @@ private struct ReferenceStackChip: View {
       let statusSuffix = prReferenceSnapshots[reference.dedupeKey]?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
       return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+    case .artifact(let id, _):
+      return "Open Claude artifact \(id) in the browser"
     }
   }
 

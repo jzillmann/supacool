@@ -23,6 +23,32 @@ struct SessionReferenceScannerTests {
     )
   }
 
+  @Test func scanTextExtractsClaudeArtifactURLs() {
+    let refs = SessionReferenceScannerLive.scanText(
+      """
+      Published to https://claude.ai/artifact/L9foDc6Pn3furwfZwtZNkT and
+      `https://claude.ai/code/artifact/3f2b9c1e-7a4d-4e8b-9c0f-1a2b3c4d5e6f`.
+      Again: https://claude.ai/artifact/L9foDc6Pn3furwfZwtZNkT
+      """
+    )
+    #expect(
+      refs == [
+        .artifact(id: "L9foDc6Pn3furwfZwtZNkT", isCode: false),
+        .artifact(id: "3f2b9c1e-7a4d-4e8b-9c0f-1a2b3c4d5e6f", isCode: true),
+      ]
+    )
+    #expect(
+      refs.last?.url(linearOrgSlug: "")?.absoluteString
+        == "https://claude.ai/code/artifact/3f2b9c1e-7a4d-4e8b-9c0f-1a2b3c4d5e6f"
+    )
+  }
+
+  @Test func artifactReferenceRoundTripsThroughCodable() throws {
+    let original: [SessionReference] = [.artifact(id: "L9foDc6Pn3furwfZwtZNkT", isCode: false)]
+    let data = try JSONEncoder().encode(original)
+    #expect(try JSONDecoder().decode([SessionReference].self, from: data) == original)
+  }
+
   @Test func scanTextExtractsMultipleRefs() {
     let text = """
       Check CEN-1234 and FOO-5 as well.
