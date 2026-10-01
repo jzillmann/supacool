@@ -72,6 +72,10 @@ struct BoardFeature {
     /// `searchQuery`.
     var tagFilterID: SessionGroup.ID?
 
+    /// Built-in "Priority" filter: show only `isPriority` sessions, shelved
+    /// ones included. Mutually exclusive with `tagFilterID`. Not persisted.
+    var isPriorityFilterActive: Bool = false
+
     /// When non-nil, a blocking script's terminal tab is shown over the
     /// board so the user can read why the script failed. See
     /// `ScriptTerminalPresentation`.
@@ -890,6 +894,8 @@ struct BoardFeature {
     case markTagReviewed(id: SessionGroup.ID)
     /// Filter the board to one tag; `nil` clears the filter.
     case tagFilterSelected(SessionGroup.ID?)
+    /// Toggle the built-in Priority filter. Turning it on clears any tag filter.
+    case priorityFilterToggled
     /// Cycle full-screen focus to the next/previous member of the group
     /// containing `from`. Drives ⌘⌥. / ⌘⌥⇧. . No-op if `from` isn't in a
     /// group or the group has a single member.
@@ -2154,6 +2160,12 @@ struct BoardFeature {
 
       case .tagFilterSelected(let id):
         state.tagFilterID = id
+        state.isPriorityFilterActive = false
+        return .none
+
+      case .priorityFilterToggled:
+        state.isPriorityFilterActive.toggle()
+        if state.isPriorityFilterActive { state.tagFilterID = nil }
         return .none
 
       case .deleteGroup(let id):
@@ -3856,19 +3868,20 @@ extension BoardFeature.State {
   var visibleSessions: [AgentSession] {
     let query = BoardSessionSearch.normalized(searchQuery)
     let tagFilter = tagFilterID.flatMap { id in sessionGroups.first { $0.id == id } }
-    let shelved = tagFilter == nil ? SessionGroup.shelvedSessionIDs(in: sessionGroups) : []
+    let shelved = tagFilter == nil && !isPriorityFilterActive ? SessionGroup.shelvedSessionIDs(in: sessionGroups) : []
     return sessions.filter {
       filters.includes(repositoryID: $0.repositoryID)
         && BoardSessionSearch.matches($0, query: query)
+        && (!isPriorityFilterActive || $0.isPriority)
         && (tagFilter?.contains($0.id) ?? !shelved.contains($0.id))
     }
   }
 
   /// Sessions behind each shelving tag's pill, under the same repo and search
-  /// filters as `visibleSessions`. Empty while a tag filter is active — the
-  /// filter already lifted every shelf.
+  /// filters as `visibleSessions`. Empty while a tag or the Priority filter
+  /// is active — the filter already lifted every shelf.
   var shelves: [(tag: SessionGroup, sessions: [AgentSession])] {
-    guard tagFilterID == nil else { return [] }
+    guard tagFilterID == nil, !isPriorityFilterActive else { return [] }
     let query = BoardSessionSearch.normalized(searchQuery)
     return sessionGroups.filter(\.shelves).compactMap { tag in
       let members = sessions.filter {

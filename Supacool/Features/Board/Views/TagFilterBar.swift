@@ -3,7 +3,8 @@ import SwiftUI
 
 /// One chip per tag (`SessionGroup`) above the board. Clicking a chip filters
 /// the board to that tag's members; clicking it again (or "All") clears the
-/// filter. Shelving tags show a shelf glyph — their members are hidden from
+/// filter. The built-in "Priority" chip next to "All" shows only priority
+/// sessions. Shelving tags show a shelf glyph — their members are hidden from
 /// the unfiltered board and only appear while their chip is selected.
 ///
 /// Tags are created from a card's context menu ("New Tag…") or by dragging
@@ -35,12 +36,23 @@ struct TagFilterBar: View {
           title: "All",
           systemImage: nil,
           count: nil,
-          isSelected: store.tagFilterID == nil,
+          isSelected: store.tagFilterID == nil && !store.isPriorityFilterActive,
           isReviewDue: false,
           shortcutDigit: nil,
           help: "Show every session except shelved ones"
         ) {
           store.send(.tagFilterSelected(nil))
+        }
+        chip(
+          title: "Priority",
+          systemImage: "flag.fill",
+          count: store.sessions.filter(\.isPriority).count,
+          isSelected: store.isPriorityFilterActive,
+          isReviewDue: false,
+          shortcutDigit: nil,
+          help: "Show only sessions marked as priority, shelved ones included"
+        ) {
+          store.send(.priorityFilterToggled)
         }
         ForEach(Array(store.sessionGroups.enumerated()), id: \.element.id) { index, tag in
           let digit = index < 9 && controlActiveState == .key ? index + 1 : nil

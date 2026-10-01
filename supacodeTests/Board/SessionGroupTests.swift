@@ -357,6 +357,37 @@ struct SessionGroupTests {
     #expect(state.visibleSessions.map(\.id) == [both.id])
   }
 
+  @Test(.dependencies) func priorityFilterShowsOnlyPrioritySessionsAndExcludesTagFilter() async {
+    var shelvedHot = Self.sampleSession(prompt: "Shelved hot")
+    shelvedHot.isPriority = true
+    var hot = Self.sampleSession(prompt: "Hot")
+    hot.isPriority = true
+    let cold = Self.sampleSession(prompt: "Cold")
+    let spikes = SessionGroup(name: "spike", sessionIDs: [shelvedHot.id], shelves: true)
+    let store = TestStore(initialState: Self.state(tags: [spikes], sessions: [shelvedHot, hot, cold])) {
+      BoardFeature()
+    }
+
+    store.exhaustivity = .off
+
+    await store.send(.tagFilterSelected(spikes.id))
+    await store.send(.priorityFilterToggled)
+    #expect(store.state.isPriorityFilterActive)
+    #expect(store.state.tagFilterID == nil)
+    // Priority lifts shelves, like any explicit filter.
+    #expect(store.state.visibleSessions.map(\.id) == [shelvedHot.id, hot.id])
+    #expect(store.state.shelves.isEmpty)
+
+    await store.send(.tagFilterSelected(spikes.id))
+    #expect(!store.state.isPriorityFilterActive)
+
+    await store.send(.tagFilterSelected(nil))
+    await store.send(.priorityFilterToggled)
+    await store.send(.priorityFilterToggled)
+    #expect(!store.state.isPriorityFilterActive)
+    #expect(store.state.visibleSessions.map(\.id) == [hot.id, cold.id])
+  }
+
   @Test(.dependencies) func deletingOrEmptyingTheFilteredTagClearsTheFilter() async {
     let a = UUID()
     let solo = SessionGroup(name: "solo", sessionIDs: [a])
