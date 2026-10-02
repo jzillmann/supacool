@@ -348,26 +348,35 @@ enum ReviewLoopReportParser {
     // A wrapped line continues the finding above it; after a blank line, a
     // non-list line is trailing prose ("CI is green."), not part of a finding.
     var continues = false
+    // Multi-PR reviews group findings under `### PR #42` headings. The
+    // heading rides along on each finding so the implementer knows its PR.
+    var section: String?
     for line in lines {
       let trimmed = line.trimmingCharacters(in: .whitespaces)
       guard !trimmed.isEmpty else {
         continues = false
         continue
       }
-      if let finding = listItemValue(trimmed) {
-        findings.append(finding)
+      if trimmed.hasPrefix("#") {
+        let title = trimmed.drop(while: { $0 == "#" }).trimmingCharacters(in: .whitespaces)
+        section = title.isEmpty ? nil : title
+        continues = false
+      } else if let finding = listItemValue(trimmed) {
+        // "No findings." under one PR's heading says that PR is clean.
+        guard !noFindingsValues.contains(finding.lowercased()) else {
+          continues = false
+          continue
+        }
+        findings.append(section.map { "\($0): \(finding)" } ?? finding)
         continues = true
       } else if continues, !findings.isEmpty {
         findings[findings.count - 1] += " " + trimmed
       }
     }
-    if findings.count == 1,
-      ["none", "none.", "no findings", "no findings."].contains(findings[0].lowercased())
-    {
-      return []
-    }
     return findings
   }
+
+  private static let noFindingsValues: Set<String> = ["none", "none.", "no findings", "no findings."]
 
   private static func listItemValue(_ line: String) -> String? {
     if line.hasPrefix("- ") || line.hasPrefix("* ") {

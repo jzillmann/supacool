@@ -34,7 +34,7 @@ extension BoardFeature {
 
     let now = date.now
     let prompt = Self.initialReviewerPrompt(
-      pullRequests: ReviewLoopState.reviewSubject(for: pullRequestURLs),
+      pullRequestURLs: pullRequestURLs,
       round: 1,
       maximumRounds: Self.defaultReviewLoopMaximumRounds
     )
@@ -226,7 +226,7 @@ extension BoardFeature {
       sessions[index].reviewLoop?.updatedAt = now
     }
     let prompt = Self.rereviewPrompt(
-      pullRequests: loop.reviewSubject,
+      pullRequestURLs: loop.pullRequestURLs,
       headSHA: headSHA,
       round: nextRound,
       maximumRounds: loop.maximumRounds,
@@ -402,7 +402,7 @@ extension BoardFeature {
       sessions[index].reviewLoop?.updatedAt = now
     }
     let prompt = Self.rereviewPrompt(
-      pullRequests: loop.reviewSubject,
+      pullRequestURLs: loop.pullRequestURLs,
       headSHA: resolvedHead ?? loop.lastReviewedSHA ?? "current HEAD",
       round: nextRound,
       maximumRounds: extendedMaximum,
@@ -862,12 +862,12 @@ extension BoardFeature {
   }
 
   nonisolated static func initialReviewerPrompt(
-    pullRequests: String,
+    pullRequestURLs: [String],
     round: Int,
     maximumRounds: Int
   ) -> String {
     reviewerPrompt(
-      pullRequests: pullRequests,
+      pullRequestURLs: pullRequestURLs,
       expectedSHA: "the pushed head of the branch checked out in this workspace",
       round: round,
       maximumRounds: maximumRounds,
@@ -876,7 +876,7 @@ extension BoardFeature {
   }
 
   nonisolated static func rereviewPrompt(
-    pullRequests: String,
+    pullRequestURLs: [String],
     headSHA: String,
     round: Int,
     maximumRounds: Int,
@@ -885,7 +885,7 @@ extension BoardFeature {
     implementerNotes: String? = nil
   ) -> String {
     reviewerPrompt(
-      pullRequests: pullRequests,
+      pullRequestURLs: pullRequestURLs,
       expectedSHA: headSHA,
       round: round,
       maximumRounds: maximumRounds,
@@ -910,7 +910,7 @@ extension BoardFeature {
   }
 
   nonisolated static func reviewerPrompt(
-    pullRequests: String,
+    pullRequestURLs: [String],
     expectedSHA: String,
     round: Int,
     maximumRounds: Int,
@@ -926,8 +926,8 @@ extension BoardFeature {
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty
           ? nil
-          : "\nThe implementation agent's notes on this commit. Verify each claim against the code; where it "
-            + "says a finding is invalid, decide that yourself and say so:\n\(trimmed)\n"
+          : "\nThe implementation agent's notes on this commit. Verify each claim; where it says a finding is "
+            + "invalid, decide that yourself and say so:\n\(trimmed)\n"
       } ?? ""
     let prior =
       previousSummary.map {
@@ -936,38 +936,54 @@ extension BoardFeature {
     let priorFindings =
       previousFindings.isEmpty
       ? ""
-      : "\nPrevious round findings — state for each one whether it is now resolved:\n"
+      : "\nPrevious round findings — say for each one whether it is now resolved:\n"
         + previousFindings.enumerated().map { "\($0.offset + 1). \($0.element)" }
         .joined(separator: "\n") + "\n"
+    let pullRequestList =
+      pullRequestURLs.isEmpty
+      ? "- the current pull request"
+      : pullRequestURLs.map { "- \($0)" }.joined(separator: "\n")
+    // Several PRs get one findings section each, headed by the PR, so the
+    // implementer knows where every finding lives. The parser carries the
+    // heading onto each finding.
+    let findingsTemplate =
+      pullRequestURLs.count > 1
+      ? pullRequestURLs.map { url in
+        "### \(pullRequestSectionTitle(for: url))\n1. [P1] Finding, with file:line."
+      }.joined(separator: "\n\n")
+      : "1. [P1] Finding, with file:line."
+    let scope = pullRequestURLs.count > 1 ? "them individually, and as one piece of work" : "it"
     return """
-      Review \(pullRequests) as a strict, read-only code reviewer. This is round \(round) of \(maximumRounds).
-      Review the exact current PR commit (expected \(expectedSHA)). Do not edit files, commit, push, or broaden scope.
-      Focus on correctness, regressions, security, data loss, concurrency, and missing tests. Ignore style-only nits.
-      If individual findings share a deeper architectural or scope problem, return blocked instead of inventing
-      an endless stream of local fixes.
+      Please review \(scope):
+      \(pullRequestList)
+
+      This is round \(round) of \(maximumRounds). Review exactly the PR commit (expected \(expectedSHA)).
+      Check that the change reaches its goal, architecturally and technically: correctness, regressions, security,
+      data loss, concurrency, missing tests. Skip style nits. Read-only: do not edit, commit, or push.
+      If findings share one architectural or scope problem, say blocked instead of listing local fixes.
       \(prior)\(priorFindings)\(notes)
-      Your FINAL message must be this exact Markdown structure. It is a human-readable handoff, so keep every
-      finding as one numbered list item and include both boundary markers:
+      Tag each finding: [P0] must fix before merge, [P1] should fix, [P2] nice to have.
+      End your FINAL message with exactly this block:
 
       SUPACOOL_REVIEW_RESULT
-      # Review handoff — copy this entire block
-
       Verdict: pass|changes|blocked
       Reviewed commit: `full git SHA`
 
       ## Summary
-
-      Short summary.
+      One or two sentences.
 
       ## Findings
-
-      1. Actionable finding with file and line references when useful.
+      \(findingsTemplate)
       SUPACOOL_REVIEW_RESULT_END
 
-      Use pass only when there are no actionable findings, changes when concrete fixes remain, and blocked when
-      the architecture or requested scope needs a human decision. For pass, write `1. No findings.` under Findings.
-      Do not put anything after SUPACOOL_REVIEW_RESULT_END.
+      pass = no findings (write `1. No findings.`), changes = fixes remain, blocked = a human must decide.
       """
+  }
+
+  /// `PR #42` for a GitHub PR URL; the URL itself for anything else.
+  nonisolated static func pullRequestSectionTitle(for url: String) -> String {
+    guard let number = url.split(separator: "/").last, number.allSatisfy(\.isNumber) else { return url }
+    return "PR #\(number)"
   }
 
   nonisolated static func implementationPrompt(
@@ -1042,8 +1058,6 @@ extension BoardFeature {
       Your FINAL message must be this exact Markdown structure, including both boundary markers:
 
       SUPACOOL_REVIEW_RESULT
-      # Review handoff — copy this entire block
-
       Verdict: pass|changes|blocked
       Reviewed commit: `\(reviewedSHA ?? "the commit you reviewed in round \(round)")`
 
@@ -1053,7 +1067,7 @@ extension BoardFeature {
 
       ## Findings
 
-      1. Each finding that still stands or changed, as one actionable item.
+      1. [P1] Each finding that still stands or changed, keeping its PR prefix and P0/P1/P2 tag.
       SUPACOOL_REVIEW_RESULT_END
 
       Use pass when every finding is withdrawn (write `1. No findings.`), changes when at least one finding still

@@ -174,6 +174,67 @@ struct ReviewLoopTests {
     #expect(report?.findings == [])
   }
 
+  @Test func reportParserTagsFindingsWithTheirPullRequestSection() {
+    let report = ReviewLoopReportParser.parse(
+      """
+      SUPACOOL_REVIEW_RESULT
+      Verdict: changes
+      Reviewed commit: `abc123`
+
+      ## Summary
+      The backend PR is clean; the client PR drops a field.
+
+      ## Findings
+      ### PR #42
+      1. No findings.
+
+      ### PR #43
+      1. [P0] The client drops `ownerID`
+         on decode.
+      2. [P2] Rename the helper.
+      SUPACOOL_REVIEW_RESULT_END
+      """
+    )
+
+    #expect(
+      report?.findings == [
+        "PR #43: [P0] The client drops `ownerID` on decode.",
+        "PR #43: [P2] Rename the helper.",
+      ])
+  }
+
+  @Test func reviewerPromptListsEachPullRequestWithItsOwnSection() {
+    let prompt = BoardFeature.reviewerPrompt(
+      pullRequestURLs: [
+        "https://github.com/acme/widgets/pull/42",
+        "https://github.com/acme/widgets/pull/43",
+      ],
+      expectedSHA: "abc123",
+      round: 1,
+      maximumRounds: 5,
+      previousSummary: nil
+    )
+
+    #expect(prompt.contains("- https://github.com/acme/widgets/pull/42\n- https://github.com/acme/widgets/pull/43"))
+    #expect(prompt.contains("### PR #42"))
+    #expect(prompt.contains("### PR #43"))
+    #expect(prompt.contains("[P0]"))
+  }
+
+  @Test func reviewerPromptForOnePullRequestHasNoSections() {
+    let prompt = BoardFeature.reviewerPrompt(
+      pullRequestURLs: ["https://github.com/acme/widgets/pull/42"],
+      expectedSHA: "abc123",
+      round: 2,
+      maximumRounds: 5,
+      previousSummary: nil
+    )
+
+    #expect(prompt.contains("- https://github.com/acme/widgets/pull/42"))
+    #expect(prompt.contains("round 2 of 5"))
+    #expect(!prompt.contains("### PR"))
+  }
+
   @Test func reportParserTreatsNoFindingsAsAnEmptyList() {
     let report = ReviewLoopReportParser.parse(
       """

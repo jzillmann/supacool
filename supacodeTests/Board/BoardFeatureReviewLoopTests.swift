@@ -43,7 +43,6 @@ extension BoardFeatureTests {
       return
     }
     #expect(input.contains("SUPACOOL_REVIEW_RESULT"))
-    #expect(input.contains("# Review handoff — copy this entire block"))
     #expect(input.contains("## Findings"))
     #expect(input.contains("SUPACOOL_REVIEW_RESULT_END"))
     #expect(input.contains("round 1 of 5"))
@@ -618,7 +617,9 @@ extension BoardFeatureTests {
       Issue.record("Expected a Codex reviewer tab")
       return
     }
-    #expect(input.contains("these pull requests together"))
+    #expect(input.contains("as one piece of work"))
+    #expect(input.contains("### PR #42"))
+    #expect(input.contains("### PR #43"))
     #expect(input.contains("pull/42"))
     #expect(input.contains("pull/43"))
     #expect(!input.contains("pull/41"))
