@@ -443,6 +443,9 @@ struct BoardRootView: View {
         onSelectTerminal: { terminalID in
           store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))
         },
+        onCycleTerminal: { step in
+          store.send(.cycleActiveTerminal(sessionID: session.id, step: step))
+        },
         onAddShellTerminal: {
           store.send(
             .addShellTerminalToSession(

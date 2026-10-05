@@ -124,6 +124,9 @@ struct FullScreenTerminalView: View {
   /// Switch the rendered terminal to the given id (from the session tab
   /// strip). Only meaningful when `session.terminals.count > 1`.
   let onSelectTerminal: (UUID) -> Void
+  /// ⌘⇧[ (-1) / ⌘⇧] (+1): step through the strip with wrap-around. The
+  /// reducer resolves the target from live state — see `tabSelectionShortcuts`.
+  let onCycleTerminal: (Int) -> Void
   /// `+` button in the session tab strip — append a new shell terminal.
   let onAddShellTerminal: () -> Void
   /// Close button on an auxiliary tab in the session tab strip. Refuses
@@ -264,11 +267,13 @@ struct FullScreenTerminalView: View {
   /// (`{`, `}`, `>`) with shift left out of the modifiers — AppKit's key
   /// equivalent convention. SwiftUI matches `"["` + ⌘⇧ against the event's
   /// `{` and never fires, so the key fell through to the terminal instead.
+  ///
+  /// The step buttons must not compute their target here: SwiftUI kept the
+  /// hidden buttons' first action closures while the active tab changed, so
+  /// a target captured from `activeTerminalID` went stale and ⌘⇧[ / ⌘⇧]
+  /// moved once, then never again. The reducer reads the live active tab.
   private var tabSelectionShortcuts: some View {
     let tabs = session.tabTerminals
-    let activeIndex = tabs.firstIndex { $0.id == activeTerminalID }
-    let previous = SessionTabShortcut.adjacentTabIndex(from: activeIndex, step: -1, tabCount: tabs.count)
-    let next = SessionTabShortcut.adjacentTabIndex(from: activeIndex, step: 1, tabCount: tabs.count)
     return Group {
       ForEach(Array(SessionTabShortcut.digits), id: \.self) { digit in
         let index = SessionTabShortcut.tabIndex(forDigit: digit, tabCount: tabs.count)
@@ -278,16 +283,10 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut(KeyEquivalent(Character(String(digit))), modifiers: .command)
         .disabled(index == nil)
       }
-      Button("Previous Tab") {
-        if let previous { onSelectTerminal(tabs[previous].id) }
-      }
-      .keyboardShortcut("{", modifiers: .command)
-      .disabled(previous == nil)
-      Button("Next Tab") {
-        if let next { onSelectTerminal(tabs[next].id) }
-      }
-      .keyboardShortcut("}", modifiers: .command)
-      .disabled(next == nil)
+      Button("Previous Tab") { onCycleTerminal(-1) }
+        .keyboardShortcut("{", modifiers: .command)
+      Button("Next Tab") { onCycleTerminal(1) }
+        .keyboardShortcut("}", modifiers: .command)
     }
     .hidden()
   }

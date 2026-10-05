@@ -733,6 +733,9 @@ struct BoardFeature {
     /// full-screen view is currently rendering. Drives the tab strip
     /// selection state.
     case selectActiveTerminal(sessionID: AgentSession.ID, terminalID: UUID)
+    /// ⌘⇧[ (`step` -1) / ⌘⇧] (+1) in the full-screen view: move to the
+    /// adjacent tab in the session's strip, wrapping at either end.
+    case cycleActiveTerminal(sessionID: AgentSession.ID, step: Int)
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -1817,6 +1820,20 @@ struct BoardFeature {
           return .none
         }
         state.activeTerminalBySession[sessionID] = terminalID
+        return .none
+
+      case .cycleActiveTerminal(let sessionID, let step):
+        guard let session = state.sessions.first(where: { $0.id == sessionID }) else { return .none }
+        let tabs = session.tabTerminals
+        let activeID = state.activeTerminalBySession[sessionID] ?? session.primaryTerminalID
+        guard
+          let target = SessionTabShortcut.adjacentTabIndex(
+            from: tabs.firstIndex { $0.id == activeID },
+            step: step,
+            tabCount: tabs.count
+          )
+        else { return .none }
+        state.activeTerminalBySession[sessionID] = tabs[target].id
         return .none
 
       case .toggleRepository(let repositoryID):
