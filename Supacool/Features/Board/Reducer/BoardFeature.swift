@@ -799,6 +799,10 @@ struct BoardFeature {
     /// host tab and flattened the pane into its own tab — fix the record
     /// so hooks and future resumes treat it as a tab terminal.
     case _paneTerminalPromotedToTab(id: AgentSession.ID, terminalID: UUID)
+    /// Resume recovered a secondary agent's native session id from the
+    /// agent's own session store (its hooks never reported one). Persists
+    /// it so later resumes and the review loop target the right conversation.
+    case _secondaryNativeSessionRecovered(id: AgentSession.ID, terminalID: UUID, nativeSessionID: String)
     /// User confirmed the "convert to worktree" popover on the repo-root
     /// pill in the focused terminal header. Creates the worktree on disk
     /// via git-wt and types `cd '<path>'` into the session's focused
@@ -1181,6 +1185,7 @@ struct BoardFeature {
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(PiSettingsClient.self) var piSettingsClient
   @Dependency(GitClientDependency.self) var gitClient
+  @Dependency(NativeSessionLocatorClient.self) var nativeSessionLocator
   @Dependency(PRMonitorClient.self) var prMonitor
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(PortReachabilityClient.self) var portReachabilityClient
@@ -2199,6 +2204,17 @@ struct BoardFeature {
         state.$sessions.withLock { sessions in
           guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
           sessions[index].updateTerminal(id: terminalID) { $0.hostTabID = nil }
+        }
+        return .none
+
+      case ._secondaryNativeSessionRecovered(let id, let terminalID, let nativeSessionID):
+        state.$sessions.withLock { sessions in
+          guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+          sessions[index].updateTerminal(id: terminalID) { terminal in
+            // A hook that landed meanwhile is authoritative.
+            guard (terminal.agentNativeSessionID ?? "").isEmpty else { return }
+            terminal.agentNativeSessionID = nativeSessionID
+          }
         }
         return .none
 

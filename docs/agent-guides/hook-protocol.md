@@ -132,6 +132,13 @@ Event wiring (see `ClaudeHookSettings` / `CodexHookSettings` for the current tru
   every Codex hook then reported that one tab, and review loops never saw their
   reviewer's Stop. Supacool launches and resumes Codex with `--no-daemon`
   (`AgentRegistry.codexBuiltin`) for this reason — keep it.
+- **A misrouted id is recovered, not lost.** A Codex started without `--no-daemon` (an
+  older build, or hand-typed) never gets its `session_id` captured. On Resume, a secondary
+  agent terminal without an id is looked up in the agent's own store
+  (`NativeSessionLocatorClient`: Codex rollouts under `~/.codex/sessions/YYYY/MM/DD/`, matched
+  by cwd + launch prompt + start time) and the id is persisted. With no match, the agent's
+  resume picker opens. Launch reattach therefore never turns such a terminal into a blank
+  shell, because a blank shell would take its tab id.
 
 ## Remote sessions (ssh + tmux)
 
