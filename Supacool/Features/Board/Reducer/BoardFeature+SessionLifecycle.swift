@@ -200,16 +200,15 @@ extension BoardFeature {
         .resumeFailed(id: id, message: "\(agent.displayName) doesn't support resume by id.")
       )
     }
-    let secondaryJobs = Self.secondaryResumeJobs(
-      for: session,
-      bypassPermissions: bypassPermissions
-    )
     if focusOnComplete {
       state.focusedSessionID = id
     }
     let command = resumeCommand + "\r"
     return .run {
-      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository, clock, secondaryJobs] send in
+      [
+        terminalClient, piSettingsClient, gitClient, nativeSessionLocator, agent, worktree, repository, clock,
+        session,
+      ] send in
       // Guardrail: never launch the resume command into a directory that no
       // longer exists. If this is an owns-worktree session whose checkout was
       // deleted (trash → restore), put the worktree back at its exact original
@@ -239,8 +238,18 @@ extension BoardFeature {
           id: id
         )
       )
+      let recoveredIDs = await Self.recoverSecondaryNativeSessionIDs(
+        for: session,
+        workingDirectory: worktree.workingDirectory.path,
+        locator: nativeSessionLocator,
+        send: send
+      )
       await Self.resumeSecondaryAgents(
-        jobs: secondaryJobs,
+        jobs: Self.secondaryResumeJobs(
+          for: session,
+          recoveredNativeSessionIDs: recoveredIDs,
+          bypassPermissions: bypassPermissions
+        ),
         sessionID: id,
         worktree: worktree,
         terminalClient: terminalClient,
@@ -258,28 +267,30 @@ extension BoardFeature {
   }
 
   /// Secondary agents — aux-tab agents and hook-adopted split panes —
-  /// resume alongside the primary, each with its own captured id. No model
-  /// flag: they were hand-typed, and resume continues on the
-  /// conversation's model anyway. Terminals without a captured id or
-  /// without resume support (pi) are skipped; their records survive for a
-  /// later manual re-launch.
+  /// resume alongside the primary, each with its own captured id (or one
+  /// recovered from the agent's session store). No model flag: they were
+  /// hand-typed, and resume continues on the conversation's model anyway.
+  /// Without any id the agent's resume picker opens instead, so the tab
+  /// still comes back as the agent rather than as a blank shell. Only
+  /// terminals whose agent supports neither are skipped; their records
+  /// survive for a later manual re-launch.
   static func secondaryResumeJobs(
     for session: AgentSession,
+    recoveredNativeSessionIDs: [UUID: String] = [:],
     bypassPermissions: Bool
   ) -> [SecondaryResumeJob] {
     session.agentTerminals
       .filter { $0.id != session.primaryTerminalID }
       .compactMap { terminal in
-        guard let nativeID = terminal.agentNativeSessionID, !nativeID.isEmpty,
-          let terminalAgent = terminal.agent,
-          let command = terminalAgent.resumeCommand(
-            sessionID: nativeID,
-            bypassPermissions: bypassPermissions,
-            model: nil
+        guard
+          let command = secondaryResumeCommand(
+            for: terminal,
+            nativeSessionID: terminal.agentNativeSessionID ?? recoveredNativeSessionIDs[terminal.id],
+            bypassPermissions: bypassPermissions
           )
         else {
           boardLogger.warning(
-            "Resume: skipping secondary terminal \(terminal.id) — no captured id or no resume support"
+            "Resume: skipping secondary terminal \(terminal.id) — agent supports no resume"
           )
           return nil
         }
@@ -289,6 +300,59 @@ extension BoardFeature {
           command: command
         )
       }
+  }
+
+  /// How Resume relaunches one secondary agent terminal: by id when one is
+  /// known, else through the agent's resume picker. `nil` means Resume
+  /// can't bring it back, so launch-time reattach may restore it as a shell.
+  static func secondaryResumeCommand(
+    for terminal: SessionTerminal,
+    nativeSessionID: String?,
+    bypassPermissions: Bool
+  ) -> String? {
+    guard terminal.role == .agent, let agent = terminal.agent else { return nil }
+    if let nativeSessionID, !nativeSessionID.isEmpty,
+      let command = agent.resumeCommand(
+        sessionID: nativeSessionID,
+        bypassPermissions: bypassPermissions,
+        model: nil
+      )
+    {
+      return command
+    }
+    return agent.resumePickerCommand(bypassPermissions: bypassPermissions)
+  }
+
+  /// Secondary agent terminals whose hooks never reported an id (Codex in
+  /// shared-daemon mode misrouted them to another tab) get one more chance:
+  /// look the conversation up in the agent's own session store. Recovered
+  /// ids are persisted so the next Resume goes straight to `resume <id>`.
+  private static func recoverSecondaryNativeSessionIDs(
+    for session: AgentSession,
+    workingDirectory: String,
+    locator: NativeSessionLocatorClient,
+    send: Send<Action>
+  ) async -> [UUID: String] {
+    var recovered: [UUID: String] = [:]
+    for terminal in session.agentTerminals
+    where terminal.id != session.primaryTerminalID && (terminal.agentNativeSessionID ?? "").isEmpty {
+      guard let agent = terminal.agent,
+        let nativeID = await locator.locate(
+          NativeSessionLocatorClient.Query(
+            agentID: agent.id,
+            workingDirectory: workingDirectory,
+            initialPrompt: terminal.initialPrompt,
+            createdAt: terminal.createdAt
+          )
+        ),
+        !nativeID.isEmpty
+      else { continue }
+      recovered[terminal.id] = nativeID
+      await send(
+        ._secondaryNativeSessionRecovered(id: session.id, terminalID: terminal.id, nativeSessionID: nativeID)
+      )
+    }
+    return recovered
   }
 
   /// The effect-side half of multi-agent Resume: bring each secondary
@@ -797,10 +861,17 @@ extension BoardFeature {
         // Pane terminals live inside another tab's split tree — their id
         // is a SURFACE UUID and must never be spawned as a tab.
         if terminal.hostTabID != nil { continue }
-        // Agent auxiliaries with a captured id belong to Resume: an eager
-        // blank shell here would spend the tab id and make the
+        // Agent auxiliaries that Resume can bring back (by id, or through
+        // the resume picker when no id was captured) belong to Resume: an
+        // eager blank shell here would spend the tab id and make the
         // interrupted agent look like an empty terminal.
-        if terminal.role == .agent, terminal.agentNativeSessionID?.isEmpty == false { continue }
+        if Self.secondaryResumeCommand(
+          for: terminal,
+          nativeSessionID: terminal.agentNativeSessionID,
+          bypassPermissions: false
+        ) != nil {
+          continue
+        }
         jobs.append(AuxiliaryReattachJob(worktree: worktree, tabID: terminal.id))
       }
     }

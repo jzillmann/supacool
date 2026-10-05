@@ -2407,7 +2407,7 @@ struct BoardFeatureTests {
     var session = Self.sampleSession(id: sessionID)
     session.updatePrimaryTerminal { $0.agentNativeSessionID = "primary-native-1" }
     // A codex agent in its own aux tab, an adopted claude pane in the
-    // primary tab, and an agent terminal with no captured id (skipped).
+    // primary tab, and an agent whose CLI supports no resume (skipped).
     session.terminals.append(
       SessionTerminal(
         id: auxTabID, role: .agent, agent: .codex, agentNativeSessionID: "codex-native-1"
@@ -2420,7 +2420,9 @@ struct BoardFeatureTests {
       )
     )
     session.terminals.append(
-      SessionTerminal(id: unresumableID, role: .agent, agent: .claude)
+      SessionTerminal(
+        id: unresumableID, role: .agent, agent: AgentRegistry.lookupOrPlaceholder(for: "no-resume-agent")
+      )
     )
     let repository = Repository(
       id: "/tmp/repo",
@@ -2533,11 +2535,118 @@ struct BoardFeatureTests {
     #expect(store.state.sessions[0].terminal(id: paneID)?.hostTabID == nil)
   }
 
+  @Test(.dependencies) func resumeRecoversMissingSecondaryIDFromAgentSessionStore() async {
+    let sessionID = UUID()
+    let reviewerID = UUID()
+    let createdAt = Date(timeIntervalSince1970: 1_790_000_000)
+    var session = Self.sampleSession(id: sessionID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "primary-native-1" }
+    // A Codex reviewer whose hooks never reached its tab: no captured id.
+    session.terminals.append(
+      SessionTerminal(
+        id: reviewerID, role: .agent, agent: .codex, initialPrompt: "Review these pull requests",
+        displayName: "Reviewer", createdAt: createdAt
+      )
+    )
+    let repository = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let queries = LockIsolated<[NativeSessionLocatorClient.Query]>([])
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = ImmediateClock()
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+      $0.terminalClient.tabExists = { _, _ in true }
+      $0[NativeSessionLocatorClient.self].locate = { query in
+        queries.withValue { $0.append(query) }
+        return "codex-recovered-1"
+      }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repository]))
+    await store.finish()
+
+    #expect(
+      queries.value == [
+        NativeSessionLocatorClient.Query(
+          agentID: "codex",
+          workingDirectory: "/tmp/repo",
+          initialPrompt: "Review these pull requests",
+          createdAt: createdAt
+        ),
+      ]
+    )
+    let reviewerInput = sentCommands.value.compactMap { command -> String? in
+      if case .createTabWithInput(_, let input, _, let id) = command, id == reviewerID { return input }
+      return nil
+    }
+    #expect(reviewerInput.count == 1)
+    #expect(reviewerInput.first?.contains("resume 'codex-recovered-1' --no-daemon") == true)
+    // Persisted, so the next Resume needs no lookup.
+    #expect(store.state.sessions[0].terminal(id: reviewerID)?.agentNativeSessionID == "codex-recovered-1")
+  }
+
+  @Test(.dependencies) func resumeOpensPickerForSecondaryWithoutAnyID() async {
+    let sessionID = UUID()
+    let reviewerID = UUID()
+    var session = Self.sampleSession(id: sessionID)
+    session.updatePrimaryTerminal { $0.agentNativeSessionID = "primary-native-1" }
+    session.terminals.append(
+      SessionTerminal(id: reviewerID, role: .agent, agent: .codex, initialPrompt: "Review")
+    )
+    let repository = Repository(
+      id: "/tmp/repo",
+      rootURL: URL(fileURLWithPath: "/tmp/repo"),
+      name: "Repo",
+      worktrees: []
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+
+    let sentCommands = LockIsolated<[TerminalClient.Command]>([])
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = ImmediateClock()
+      $0.terminalClient.send = { command in
+        sentCommands.withValue { $0.append(command) }
+      }
+      $0.terminalClient.tabExists = { _, _ in true }
+      $0[NativeSessionLocatorClient.self].locate = { _ in nil }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.resumeDetachedSession(id: sessionID, repositories: [repository]))
+    await store.finish()
+
+    // The reviewer comes back as Codex's resume picker, not as a blank
+    // shell and not skipped.
+    let reviewerInput = sentCommands.value.compactMap { command -> String? in
+      if case .createTabWithInput(_, let input, _, let id) = command, id == reviewerID { return input }
+      return nil
+    }
+    #expect(reviewerInput.count == 1)
+    #expect(reviewerInput.first?.hasPrefix("codex resume --no-daemon") == true)
+    #expect(store.state.sessions[0].terminal(id: reviewerID)?.agentNativeSessionID == nil)
+  }
+
   @Test func collectAuxiliaryReattachJobsSkipsPanesAndResumableAgents() {
     let sessionID = UUID()
     var session = Self.sampleSession(id: sessionID)
     let shellTabID = UUID()
     let resumableAgentTabID = UUID()
+    let pickerAgentTabID = UUID()
     let unresumableAgentTabID = UUID()
     let paneID = UUID()
     session.terminals.append(SessionTerminal(id: shellTabID, role: .shell))
@@ -2546,8 +2655,15 @@ struct BoardFeatureTests {
         id: resumableAgentTabID, role: .agent, agent: .codex, agentNativeSessionID: "codex-1"
       )
     )
+    // No captured id, but Codex has a resume picker: Resume owns it.
     session.terminals.append(
-      SessionTerminal(id: unresumableAgentTabID, role: .agent, agent: .claude)
+      SessionTerminal(id: pickerAgentTabID, role: .agent, agent: .codex)
+    )
+    session.terminals.append(
+      SessionTerminal(
+        id: unresumableAgentTabID, role: .agent,
+        agent: AgentRegistry.lookupOrPlaceholder(for: "no-resume-agent")
+      )
     )
     session.terminals.append(
       SessionTerminal(
@@ -2566,9 +2682,9 @@ struct BoardFeatureTests {
       sessions: [session],
       repositories: [repository]
     )
-    // Shell tab reattaches; agent-without-id reattaches as a shell; the
-    // resumable agent tab belongs to Resume; the pane must never become
-    // a tab.
+    // Shell tab reattaches; an agent Resume can't bring back reattaches as
+    // a shell; agents resumable by id or picker belong to Resume (a blank
+    // shell would spend their tab id); the pane must never become a tab.
     #expect(jobs.map(\.tabID) == [shellTabID, unresumableAgentTabID])
   }
 
