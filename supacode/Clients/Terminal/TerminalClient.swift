@@ -123,6 +123,8 @@ struct TerminalClient {
       worktreeID: Worktree.ID, kind: BlockingScriptKind, exitCode: Int?, tabId: TerminalTabID?)
     case commandPaletteToggleRequested(worktreeID: Worktree.ID)
     case setupScriptConsumed(worktreeID: Worktree.ID)
+    /// "Pin Selection" in a terminal's right-click menu.
+    case selectionPinned(worktreeID: Worktree.ID, tabID: UUID, surfaceID: UUID, text: String)
   }
 }
 

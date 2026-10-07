@@ -123,6 +123,9 @@ final class WorktreeTerminalState {
   /// the user is engaging with again and to optimistically mark submitted
   /// prompts as busy while waiting for agent hooks to catch up.
   var onInputObserved: ((TerminalTabID, String) -> Void)?
+  /// Fires on "Pin Selection" in a surface's right-click menu with the tab,
+  /// the surface and the selected text. Supacool stores it as a session note.
+  var onSelectionPinned: ((TerminalTabID, UUID, String) -> Void)?
   /// Fires when the user explicitly closes a split surface whose process
   /// is still alive, and the host tab survives it. Supacool prunes the
   /// matching adopted pane terminal — closing a live pane is the explicit
@@ -718,6 +721,51 @@ final class WorktreeTerminalState {
   func primarySurface(tabID: TerminalTabID) -> GhosttySurfaceView? {
     if let firstLeaf = trees[tabID]?.leaves().first { return firstLeaf }
     return focusedSurfaceIdByTab[tabID].flatMap { surfaces[$0] }
+  }
+
+  /// Supacool "jump to pinned note": focus `surfaceID` (else the tab's
+  /// primary surface), open the search overlay on `needle`, and select the
+  /// newest match — Ghostty scrolls the viewport to a selected match.
+  ///
+  /// The overlay emits the `search:` binding itself, and Ghostty finds
+  /// matches on its search thread, so the match is selected once the first
+  /// total arrives. Returns false when the tab has no live surface.
+  @discardableResult
+  func revealText(_ needle: String, surfaceID: UUID?, tabID: TerminalTabID) -> Bool {
+    let target: GhosttySurfaceView
+    if let surfaceID, tabId(containing: surfaceID) == tabID, let surface = surfaces[surfaceID] {
+      target = surface
+    } else if let surface = primarySurface(tabID: tabID) {
+      target = surface
+    } else {
+      return false
+    }
+    tabManager.selectTab(tabID)
+    focusSurface(target, in: tabID)
+
+    let search = target.bridge.state
+    if search.searchNeedle == needle, let total = search.searchTotal, total > 0 {
+      // Same search still open: step away and back so a viewport the user
+      // scrolled since gets moved to the match again.
+      target.performBindingAction("navigate_search:next")
+      if total > 1 { target.performBindingAction("navigate_search:previous") }
+      return true
+    }
+    search.searchNeedle = needle
+    search.searchSelected = nil
+    search.searchTotal = nil
+    Task { @MainActor [weak target] in
+      for _ in 0..<40 {
+        try? await ContinuousClock().sleep(for: .milliseconds(75))
+        guard let target, target.bridge.state.searchNeedle == needle else { return }
+        if target.bridge.state.searchSelected != nil { return }
+        if let total = target.bridge.state.searchTotal, total > 0 {
+          // `next` with nothing selected picks the newest match.
+          target.performBindingAction("navigate_search:next")
+        }
+      }
+    }
+    return true
   }
 
   /// Screen contents of the tab's primary surface — see
@@ -1825,6 +1873,9 @@ final class WorktreeTerminalState {
     }
     view.bridge.onInputSubmitted = { [weak self] in
       self?.onInputObserved?(tabId, "\r")
+    }
+    view.bridge.onPinSelection = { [weak self] text in
+      self?.onSelectionPinned?(tabId, surfaceID, text)
     }
     view.bridge.onCloseRequest = { [weak self, weak view] processAlive in
       guard let self, let view else { return }

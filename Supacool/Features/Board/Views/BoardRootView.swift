@@ -435,6 +435,9 @@ struct BoardRootView: View {
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
+        onRemoveNote: { noteID in
+          store.send(.removeNote(sessionID: session.id, noteID: noteID))
+        },
         prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
           of: session,
           pulseFallback: store.state.prPulseSnapshots

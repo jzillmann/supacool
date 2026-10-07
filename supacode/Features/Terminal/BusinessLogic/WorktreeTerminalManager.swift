@@ -1320,6 +1320,11 @@ final class WorktreeTerminalManager {
     state.onInputObserved = { [weak self] tabID, text in
       self?.handleInputObserved(worktreeID: worktree.id, tabID: tabID, text: text)
     }
+    state.onSelectionPinned = { [weak self] tabID, surfaceID, text in
+      self?.emit(
+        .selectionPinned(worktreeID: worktree.id, tabID: tabID.rawValue, surfaceID: surfaceID, text: text)
+      )
+    }
     state.onSurfaceClosed = { [weak self] _, surfaceID in
       self?.prunePaneTerminal(surfaceID: surfaceID)
     }

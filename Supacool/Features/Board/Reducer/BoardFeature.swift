@@ -971,6 +971,10 @@ struct BoardFeature {
     /// `gh pr view`. The scheduler path below is preferred because it
     /// dedupes and fans out by PR key.
     case _refreshPRStatus(id: AgentSession.ID, ref: SessionReference)
+    /// "Pin Selection" in a terminal's right-click menu. Resolved to the
+    /// session that owns the tab (or adopted pane) and stored as a note.
+    case pinTerminalSelection(worktreeID: Worktree.ID, tabID: UUID, surfaceID: UUID, text: String)
+    case removeNote(sessionID: AgentSession.ID, noteID: SessionNote.ID)
     case _prStatusUpdated(id: AgentSession.ID, ref: SessionReference, snapshot: PullRequestSnapshot)
     /// Records that a `gh pr view` lookup failed for the given dedupe key
     /// so subsequent scan/cardAppeared passes skip it for
@@ -2576,6 +2580,13 @@ struct BoardFeature {
       case ._startPRRefresher:
         // The snooze wake ticker rides the same once-per-launch start signal.
         return .merge(reduceStartPRRefresher(state: &state), snoozeWakeTicker())
+      case .pinTerminalSelection(let worktreeID, let tabID, let surfaceID, let text):
+        return reducePinTerminalSelection(
+          state: &state, worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID, text: text)
+
+      case .removeNote(let sessionID, let noteID):
+        return reduceRemoveNote(state: &state, sessionID: sessionID, noteID: noteID)
+
 
       case ._runPRRefreshTick:
         return reduceRunPRRefreshTick(state: &state)

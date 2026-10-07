@@ -115,6 +115,9 @@ struct FullScreenTerminalView: View {
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
 
+  /// Delete a pinned note. Nil hides the notes chip.
+  var onRemoveNote: ((SessionNote.ID) -> Void)?
+
   /// Latest checks/Greptile snapshot per PR reference of this session.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
 
@@ -352,6 +355,15 @@ struct FullScreenTerminalView: View {
           onDiagnose: onDiagnoseReviewLoop,
           onChoose: onChooseReviewDecision,
           onStop: onStopReviewLoop
+        )
+      }
+      if !session.notes.isEmpty, let onRemoveNote {
+        SessionNotesButton(
+          notes: session.notes,
+          canJump: canJumpToNote,
+          onJump: jumpToNote,
+          onInsert: insertNote,
+          onRemove: { onRemoveNote($0.id) }
         )
       }
       overflowMenu
@@ -1106,6 +1118,39 @@ struct FullScreenTerminalView: View {
     terminalManager.performBindingAction(
       worktreeID: session.worktreeID,
       action: "search:\(needle)"
+    )
+  }
+
+  /// The tab a note's terminal lives in: an adopted pane's host tab, else
+  /// the terminal's own tab.
+  private func noteTabID(_ note: SessionNote) -> TerminalTabID? {
+    guard let terminal = session.terminal(id: note.terminalID) else { return nil }
+    return TerminalTabID(rawValue: terminal.hostTabID ?? terminal.id)
+  }
+
+  private func canJumpToNote(_ note: SessionNote) -> Bool {
+    guard let tabID = noteTabID(note) else { return false }
+    return terminalManager.sessionTabExists(worktreeID: session.worktreeID, tabID: tabID)
+  }
+
+  /// Bring the note's tab to the front and scroll its surface to the note.
+  private func jumpToNote(_ note: SessionNote) {
+    guard let tabID = noteTabID(note), let needle = note.searchNeedle,
+      let worktree = resolveWorktree()
+    else { return }
+    onSelectTerminal(tabID.rawValue)
+    let state = terminalManager.state(for: worktree) { false }
+    state.revealText(needle, surfaceID: note.surfaceID, tabID: tabID)
+  }
+
+  /// Type the note into the session's agent prompt, unsent.
+  private func insertNote(_ note: SessionNote) {
+    terminalManager.handleCommand(
+      .sendText(
+        worktreeID: session.worktreeID,
+        tabID: TerminalTabID(rawValue: session.primaryTerminalID),
+        text: note.text
+      )
     )
   }
 

@@ -36,6 +36,9 @@ final class GhosttySurfaceBridge {
   /// can continue to ignore low-signal control keys while status tracking
   /// still sees prompt submissions.
   var onInputSubmitted: (() -> Void)?
+  /// Supacool: "Pin Selection" in the surface's right-click menu, with the
+  /// selected text. Nil hides the menu item (surfaces outside a session).
+  var onPinSelection: ((String) -> Void)?
   private var progressResetTask: Task<Void, Never>?
 
   deinit {

@@ -1194,6 +1194,11 @@ final class GhosttySurfaceView: NSView, Identifiable {
     let menu = NSMenu()
     if ghostty_surface_has_selection(surface) {
       menu.addItem(NSMenuItem(title: "Copy", action: #selector(copy(_:)), keyEquivalent: ""))
+      if bridge.onPinSelection != nil {
+        menu.addItem(
+          menuItem(title: "Pin Selection", action: #selector(pinSelection(_:)), symbol: "pin")
+        )
+      }
     }
     menu.addItem(NSMenuItem(title: "Paste", action: #selector(paste(_:)), keyEquivalent: ""))
     menu.addItem(.separator())
@@ -1258,6 +1263,16 @@ final class GhosttySurfaceView: NSView, Identifiable {
 
   @IBAction func splitUp(_ sender: Any?) {
     _ = bridge.onSplitAction?(.newSplit(direction: .top))
+  }
+
+  @IBAction func pinSelection(_ sender: Any?) {
+    guard let surface else { return }
+    var text = ghostty_text_s()
+    guard ghostty_surface_read_selection(surface, &text) else { return }
+    defer { ghostty_surface_free_text(surface, &text) }
+    let selected = String(cString: text.text)
+    guard !selected.isEmpty else { return }
+    bridge.onPinSelection?(selected)
   }
 
   @IBAction func resetTerminal(_ sender: Any?) {

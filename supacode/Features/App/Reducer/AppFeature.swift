@@ -1028,6 +1028,11 @@ struct AppFeature {
           )
         )
 
+      case .terminalEvent(.selectionPinned(let worktreeID, let tabID, let surfaceID, let text)):
+        return .send(
+          .board(.pinTerminalSelection(worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID, text: text))
+        )
+
       case .terminalEvent:
         return .none
       }

@@ -116,6 +116,9 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// rescan does not re-surface them.
   var dismissedReferenceKeys: Set<String>
 
+  /// Terminal output the user pinned ("Pin Selection"), oldest first.
+  var notes: [SessionNote]
+
   /// Non-nil when this session runs on a remote host.
   var remoteWorkspaceID: RemoteWorkspace.ID?
 
@@ -187,6 +190,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     references: [SessionReference] = [],
     referencesScannedAt: Date? = nil,
     dismissedReferenceKeys: Set<String> = [],
+    notes: [SessionNote] = [],
     remoteWorkspaceID: RemoteWorkspace.ID? = nil,
     remoteHostID: RemoteHost.ID? = nil,
     repositoryRemoteTargetID: RepositoryRemoteTarget.ID? = nil,
@@ -217,6 +221,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.references = references
     self.referencesScannedAt = referencesScannedAt
     self.dismissedReferenceKeys = dismissedReferenceKeys
+    self.notes = notes
     self.remoteWorkspaceID = remoteWorkspaceID
     self.remoteHostID = remoteHostID
     self.repositoryRemoteTargetID = repositoryRemoteTargetID
@@ -258,6 +263,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case parked, parkedActive, parkedUntil, wokeFromSnoozeAt
     case autoObserver, autoObserverPrompt, reviewLoop
     case references, referencesScannedAt, dismissedReferenceKeys
+    case notes
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
     case manualStatusOverride
@@ -300,6 +306,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       .deduplicatedByKey()
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
     dismissedReferenceKeys = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReferenceKeys) ?? []
+    notes = try c.decodeIfPresent([SessionNote].self, forKey: .notes) ?? []
     remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
     remoteHostID = try c.decodeIfPresent(UUID.self, forKey: .remoteHostID)
     repositoryRemoteTargetID = try c.decodeIfPresent(UUID.self, forKey: .repositoryRemoteTargetID)
@@ -388,6 +395,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(references, forKey: .references)
     try c.encodeIfPresent(referencesScannedAt, forKey: .referencesScannedAt)
     try c.encode(dismissedReferenceKeys, forKey: .dismissedReferenceKeys)
+    try c.encode(notes, forKey: .notes)
     try c.encodeIfPresent(remoteWorkspaceID, forKey: .remoteWorkspaceID)
     try c.encodeIfPresent(remoteHostID, forKey: .remoteHostID)
     try c.encodeIfPresent(repositoryRemoteTargetID, forKey: .repositoryRemoteTargetID)
