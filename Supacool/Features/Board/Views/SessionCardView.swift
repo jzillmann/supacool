@@ -1353,6 +1353,22 @@ struct SessionReferenceSummaryChips: View {
   }
 
   var body: some View {
+    // A row at its natural width can be wider than a board card (ticket +
+    // PR stack + "N artifacts"). The card pins its width with
+    // `.frame(width:)`, which centres an overflowing child, so the whole
+    // card used to spill out on both sides and break the grid columns.
+    // Try the full row, then a shorter artifact label, and as a last resort
+    // let the chip labels truncate inside the width on offer.
+    ViewThatFits(in: .horizontal) {
+      chipRow(compactArtifacts: false)
+        .fixedSize(horizontal: true, vertical: false)
+      chipRow(compactArtifacts: true)
+        .fixedSize(horizontal: true, vertical: false)
+      chipRow(compactArtifacts: true)
+    }
+  }
+
+  private func chipRow(compactArtifacts: Bool) -> some View {
     HStack(spacing: 4) {
       if parts.showsTickets {
         ticketChips
@@ -1361,11 +1377,10 @@ struct SessionReferenceSummaryChips: View {
         pullRequestChips
       }
       if parts.showsArtifacts {
-        artifactChips
+        artifactChips(compact: compactArtifacts)
       }
     }
     .lineLimit(1)
-    .fixedSize(horizontal: true, vertical: false)
   }
 
   @ViewBuilder
@@ -1420,7 +1435,7 @@ struct SessionReferenceSummaryChips: View {
   }
 
   @ViewBuilder
-  private var artifactChips: some View {
+  private func artifactChips(compact: Bool) -> some View {
     if artifacts.count == 1, let artifact = artifacts.first {
       ReferenceChip(
         reference: artifact,
@@ -1434,7 +1449,8 @@ struct SessionReferenceSummaryChips: View {
         references: artifacts,
         linearOrgSlug: linearOrgSlug,
         onRemoveReference: onRemoveReference,
-        onAddLink: onAddLink
+        onAddLink: onAddLink,
+        isCompact: compact
       )
     }
   }
@@ -1554,6 +1570,9 @@ private struct ReferenceStackChip: View {
   /// label features that PR instead of whichever one happens to be open first.
   /// Nil falls back to the open → draft → newest heuristic.
   var actionablePullRequestKey: String?
+  /// Drop the noun from the label ("3" instead of "3 artifacts") when the
+  /// chip row is short on room. The glyph and tooltip still say what it is.
+  var isCompact = false
 
   @State private var isPopoverShown: Bool = false
   @State private var isMergedPullRequestsExpanded: Bool = false
@@ -1634,7 +1653,7 @@ private struct ReferenceStackChip: View {
     case .tickets:
       return "+\(references.count)"
     case .artifacts:
-      return "\(references.count) artifacts"
+      return isCompact ? "\(references.count)" : "\(references.count) artifacts"
     }
   }
 
