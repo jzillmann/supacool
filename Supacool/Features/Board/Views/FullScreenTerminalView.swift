@@ -127,8 +127,11 @@ struct FullScreenTerminalView: View {
   /// Switch the rendered terminal to the given id (from the session tab
   /// strip). Only meaningful when `session.terminals.count > 1`.
   let onSelectTerminal: (UUID) -> Void
-  /// ⌘⇧[ (-1) / ⌘⇧] (+1): step through the strip with wrap-around. The
-  /// reducer resolves the target from live state — see `tabSelectionShortcuts`.
+  /// ⌘1–⌘9: pick that tab in the focused session's strip. The reducer
+  /// resolves session and tab from live state — see `tabSelectionShortcuts`.
+  let onSelectTabDigit: (Int) -> Void
+  /// ⌘⇧[ (-1) / ⌘⇧] (+1): step through the focused session's strip with
+  /// wrap-around, resolved in the reducer like `onSelectTabDigit`.
   let onCycleTerminal: (Int) -> Void
   /// `+` button in the session tab strip — append a new shell terminal.
   let onAddShellTerminal: () -> Void
@@ -271,20 +274,17 @@ struct FullScreenTerminalView: View {
   /// equivalent convention. SwiftUI matches `"["` + ⌘⇧ against the event's
   /// `{` and never fires, so the key fell through to the terminal instead.
   ///
-  /// The step buttons must not compute their target here: SwiftUI kept the
-  /// hidden buttons' first action closures while the active tab changed, so
-  /// a target captured from `activeTerminalID` went stale and ⌘⇧[ / ⌘⇧]
-  /// moved once, then never again. The reducer reads the live active tab.
+  /// These buttons must not capture session state, nor be disabled from
+  /// it: SwiftUI kept their first action closures (and enabled state) while
+  /// the active tab — and even the focused session — changed. A captured
+  /// target went stale, so ⌘⇧[ / ⌘⇧] moved once and then never again, and
+  /// ⌘1–⌘9 worked only sometimes. The closures send bare intents; the reducer
+  /// reads the focused session and its active tab when the key lands.
   private var tabSelectionShortcuts: some View {
-    let tabs = session.tabTerminals
-    return Group {
+    Group {
       ForEach(Array(SessionTabShortcut.digits), id: \.self) { digit in
-        let index = SessionTabShortcut.tabIndex(forDigit: digit, tabCount: tabs.count)
-        Button("Select Tab \(digit)") {
-          if let index { onSelectTerminal(tabs[index].id) }
-        }
-        .keyboardShortcut(KeyEquivalent(Character(String(digit))), modifiers: .command)
-        .disabled(index == nil)
+        Button("Select Tab \(digit)") { onSelectTabDigit(digit) }
+          .keyboardShortcut(KeyEquivalent(Character(String(digit))), modifiers: .command)
       }
       Button("Previous Tab") { onCycleTerminal(-1) }
         .keyboardShortcut("{", modifiers: .command)

@@ -733,9 +733,13 @@ struct BoardFeature {
     /// full-screen view is currently rendering. Drives the tab strip
     /// selection state.
     case selectActiveTerminal(sessionID: AgentSession.ID, terminalID: UUID)
+    /// ⌘1–⌘9 in the full-screen view: pick that tab in the *focused*
+    /// session's strip (⌘9 = last). Resolved here, not in the view, because
+    /// SwiftUI kept stale action closures on the view's hidden shortcut buttons.
+    case selectFocusedSessionTab(digit: Int)
     /// ⌘⇧[ (`step` -1) / ⌘⇧] (+1) in the full-screen view: move to the
-    /// adjacent tab in the session's strip, wrapping at either end.
-    case cycleActiveTerminal(sessionID: AgentSession.ID, step: Int)
+    /// adjacent tab in the focused session's strip, wrapping at either end.
+    case cycleFocusedSessionTab(step: Int)
 
     // MARK: Focus
     case focusSession(id: AgentSession.ID?)
@@ -1831,8 +1835,21 @@ struct BoardFeature {
         state.activeTerminalBySession[sessionID] = terminalID
         return .none
 
-      case .cycleActiveTerminal(let sessionID, let step):
-        guard let session = state.sessions.first(where: { $0.id == sessionID }) else { return .none }
+      case .selectFocusedSessionTab(let digit):
+        guard let sessionID = state.focusedSessionID,
+          let session = state.sessions.first(where: { $0.id == sessionID })
+        else { return .none }
+        let tabs = session.tabTerminals
+        guard let target = SessionTabShortcut.tabIndex(forDigit: digit, tabCount: tabs.count) else {
+          return .none
+        }
+        state.activeTerminalBySession[sessionID] = tabs[target].id
+        return .none
+
+      case .cycleFocusedSessionTab(let step):
+        guard let sessionID = state.focusedSessionID,
+          let session = state.sessions.first(where: { $0.id == sessionID })
+        else { return .none }
         let tabs = session.tabTerminals
         let activeID = state.activeTerminalBySession[sessionID] ?? session.primaryTerminalID
         guard
@@ -2563,6 +2580,13 @@ struct BoardFeature {
       case .addReferences(let id, let rawText):
         return reduceAddReferences(state: &state, id: id, rawText: rawText)
 
+      case .pinTerminalSelection(let worktreeID, let tabID, let surfaceID, let text):
+        return reducePinTerminalSelection(
+          state: &state, worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID, text: text)
+
+      case .removeNote(let sessionID, let noteID):
+        return reduceRemoveNote(state: &state, sessionID: sessionID, noteID: noteID)
+
       case .refreshPRReferences(let id):
         return reduceRefreshPRReferences(state: &state, id: id)
 
@@ -2580,13 +2604,6 @@ struct BoardFeature {
       case ._startPRRefresher:
         // The snooze wake ticker rides the same once-per-launch start signal.
         return .merge(reduceStartPRRefresher(state: &state), snoozeWakeTicker())
-      case .pinTerminalSelection(let worktreeID, let tabID, let surfaceID, let text):
-        return reducePinTerminalSelection(
-          state: &state, worktreeID: worktreeID, tabID: tabID, surfaceID: surfaceID, text: text)
-
-      case .removeNote(let sessionID, let noteID):
-        return reduceRemoveNote(state: &state, sessionID: sessionID, noteID: noteID)
-
 
       case ._runPRRefreshTick:
         return reduceRunPRRefreshTick(state: &state)

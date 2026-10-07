@@ -190,9 +190,10 @@ Rules:
   Write `"{"` with `.command` (shift implied), likewise `"}"` for ⌘⇧] and `">"` for ⌘⌥⇧.
   The dead shortcut is silent — the key just falls through to the terminal.
 - **Hidden shortcut buttons must not capture changing state.** SwiftUI kept the first action
-  closures of the full-screen view's hidden tab buttons while the active tab changed, so a
-  target computed from `activeTerminalID` went stale (⌘⇧] moved once, then never again).
-  Send an intent (`cycleActiveTerminal(step:)`) and let the reducer read live state.
+  closures (and `.disabled` state) of the full-screen view's hidden tab buttons while the active
+  tab and even the focused session changed: ⌘⇧] moved once and then never again, ⌘1–⌘9 worked
+  only sometimes. Send a bare intent (`cycleFocusedSessionTab(step:)`,
+  `selectFocusedSessionTab(digit:)`) and let the reducer read `focusedSessionID` and live state.
 - **Never gate a menu shortcut on a `@FocusedValue` nobody sets.** `WindowCommands` used
   `closeSurfaceAction == nil` to decide whether ⌘W overlapped Ghostty's `close_surface`.
   The only setter was deleted with the sidebar in `8dae4c31`, so the guard silently inverted

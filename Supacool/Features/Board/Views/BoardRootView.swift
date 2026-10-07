@@ -446,8 +446,12 @@ struct BoardRootView: View {
         onSelectTerminal: { terminalID in
           store.send(.selectActiveTerminal(sessionID: session.id, terminalID: terminalID))
         },
+        // No `session` capture here: see `FullScreenTerminalView.tabSelectionShortcuts`.
+        onSelectTabDigit: { digit in
+          store.send(.selectFocusedSessionTab(digit: digit))
+        },
         onCycleTerminal: { step in
-          store.send(.cycleActiveTerminal(sessionID: session.id, step: step))
+          store.send(.cycleFocusedSessionTab(step: step))
         },
         onAddShellTerminal: {
           store.send(
