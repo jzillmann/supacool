@@ -107,7 +107,7 @@ struct AgentRegistryTests {
       bypassPermissions: true,
       remoteControl: true
     )
-    #expect(cmd == "claude --dangerously-skip-permissions --remote-control 'ship it'")
+    #expect(cmd == "claude --dangerously-skip-permissions --remote-control= 'ship it'")
   }
 
   @Test func claudeRemoteControlCombinesWithPlanMode() {
@@ -118,25 +118,25 @@ struct AgentRegistryTests {
       remoteControl: true
     )
     // Plan wins over bypass; remote-control is orthogonal and still appends.
-    #expect(cmd == "claude --permission-mode plan --remote-control 'design'")
+    #expect(cmd == "claude --permission-mode plan --remote-control= 'design'")
   }
 
-  @Test func claudeRemoteControlShellQuotesOptionalName() {
+  @Test func claudeRemoteControlBindsShellQuotedNameToFlag() {
     let cmd = AgentType.claude.command(
       prompt: "go",
       remoteControl: true,
       remoteControlName: "My Project"
     )
-    #expect(cmd == "claude --remote-control 'My Project' 'go'")
+    #expect(cmd == "claude --remote-control='My Project' 'go'")
   }
 
-  @Test func claudeRemoteControlBlankNameOmitsName() {
+  @Test func claudeRemoteControlBlankNameStillTerminatesFlag() {
     let cmd = AgentType.claude.command(
       prompt: "go",
       remoteControl: true,
       remoteControlName: "   "
     )
-    #expect(cmd == "claude --remote-control 'go'")
+    #expect(cmd == "claude --remote-control= 'go'")
   }
 
   @Test func claudeSupportsRemoteControlCodexAndPiDoNot() {

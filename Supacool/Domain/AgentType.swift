@@ -247,7 +247,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   }
 
   /// Builds the leading-space-prefixed flag fragment used by the templates
-  /// (e.g. `" --dangerously-skip-permissions --remote-control"` or `""`).
+  /// (e.g. `" --dangerously-skip-permissions --remote-control="` or `""`).
   ///
   /// Plan mode wins over bypass-permissions so those two never conflict in
   /// the rendered command. Remote control is orthogonal — it combines with
@@ -272,11 +272,13 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
       fragments.append(flag)
     }
     if remoteControl, let flag = remoteControlFlag {
-      fragments.append(flag)
+      // The flag takes an OPTIONAL value (`--remote-control [name]`), so a
+      // bare flag swallows the next word — the prompt — as the session name.
+      // A long prompt then makes Claude's session creation fail (server 400)
+      // and the prompt never arrives as the first message. The `=` form binds
+      // the value to the flag; `--remote-control=` (empty) means "no name".
       let trimmedName = remoteControlName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-      if !trimmedName.isEmpty {
-        fragments.append(Self.shellQuote(trimmedName))
-      }
+      fragments.append(trimmedName.isEmpty ? "\(flag)=" : "\(flag)=\(Self.shellQuote(trimmedName))")
     }
     if let flag = modelFlag {
       let trimmedModel = model?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

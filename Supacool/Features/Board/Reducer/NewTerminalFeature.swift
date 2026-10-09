@@ -160,7 +160,7 @@ struct NewTerminalFeature {
     /// Only meaningful for agents that support it; gated at submit time
     /// against `agent.supportsRemoteControl`.
     var remoteControl: Bool = false
-    /// Optional session title passed to `--remote-control "<name>"`. Blank
+    /// Optional session title passed as `--remote-control=<name>`. Blank
     /// → Claude auto-names the remote session. Sheet-local only — not
     /// persisted on bookmarks/drafts.
     var remoteControlName: String = ""

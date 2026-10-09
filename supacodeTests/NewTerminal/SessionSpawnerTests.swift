@@ -122,7 +122,7 @@ struct SessionSpawnerTests {
     }
     #expect(
       spawnedInput.value
-        == "claude --dangerously-skip-permissions --remote-control 'Couch' 'Pair from my phone'\r"
+        == "claude --dangerously-skip-permissions --remote-control='Couch' 'Pair from my phone'\r"
     )
     // The flag is persisted on the session so rerun re-arms it.
     #expect(session.remoteControl == true)
