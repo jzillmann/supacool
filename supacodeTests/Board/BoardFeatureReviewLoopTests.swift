@@ -1218,31 +1218,173 @@ extension BoardFeatureTests {
     #expect(store.state.sessions.first?.reviewLoop?.expectedReviewSHA == "pushed-sha")
   }
 
-  @Test(.dependencies) func aStackOfPullRequestsReviewsTheHeadOfTheCheckedOutBranch() async throws {
-    let gitClient = GitClientDependency.liveValue
-    let heads: [Int: SupacoolPRHead] = [
-      42: SupacoolPRHead(headRefName: "part-1", headRefOid: "sha-1"),
-      43: SupacoolPRHead(headRefName: "part-2", headRefOid: "sha-2"),
-    ]
-    let githubPR = SupacoolGithubPRClient(
-      fetchMetadata: SupacoolGithubPRClient.testValue.fetchMetadata,
-      fetchHead: { _, _, number in try #require(heads[number]) }
-    )
+  // Several PRs are one piece of work: the round's revision is every head,
+  // so a push to any PR is new, and one missing head leaves nothing to review.
+  @Test func severalPullRequestsResolveToEveryHeadOrNone() async throws {
     let urls = ["https://github.com/acme/widgets/pull/42", "https://github.com/acme/widgets/pull/43"]
-    var onPart2 = gitClient
-    onPart2.branchName = { _ in "part-2" }
-    var elsewhere = gitClient
-    elsewhere.branchName = { _ in "morning-report" }
-    let workspace = URL(fileURLWithPath: "/tmp/repo")
+    func revision(_ heads: [Int: SupacoolPRHead]) async -> String? {
+      let githubPR = SupacoolGithubPRClient(
+        fetchMetadata: SupacoolGithubPRClient.testValue.fetchMetadata,
+        fetchHead: { _, _, number in
+          struct NoPullRequestHead: Error {}
+          guard let head = heads[number] else { throw NoPullRequestHead() }
+          return head
+        }
+      )
+      return await BoardFeature.reviewHeadSHA(
+        gitClient: GitClientDependency.liveValue,
+        githubPR: githubPR,
+        pullRequestURLs: urls,
+        workspaceURL: URL(fileURLWithPath: "/tmp/repo")
+      )
+    }
 
-    let matched = await BoardFeature.reviewHeadSHA(
-      gitClient: onPart2, githubPR: githubPR, pullRequestURLs: urls, workspaceURL: workspace
+    let both = await revision([
+      42: SupacoolPRHead(headRefName: "part-1", headRefOid: "aaaaaaa1"),
+      43: SupacoolPRHead(headRefName: "part-2", headRefOid: "bbbbbbb2"),
+    ])
+    let firstOnly = await revision([42: SupacoolPRHead(headRefName: "part-1", headRefOid: "aaaaaaa1")])
+    let secondOnly = await revision([43: SupacoolPRHead(headRefName: "part-2", headRefOid: "bbbbbbb2")])
+
+    #expect(both == "aaaaaaa1, bbbbbbb2")
+    #expect(firstOnly == nil)
+    #expect(secondOnly == nil)
+  }
+
+  @Test func revisionsCompareByTheirCommitSets() {
+    #expect(BoardFeature.isSameRevision("aaaaaaa1, bbbbbbb2", "`aaaaaaa1` (PR #42), `bbbbbbb2` (PR #43)"))
+    #expect(BoardFeature.isSameRevision("aaaaaaa1, bbbbbbb2", "bbbbbbb2 aaaaaaa1"))
+    #expect(!BoardFeature.isSameRevision("aaaaaaa1, bbbbbbb2", "aaaaaaa1, ccccccc3"))
+    #expect(!BoardFeature.isSameRevision("aaaaaaa1, bbbbbbb2", "aaaaaaa1"))
+    #expect(BoardFeature.isSameRevision("old-sha", "old-sha"))
+    #expect(!BoardFeature.isSameRevision("old-sha", nil))
+  }
+
+  @Test(.dependencies) func aPushToAnotherPullRequestOfTheLoopStartsARound() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        additionalPullRequestURLs: ["https://github.com/acme/widgets/pull/43"],
+        phase: .fixing,
+        lastReviewedSHA: "aaaaaaa1, bbbbbbb2"
+      )
     )
-    let unmatched = await BoardFeature.reviewHeadSHA(
-      gitClient: elsewhere, githubPR: githubPR, pullRequestURLs: urls, workspaceURL: workspace
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(
+      session: session,
+      commands: commands,
+      pullRequestHeads: [
+        42: SupacoolPRHead(headRefName: "part-1", headRefOid: "aaaaaaa1"),
+        43: SupacoolPRHead(headRefName: "part-2", headRefOid: "ccccccc3"),
+      ]
     )
-    #expect(matched == "sha-2")
-    #expect(unmatched == "sha-1")
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: session.primaryTerminalID,
+        surfaceID: UUID(),
+        agent: "claude",
+        message: "Pushed the fix to part 2."
+      )
+    )
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.expectedReviewSHA == "aaaaaaa1, ccccccc3")
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the new revision to reach the reviewer")
+      return
+    }
+    #expect(prompt.contains("expected aaaaaaa1, ccccccc3"))
+    #expect(prompt.contains("one per PR in the order listed"))
+  }
+
+  @Test(.dependencies) func aReviewOfEveryPullRequestHeadIsAccepted() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        additionalPullRequestURLs: ["https://github.com/acme/widgets/pull/43"],
+        round: 2,
+        expectedReviewSHA: "aaaaaaa1, bbbbbbb2",
+        lastReviewedSHA: "aaaaaaa1, ccccccc3"
+      )
+    )
+    let store = reviewLoopStore(session: session)
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: reviewerID,
+        surfaceID: reviewerID,
+        agent: "codex",
+        message: reviewReport(verdict: "pass", sha: "`aaaaaaa1` (PR #42), `bbbbbbb2` (PR #43)")
+      )
+    )
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.escalationReason?.contains("stale findings") != true)
+    #expect(loop.lastReviewedSHA == "aaaaaaa1, bbbbbbb2")
+  }
+
+  @Test(.dependencies) func aReviewOfOnlyOnePullRequestHeadIsStale() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        additionalPullRequestURLs: ["https://github.com/acme/widgets/pull/43"],
+        round: 2,
+        expectedReviewSHA: "aaaaaaa1, bbbbbbb2",
+        lastReviewedSHA: "aaaaaaa1, ccccccc3"
+      )
+    )
+    let store = reviewLoopStore(session: session)
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: reviewerID,
+        surfaceID: reviewerID,
+        agent: "codex",
+        message: reviewReport(verdict: "pass", sha: "bbbbbbb2")
+      )
+    )
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(loop.escalationReason?.contains("stale findings") == true)
+  }
+
+  @Test(.dependencies) func aRereviewWithoutAResolvedHeadParks() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        phase: .needsDecision,
+        round: 2,
+        lastReviewedSHA: "old-sha",
+        lastReport: "Codex stopped without a handoff block."
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(session: session, commands: commands, headSHA: "main-tip-sha")
+
+    await store.send(.continueReviewLoop(id: session.id, additionalRounds: 1))
+    await store.receive(\._reviewLoopRereviewHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(loop.round == 2)
+    #expect(loop.expectedReviewSHA == nil)
+    #expect(loop.escalationReason?.contains("could not resolve the current commit") == true)
+    #expect(commands.value.isEmpty)
   }
 
   @Test func pullRequestHeadDecodesFromGhJSON() throws {
@@ -1289,7 +1431,7 @@ private func reviewLoopStore(
           date: Date(timeIntervalSince1970: 1_750_000_000),
           author: "Tester",
           subject: "Head"
-        )
+        ),
       ]
     }
   }
