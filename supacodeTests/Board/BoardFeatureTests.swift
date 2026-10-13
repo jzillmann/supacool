@@ -327,6 +327,115 @@ struct BoardFeatureTests {
     #expect(store.state.sessions.first?.references.isEmpty == true)
   }
 
+  @Test(.dependencies) func referencesScanRecordsOwnershipEvidence() async {
+    let created = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 1, state: nil, title: nil
+    )
+    let mentioned = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 2, state: nil, title: nil
+    )
+    let now = Date(timeIntervalSince1970: 5_000_000)
+    let session = Self.sampleSession()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(now)
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      ._referencesScanned(
+        id: session.id,
+        refs: [created, mentioned],
+        // A key the session doesn't hold must not be recorded as created.
+        createdPullRequestKeys: [created.dedupeKey, "pr:acme/widgets#99"]
+      )
+    )
+
+    let marks = store.state.sessions.first?.pullRequestOwnership
+    #expect(marks?.created == [created.dedupeKey])
+    #expect(marks?.firstSeenAt == [created.dedupeKey: now, mentioned.dedupeKey: now])
+  }
+
+  @Test(.dependencies) func strayPullRequestOnSecondSessionWarns() async {
+    let pr = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 7, state: .open, title: nil
+    )
+    var owner = Self.sampleSession(displayName: "Owner")
+    owner.references = [pr]
+    owner.pullRequestOwnership.created = [pr.dedupeKey]
+    let stray = Self.sampleSession(displayName: "Stray")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [owner, stray] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 5_000_000))
+    }
+    store.exhaustivity = .off
+
+    await store.send(._referencesScanned(id: stray.id, refs: [pr]))
+    await store.receive(\.delegate.pullRequestPickedUpByWatcher)
+
+    // The owner picking the PR up again on a rescan is not news.
+    await store.send(._referencesScanned(id: owner.id, refs: [pr]))
+    await store.finish()
+  }
+
+  @Test(.dependencies) func claimingAPullRequestMovesOwnershipAndQuietsTheOldOwner() async throws {
+    let pr = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 7, state: .open, title: nil
+    )
+    var first = Self.sampleSession(displayName: "First")
+    first.references = [pr]
+    first.pullRequestOwnership.created = [pr.dedupeKey]
+    var second = Self.sampleSession(displayName: "Second")
+    second.references = [pr]
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [first, second] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 5_000_000))
+    }
+    store.exhaustivity = .off
+    #expect(PullRequestOwnership.ownerID(of: pr.dedupeKey, in: store.state.sessions) == first.id)
+
+    await store.send(.claimPullRequest(id: second.id, dedupeKey: pr.dedupeKey))
+
+    let sessions = store.state.sessions
+    #expect(PullRequestOwnership.ownerID(of: pr.dedupeKey, in: sessions) == second.id)
+    let firstNow = try #require(sessions.first { $0.id == first.id })
+    #expect(PullRequestOwnership.roles(for: firstNow, in: sessions)[pr.dedupeKey]?.needsAttention == false)
+  }
+
+  @Test(.dependencies) func acknowledgingAWatchedPullRequestSilencesIt() async throws {
+    let pr = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 7, state: .open, title: nil
+    )
+    var owner = Self.sampleSession(displayName: "Owner")
+    owner.references = [pr]
+    owner.pullRequestOwnership.created = [pr.dedupeKey]
+    var watcher = Self.sampleSession(displayName: "Watcher")
+    watcher.references = [pr]
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [owner, watcher] }
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+    store.exhaustivity = .off
+
+    await store.send(.acknowledgePullRequestWatching(id: watcher.id, dedupeKey: pr.dedupeKey))
+
+    let sessions = store.state.sessions
+    let watcherNow = try #require(sessions.first { $0.id == watcher.id })
+    let role = PullRequestOwnership.roles(for: watcherNow, in: sessions)[pr.dedupeKey]
+    #expect(role?.isWatcher == true)
+    #expect(role?.needsAttention == false)
+  }
+
   @Test(.dependencies) func dismissedReferenceDoesNotReturnOnRescan() async {
     let kept = SessionReference.pullRequest(
       owner: "acme", repo: "widgets", number: 1, state: .open, title: nil
@@ -341,6 +450,8 @@ struct BoardFeatureTests {
     state.$sessions.withLock { $0 = [session] }
     let store = TestStore(initialState: state) {
       BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date())
     }
     // `_referencesScanned` stamps `referencesScannedAt` off the real clock,
     // so assert the references outcome directly rather than exhaustively.
@@ -426,6 +537,7 @@ struct BoardFeatureTests {
     let store = TestStore(initialState: state) {
       BoardFeature()
     } withDependencies: {
+      $0.date = .constant(Date())
       $0.sessionReferenceScannerClient.scanText = { _, _ in [.ticket(id: "CEN-10")] }
       $0.sessionReferenceScannerClient.scanTerminalTranscript = { _, _ in [
         .pullRequest(owner: "acme", repo: "widgets", number: 42, state: nil, title: nil),

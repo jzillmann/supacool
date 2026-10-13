@@ -116,6 +116,10 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
   /// rescan does not re-surface them.
   var dismissedReferenceKeys: Set<String>
 
+  /// Which of this session's PR references it owns versus merely mentions —
+  /// see `PullRequestOwnership` for how one owner per PR is resolved.
+  var pullRequestOwnership: PullRequestOwnershipMarks
+
   /// Terminal output the user pinned ("Pin Selection"), oldest first.
   var notes: [SessionNote]
 
@@ -190,6 +194,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     references: [SessionReference] = [],
     referencesScannedAt: Date? = nil,
     dismissedReferenceKeys: Set<String> = [],
+    pullRequestOwnership: PullRequestOwnershipMarks = PullRequestOwnershipMarks(),
     notes: [SessionNote] = [],
     remoteWorkspaceID: RemoteWorkspace.ID? = nil,
     remoteHostID: RemoteHost.ID? = nil,
@@ -221,6 +226,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     self.references = references
     self.referencesScannedAt = referencesScannedAt
     self.dismissedReferenceKeys = dismissedReferenceKeys
+    self.pullRequestOwnership = pullRequestOwnership
     self.notes = notes
     self.remoteWorkspaceID = remoteWorkspaceID
     self.remoteHostID = remoteHostID
@@ -262,7 +268,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     case removeBackingWorktreeOnDelete, isPriority, planMode, remoteControl, model
     case parked, parkedActive, parkedUntil, wokeFromSnoozeAt
     case autoObserver, autoObserverPrompt, reviewLoop
-    case references, referencesScannedAt, dismissedReferenceKeys
+    case references, referencesScannedAt, dismissedReferenceKeys, pullRequestOwnership
     case notes
     case remoteWorkspaceID, remoteHostID, repositoryRemoteTargetID
     case tmuxSessionName, remoteConnectionLost
@@ -306,6 +312,15 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
       .deduplicatedByKey()
     referencesScannedAt = try c.decodeIfPresent(Date.self, forKey: .referencesScannedAt)
     dismissedReferenceKeys = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReferenceKeys) ?? []
+    if let marks = try c.decodeIfPresent(PullRequestOwnershipMarks.self, forKey: .pullRequestOwnership) {
+      pullRequestOwnership = marks
+    } else {
+      // Saved before PR ownership existed: drop the scan stamp so the next
+      // card appearance rescans the transcript and records which PRs this
+      // session opened (`gh pr create`) instead of guessing from first-seen.
+      pullRequestOwnership = PullRequestOwnershipMarks()
+      referencesScannedAt = nil
+    }
     notes = try c.decodeIfPresent([SessionNote].self, forKey: .notes) ?? []
     remoteWorkspaceID = try c.decodeIfPresent(UUID.self, forKey: .remoteWorkspaceID)
     remoteHostID = try c.decodeIfPresent(UUID.self, forKey: .remoteHostID)
@@ -395,6 +410,7 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     try c.encode(references, forKey: .references)
     try c.encodeIfPresent(referencesScannedAt, forKey: .referencesScannedAt)
     try c.encode(dismissedReferenceKeys, forKey: .dismissedReferenceKeys)
+    try c.encode(pullRequestOwnership, forKey: .pullRequestOwnership)
     try c.encode(notes, forKey: .notes)
     try c.encodeIfPresent(remoteWorkspaceID, forKey: .remoteWorkspaceID)
     try c.encodeIfPresent(remoteHostID, forKey: .remoteHostID)

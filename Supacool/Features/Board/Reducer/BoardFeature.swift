@@ -957,7 +957,13 @@ struct BoardFeature {
     /// a scan of Claude Code JSONL plus Supacool's terminal transcript when
     /// references are stale (never scanned, or `lastActivityAt > referencesScannedAt`).
     case cardAppeared(id: AgentSession.ID)
-    case _referencesScanned(id: AgentSession.ID, refs: [SessionReference])
+    /// `createdPullRequestKeys` are the PRs the transcript shows this session
+    /// opening itself (`gh pr create`), recorded as ownership evidence.
+    case _referencesScanned(
+      id: AgentSession.ID,
+      refs: [SessionReference],
+      createdPullRequestKeys: Set<String> = []
+    )
     /// User-visible refresh hook for PR reference chips/popovers. Scoped
     /// to one session and throttled by `prStateCacheWindow` so repeated
     /// clicks do not spawn repeated `gh pr view` calls.
@@ -971,6 +977,12 @@ struct BoardFeature {
     /// parsed references are merged in and cleared from `dismissedReferenceKeys`
     /// so a manual add overrides a prior unlink.
     case addReferences(id: AgentSession.ID, rawText: String)
+    /// "Make This Session the Owner" on a PR chip: the newest claim wins, so
+    /// auto-resume, PR Pulse "Open" and ball-court triage follow this session.
+    case claimPullRequest(id: AgentSession.ID, dedupeKey: String)
+    /// "Keep as Watcher" on a shared PR chip: the user confirmed this session
+    /// only watches the PR, so its card stops warning.
+    case acknowledgePullRequestWatching(id: AgentSession.ID, dedupeKey: String)
     /// Legacy one-session fetch path for a pull-request reference via
     /// `gh pr view`. The scheduler path below is preferred because it
     /// dedupes and fans out by PR key.
@@ -1150,6 +1162,10 @@ struct BoardFeature {
     /// system notification so the user doesn't have to watch the board.
     /// `sessionID` is nil when no board session references the PR.
     case pullRequestReturnedToCourt(sessionID: AgentSession.ID?, title: String, body: String)
+    /// A PR that another session owns just showed up in session `sessionID`.
+    /// Usually an accident — only the owner should work on a PR — so
+    /// AppFeature fires a system notification that deep-links to the watcher.
+    case pullRequestPickedUpByWatcher(sessionID: AgentSession.ID, title: String, body: String)
     /// Emitted when a tray card asks to open the Settings window on a
     /// specific section (e.g. the stale-hooks card routes to Coding Agents).
     /// AppFeature listens and forwards to SettingsFeature.
@@ -2571,14 +2587,25 @@ struct BoardFeature {
       case .cardAppeared(let id):
         return reduceCardAppeared(state: &state, id: id)
 
-      case ._referencesScanned(let id, let refs):
-        return reduceReferencesScanned(state: &state, id: id, refs: refs)
+      case ._referencesScanned(let id, let refs, let createdPullRequestKeys):
+        return reduceReferencesScanned(
+          state: &state,
+          id: id,
+          refs: refs,
+          createdPullRequestKeys: createdPullRequestKeys
+        )
 
       case .removeReference(let id, let dedupeKey):
         return reduceRemoveReference(state: &state, id: id, dedupeKey: dedupeKey)
 
       case .addReferences(let id, let rawText):
         return reduceAddReferences(state: &state, id: id, rawText: rawText)
+
+      case .claimPullRequest(let id, let dedupeKey):
+        return reduceClaimPullRequest(state: &state, id: id, dedupeKey: dedupeKey)
+
+      case .acknowledgePullRequestWatching(let id, let dedupeKey):
+        return reduceAcknowledgePullRequestWatching(state: &state, id: id, dedupeKey: dedupeKey)
 
       case .pinTerminalSelection(let worktreeID, let tabID, let surfaceID, let text):
         return reducePinTerminalSelection(

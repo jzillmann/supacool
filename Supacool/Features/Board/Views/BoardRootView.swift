@@ -435,6 +435,7 @@ struct BoardRootView: View {
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
+        pullRequestOwnership: .board(store, session: session),
         onRemoveNote: { noteID in
           store.send(.removeNote(sessionID: session.id, noteID: noteID))
         },
@@ -1074,7 +1075,8 @@ struct BoardRootView: View {
       prReferenceSnapshots: store.state.prReferenceSnapshots,
       reinitializingSessionIDs: store.reinitializingSessionIDs,
       repositories: repositories,
-      worktreeInfoByID: worktreeInfoByID
+      worktreeInfoByID: worktreeInfoByID,
+      allSessions: store.sessions
     )
   }
 

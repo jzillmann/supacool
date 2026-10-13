@@ -348,6 +348,14 @@ struct AppFeature {
           await systemNotificationClient.send(title, body, sessionID)
         }
 
+      // Foreground too, same reasoning: the stray session is usually one the
+      // user is typing into right now, so the warning must reach them there.
+      case .board(.delegate(.pullRequestPickedUpByWatcher(let sessionID, let title, let body))):
+        guard state.settings.systemNotificationsEnabled else { return .none }
+        return .run { _ in
+          await systemNotificationClient.send(title, body, sessionID)
+        }
+
       case .notificationSessionClicked(let sessionID):
         // Deep-link a notification click to the session's full-screen
         // terminal. The session may be gone by click time (trashed, removed);

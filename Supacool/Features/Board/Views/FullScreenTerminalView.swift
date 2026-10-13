@@ -115,6 +115,10 @@ struct FullScreenTerminalView: View {
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
 
+  /// Owner/watcher role per PR plus the ownership verbs. The header is where
+  /// the user types into a session, so a PR another session owns warns here.
+  var pullRequestOwnership = PullRequestOwnershipChipContext()
+
   /// Delete a pinned note. Nil hides the notes chip.
   var onRemoveNote: ((SessionNote.ID) -> Void)?
 
@@ -578,7 +582,7 @@ struct FullScreenTerminalView: View {
   /// `dedupeKey` of the PR whose ball is in the user's court — the reference
   /// stack chip features it, so its glyphs describe the PR that needs you.
   private var actionablePullRequestKey: String? {
-    prReferenceSnapshots.actionableReference(for: session)?.dedupeKey
+    prReferenceSnapshots.actionableReference(for: session, excluding: pullRequestOwnership.watchedKeys)?.dedupeKey
   }
 
   @ViewBuilder
@@ -592,6 +596,7 @@ struct FullScreenTerminalView: View {
         // No reason pill in this header, so every glyph stays on the chip.
         suppressedIndicator: nil,
         actionablePullRequestKey: actionablePullRequestKey,
+        pullRequestOwnership: pullRequestOwnership,
         ticketPreviewSource: inboxTickets[session.repositoryID] ?? [],
         parts: parts,
         foldsRelatedTicketsIntoPreview: true

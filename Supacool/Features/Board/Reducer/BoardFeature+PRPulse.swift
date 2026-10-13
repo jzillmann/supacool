@@ -230,11 +230,9 @@ extension BoardFeature {
     else {
       return .none
     }
-    if let session = state.sessions.first(where: { session in
-      session.references.contains(where: { $0.dedupeKey == refKey })
-    }) {
+    if let ownerID = PullRequestOwnership.ownerID(of: refKey, in: state.sessions) {
       state.newTerminalSheet = nil
-      return .send(.focusSession(id: session.id))
+      return .send(.focusSession(id: ownerID))
     }
     let available = IdentifiedArray(uniqueElements: repositories)
     guard available[id: repositoryID] != nil else { return .none }
@@ -662,7 +660,10 @@ extension BoardFeature {
 
     // refKey is "pr:owner/repo#number" — surface the number to the user.
     let prLabel = refKey.split(separator: "#").last.map { "PR #\($0)" } ?? "Pull request"
-    let session = sessions.first { $0.references.contains { $0.dedupeKey == refKey } }
+    // The owner, never just the first session that happens to mention the
+    // PR: auto-resume types a fix-it prompt into this session's agent, and a
+    // watcher sits in some other worktree — possibly another branch.
+    let session = PullRequestOwnership.owner(of: refKey, in: sessions)
 
     func notification(suffix: String = "") -> Delegate {
       let title = session?.displayName ?? prLabel

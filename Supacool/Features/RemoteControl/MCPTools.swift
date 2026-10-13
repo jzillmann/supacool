@@ -623,7 +623,8 @@ struct MCPToolBox {
       prReferenceSnapshots: state.board.prReferenceSnapshots,
       reinitializingSessionIDs: state.board.reinitializingSessionIDs,
       repositories: state.repositories.repositories,
-      worktreeInfoByID: state.repositories.worktreeInfoByID
+      worktreeInfoByID: state.repositories.worktreeInfoByID,
+      allSessions: state.board.sessions
     )
   }
 

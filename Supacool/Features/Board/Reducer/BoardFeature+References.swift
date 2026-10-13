@@ -36,9 +36,9 @@ extension BoardFeature {
     var repositorySettings
     let allowedPrefixes = parseLinearTeamKeys(repositorySettings.linearTeamKeys)
     return .run { [scannerClient] send in
-      var refs: [SessionReference] = []
+      var scan = SessionReferenceScan()
       if let agentID, !agentID.isEmpty {
-        refs = await scannerClient.scan(worktreeID, agentID, allowedPrefixes)
+        scan = await scannerClient.scan(worktreeID, agentID, allowedPrefixes)
       }
       // Always also scan the initialPrompt and Supacool's own
       // terminal transcript. The transcript pass catches Codex/raw
@@ -46,21 +46,27 @@ extension BoardFeature {
       let promptRefs = scannerClient.scanText(initialPrompt, allowedPrefixes)
       let terminalRefs = await scannerClient.scanTerminalTranscript(id, allowedPrefixes)
       let merged = Self.mergeReferences(
-        Self.mergeReferences(refs, with: promptRefs),
+        Self.mergeReferences(scan.references, with: promptRefs),
         with: terminalRefs
       )
-      await send(._referencesScanned(id: id, refs: merged))
+      await send(
+        ._referencesScanned(id: id, refs: merged, createdPullRequestKeys: scan.createdPullRequestKeys)
+      )
     }
   }
 
   func reduceReferencesScanned(
     state: inout State,
     id: AgentSession.ID,
-    refs: [SessionReference]
+    refs: [SessionReference],
+    createdPullRequestKeys: Set<String> = []
   ) -> Effect<Action> {
+    let now = date.now
+    var addedPullRequestKeys: [String] = []
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
       let dismissed = sessions[index].dismissedReferenceKeys
+      let before = Set(sessions[index].references.map(\.dedupeKey))
       let merged = Self.mergeReferences(
         refs,
         with: sessions[index].references,
@@ -70,12 +76,98 @@ extension BoardFeature {
       // explicitly removed, even if it is still in the transcript.
       sessions[index].references = merged.filter { !dismissed.contains($0.dedupeKey) }
       sessions[index].referencesScannedAt = Date()
+      addedPullRequestKeys = sessions[index].references
+        .filter { $0.isPullRequestReference && !before.contains($0.dedupeKey) }
+        .map(\.dedupeKey)
+      Self.recordPullRequestOwnershipEvidence(
+        in: &sessions[index],
+        addedKeys: addedPullRequestKeys,
+        createdKeys: createdPullRequestKeys,
+        now: now
+      )
     }
     // No per-scan PR-refresh dispatch here anymore — the global
     // `_runPRRefreshTick` scheduler picks up newly-discovered and
     // still-active refs on its next tick. This eliminates the
     // multi-session lockstep storm where every busy↔idle edge
     // re-fetched the same PRs once per referencing session.
+    return pullRequestPickedUpByWatcherEffect(state: state, id: id, addedKeys: addedPullRequestKeys)
+  }
+
+  /// Stamps first-seen for PRs that just entered `session.references` and
+  /// records the PRs the transcript shows it opening. Creation evidence only
+  /// counts for references the session still holds (an unlinked PR stays out).
+  nonisolated static func recordPullRequestOwnershipEvidence(
+    in session: inout AgentSession,
+    addedKeys: [String],
+    createdKeys: Set<String>,
+    now: Date
+  ) {
+    for key in addedKeys where session.pullRequestOwnership.firstSeenAt[key] == nil {
+      session.pullRequestOwnership.firstSeenAt[key] = now
+    }
+    let held = Set(session.references.map(\.dedupeKey))
+    session.pullRequestOwnership.created.formUnion(createdKeys.intersection(held))
+  }
+
+  /// Warns when PRs that just landed on session `id` belong to another
+  /// session. Only the owner should work on a PR, so a second session picking
+  /// one up is usually an accident worth surfacing at once — not on the next
+  /// glance at the board.
+  func pullRequestPickedUpByWatcherEffect(
+    state: State,
+    id: AgentSession.ID,
+    addedKeys: [String]
+  ) -> Effect<Action> {
+    guard !addedKeys.isEmpty, let session = state.sessions.first(where: { $0.id == id }) else {
+      return .none
+    }
+    let roles = PullRequestOwnership.roles(for: session, in: state.sessions)
+    let strays = addedKeys.compactMap { key -> (number: String, owner: String)? in
+      guard let role = roles[key], role.needsAttention,
+        case .watcher(let owner, _, _) = role
+      else { return nil }
+      let number = key.split(separator: "#").last.map { "#\($0)" } ?? key
+      return (number: number, owner: owner.name)
+    }
+    guard !strays.isEmpty else { return .none }
+    let body = strays
+      .map { "PR \($0.number) belongs to “\($0.owner)” — only the owner should work on it." }
+      .joined(separator: "\n")
+    return .send(
+      .delegate(.pullRequestPickedUpByWatcher(sessionID: id, title: session.displayName, body: body))
+    )
+  }
+
+  func reduceClaimPullRequest(state: inout State, id: AgentSession.ID, dedupeKey: String) -> Effect<Action> {
+    let now = date.now
+    let previousOwnerID = PullRequestOwnership.ownerID(of: dedupeKey, in: state.sessions)
+    state.$sessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == id }),
+        sessions[index].references.contains(where: { $0.dedupeKey == dedupeKey })
+      else { return }
+      sessions[index].pullRequestOwnership.claimedAt[dedupeKey] = now
+      sessions[index].pullRequestOwnership.acknowledgedWatching.remove(dedupeKey)
+      // The user moved the PR on purpose, so the session it came from is a
+      // known watcher now — don't flag it as if it had wandered in.
+      if let previousOwnerID, previousOwnerID != id,
+        let previous = sessions.firstIndex(where: { $0.id == previousOwnerID })
+      {
+        sessions[previous].pullRequestOwnership.acknowledgedWatching.insert(dedupeKey)
+      }
+    }
+    return .none
+  }
+
+  func reduceAcknowledgePullRequestWatching(
+    state: inout State,
+    id: AgentSession.ID,
+    dedupeKey: String
+  ) -> Effect<Action> {
+    state.$sessions.withLock { sessions in
+      guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+      sessions[index].pullRequestOwnership.acknowledgedWatching.insert(dedupeKey)
+    }
     return .none
   }
 
@@ -97,14 +189,29 @@ extension BoardFeature {
   func reduceAddReferences(state: inout State, id: AgentSession.ID, rawText: String) -> Effect<Action> {
     let parsed = scannerClient.scanText(rawText, [])
     guard !parsed.isEmpty else { return .none }
+    let now = date.now
+    var addedPullRequestKeys: [String] = []
     state.$sessions.withLock { sessions in
       guard let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+      let before = Set(sessions[index].references.map(\.dedupeKey))
       sessions[index].references = Self.mergeReferences(sessions[index].references, with: parsed)
       for ref in parsed {
         sessions[index].dismissedReferenceKeys.remove(ref.dedupeKey)
       }
+      addedPullRequestKeys = parsed
+        .filter { $0.isPullRequestReference && !before.contains($0.dedupeKey) }
+        .map(\.dedupeKey)
+      Self.recordPullRequestOwnershipEvidence(
+        in: &sessions[index],
+        addedKeys: addedPullRequestKeys,
+        createdKeys: [],
+        now: now
+      )
     }
-    return .send(.refreshPRReferences(id: id))
+    return .merge(
+      .send(.refreshPRReferences(id: id)),
+      pullRequestPickedUpByWatcherEffect(state: state, id: id, addedKeys: addedPullRequestKeys)
+    )
   }
 
   func reduceRefreshPRReferences(state: inout State, id: AgentSession.ID) -> Effect<Action> {

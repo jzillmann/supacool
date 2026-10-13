@@ -400,6 +400,64 @@ struct SessionReferenceScannerTests {
     )
   }
 
+  // MARK: - PR creation detection
+
+  private static func toolUse(id: String, command: String, name: String = "Bash") -> String {
+    #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":""#
+      + id + #"","name":""# + name + #"","input":{"command":""# + command + #""}}]}}"#
+  }
+
+  private static func toolResult(id: String, text: String, isError: Bool = false) -> String {
+    #"{"type":"user","message":{"role":"user","content":[{"tool_use_id":""# + id
+      + #"","type":"tool_result","is_error":"# + (isError ? "true" : "false")
+      + #","content":[{"type":"text","text":""# + text + #""}]}]}}"#
+  }
+
+  @Test func scanJSONLDetectsPullRequestCreatedByGhPrCreate() {
+    let jsonl = [
+      Self.toolUse(id: "t1", command: "gh pr create --title Fix --body Done"),
+      Self.toolResult(id: "t1", text: "https://github.com/foo/bar/pull/42"),
+    ].joined(separator: "\n")
+    let scan = SessionReferenceScannerLive.scanJSONLDetailed(jsonl)
+    let key = SessionReference.pullRequest(owner: "foo", repo: "bar", number: 42, state: nil, title: nil).dedupeKey
+    #expect(scan.createdPullRequestKeys == [key])
+    // A single tool-output appearance normally fails the noise bar; creation clears it.
+    #expect(scan.references.map(\.dedupeKey) == [key])
+  }
+
+  @Test func scanJSONLDoesNotTreatViewingAPullRequestAsCreatingIt() {
+    let jsonl = [
+      Self.toolUse(id: "t1", command: "gh pr view 42 --json url"),
+      Self.toolResult(id: "t1", text: "https://github.com/foo/bar/pull/42"),
+      #"{"type":"user","message":{"role":"user","content":"look at https://github.com/foo/bar/pull/43"}}"#,
+    ].joined(separator: "\n")
+    let scan = SessionReferenceScannerLive.scanJSONLDetailed(jsonl)
+    #expect(scan.createdPullRequestKeys.isEmpty)
+  }
+
+  @Test func scanJSONLIgnoresFailedPullRequestCreation() {
+    // `gh pr create` on a branch that already has a PR fails and prints the
+    // existing PR's URL — that PR belongs to whoever opened it.
+    let jsonl = [
+      Self.toolUse(id: "t1", command: "gh pr create --fill"),
+      Self.toolResult(
+        id: "t1",
+        text: "a pull request already exists: https://github.com/foo/bar/pull/42",
+        isError: true
+      ),
+    ].joined(separator: "\n")
+    #expect(SessionReferenceScannerLive.scanJSONLDetailed(jsonl).createdPullRequestKeys.isEmpty)
+  }
+
+  @Test func scanJSONLDetectsCreatePullRequestMCPTool() {
+    let jsonl = [
+      Self.toolUse(id: "t9", command: "", name: "mcp__github__create_pull_request"),
+      Self.toolResult(id: "t9", text: "Created https://github.com/foo/bar/pull/7"),
+    ].joined(separator: "\n")
+    let scan = SessionReferenceScannerLive.scanJSONLDetailed(jsonl)
+    #expect(scan.createdPullRequestKeys == ["pr:foo/bar#7"])
+  }
+
   // MARK: - Codec round-trip
 
   @Test func referenceRoundTripsThroughJSON() throws {

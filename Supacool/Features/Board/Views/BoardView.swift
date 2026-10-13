@@ -1001,6 +1001,7 @@ struct BoardView: View {
       onAddReference: { rawText in
         store.send(.addReferences(id: session.id, rawText: rawText))
       },
+      pullRequestOwnership: .board(store, session: session),
       prReferenceSnapshots: store.state.prReferenceSnapshots.forReferences(
         of: session,
         pulseFallback: store.state.prPulseSnapshots
@@ -1470,6 +1471,7 @@ private struct SessionCardContainer: View {
   let onReferencesPopoverOpened: (() -> Void)?
   let onRemoveReference: ((SessionReference) -> Void)?
   let onAddReference: ((String) -> Void)?
+  let pullRequestOwnership: PullRequestOwnershipChipContext
   /// Latest checks/Greptile snapshot per PR reference of this session.
   let prReferenceSnapshots: [String: PullRequestSnapshot]
   let sessionGroups: [SessionGroup]
@@ -1549,6 +1551,7 @@ private struct SessionCardContainer: View {
       onReferencesPopoverOpened: onReferencesPopoverOpened,
       onRemoveReference: onRemoveReference,
       onAddReference: onAddReference,
+      pullRequestOwnership: pullRequestOwnership,
       prReferenceSnapshots: prReferenceSnapshots,
       sessionGroups: sessionGroups,
       onToggleGroupMembership: onToggleGroupMembership,

@@ -104,6 +104,28 @@ struct PRAutoResumeOutcomeTests {
     #expect(prompt.contains("merge conflicts"))
   }
 
+  @Test func autoResumeTargetsTheOwnerNotTheFirstMention() {
+    // The watcher sits first in the board array; the old `sessions.first`
+    // lookup typed the fix-it prompt into its (unrelated) worktree.
+    let watcher = session(busy: false)
+    var owner = session(busy: false)
+    owner.pullRequestOwnership.created = [refKey]
+    let result = BoardFeature.pullRequestReturnOutcome(
+      refKey: refKey,
+      previous: running,
+      next: failed,
+      sessions: [watcher, owner],
+      autoResume: settings(enabled: true),
+      priorAttempts: 0,
+      maxAttempts: 3
+    )
+    guard case .autoResume(let id, _, _) = result else {
+      Issue.record("expected autoResume, got \(result)")
+      return
+    }
+    #expect(id == owner.id)
+  }
+
   @Test func busyAgentNeverAutoResumed() {
     // Never interrupt a working agent — fall back to notifying.
     let result = outcome(previous: running, next: failed, enabled: true, busy: true)

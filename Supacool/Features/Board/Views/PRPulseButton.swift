@@ -250,7 +250,7 @@ struct PRPulseButton: View {
         pullRequest,
         repositoryID: entry.snapshot.repositoryID,
         expansionKey: expansionKey,
-        associatedSession: associatedSession(snapshot: entry.snapshot, pullRequest: pullRequest)
+        holders: holders(snapshot: entry.snapshot, pullRequest: pullRequest)
       )
       if expandedCheckKeys.contains(expansionKey) {
         checkDetailRows(pullRequest)
@@ -317,9 +317,10 @@ struct PRPulseButton: View {
     _ pullRequest: MonitoredPullRequest,
     repositoryID: String,
     expansionKey: String,
-    associatedSession: AgentSession?
+    holders: [AgentSession]
   ) -> some View {
-    HStack(spacing: 8) {
+    let associatedSession = holders.first
+    return HStack(spacing: 8) {
       Button {
         if let url = URL(string: pullRequest.url) {
           WebBrowser.open(url)
@@ -380,8 +381,11 @@ struct PRPulseButton: View {
       .help(
         associatedSession == nil
           ? "Start an associated session for this PR"
-          : "Open the associated session for this PR"
+          : "Open the session that owns this PR"
       )
+      if holders.count > 1 {
+        sharedSessionsMenu(holders)
+      }
       Button {
         store.send(.prPulseIgnoreToggled(repositoryID: repositoryID, number: pullRequest.number))
       } label: {
@@ -397,17 +401,42 @@ struct PRPulseButton: View {
     .padding(.vertical, 4)
   }
 
-  private func associatedSession(
+  /// Every board session holding this PR, the owner first — see
+  /// `PullRequestOwnership`. The row's open button targets the owner.
+  private func holders(
     snapshot: RepoPullRequestSnapshot,
     pullRequest: MonitoredPullRequest
-  ) -> AgentSession? {
+  ) -> [AgentSession] {
     guard let refKey = PRPulseReference.dedupeKey(
       slug: snapshot.slug,
       number: pullRequest.number
-    ) else { return nil }
-    return store.sessions.first { session in
-      session.references.contains(where: { $0.dedupeKey == refKey })
+    ) else { return [] }
+    return PullRequestOwnership.holders(of: refKey, in: store.sessions)
+  }
+
+  /// "+N" menu shown when more than one session holds the PR, so the overlap
+  /// is visible from the PR's side too and each session is one click away.
+  private func sharedSessionsMenu(_ holders: [AgentSession]) -> some View {
+    Menu {
+      ForEach(Array(holders.enumerated()), id: \.element.id) { index, session in
+        Button(index == 0 ? "\(session.displayName) (owner)" : session.displayName) {
+          isPresented = false
+          store.send(.focusSession(id: session.id))
+        }
+      }
+    } label: {
+      Label("+\(holders.count - 1)", systemImage: "exclamationmark.triangle.fill")
+        .labelStyle(.titleAndIcon)
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.yellow)
     }
+    .menuStyle(.borderlessButton)
+    .menuIndicator(.hidden)
+    .fixedSize()
+    .help(
+      "\(holders.count) sessions hold this PR. Owner: “\(holders[0].displayName)”. "
+        + "Only the owner should work on it — click to open one."
+    )
   }
 
   /// Busy/idle glyph for a PR's associated session, mirroring the board

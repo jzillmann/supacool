@@ -228,12 +228,21 @@ extension [String: PullRequestSnapshot] {
   /// Supersession is judged on the snapshot's state where there is one, and on
   /// the reference's own cached `PRState` otherwise, so a PR whose snapshot
   /// hasn't been fetched yet still counts as the live successor.
-  nonisolated func rankedBallStates(of session: AgentSession, greptileThreshold: Int = 5)
-    -> [(dedupeKey: String, ball: PRBallState)]
-  {
+  ///
+  /// `watchedKeys` are PRs another session owns (`PullRequestOwnership`).
+  /// They never rank here: a watcher must not be parked, resurfaced, or
+  /// labelled by a PR the owner is driving. They still count as a live
+  /// successor, since the session does reference them.
+  nonisolated func rankedBallStates(
+    of session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> [(dedupeKey: String, ball: PRBallState)] {
     let ranked = session.references.compactMap {
       reference -> (dedupeKey: String, ball: PRBallState)? in
-      guard case .pullRequest = reference, let snapshot = self[reference.dedupeKey] else {
+      guard case .pullRequest = reference, !watchedKeys.contains(reference.dedupeKey),
+        let snapshot = self[reference.dedupeKey]
+      else {
         return nil
       }
       let ball = PRBallState(snapshot: snapshot, greptileThreshold: greptileThreshold)
@@ -253,28 +262,36 @@ extension [String: PullRequestSnapshot] {
   /// snapshot. Drives both the card's reason chip and the board's
   /// external-court decision off the same explicitly-linked source, so the
   /// two never disagree.
-  nonisolated func ballStates(of session: AgentSession, greptileThreshold: Int = 5) -> [PRBallState] {
-    rankedBallStates(of: session, greptileThreshold: greptileThreshold).map(\.ball)
+  nonisolated func ballStates(
+    of session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> [PRBallState] {
+    rankedBallStates(of: session, greptileThreshold: greptileThreshold, excluding: watchedKeys).map(\.ball)
   }
 
   /// The most urgent "ball is in your court" reason across `session`'s PRs
   /// *and the PR reference it belongs to*, or `nil` when none need the user.
   /// Shared by the reason pill and the redundant-glyph suppression so the two
   /// surfaces never disagree about which PR / reason is being surfaced.
-  nonisolated func actionableReference(for session: AgentSession, greptileThreshold: Int = 5)
-    -> (dedupeKey: String, ball: PRBallState)?
-  {
-    rankedBallStates(of: session, greptileThreshold: greptileThreshold)
+  nonisolated func actionableReference(
+    for session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> (dedupeKey: String, ball: PRBallState)? {
+    rankedBallStates(of: session, greptileThreshold: greptileThreshold, excluding: watchedKeys)
       .filter { $0.ball.court == .mine }
       .min { $0.ball.triagePriority < $1.ball.triagePriority }
   }
 
   /// The most urgent "ball is in your court" reason across `session`'s PRs, or
   /// `nil` when none need the user.
-  nonisolated func actionableReason(for session: AgentSession, greptileThreshold: Int = 5)
-    -> PRBallState?
-  {
-    actionableReference(for: session, greptileThreshold: greptileThreshold)?.ball
+  nonisolated func actionableReason(
+    for session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> PRBallState? {
+    actionableReference(for: session, greptileThreshold: greptileThreshold, excluding: watchedKeys)?.ball
   }
 
   /// The reason worth its own standalone pill: `actionableReason` minus the
@@ -288,10 +305,12 @@ extension [String: PullRequestSnapshot] {
   /// whose badge is `PRHealthBarStrip` — coloured marks, no numbers — so the
   /// score and the green light are no longer *stated*, only hinted, and the
   /// pill has to carry the words again.
-  nonisolated func standaloneReason(for session: AgentSession, greptileThreshold: Int = 5)
-    -> PRBallState?
-  {
-    guard let ball = actionableReason(for: session, greptileThreshold: greptileThreshold)
+  nonisolated func standaloneReason(
+    for session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> PRBallState? {
+    guard let ball = actionableReason(for: session, greptileThreshold: greptileThreshold, excluding: watchedKeys)
     else { return nil }
     let isCollapsedIntoStack = session.references.count(where: \.isPullRequestReference) > 1
     guard isCollapsedIntoStack || !ball.isStatedByChipBadge else { return nil }
@@ -305,10 +324,14 @@ extension [String: PullRequestSnapshot] {
   /// Draft, PR closed), when the chip badge is the surface that wins (low
   /// score, ready to merge — the pill is dropped instead, see
   /// `standaloneReason(for:)`), or when no PR is in the user's court.
-  nonisolated func redundantIndicator(for session: AgentSession, greptileThreshold: Int = 5)
-    -> SuppressedPRIndicator?
-  {
-    guard let winner = actionableReference(for: session, greptileThreshold: greptileThreshold) else {
+  nonisolated func redundantIndicator(
+    for session: AgentSession,
+    greptileThreshold: Int = 5,
+    excluding watchedKeys: Set<String> = []
+  ) -> SuppressedPRIndicator? {
+    guard
+      let winner = actionableReference(for: session, greptileThreshold: greptileThreshold, excluding: watchedKeys)
+    else {
       return nil
     }
     let kind: SuppressedPRIndicator.Kind

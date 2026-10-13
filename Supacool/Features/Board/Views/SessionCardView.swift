@@ -67,6 +67,10 @@ struct SessionCardView: View {
   /// ticket id) is parsed by the board reducer and merged into the session's
   /// references.
   var onAddReference: ((String) -> Void)?
+  /// This session's owner/watcher role per PR plus the ownership verbs.
+  /// Watched PRs (another session owns them) are kept out of ball-court
+  /// triage, and their chips warn until the user confirms or moves ownership.
+  var pullRequestOwnership = PullRequestOwnershipChipContext()
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey), from
   /// `BoardFeature.State.prReferenceSnapshots`. Callers pass the subset
   /// for this session's references so unrelated PR updates don't re-render
@@ -656,7 +660,7 @@ struct SessionCardView: View {
   /// chip's own badge ("N/5", green check) rather than as a second, detached
   /// pill.
   private var prReason: PRBallState? {
-    prReferenceSnapshots.standaloneReason(for: session)
+    prReferenceSnapshots.standaloneReason(for: session, excluding: pullRequestOwnership.watchedKeys)
   }
 
   /// `dedupeKey` of the PR the triage reason belongs to. Steers the collapsed
@@ -666,7 +670,7 @@ struct SessionCardView: View {
   /// `showsReasonChip`: featuring the PR that most needs the user is the better
   /// default even on a card that shows no pill.
   private var actionablePullRequestKey: String? {
-    prReferenceSnapshots.actionableReference(for: session)?.dedupeKey
+    prReferenceSnapshots.actionableReference(for: session, excluding: pullRequestOwnership.watchedKeys)?.dedupeKey
   }
 
   /// PR number to stamp on the reason pill, so "2 checks failed" says *which*
@@ -687,7 +691,7 @@ struct SessionCardView: View {
   /// gate) — a card with no pill keeps every glyph.
   private var suppressedPRIndicator: SuppressedPRIndicator? {
     guard showsReasonChip else { return nil }
-    return prReferenceSnapshots.redundantIndicator(for: session)
+    return prReferenceSnapshots.redundantIndicator(for: session, excluding: pullRequestOwnership.watchedKeys)
   }
 
   /// Don't annotate cards whose agent is actively working or just starting —
@@ -768,7 +772,8 @@ struct SessionCardView: View {
         },
       prReferenceSnapshots: prReferenceSnapshots,
       suppressedIndicator: suppressedPRIndicator,
-      actionablePullRequestKey: actionablePullRequestKey
+      actionablePullRequestKey: actionablePullRequestKey,
+      pullRequestOwnership: pullRequestOwnership
     )
   }
 
@@ -934,6 +939,8 @@ struct ReferenceChip: View {
   /// Only fires when the chip is the exact PR the pill is calling out. The
   /// Greptile badge is never suppressed — the pill stands down for it instead.
   var suppressedIndicator: SuppressedPRIndicator?
+  /// PR ownership for this chip's session. Default context = no ownership UI.
+  var pullRequestOwnership = PullRequestOwnershipChipContext()
 
   /// When set (ticket chips only), hovering the chip reveals a preview
   /// popover with the ticket's title + markdown description. Click still
@@ -970,6 +977,7 @@ struct ReferenceChip: View {
       }
     } label: {
       HStack(spacing: 3) {
+        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
         if case .pullRequest(_, _, _, let state, _) = reference, let state {
           Image(systemName: state.systemImage)
             .font(.caption2)
@@ -997,7 +1005,7 @@ struct ReferenceChip: View {
           GreptileScoreBadge(score: prSnapshot.greptileScore)
         }
       }
-      .foregroundStyle(.primary.opacity(0.85))
+      .foregroundStyle(.primary.opacity(isWatchedQuietly ? 0.55 : 0.85))
       .padding(.horizontal, 6)
       .padding(.vertical, 2)
       .background(chipBackground)
@@ -1052,7 +1060,15 @@ struct ReferenceChip: View {
           Label("Remove link", systemImage: "link.badge.minus")
         }
       }
+      PullRequestOwnershipMenuItems(reference: reference, context: pullRequestOwnership)
     }
+  }
+
+  /// A PR another session owns that the user already accepted (or that is
+  /// settled) reads as background: muted label, no warning.
+  private var isWatchedQuietly: Bool {
+    guard let role = pullRequestOwnership.role(for: reference) else { return false }
+    return role.isWatcher && !role.needsAttention
   }
 
   /// Re-evaluate whether the preview should be visible after a hover change.
@@ -1104,7 +1120,9 @@ struct ReferenceChip: View {
       let stateLabel = state?.rawValue ?? "loading…"
       let statusSuffix = prSnapshot?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+      let open = "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+      guard let role = pullRequestOwnership.role(for: reference) else { return open }
+      return "\(open)\n\(role.helpText)"
     case .artifact(let id, _):
       return "Open Claude artifact \(id) in the browser"
     }
@@ -1301,6 +1319,8 @@ struct SessionReferenceSummaryChips: View {
   /// session the collapsed stack chip features this PR, so its inline CI/score
   /// indicators describe the same PR the reason pill names.
   var actionablePullRequestKey: String?
+  /// PR ownership for this session's chips. Default context = no ownership UI.
+  var pullRequestOwnership = PullRequestOwnershipChipContext()
 
   /// Cached Linear inbox records used to hover-preview the primary ticket
   /// chip's title + description. Empty (the default) disables the preview —
@@ -1418,7 +1438,8 @@ struct SessionReferenceSummaryChips: View {
         onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
         onAddLink: onAddLink,
         prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey],
-        suppressedIndicator: suppressedIndicator
+        suppressedIndicator: suppressedIndicator,
+        pullRequestOwnership: pullRequestOwnership
       )
     } else if pullRequests.count > 1 {
       ReferenceStackChip(
@@ -1429,7 +1450,8 @@ struct SessionReferenceSummaryChips: View {
         onRemoveReference: onRemoveReference,
         onAddLink: onAddLink,
         prReferenceSnapshots: prReferenceSnapshots,
-        actionablePullRequestKey: actionablePullRequestKey
+        actionablePullRequestKey: actionablePullRequestKey,
+        pullRequestOwnership: pullRequestOwnership
       )
     }
   }
@@ -1570,6 +1592,8 @@ private struct ReferenceStackChip: View {
   /// label features that PR instead of whichever one happens to be open first.
   /// Nil falls back to the open → draft → newest heuristic.
   var actionablePullRequestKey: String?
+  /// PR ownership for the popover rows. Default context = no ownership UI.
+  var pullRequestOwnership = PullRequestOwnershipChipContext()
   /// Drop the noun from the label ("3" instead of "3 artifacts") when the
   /// chip row is short on room. The glyph and tooltip still say what it is.
   var isCompact = false
@@ -1586,6 +1610,12 @@ private struct ReferenceStackChip: View {
       }
     } label: {
       HStack(spacing: 4) {
+        if pullRequestOwnership.needsAttention(references) {
+          Image(systemName: "exclamationmark.triangle.fill")
+            .font(.caption2)
+            .foregroundStyle(.yellow)
+            .accessibilityLabel("A pull request here is owned by another session")
+        }
         stackGlyph
         Text(chipText)
           .font(.caption2.weight(.medium))
@@ -1663,7 +1693,13 @@ private struct ReferenceStackChip: View {
       // One line per live PR, matching the strip's marks left to right, so
       // the tooltip explains every colour rather than only the featured PR's.
       let lines = healthBars.map(\.summary)
-      return (["Show \(references.count) pull requests"] + lines).joined(separator: "\n")
+      let ownershipLines = references.compactMap { reference -> String? in
+        guard let role = pullRequestOwnership.role(for: reference), role.needsAttention,
+          case .pullRequest(_, _, let number, _, _) = reference
+        else { return nil }
+        return "#\(number): \(role.helpText)"
+      }
+      return (["Show \(references.count) pull requests"] + lines + ownershipLines).joined(separator: "\n")
     case .tickets:
       let noun = references.count == 1 ? "ticket" : "tickets"
       return "Show \(references.count) more \(noun)"
@@ -1782,6 +1818,7 @@ private struct ReferenceStackChip: View {
       open(reference)
     } label: {
       HStack(spacing: 8) {
+        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
         Image(systemName: rowSystemImage(for: reference))
           .font(.caption)
           .foregroundStyle(rowTint(for: reference))
@@ -1845,6 +1882,9 @@ private struct ReferenceStackChip: View {
         } label: {
           Label("Remove link", systemImage: "link.badge.minus")
         }
+      }
+      PullRequestOwnershipMenuItems(reference: reference, context: pullRequestOwnership) {
+        isPopoverShown = false
       }
     }
   }
@@ -1916,7 +1956,9 @@ private struct ReferenceStackChip: View {
       let stateLabel = state?.rawValue ?? "loading…"
       let statusSuffix = prReferenceSnapshots[reference.dedupeKey]?.statusHelpSuffix ?? ""
       let titleSuffix = (title?.isEmpty ?? true) ? "" : " — \(title ?? "")"
-      return "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+      let open = "Open \(owner)/\(repo) #\(number) (\(stateLabel)\(statusSuffix))\(titleSuffix) on GitHub"
+      guard let role = pullRequestOwnership.role(for: reference) else { return open }
+      return "\(open)\n\(role.helpText)"
     case .artifact(let id, _):
       return "Open Claude artifact \(id) in the browser"
     }

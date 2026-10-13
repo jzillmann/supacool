@@ -11,12 +11,13 @@ import Foundation
 /// references beyond the initial prompt.
 struct SessionReferenceScannerClient: Sendable {
   /// Read the JSONL and pull out every unique ticket/PR reference from user
-  /// and assistant messages. `allowedPrefixes` scopes ticket matches to a
-  /// repo's Linear team keys (empty = match any uppercase prefix). Returns
-  /// `[]` if the file doesn't exist.
+  /// and assistant messages, plus the PRs the session itself opened.
+  /// `allowedPrefixes` scopes ticket matches to a repo's Linear team keys
+  /// (empty = match any uppercase prefix). Returns an empty scan if the file
+  /// doesn't exist.
   var scan:
     @Sendable (_ cwdPath: String, _ agentNativeSessionID: String, _ allowedPrefixes: Set<String>) async
-      -> [SessionReference]
+      -> SessionReferenceScan
   /// One-shot regex pass over a plain string (e.g. `session.initialPrompt`),
   /// scoped to `allowedPrefixes`.
   var scanText: @Sendable (_ text: String, _ allowedPrefixes: Set<String>) -> [SessionReference]
@@ -44,7 +45,7 @@ extension SessionReferenceScannerClient: DependencyKey {
   )
 
   static let testValue = Self(
-    scan: { _, _, _ in [] },
+    scan: { _, _, _ in SessionReferenceScan() },
     scanText: { _, _ in [] },
     scanTerminalTranscript: { _, _ in [] }
   )
@@ -55,6 +56,15 @@ extension DependencyValues {
     get { self[SessionReferenceScannerClient.self] }
     set { self[SessionReferenceScannerClient.self] = newValue }
   }
+}
+
+/// What one transcript scan found.
+nonisolated struct SessionReferenceScan: Equatable, Sendable {
+  var references: [SessionReference] = []
+  /// Dedupe keys of the PRs this session opened itself: a `gh pr create`
+  /// (or a create-pull-request tool) call whose result printed the PR URL.
+  /// Feeds `PullRequestOwnershipMarks.created`.
+  var createdPullRequestKeys: Set<String> = []
 }
 
 // MARK: - Live implementation
@@ -121,19 +131,19 @@ nonisolated enum SessionReferenceScannerLive {
     cwdPath: String,
     agentNativeSessionID: String,
     allowedPrefixes: Set<String> = []
-  ) -> [SessionReference] {
-    guard !agentNativeSessionID.isEmpty else { return [] }
+  ) -> SessionReferenceScan {
+    guard !agentNativeSessionID.isEmpty else { return SessionReferenceScan() }
     guard
       let url = locateJSONLURL(cwdPath: cwdPath, agentNativeSessionID: agentNativeSessionID)
-    else { return [] }
+    else { return SessionReferenceScan() }
     guard let data = try? Data(contentsOf: url) else {
-      return []
+      return SessionReferenceScan()
     }
     guard let content = String(data: data, encoding: .utf8) else {
       scannerLogger.warning("JSONL was not UTF-8: \(url.path)")
-      return []
+      return SessionReferenceScan()
     }
-    return scanJSONL(content, allowedPrefixes: allowedPrefixes)
+    return scanJSONLDetailed(content, allowedPrefixes: allowedPrefixes)
   }
 
   /// Parse a JSONL blob, extract message text, run reference regexes,
@@ -148,6 +158,19 @@ nonisolated enum SessionReferenceScannerLive {
   /// across **≥ 2 messages** to count — a real focus comes back in
   /// conversation; a one-shot in a tool dump does not.
   static func scanJSONL(_ jsonl: String, allowedPrefixes: Set<String> = []) -> [SessionReference] {
+    scanJSONLDetailed(jsonl, allowedPrefixes: allowedPrefixes).references
+  }
+
+  /// `scanJSONL` plus creation detection in the same pass.
+  ///
+  /// A PR counts as *created here* when an assistant `tool_use` that opens a
+  /// PR (`isPullRequestCreation`) is answered by a `tool_result` — matched on
+  /// `tool_use_id` — that prints the PR URL. `gh pr create` prints exactly
+  /// that URL on success, so the pairing is precise: a session that merely
+  /// reads or pastes the link never matches.
+  static func scanJSONLDetailed(_ jsonl: String, allowedPrefixes: Set<String> = []) -> SessionReferenceScan {
+    var createToolUseIDs = Set<String>()
+    var createdKeys = Set<String>()
     var firstSeen: [String: SessionReference] = [:]
     var order: [String] = []
     var highSignalKeys = Set<String>()
@@ -171,6 +194,10 @@ nonisolated enum SessionReferenceScannerLive {
         continue
       }
       guard let message = obj["message"] as? [String: Any] else { continue }
+      createToolUseIDs.formUnion(pullRequestCreationToolUseIDs(in: message["content"]))
+      for ref in pullRequestsCreated(in: message["content"], byToolUseIDs: createToolUseIDs) {
+        createdKeys.insert(ref.dedupeKey)
+      }
       let (highSignal, toolResult) = partitionText(from: message["content"])
 
       for ref in scanText(highSignal, allowedPrefixes: allowedPrefixes) {
@@ -186,12 +213,56 @@ nonisolated enum SessionReferenceScannerLive {
       }
     }
 
-    return order.compactMap { key in
+    let references = order.compactMap { key -> SessionReference? in
       guard let ref = firstSeen[key] else { return nil }
-      if highSignalKeys.contains(key) { return ref }
+      // The `gh pr create` result is the PR's one tool-output appearance, so
+      // creation alone clears the noise bar a single tool dump otherwise fails.
+      if highSignalKeys.contains(key) || createdKeys.contains(key) { return ref }
       if (toolResultMessageCounts[key] ?? 0) >= 2 { return ref }
       return nil
     }
+    return SessionReferenceScan(references: references, createdPullRequestKeys: createdKeys)
+  }
+
+  /// Ids of the `tool_use` blocks in `content` that open a pull request.
+  static func pullRequestCreationToolUseIDs(in content: Any?) -> Set<String> {
+    guard let blocks = content as? [Any] else { return [] }
+    var ids = Set<String>()
+    for block in blocks {
+      guard let dict = block as? [String: Any], dict["type"] as? String == "tool_use",
+        let id = dict["id"] as? String
+      else { continue }
+      if isPullRequestCreation(toolName: dict["name"] as? String, input: dict["input"]) {
+        ids.insert(id)
+      }
+    }
+    return ids
+  }
+
+  /// True for a tool call that opens a PR: a shell command running
+  /// `gh pr create`, or a GitHub MCP tool named like `create_pull_request`.
+  static func isPullRequestCreation(toolName: String?, input: Any?) -> Bool {
+    let name = (toolName ?? "").lowercased()
+    if name.contains("create_pull_request") || name.contains("createpullrequest") { return true }
+    guard let input = input as? [String: Any], let command = input["command"] as? String else {
+      return false
+    }
+    return command.contains(/\bgh\s+pr\s+create\b/)
+  }
+
+  /// PR references printed by the `tool_result` blocks in `content` that
+  /// answer one of `toolUseIDs`.
+  static func pullRequestsCreated(in content: Any?, byToolUseIDs toolUseIDs: Set<String>) -> [SessionReference] {
+    guard !toolUseIDs.isEmpty, let blocks = content as? [Any] else { return [] }
+    var refs: [SessionReference] = []
+    for block in blocks {
+      guard let dict = block as? [String: Any], dict["type"] as? String == "tool_result",
+        let id = dict["tool_use_id"] as? String, toolUseIDs.contains(id)
+      else { continue }
+      if dict["is_error"] as? Bool == true { continue }
+      refs += scanText(extractText(from: dict["content"])).filter(\.isPullRequestReference)
+    }
+    return refs
   }
 
   /// Split a message's content into high-signal text (what the user typed and

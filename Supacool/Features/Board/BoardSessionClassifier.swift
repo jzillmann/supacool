@@ -14,6 +14,9 @@ struct BoardSessionClassifier {
   let reinitializingSessionIDs: Set<AgentSession.ID>
   let repositories: IdentifiedArrayOf<Repository>
   let worktreeInfoByID: [Worktree.ID: WorktreeInfoEntry]
+  /// Every board session, for PR ownership: a PR another session owns
+  /// never moves this one into "Waiting on External". Empty skips the check.
+  var allSessions: [AgentSession] = []
 
   /// Classifier reads live busy state from WorktreeTerminalManager and the
   /// persisted last-known-busy flag on the session.
@@ -55,7 +58,8 @@ struct BoardSessionClassifier {
   /// reason chip) so bucket and chip never disagree; fall back to the
   /// branch-matched PR only when no snapshot has been fetched yet.
   func waitingExternally(for session: AgentSession) -> Bool {
-    let states = prReferenceSnapshots.ballStates(of: session)
+    let watched = allSessions.isEmpty ? [] : PullRequestOwnership.watchedKeys(of: session, in: allSessions)
+    let states = prReferenceSnapshots.ballStates(of: session, excluding: watched)
     if !states.isEmpty {
       return PRBallState.sessionWaitsExternally(states)
     }
