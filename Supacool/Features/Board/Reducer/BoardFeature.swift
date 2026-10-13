@@ -1198,6 +1198,7 @@ struct BoardFeature {
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(NativeSessionLocatorClient.self) var nativeSessionLocator
   @Dependency(PRMonitorClient.self) var prMonitor
+  @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(PortReachabilityClient.self) var portReachabilityClient
   @Dependency(\.uuid) var uuid

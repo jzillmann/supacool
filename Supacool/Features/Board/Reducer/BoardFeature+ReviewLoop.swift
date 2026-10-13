@@ -141,20 +141,54 @@ extension BoardFeature {
       loop.lastAgentMessage = agentMessage.isEmpty ? nil : Self.capped(agentMessage, limit: 2_000)
     }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: headSHA))
     }
   }
 
-  /// The commit a review round should look at: the pushed upstream head when
-  /// the branch tracks one, else local HEAD. The reviewer reads the PR on
-  /// GitHub, so a commit that is only local is not reviewable yet — using
-  /// local HEAD made the loop expect a commit the reviewer could not see.
+  /// The commit a review round should look at.
+  ///
+  /// A loop with PRs asks GitHub for the PR head. The reviewer reads the PR,
+  /// so its head is the only commit it can review — and the session's
+  /// worktree need not hold the PR branch at all: an agent can commit and
+  /// push a PR from another session's worktree, and that worktree's
+  /// `@{upstream}` then names some unrelated branch (often `origin/main`).
+  /// Several PRs (a stack) use the one whose head branch the worktree has
+  /// checked out, else the first. When GitHub does not answer, the result
+  /// is nil: falling back to the worktree would bring back the wrong commit.
+  ///
+  /// A loop without PRs uses the worktree: the pushed upstream head when the
+  /// branch tracks one, else local HEAD.
   nonisolated static func reviewHeadSHA(
     gitClient: GitClientDependency,
+    githubPR: SupacoolGithubPRClient,
+    pullRequestURLs: [String],
     workspaceURL: URL
   ) async -> String? {
+    let pullRequests = pullRequestURLs.compactMap { ParsedPullRequestURL.firstMatch(in: $0) }
+    guard pullRequests.isEmpty else {
+      var heads: [SupacoolPRHead] = []
+      for pullRequest in pullRequests {
+        do {
+          let head = try await githubPR.fetchHead(pullRequest.owner, pullRequest.repo, pullRequest.number)
+          if !head.headRefOid.isEmpty { heads.append(head) }
+        } catch {
+          reviewLoopLogger.warning(
+            "Could not resolve the head of \(pullRequest.dedupeKey): \(error.localizedDescription)"
+          )
+        }
+      }
+      guard heads.count > 1 else { return heads.first?.headRefOid }
+      let branch = await gitClient.branchName(workspaceURL)
+      return (heads.first(where: { $0.headRefName == branch }) ?? heads.first)?.headRefOid
+    }
     if let published = await gitClient.publishedHeadSHA(workspaceURL), !published.isEmpty {
       return published
     }
@@ -176,7 +210,8 @@ extension BoardFeature {
       return escalateReviewLoop(
         state: &state,
         sessionID: id,
-        reason: "The implementation turn ended, but Supacool could not resolve its current commit.",
+        reason: "The implementation turn ended, but Supacool could not resolve its current commit "
+          + "(the PR head on GitHub, or the worktree head when the loop has no PR).",
         pausedDuringFix: true
       )
     }
@@ -345,8 +380,14 @@ extension BoardFeature {
     }
 
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(
         ._reviewLoopRereviewHeadResolved(
           id: id,
@@ -431,8 +472,14 @@ extension BoardFeature {
       loop.pausedDuringFix
     else { return .none }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(._reviewLoopResumeHeadResolved(id: id, headSHA: headSHA))
     }
   }
@@ -868,7 +915,7 @@ extension BoardFeature {
   ) -> String {
     reviewerPrompt(
       pullRequestURLs: pullRequestURLs,
-      expectedSHA: "the pushed head of the branch checked out in this workspace",
+      expectedSHA: "the PR head commit on GitHub",
       round: round,
       maximumRounds: maximumRounds,
       previousSummary: nil

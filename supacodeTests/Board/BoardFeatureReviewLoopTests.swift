@@ -1062,6 +1062,195 @@ extension BoardFeatureTests {
     #expect(store.state.pendingReviewDecisions.map(\.id) == [session.id])
   }
 
+  // The PR #328 incident: the loop sat on a session whose worktree was on
+  // `morning-report` (upstream origin/main) while the agent pushed the PR from
+  // another worktree. The round asked for main's tip, which is not in the PR.
+  @Test(.dependencies) func aLoopWithAPullRequestReviewsThePullRequestHead() async throws {
+    let reviewerID = UUID()
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: reviewerID,
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        phase: .fixing,
+        lastReviewedSHA: "old-pr-sha"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let headRequests = LockIsolated<[String]>([])
+    let store = reviewLoopStore(
+      session: session,
+      commands: commands,
+      headSHA: "main-tip-sha",
+      publishedSHA: LockIsolated<String?>("main-tip-sha"),
+      pullRequestHeads: [42: SupacoolPRHead(headRefName: "tra-511-fix", headRefOid: "new-pr-sha")],
+      headRequests: headRequests
+    )
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: session.primaryTerminalID,
+        surfaceID: UUID(),
+        agent: "claude",
+        message: "Pushed the fix."
+      )
+    )
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    await store.finish()
+
+    #expect(headRequests.value == ["acme/widgets#42"])
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .reviewing)
+    #expect(loop.expectedReviewSHA == "new-pr-sha")
+    guard case .sendPrompt(_, _, let prompt) = try #require(commands.value.first) else {
+      Issue.record("Expected the PR head to be sent to the reviewer")
+      return
+    }
+    #expect(prompt.contains("expected new-pr-sha"))
+    #expect(!prompt.contains("main-tip-sha"))
+  }
+
+  @Test(.dependencies) func everyRoundStartReadsThePullRequestHead() async throws {
+    let pullRequestURL = "https://github.com/acme/widgets/pull/42"
+    let heads: [Int: SupacoolPRHead] = [42: SupacoolPRHead(headRefName: "feature", headRefOid: "pr-sha")]
+
+    let rereview = reviewLoopStore(
+      session: reviewLoopSession(
+        loop: ReviewLoopState(
+          reviewerTerminalID: UUID(),
+          pullRequestURL: pullRequestURL,
+          phase: .needsDecision,
+          round: 2,
+          lastReviewedSHA: "old-sha",
+          lastReport: "Codex stopped without a handoff block."
+        )
+      ),
+      headSHA: "main-tip-sha",
+      pullRequestHeads: heads
+    )
+    await rereview.send(.continueReviewLoop(id: rereview.state.sessions[0].id, additionalRounds: 1))
+    await rereview.receive(\._reviewLoopRereviewHeadResolved)
+    await rereview.finish()
+    #expect(rereview.state.sessions.first?.reviewLoop?.expectedReviewSHA == "pr-sha")
+
+    let resume = reviewLoopStore(
+      session: reviewLoopSession(
+        loop: ReviewLoopState(
+          reviewerTerminalID: UUID(),
+          pullRequestURL: pullRequestURL,
+          phase: .needsDecision,
+          round: 2,
+          lastReviewedSHA: "old-sha",
+          pausedDuringFix: true
+        )
+      ),
+      headSHA: "main-tip-sha",
+      pullRequestHeads: heads
+    )
+    await resume.send(.resumeReviewLoopRound(id: resume.state.sessions[0].id))
+    await resume.receive(\._reviewLoopResumeHeadResolved)
+    await resume.finish()
+    #expect(resume.state.sessions.first?.reviewLoop?.expectedReviewSHA == "pr-sha")
+  }
+
+  @Test(.dependencies) func anUnreachablePullRequestHeadParksInsteadOfUsingTheWorktree() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(
+        reviewerTerminalID: UUID(),
+        pullRequestURL: "https://github.com/acme/widgets/pull/42",
+        phase: .fixing,
+        lastReviewedSHA: "old-sha"
+      )
+    )
+    let commands = LockIsolated<[TerminalClient.Command]>([])
+    let store = reviewLoopStore(
+      session: session,
+      commands: commands,
+      headSHA: "main-tip-sha",
+      publishedSHA: LockIsolated<String?>("main-tip-sha")
+    )
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: session.primaryTerminalID,
+        surfaceID: UUID(),
+        agent: "claude",
+        message: "Pushed."
+      )
+    )
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first?.reviewLoop)
+    #expect(loop.phase == .needsDecision)
+    #expect(loop.pausedDuringFix)
+    #expect(loop.expectedReviewSHA == nil)
+    #expect(loop.escalationReason?.contains("could not resolve its current commit") == true)
+    #expect(commands.value.isEmpty)
+  }
+
+  @Test(.dependencies) func aLoopWithoutAPullRequestKeepsUsingTheWorktreeUpstream() async throws {
+    let session = reviewLoopSession(
+      loop: ReviewLoopState(reviewerTerminalID: UUID(), phase: .fixing, lastReviewedSHA: "old-sha")
+    )
+    let headRequests = LockIsolated<[String]>([])
+    let store = reviewLoopStore(
+      session: session,
+      headSHA: "local-sha",
+      publishedSHA: LockIsolated<String?>("pushed-sha"),
+      headRequests: headRequests
+    )
+
+    await store.send(
+      .reviewLoopAgentTurnEnded(
+        worktreeID: session.worktreeID,
+        tabID: session.primaryTerminalID,
+        surfaceID: UUID(),
+        agent: "claude",
+        message: "Pushed."
+      )
+    )
+    await store.receive(\._reviewLoopImplementationHeadResolved)
+    await store.finish()
+
+    #expect(headRequests.value.isEmpty)
+    #expect(store.state.sessions.first?.reviewLoop?.expectedReviewSHA == "pushed-sha")
+  }
+
+  @Test(.dependencies) func aStackOfPullRequestsReviewsTheHeadOfTheCheckedOutBranch() async throws {
+    let gitClient = GitClientDependency.liveValue
+    let heads: [Int: SupacoolPRHead] = [
+      42: SupacoolPRHead(headRefName: "part-1", headRefOid: "sha-1"),
+      43: SupacoolPRHead(headRefName: "part-2", headRefOid: "sha-2"),
+    ]
+    let githubPR = SupacoolGithubPRClient(
+      fetchMetadata: SupacoolGithubPRClient.testValue.fetchMetadata,
+      fetchHead: { _, _, number in try #require(heads[number]) }
+    )
+    let urls = ["https://github.com/acme/widgets/pull/42", "https://github.com/acme/widgets/pull/43"]
+    var onPart2 = gitClient
+    onPart2.branchName = { _ in "part-2" }
+    var elsewhere = gitClient
+    elsewhere.branchName = { _ in "morning-report" }
+    let workspace = URL(fileURLWithPath: "/tmp/repo")
+
+    let matched = await BoardFeature.reviewHeadSHA(
+      gitClient: onPart2, githubPR: githubPR, pullRequestURLs: urls, workspaceURL: workspace
+    )
+    let unmatched = await BoardFeature.reviewHeadSHA(
+      gitClient: elsewhere, githubPR: githubPR, pullRequestURLs: urls, workspaceURL: workspace
+    )
+    #expect(matched == "sha-2")
+    #expect(unmatched == "sha-1")
+  }
+
+  @Test func pullRequestHeadDecodesFromGhJSON() throws {
+    let head = try decodeHead(stdout: #"{"headRefName":"tra-511-fix","headRefOid":"783202409abc"}"#)
+    #expect(head == SupacoolPRHead(headRefName: "tra-511-fix", headRefOid: "783202409abc"))
+    #expect(throws: (any Error).self) { try decodeHead(stdout: #"{"headRefName":"x"}"#) }
+  }
+
 }
 
 @MainActor
@@ -1069,7 +1258,9 @@ private func reviewLoopStore(
   session: AgentSession,
   commands: LockIsolated<[TerminalClient.Command]> = LockIsolated<[TerminalClient.Command]>([]),
   headSHA: String? = nil,
-  publishedSHA: LockIsolated<String?> = LockIsolated<String?>(nil)
+  publishedSHA: LockIsolated<String?> = LockIsolated<String?>(nil),
+  pullRequestHeads: [Int: SupacoolPRHead] = [:],
+  headRequests: LockIsolated<[String]> = LockIsolated<[String]>([])
 ) -> TestStoreOf<BoardFeature> {
   let state = BoardFeature.State()
   state.$sessions.withLock { $0 = [session] }
@@ -1082,6 +1273,13 @@ private func reviewLoopStore(
       commands.withValue { $0.append(command) }
     }
     $0[GitClientDependency.self].publishedHeadSHA = { _ in publishedSHA.value }
+    $0[GitClientDependency.self].branchName = { _ in nil }
+    $0.supacoolGithubPR.fetchHead = { owner, repo, number in
+      headRequests.withValue { $0.append("\(owner)/\(repo)#\(number)") }
+      struct NoPullRequestHead: Error {}
+      guard let head = pullRequestHeads[number] else { throw NoPullRequestHead() }
+      return head
+    }
     $0[GitClientDependency.self].commitHistory = { _, _ in
       guard let headSHA else { return [] }
       return [
@@ -1091,7 +1289,7 @@ private func reviewLoopStore(
           date: Date(timeIntervalSince1970: 1_750_000_000),
           author: "Tester",
           subject: "Head"
-        ),
+        )
       ]
     }
   }
