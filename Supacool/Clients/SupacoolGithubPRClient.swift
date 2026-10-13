@@ -9,8 +9,16 @@ import Foundation
 ///
 /// Supacool-specific — lives under `Supacool/` rather than replacing upstream's `GithubCLIClient`.
 struct SupacoolGithubPRClient: Sendable {
-  var fetchMetadata:
-    @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> SupacoolPRMetadata
+  var fetchMetadata: @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> SupacoolPRMetadata
+  /// The branch and commit GitHub shows as the PR's head right now. The
+  /// review loop asks for this commit: it is what a reviewer reading the PR
+  /// sees, whichever worktree the commits were pushed from.
+  var fetchHead: @Sendable (_ owner: String, _ repo: String, _ number: Int) async throws -> SupacoolPRHead
+}
+
+nonisolated struct SupacoolPRHead: Equatable, Sendable {
+  let headRefName: String
+  let headRefOid: String
 }
 
 nonisolated struct SupacoolPRMetadata: Equatable, Sendable {
@@ -41,6 +49,17 @@ extension SupacoolGithubPRClient: DependencyKey {
           ]
         )
         return try decodeMetadata(stdout: stdout, fallbackOwner: owner)
+      },
+      fetchHead: { owner, repo, number in
+        let stdout = try await runGh(
+          shell: shell,
+          arguments: [
+            "pr", "view", "\(number)",
+            "--repo", "\(owner)/\(repo)",
+            "--json", "headRefName,headRefOid",
+          ]
+        )
+        return try decodeHead(stdout: stdout)
       }
     )
   }
@@ -49,6 +68,10 @@ extension SupacoolGithubPRClient: DependencyKey {
     fetchMetadata: { _, _, _ in
       struct UnimplementedFetchMetadata: Error {}
       throw UnimplementedFetchMetadata()
+    },
+    fetchHead: { _, _, _ in
+      struct UnimplementedFetchHead: Error {}
+      throw UnimplementedFetchHead()
     }
   )
 }
@@ -87,6 +110,16 @@ nonisolated func decodeMetadata(stdout: String, fallbackOwner: String) throws ->
     state: decoded.state,
     isDraft: decoded.isDraft
   )
+}
+
+private nonisolated struct PRHeadResponse: Decodable {
+  let headRefName: String
+  let headRefOid: String
+}
+
+nonisolated func decodeHead(stdout: String) throws -> SupacoolPRHead {
+  let decoded = try JSONDecoder().decode(PRHeadResponse.self, from: Data(stdout.utf8))
+  return SupacoolPRHead(headRefName: decoded.headRefName, headRefOid: decoded.headRefOid)
 }
 
 // MARK: - PR URL parsing

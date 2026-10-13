@@ -29,7 +29,10 @@ nonisolated struct ReviewLoopState: Codable, Hashable, Sendable {
   var round: Int
   var maximumRounds: Int
   /// The commit the next reviewer turn must report. Nil for the first
-  /// round, where the PR head is discovered by the reviewer itself.
+  /// round, where the PR head is discovered by the reviewer itself. With
+  /// several PRs it holds every head, in PR order, comma separated
+  /// (`BoardFeature.reviewRevision(heads:)`); the same holds for
+  /// `lastReviewedSHA`.
   var expectedReviewSHA: String?
   var lastReviewedSHA: String?
   var lastSummary: String?

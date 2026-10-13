@@ -141,24 +141,86 @@ extension BoardFeature {
       loop.lastAgentMessage = agentMessage.isEmpty ? nil : Self.capped(agentMessage, limit: 2_000)
     }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(._reviewLoopImplementationHeadResolved(id: session.id, headSHA: headSHA))
     }
   }
 
-  /// The commit a review round should look at: the pushed upstream head when
-  /// the branch tracks one, else local HEAD. The reviewer reads the PR on
-  /// GitHub, so a commit that is only local is not reviewable yet — using
-  /// local HEAD made the loop expect a commit the reviewer could not see.
+  /// The revision a review round should look at.
+  ///
+  /// A loop with PRs asks GitHub for the PR heads. The reviewer reads the
+  /// PRs, so their heads are the only commits it can review — and the
+  /// session's worktree need not hold a PR branch at all: an agent can commit
+  /// and push a PR from another session's worktree, and that worktree's
+  /// `@{upstream}` then names some unrelated branch (often `origin/main`).
+  ///
+  /// Several PRs are reviewed as one piece of work, so the revision is every
+  /// head, in PR order (see `reviewRevision(heads:)`): a push to any of them
+  /// is a new revision. When GitHub does not answer for any PR, the result is
+  /// nil. Falling back to the worktree, or to the PRs that did answer, would
+  /// review less than the loop certifies.
+  ///
+  /// A loop without PRs uses the worktree: the pushed upstream head when the
+  /// branch tracks one, else local HEAD.
   nonisolated static func reviewHeadSHA(
     gitClient: GitClientDependency,
+    githubPR: SupacoolGithubPRClient,
+    pullRequestURLs: [String],
     workspaceURL: URL
   ) async -> String? {
+    let pullRequests = pullRequestURLs.compactMap { ParsedPullRequestURL.firstMatch(in: $0) }
+    guard pullRequests.isEmpty else {
+      var heads: [String] = []
+      for pullRequest in pullRequests {
+        do {
+          let head = try await githubPR.fetchHead(pullRequest.owner, pullRequest.repo, pullRequest.number)
+          guard !head.headRefOid.isEmpty else { return nil }
+          heads.append(head.headRefOid)
+        } catch {
+          reviewLoopLogger.warning(
+            "Could not resolve the head of \(pullRequest.dedupeKey): \(error.localizedDescription)"
+          )
+          return nil
+        }
+      }
+      return reviewRevision(heads: heads)
+    }
     if let published = await gitClient.publishedHeadSHA(workspaceURL), !published.isEmpty {
       return published
     }
     return try? await gitClient.commitHistory(workspaceURL, 1).first?.hash
+  }
+
+  /// One PR head is its SHA; several are their SHAs in PR order, comma
+  /// separated. `expectedReviewSHA` and `lastReviewedSHA` hold this form.
+  nonisolated static func reviewRevision(heads: [String]) -> String {
+    heads.joined(separator: ", ")
+  }
+
+  /// Whether two revisions name the same commits. Reviewers echo the
+  /// expected commits with their own decoration (backticks, PR labels, other
+  /// separators), so the full SHAs in each are compared as a set. Text with
+  /// no SHA in it compares as itself.
+  nonisolated static func isSameRevision(_ lhs: String?, _ rhs: String?) -> Bool {
+    guard let lhs, let rhs else { return false }
+    return commitSHAs(in: lhs) == commitSHAs(in: rhs)
+  }
+
+  private nonisolated static func commitSHAs(in revision: String) -> Set<String> {
+    let shas = revision.lowercased()
+      .split(whereSeparator: { !$0.isHexDigit })
+      .filter { $0.count >= 7 }
+      .map(String.init)
+    guard shas.isEmpty else { return Set(shas) }
+    let trimmed = revision.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? [] : [trimmed]
   }
 
   func reduceReviewLoopImplementationHeadResolved(
@@ -176,11 +238,12 @@ extension BoardFeature {
       return escalateReviewLoop(
         state: &state,
         sessionID: id,
-        reason: "The implementation turn ended, but Supacool could not resolve its current commit.",
+        reason: "The implementation turn ended, but Supacool could not resolve its current commit "
+          + "(the PR heads on GitHub, or the worktree head when the loop has no PR).",
         pausedDuringFix: true
       )
     }
-    guard headSHA != loop.lastReviewedSHA else {
+    guard !Self.isSameRevision(headSHA, loop.lastReviewedSHA) else {
       // Agents end turns while tests, hooks, or a push still run, and they end
       // turns to ask the user a question. Both are normal inside a fix round:
       // keep waiting for a pushed commit, and only park after several quiet
@@ -345,8 +408,14 @@ extension BoardFeature {
     }
 
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(
         ._reviewLoopRereviewHeadResolved(
           id: id,
@@ -376,8 +445,18 @@ extension BoardFeature {
       )
     }
 
-    let resolvedHead = (headSHA?.isEmpty == false) ? headSHA : nil
-    if let resolvedHead, resolvedHead == loop.lastReviewedSHA {
+    guard let resolvedHead = headSHA, !resolvedHead.isEmpty else {
+      // Without a head the round has nothing to check the reviewer against,
+      // and the prompt would point it at the last reviewed commit again.
+      return escalateReviewLoop(
+        state: &state,
+        sessionID: id,
+        reason: "Supacool could not resolve the current commit for another review pass "
+          + "(the PR heads on GitHub, or the worktree head when the loop has no PR).",
+        pausedDuringFix: loop.pausedDuringFix
+      )
+    }
+    if Self.isSameRevision(resolvedHead, loop.lastReviewedSHA) {
       return escalateReviewLoop(
         state: &state,
         sessionID: id,
@@ -403,7 +482,7 @@ extension BoardFeature {
     }
     let prompt = Self.rereviewPrompt(
       pullRequestURLs: loop.pullRequestURLs,
-      headSHA: resolvedHead ?? loop.lastReviewedSHA ?? "current HEAD",
+      headSHA: resolvedHead,
       round: nextRound,
       maximumRounds: extendedMaximum,
       previousSummary: loop.lastSummary,
@@ -431,8 +510,14 @@ extension BoardFeature {
       loop.pausedDuringFix
     else { return .none }
     let workspaceURL = URL(fileURLWithPath: session.currentWorkspacePath)
-    return .run { [gitClient] send in
-      let headSHA = await Self.reviewHeadSHA(gitClient: gitClient, workspaceURL: workspaceURL)
+    let pullRequestURLs = session.reviewLoop?.pullRequestURLs ?? []
+    return .run { [gitClient, supacoolGithubPR] send in
+      let headSHA = await Self.reviewHeadSHA(
+        gitClient: gitClient,
+        githubPR: supacoolGithubPR,
+        pullRequestURLs: pullRequestURLs,
+        workspaceURL: workspaceURL
+      )
       await send(._reviewLoopResumeHeadResolved(id: id, headSHA: headSHA))
     }
   }
@@ -459,7 +544,7 @@ extension BoardFeature {
       updated.pausedDuringFix = false
       updated.commitlessTurnCount = 0
     }
-    if let headSHA, !headSHA.isEmpty, headSHA != loop.lastReviewedSHA {
+    if let headSHA, !headSHA.isEmpty, !Self.isSameRevision(headSHA, loop.lastReviewedSHA) {
       return reduceReviewLoopImplementationHeadResolved(state: &state, id: id, headSHA: headSHA)
     }
 
@@ -531,7 +616,7 @@ extension BoardFeature {
           + "Supacool paused rather than guessing."
       )
     }
-    if let expectedSHA = loop.expectedReviewSHA, report.reviewedSHA != expectedSHA {
+    if let expectedSHA = loop.expectedReviewSHA, !Self.isSameRevision(report.reviewedSHA, expectedSHA) {
       return escalateReviewLoop(
         state: &state,
         sessionID: session.id,
@@ -548,7 +633,10 @@ extension BoardFeature {
     let warning = loop.round >= Self.reviewLoopWarningRound || repeatedCount > 0
     updateReviewLoop(state: &state, sessionID: session.id) { updated in
       updated.expectedReviewSHA = nil
-      updated.lastReviewedSHA = report.reviewedSHA
+      // Keep the canonical form when the reviewer echoed the expected commits
+      // with its own decoration, so the next no-new-commit check compares like
+      // with like.
+      updated.lastReviewedSHA = loop.expectedReviewSHA ?? report.reviewedSHA
       updated.lastSummary = report.summary
       updated.lastReport = Self.capped(message, limit: Self.maximumStoredReviewReportLength)
       updated.lastFindingsFingerprint = fingerprint
@@ -868,7 +956,9 @@ extension BoardFeature {
   ) -> String {
     reviewerPrompt(
       pullRequestURLs: pullRequestURLs,
-      expectedSHA: "the pushed head of the branch checked out in this workspace",
+      expectedSHA: pullRequestURLs.count > 1
+        ? "the head commit of each PR on GitHub"
+        : "the PR head commit on GitHub",
       round: round,
       maximumRounds: maximumRounds,
       previousSummary: nil
@@ -953,11 +1043,21 @@ extension BoardFeature {
       }.joined(separator: "\n\n")
       : "1. [P1] Finding, with file:line."
     let scope = pullRequestURLs.count > 1 ? "them individually, and as one piece of work" : "it"
+    // Several PRs are one revision: every head, in PR order. The reviewer
+    // names each, so a round cannot pass on part of the change set.
+    let commitScope =
+      pullRequestURLs.count > 1
+      ? "Review exactly the PR head commits, one per PR in the order listed"
+      : "Review exactly the PR commit"
+    let commitTemplate =
+      pullRequestURLs.count > 1
+      ? "`full git SHA of each PR head, in the order listed, comma separated`"
+      : "`full git SHA`"
     return """
       Please review \(scope):
       \(pullRequestList)
 
-      This is round \(round) of \(maximumRounds). Review exactly the PR commit (expected \(expectedSHA)).
+      This is round \(round) of \(maximumRounds). \(commitScope) (expected \(expectedSHA)).
       Check that the change reaches its goal, architecturally and technically: correctness, regressions, security,
       data loss, concurrency, missing tests. Skip style nits. Read-only: do not edit, commit, or push.
       If findings share one architectural or scope problem, say blocked instead of listing local fixes.
@@ -967,7 +1067,7 @@ extension BoardFeature {
 
       SUPACOOL_REVIEW_RESULT
       Verdict: pass|changes|blocked
-      Reviewed commit: `full git SHA`
+      Reviewed commit: \(commitTemplate)
 
       ## Summary
       One or two sentences.
