@@ -27,9 +27,148 @@ nonisolated enum TerminalLinkRules {
   ///
   /// The highlight mirrors ghostty's built-in URL link (hover while holding
   /// ⌘) so a ticket id behaves exactly like a URL in the same terminal.
-  static func configLines(teamKeys: Set<String>) -> String {
-    guard let regex = ticketRegex(teamKeys: teamKeys) else { return "" }
-    return "link = \(regex),open,hover-mods:super\n"
+  static func configLines(teamKeys: Set<String>, repositorySlugs: [String] = []) -> String {
+    var lines = ""
+    if let regex = ticketRegex(teamKeys: teamKeys) {
+      lines += "link = \(regex),open,hover-mods:super\n"
+    }
+    lines += "link = \(pullRequestRegex(repositorySlugs: repositorySlugs)),open,hover-mods:super\n"
+    return lines
+  }
+
+  // MARK: - Pull requests
+
+  /// Matches GitHub's short PR notation: `owner/repo#123` for any repo, and a
+  /// bare `repo#123` for repos the board knows (so `README#1` or a markdown
+  /// anchor never lights up). The lookbehind keeps `a/b#1` inside a longer
+  /// path or URL from matching mid-way.
+  static func pullRequestRegex(repositorySlugs: [String]) -> String {
+    let names = Set(repositorySlugs.compactMap { slugParts($0)?.repo.lowercased() })
+      .filter(isSafeName)
+      .sorted()
+      .map(regexEscaped)
+    let shortForms = names.isEmpty ? "" : "|" + names.joined(separator: "|")
+    return #"(?<![\w./-])(?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"# + shortForms + #")#\d+\b"#
+  }
+
+  /// Resolve a matched `owner/repo#123` or `repo#123` to its GitHub URL.
+  /// A bare repo name must belong to exactly one known slug; nil otherwise,
+  /// and the caller leaves the action to ghostty.
+  static func pullRequestURL(forMatched matched: String, repositorySlugs: [String]) -> URL? {
+    let trimmed = matched.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let reference = pullRequestReference(in: trimmed, repositorySlugs: repositorySlugs) else { return nil }
+    return URL(string: "https://github.com/\(reference.owner)/\(reference.repo)/pull/\(reference.number)")
+  }
+
+  static func pullRequestReference(
+    in text: String,
+    repositorySlugs: [String]
+  ) -> (owner: String, repo: String, number: Int)? {
+    let pattern = /^(?:([A-Za-z0-9_.-]+)\/)?([A-Za-z0-9_.-]+)#(\d+)$/
+    guard let match = text.wholeMatch(of: pattern), let number = Int(match.output.3) else { return nil }
+    let repo = String(match.output.2)
+    if let owner = match.output.1 {
+      return (String(owner), repo, number)
+    }
+    let candidates = repositorySlugs.compactMap(slugParts).filter { $0.repo.lowercased() == repo.lowercased() }
+    guard candidates.count == 1, let only = candidates.first else { return nil }
+    return (only.owner, only.repo, number)
+  }
+
+  // MARK: - Colors
+
+  /// Longest value we put on one `link-color` line. Ghostty reads config
+  /// lines into a 4096-byte buffer and drops anything longer.
+  static let maxColorRuleLength = 3500
+
+  /// `link-color` lines tinting known tickets and PRs by state. `toneHex`
+  /// resolves a tone to `#rrggbb` (the caller owns the palette, so it can
+  /// follow light/dark mode). Rules are grouped per color, then per team or
+  /// repo, so a busy board costs a handful of regex passes per frame rather
+  /// than one per reference.
+  static func colorConfigLines(
+    catalog: TerminalReferenceCatalog,
+    toneHex: (TerminalReferenceCatalog.Tone) -> String
+  ) -> String {
+    var lines: [String] = []
+
+    // Tickets: color -> team key -> numbers.
+    var ticketGroups: [String: [String: [String]]] = [:]
+    for ticket in catalog.tickets.values {
+      guard let match = ticket.identifier.wholeMatch(of: /([A-Z][A-Z0-9]{0,9})-(\d+)/) else { continue }
+      guard let hex = ticket.colorHex ?? ticket.fallbackTone.map(toneHex) else { continue }
+      ticketGroups[hex, default: [:]][String(match.output.1), default: []].append(String(match.output.2))
+    }
+    for hex in ticketGroups.keys.sorted() {
+      let alternatives = ticketGroups[hex, default: [:]].keys.sorted().map { team in
+        "\(team)-" + numberAlternation(ticketGroups[hex, default: [:]][team, default: []])
+      }
+      for chunk in chunked(alternatives) {
+        lines.append(#"link-color = \b(?:"# + chunk.joined(separator: "|") + #")\b,"# + hex)
+      }
+    }
+
+    // PRs: tone -> owner/repo -> numbers.
+    var prGroups: [TerminalReferenceCatalog.Tone: [String: [String]]] = [:]
+    for pullRequest in catalog.pullRequests.values {
+      guard let tone = pullRequest.tone,
+        isSafeName(pullRequest.owner), isSafeName(pullRequest.repo)
+      else { continue }
+      let slug = "\(pullRequest.owner)/\(pullRequest.repo)"
+      prGroups[tone, default: [:]][slug, default: []].append(String(pullRequest.number))
+    }
+    for tone in TerminalReferenceCatalog.Tone.allCases {
+      guard let bySlug = prGroups[tone] else { continue }
+      let alternatives = bySlug.keys.sorted().compactMap { slug -> String? in
+        guard let parts = slugParts(slug) else { return nil }
+        let owner = regexEscaped(parts.owner)
+        let repo = regexEscaped(parts.repo)
+        return #"(?:(?<![\w./-])(?:"# + owner + "/)?" + repo + "#|github\\.com/" + owner + "/" + repo
+          + "/pull/)" + numberAlternation(bySlug[slug, default: []])
+      }
+      for chunk in chunked(alternatives) {
+        lines.append(#"link-color = (?i)(?:"# + chunk.joined(separator: "|") + #")\b,"# + toneHex(tone))
+      }
+    }
+
+    return lines.map { $0 + "\n" }.joined()
+  }
+
+  private static func numberAlternation(_ numbers: [String]) -> String {
+    "(?:" + Set(numbers).sorted().joined(separator: "|") + ")"
+  }
+
+  /// Split alternatives into groups whose joined length fits one config line.
+  /// A single oversized alternative is dropped rather than truncated.
+  private static func chunked(_ alternatives: [String]) -> [[String]] {
+    var chunks: [[String]] = []
+    var current: [String] = []
+    var length = 0
+    for alternative in alternatives where alternative.count < maxColorRuleLength {
+      if !current.isEmpty, length + alternative.count + 1 > maxColorRuleLength {
+        chunks.append(current)
+        current = []
+        length = 0
+      }
+      current.append(alternative)
+      length += alternative.count + 1
+    }
+    if !current.isEmpty { chunks.append(current) }
+    return chunks
+  }
+
+  private static func slugParts(_ slug: String) -> (owner: String, repo: String)? {
+    PRPulseReference.coordinates(slug: slug)
+  }
+
+  /// GitHub owner and repo names are `[A-Za-z0-9_.-]`; anything else never
+  /// reaches a regex.
+  private static func isSafeName(_ name: String) -> Bool {
+    !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "_.-".contains($0)) }
+  }
+
+  private static func regexEscaped(_ name: String) -> String {
+    name.replacing(".", with: "\\.")
   }
 
   /// Resolve text ghostty matched back to the URL we actually want to open.

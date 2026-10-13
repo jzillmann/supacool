@@ -247,6 +247,16 @@ struct BoardFeature {
     /// modifier — subsequent dispatches are no-ops.
     var prRefreshSchedulerStarted: Bool = false
 
+    // MARK: Terminal references (ticket/PR tint + hover in terminal text)
+
+    /// Linear issues for the ticket ids sessions reference, keyed by
+    /// identifier. In-memory only. Feeds `@Shared(.terminalReferenceCatalog)`.
+    var terminalTicketIssues: [String: LinearIssue] = [:]
+    /// Last fetch attempt per ticket id, success or not — the refresh
+    /// cooldown. See `BoardFeature+TerminalReferences.swift`.
+    var terminalTicketAttemptedAt: [String: Date] = [:]
+    var terminalTicketFetchInFlight = false
+
     // MARK: PR Pulse (repo-wide open-PR monitoring)
 
     /// Board repositories the pulse scheduler monitors. Pushed from
@@ -1016,6 +1026,9 @@ struct BoardFeature {
     /// fetches so a single GitHub round-trip updates all referencing
     /// sessions at once.
     case _prStateFanout(refKey: String, snapshot: PullRequestSnapshot)
+    /// Linear answered (or failed) for the terminal-reference ticket batch.
+    /// `attempted` is every id asked for; `issues` the ones that resolved.
+    case _terminalTicketsLoaded(attempted: [String], issues: [LinearIssue])
 
     // MARK: PR Pulse (repo-wide open-PR monitoring)
     /// Pushed from `BoardRootView` when the registered repository list
@@ -1199,6 +1212,7 @@ struct BoardFeature {
   @Dependency(NativeSessionLocatorClient.self) var nativeSessionLocator
   @Dependency(PRMonitorClient.self) var prMonitor
   @Dependency(SupacoolGithubPRClient.self) var supacoolGithubPR
+  @Dependency(LinearClient.self) var linearClient
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(PortReachabilityClient.self) var portReachabilityClient
   @Dependency(\.uuid) var uuid
@@ -2604,7 +2618,11 @@ struct BoardFeature {
 
       case ._startPRRefresher:
         // The snooze wake ticker rides the same once-per-launch start signal.
-        return .merge(reduceStartPRRefresher(state: &state), snoozeWakeTicker())
+        return .merge(
+          reduceStartPRRefresher(state: &state),
+          snoozeWakeTicker(),
+          refreshTerminalTickets(state: &state)
+        )
 
       case ._runPRRefreshTick:
         return reduceRunPRRefreshTick(state: &state)
@@ -2624,7 +2642,10 @@ struct BoardFeature {
         return reducePRPulseRefreshRequested(state: &state)
 
       case ._runPRPulseTick:
-        return reduceRunPRPulseTick(state: &state)
+        return .merge(reduceRunPRPulseTick(state: &state), refreshTerminalTickets(state: &state))
+
+      case ._terminalTicketsLoaded(let attempted, let issues):
+        return reduceTerminalTicketsLoaded(state: &state, attempted: attempted, issues: issues)
 
       case ._prPulseFetchStarted(let repositoryID):
         return reducePRPulseFetchStarted(state: &state, repositoryID: repositoryID)
@@ -3071,6 +3092,12 @@ struct BoardFeature {
 
       case ._debugSpawnFailed(let message):
         boardLogger.warning("Debug session spawn failed: \(message)")
+        return .none
+      }
+    }
+    .onChange(of: \.terminalReferenceInputs) { _, _ in
+      Reduce { state, _ in
+        publishTerminalReferenceCatalog(state: state)
         return .none
       }
     }

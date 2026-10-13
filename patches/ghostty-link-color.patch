@@ -1,0 +1,463 @@
+diff --git a/src/config/Config.zig b/src/config/Config.zig
+index 877c43724..a1de5f6d5 100644
+--- a/src/config/Config.zig
++++ b/src/config/Config.zig
+@@ -1493,6 +1493,22 @@ link: RepeatableLink = .{},
+ /// Available since: 1.2.0
+ @"link-previews": LinkPreviews = .true,
+ 
++/// Recolor terminal text matching a regular expression. Matching text is
++/// drawn in the given foreground color, always, regardless of the mouse or
++/// modifier state. Purely visual: a color rule never makes text clickable
++/// (use `link` for that), so pair the two when you want both.
++///
++/// The syntax is `link-color = <regex>,<color>`, e.g.
++/// `link-color = \bCEN-(12|40)\b,#30d158`. The color is the last field,
++/// so a comma inside the regex needs no escaping. When several rules match
++/// the same cell, the first one configured wins.
++///
++/// Text drawn with the inverse attribute, selected text and search matches
++/// keep their usual colors.
++///
++/// Setting this to an empty value clears every rule.
++@"link-color": RepeatableLinkColor = .{},
++
+ /// Whether to start the window in a maximized state. This setting applies
+ /// to new windows and does not apply to tabs, splits, etc. However, this setting
+ /// will apply to all new windows, not just the first one.
+@@ -5601,6 +5617,136 @@ pub const WorkingDirectory = union(enum) {
+     }
+ };
+ 
++/// A list of `link-color` rules: text matching `regex` is drawn in `color`.
++pub const RepeatableLinkColor = struct {
++    const Self = @This();
++
++    pub const Entry = struct {
++        regex: []const u8,
++        color: Color,
++    };
++
++    items: std.ArrayList(Entry) = .empty,
++
++    /// Syntax: `link-color = <regex>,<color>`. Parsed right-to-left so the
++    /// regex may contain commas. An empty value resets the list.
++    pub fn parseCLI(self: *Self, alloc: Allocator, input_: ?[]const u8) !void {
++        const input = input_ orelse "";
++        if (input.len == 0) {
++            self.items.clearRetainingCapacity();
++            return;
++        }
++
++        const idx = std.mem.lastIndexOfScalar(u8, input, ',') orelse
++            return error.InvalidValue;
++        const regex = input[0..idx];
++        if (regex.len == 0) return error.InvalidValue;
++        const color = Color.parseCLI(input[idx + 1 ..]) catch
++            return error.InvalidValue;
++
++        // Reject a regex oniguruma can't compile at config-parse time,
++        // rather than logging a failure on every frame.
++        {
++            const probe: inputpkg.Link = .{
++                .regex = regex,
++                .action = .{ .open = {} },
++                .highlight = .{ .always = {} },
++            };
++            var compiled = probe.oniRegex() catch return error.InvalidValue;
++            compiled.deinit();
++        }
++
++        try self.items.append(alloc, .{
++            .regex = try alloc.dupe(u8, regex),
++            .color = color,
++        });
++    }
++
++    /// Deep copy of the struct. Required by Config.
++    pub fn clone(
++        self: *const Self,
++        alloc: Allocator,
++    ) Allocator.Error!Self {
++        var list = try std.ArrayList(Entry).initCapacity(
++            alloc,
++            self.items.items.len,
++        );
++        for (self.items.items) |item| {
++            list.appendAssumeCapacity(.{
++                .regex = try alloc.dupe(u8, item.regex),
++                .color = item.color,
++            });
++        }
++        return .{ .items = list };
++    }
++
++    /// Compare if two of our value are requal. Required by Config.
++    pub fn equal(self: Self, other: Self) bool {
++        const itemsA = self.items.items;
++        const itemsB = other.items.items;
++        if (itemsA.len != itemsB.len) return false;
++        for (itemsA, itemsB) |a, b| {
++            if (!a.color.equal(b.color)) return false;
++            if (!std.mem.eql(u8, a.regex, b.regex)) return false;
++        } else return true;
++    }
++
++    /// Used by Formatter
++    pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
++        var buf: [4096]u8 = undefined;
++        for (self.items.items) |item| {
++            const value = std.fmt.bufPrint(
++                &buf,
++                "{s},#{x:0>2}{x:0>2}{x:0>2}",
++                .{ item.regex, item.color.r, item.color.g, item.color.b },
++            ) catch continue;
++            try formatter.formatEntry([]const u8, value);
++        }
++    }
++
++    test "parseCLI" {
++        const testing = std.testing;
++        var arena = ArenaAllocator.init(testing.allocator);
++        defer arena.deinit();
++        const alloc = arena.allocator();
++
++        var list: Self = .{};
++        try list.parseCLI(alloc, "\\b(CEN-1|CEN-2)\\b,#30d158");
++        try testing.expectEqual(@as(usize, 1), list.items.items.len);
++        try testing.expectEqualStrings("\\b(CEN-1|CEN-2)\\b", list.items.items[0].regex);
++        try testing.expectEqual(@as(u8, 0x30), list.items.items[0].color.r);
++        try testing.expectEqual(@as(u8, 0xd1), list.items.items[0].color.g);
++
++        // A comma inside the regex belongs to the regex.
++        try list.parseCLI(alloc, "a{1,2},#ffffff");
++        try testing.expectEqualStrings("a{1,2}", list.items.items[1].regex);
++
++        try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "foo"));
++        try testing.expectError(error.InvalidValue, list.parseCLI(alloc, ",#ffffff"));
++        try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "foo,notacolor"));
++        try testing.expectError(error.InvalidValue, list.parseCLI(alloc, "[bad,#ffffff"));
++
++        // Empty resets.
++        try list.parseCLI(alloc, "");
++        try testing.expectEqual(@as(usize, 0), list.items.items.len);
++    }
++
++    test "formatEntry" {
++        const testing = std.testing;
++        var arena = ArenaAllocator.init(testing.allocator);
++        defer arena.deinit();
++        const alloc = arena.allocator();
++
++        var buf: std.Io.Writer.Allocating = .init(alloc);
++        defer buf.deinit();
++
++        var list: Self = .{};
++        try list.parseCLI(alloc, "CEN-1,#30d158");
++        try list.formatEntry(formatterpkg.entryFormatter("link-color", &buf.writer));
++        try testing.expectEqualStrings("link-color = CEN-1,#30d158\n", buf.written());
++    }
++};
++
+ /// Color represents a color using RGB.
+ ///
+ /// This is a packed struct so that the C API to read color values just
+diff --git a/src/renderer/generic.zig b/src/renderer/generic.zig
+index e376e1bfe..1f5389edb 100644
+--- a/src/renderer/generic.zig
++++ b/src/renderer/generic.zig
+@@ -147,6 +147,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         search_selected_match: ?renderer.Message.SearchMatch,
+         search_matches_dirty: bool,
+ 
++        /// Foreground overrides from `link-color` rules for the current
++        /// viewport. Recomputed only when the terminal state is dirty;
++        /// rows that are not rebuilt keep the colors they were drawn with.
++        link_colors: link.ColorMap = .empty,
++
+         /// The current set of cells to render. This is rebuilt on every frame
+         /// but we keep this around so that we don't reallocate. Each set of
+         /// cells goes into a separate shader.
+@@ -577,6 +582,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             bg_image_fit: configpkg.BackgroundImageFit,
+             bg_image_repeat: bool,
+             links: link.Set,
++            link_colors: link.ColorSet,
+             vsync: bool,
+             colorspace: configpkg.Config.WindowColorspace,
+             blending: configpkg.Config.AlphaBlending,
+@@ -617,6 +623,19 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     config.link.links.items,
+                 );
+ 
++                // Our link-color rules
++                var link_color_entries: std.ArrayList(link.ColorSet.Entry) = .empty;
++                for (config.@"link-color".items.items) |entry| {
++                    try link_color_entries.append(alloc, .{
++                        .regex = entry.regex,
++                        .color = entry.color.toTerminalRGB(),
++                    });
++                }
++                const link_colors = try link.ColorSet.init(
++                    alloc,
++                    link_color_entries.items,
++                );
++
+                 return .{
+                     .background_opacity = @max(0, @min(1, config.@"background-opacity")),
+                     .background_opacity_cells = config.@"background-opacity-cells",
+@@ -652,6 +671,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                     .bg_image_fit = config.@"background-image-fit",
+                     .bg_image_repeat = config.@"background-image-repeat",
+                     .links = links,
++                    .link_colors = link_colors,
+                     .vsync = config.@"window-vsync",
+                     .colorspace = config.@"window-colorspace",
+                     .blending = config.@"alpha-blending",
+@@ -665,6 +685,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+             pub fn deinit(self: *DerivedConfig) void {
+                 const alloc = self.arena.allocator();
+                 self.links.deinit(alloc);
++                self.link_colors.deinit(alloc);
+                 self.arena.deinit();
+             }
+         };
+@@ -805,6 +826,7 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+         pub fn deinit(self: *Self) void {
+             if (self.overlay) |*overlay| overlay.deinit(self.alloc);
+             self.terminal_state.deinit(self.alloc);
++            self.link_colors.deinit(self.alloc);
+             if (self.search_selected_match) |*m| m.arena.deinit();
+             if (self.search_matches) |*m| m.arena.deinit();
+             if (self.swap_chain) |*sc| sc.deinit();
+@@ -1478,6 +1500,26 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+                 log.warn("error searching for regex links err={}", .{err});
+             };
+ 
++            // Recolor `link-color` matches. Only rebuilt rows read the
++            // map, and rows are only rebuilt when dirty, so skip the
++            // regex pass entirely on clean frames.
++            if (self.terminal_state.dirty != .false and
++                self.config.link_colors.rules.len > 0)
++            {
++                self.link_colors.clearRetainingCapacity();
++                self.config.link_colors.renderColorMap(
++                    self.alloc,
++                    &self.link_colors,
++                    &self.terminal_state,
++                ) catch |err| {
++                    log.warn("error searching for link colors err={}", .{err});
++                };
++            } else if (self.config.link_colors.rules.len == 0 and
++                self.link_colors.count() > 0)
++            {
++                self.link_colors.clearRetainingCapacity();
++            }
++
+             // Clear our highlight state and update.
+             if (self.search_matches_dirty or self.terminal_state.dirty != .false) {
+                 self.search_matches_dirty = false;
+@@ -3083,6 +3125,11 @@ pub fn Renderer(comptime GraphicsAPI: type) type {
+ 
+                         .false => if (style.flags.inverse)
+                             final_bg
++                        else if (self.link_colors.get(.{
++                            .x = @intCast(x),
++                            .y = @intCast(y),
++                        })) |color|
++                            color
+                         else
+                             fg_style,
+                     };
+diff --git a/src/renderer/link.zig b/src/renderer/link.zig
+index dfc6fe671..1d8accbad 100644
+--- a/src/renderer/link.zig
++++ b/src/renderer/link.zig
+@@ -144,6 +144,187 @@ pub const Set = struct {
+     }
+ };
+ 
++/// Cells to recolor, mapped to their foreground color.
++pub const ColorMap = std.AutoHashMapUnmanaged(point.Coordinate, terminal.color.RGB);
++
++/// A set of `link-color` rules: regexes whose matches are drawn in a
++/// fixed foreground color. Unlike `Set` these are purely visual and
++/// always active, independent of mouse and modifier state.
++pub const ColorSet = struct {
++    pub const Rule = struct {
++        regex: oni.Regex,
++        color: terminal.color.RGB,
++    };
++
++    rules: []Rule,
++
++    pub const Entry = struct {
++        regex: []const u8,
++        color: terminal.color.RGB,
++    };
++
++    pub fn init(alloc: Allocator, entries: []const Entry) !ColorSet {
++        var rules: std.ArrayList(Rule) = .empty;
++        defer rules.deinit(alloc);
++        errdefer for (rules.items) |*rule| rule.regex.deinit();
++
++        for (entries) |entry| {
++            var regex = try oni.Regex.init(
++                entry.regex,
++                .{},
++                oni.Encoding.utf8,
++                oni.Syntax.default,
++                null,
++            );
++            errdefer regex.deinit();
++            try rules.append(alloc, .{ .regex = regex, .color = entry.color });
++        }
++
++        return .{ .rules = try rules.toOwnedSlice(alloc) };
++    }
++
++    pub fn deinit(self: *ColorSet, alloc: Allocator) void {
++        for (self.rules) |*rule| rule.regex.deinit();
++        alloc.free(self.rules);
++    }
++
++    /// Fills `result` with the color of every cell some rule matches. The
++    /// first rule to claim a cell wins. `alloc` is used for `result` and
++    /// for scratch buffers, so pass an allocator that outlives `result`.
++    pub fn renderColorMap(
++        self: *const ColorSet,
++        alloc: Allocator,
++        result: *ColorMap,
++        render_state: *const terminal.RenderState,
++    ) !void {
++        if (self.rules.len == 0) return;
++
++        var builder: std.Io.Writer.Allocating = .init(alloc);
++        defer builder.deinit();
++        var map: terminal.RenderState.StringMap = .empty;
++        defer map.deinit(alloc);
++        try render_state.string(&builder.writer, .{
++            .alloc = alloc,
++            .map = &map,
++        });
++
++        const str = builder.writer.buffered();
++
++        for (self.rules) |*rule| {
++            var offset: usize = 0;
++            while (offset < str.len) {
++                var region = rule.regex.search(
++                    str[offset..],
++                    .{},
++                ) catch |err| switch (err) {
++                    error.Mismatch => break,
++                    else => return err,
++                };
++                defer region.deinit();
++
++                const start = offset + @as(usize, @intCast(region.starts()[0]));
++                const end = offset + @as(usize, @intCast(region.ends()[0]));
++
++                // An empty match would never advance; skip one byte.
++                if (end == start) {
++                    offset = end + 1;
++                    continue;
++                }
++                offset = end;
++
++                for (map.items[start..end]) |pt| {
++                    const gop = try result.getOrPut(alloc, pt);
++                    if (!gop.found_existing) gop.value_ptr.* = rule.color;
++                }
++            }
++        }
++    }
++};
++
++test "renderColorMap" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var t: terminal.Terminal = try .init(testing.io, alloc, .{
++        .cols = 5,
++        .rows = 3,
++    });
++    defer t.deinit(alloc);
++
++    var s = t.vtStream();
++    defer s.deinit();
++    s.nextSlice("1ABCD2EFGH\r\n3IJKL");
++
++    var state: terminal.RenderState = .empty;
++    defer state.deinit(alloc);
++    try state.update(alloc, &t);
++
++    const green: terminal.color.RGB = .{ .r = 0, .g = 255, .b = 0 };
++    const red: terminal.color.RGB = .{ .r = 255, .g = 0, .b = 0 };
++    var set = try ColorSet.init(alloc, &.{
++        .{ .regex = "AB", .color = green },
++        .{ .regex = "BC|IJ", .color = red },
++    });
++    defer set.deinit(alloc);
++
++    var result: ColorMap = .empty;
++    defer result.deinit(alloc);
++    try set.renderColorMap(alloc, &result, &state);
++
++    try testing.expect(result.get(.{ .x = 0, .y = 0 }) == null);
++    try testing.expectEqual(green, result.get(.{ .x = 1, .y = 0 }).?);
++    // First rule wins on overlap.
++    try testing.expectEqual(green, result.get(.{ .x = 2, .y = 0 }).?);
++    try testing.expectEqual(red, result.get(.{ .x = 3, .y = 0 }).?);
++    try testing.expectEqual(red, result.get(.{ .x = 1, .y = 2 }).?);
++    try testing.expect(result.get(.{ .x = 4, .y = 1 }) == null);
++}
++
++test "renderColorMap Supacool rule shapes" {
++    const testing = std.testing;
++    const alloc = testing.allocator;
++
++    var t: terminal.Terminal = try .init(testing.io, alloc, .{
++        .cols = 60,
++        .rows = 2,
++    });
++    defer t.deinit(alloc);
++
++    var s = t.vtStream();
++    defer s.deinit();
++    s.nextSlice("CEN-12 rocket#5 x/acme/rocket#5\r\nAcme/Rocket#9 CEN-123");
++
++    var state: terminal.RenderState = .empty;
++    defer state.deinit(alloc);
++    try state.update(alloc, &t);
++
++    const green: terminal.color.RGB = .{ .r = 0, .g = 255, .b = 0 };
++    const red: terminal.color.RGB = .{ .r = 255, .g = 0, .b = 0 };
++    var set = try ColorSet.init(alloc, &.{
++        .{ .regex = "\\b(?:CEN-(?:12))\\b", .color = red },
++        .{
++            .regex = "(?i)(?:(?:(?<![\\w./-])(?:acme/)?rocket#|github\\.com/acme/rocket/pull/)(?:5|9))\\b",
++            .color = green,
++        },
++    });
++    defer set.deinit(alloc);
++
++    var result: ColorMap = .empty;
++    defer result.deinit(alloc);
++    try set.renderColorMap(alloc, &result, &state);
++
++    // CEN-12 colored, CEN-123 not.
++    try testing.expectEqual(red, result.get(.{ .x = 0, .y = 0 }).?);
++    try testing.expect(result.get(.{ .x = 14, .y = 1 }) == null);
++    // Bare repo#N colored.
++    try testing.expectEqual(green, result.get(.{ .x = 7, .y = 0 }).?);
++    // Inside a longer path: not colored.
++    try testing.expect(result.get(.{ .x = 18, .y = 0 }) == null);
++    try testing.expect(result.get(.{ .x = 24, .y = 0 }) == null);
++    // owner/repo#N, case-insensitive.
++    try testing.expectEqual(green, result.get(.{ .x = 0, .y = 1 }).?);
++}
++
+ test "renderCellMap" {
+     const testing = std.testing;
+     const alloc = testing.allocator;
