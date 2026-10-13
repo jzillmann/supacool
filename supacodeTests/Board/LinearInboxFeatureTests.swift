@@ -1016,11 +1016,17 @@ struct LinearInboxFeatureTests {
     state.selectedTab = .newTerminal
     state.newTerminal = NewTerminalFeature.State(availableRepositories: [])
 
+    // Linear answers only after the optimistic flip is checked: a stub that
+    // throws at once can revert the row before `send` returns.
+    let linearAnswers = AsyncStream.makeStream(of: Void.self)
     let store = TestStore(initialState: state) {
       LinearInboxFeature()
     } withDependencies: {
       $0.date = .constant(now)
-      $0.linearClient.assignToMe = { _ in throw LinearClientError.unauthorized }
+      $0.linearClient.assignToMe = { _ in
+        for await _ in linearAnswers.stream { break }
+        throw LinearClientError.unauthorized
+      }
     }
     store.exhaustivity = .off
 
@@ -1034,6 +1040,7 @@ struct LinearInboxFeatureTests {
     #expect(store.state.tickets[0].assignedToMe)
     #expect(store.state.tickets[0].stateType == "started")
 
+    linearAnswers.continuation.yield()
     await store.receive(\._inProgressSyncFailed)
     // Reverted to the pre-spawn Linear status…
     #expect(!store.state.tickets[0].assignedToMe)
