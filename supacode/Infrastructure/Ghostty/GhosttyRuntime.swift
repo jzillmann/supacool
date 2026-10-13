@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import GhosttyKit
 import Sharing
 import SwiftUI
@@ -25,6 +26,10 @@ final class GhosttyRuntime {
   private var observers: [NSObjectProtocol] = []
   private var surfaceRefs: [SurfaceReference] = []
   private var lastColorScheme: ghostty_color_scheme_e?
+  private var referenceCatalogObservation: AnyCancellable?
+  /// The reference link/color rules the live config was built with, so a
+  /// catalog update that changes nothing visible doesn't reload ghostty.
+  private var appliedReferenceRules = ""
   var onConfigChange: (() -> Void)?
 
   init() {
@@ -60,6 +65,8 @@ final class GhosttyRuntime {
       preconditionFailure("ghostty_app_new failed")
     }
     self.app = app
+    appliedReferenceRules = Self.currentReferenceRules()
+    observeReferenceCatalog()
 
     let center = NotificationCenter.default
     observers.append(
@@ -617,11 +624,12 @@ final class GhosttyRuntime {
     return config
   }
 
-  /// Applies Supacool-specific config (padding, ticket links) that takes precedence over user settings.
+  /// Applies Supacool-specific config (padding, ticket/PR links and their
+  /// state colors) that takes precedence over user settings.
   private static func loadBundledOverrides(into config: ghostty_config_t, settings: SettingsFile) {
     let defaults =
       "window-padding-x = 14\nwindow-padding-y = 12,0\n"
-      + TerminalLinkRules.configLines(teamKeys: configuredLinearTeamKeys(in: settings))
+      + referenceRules(settings: settings)
     let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("supacool-defaults.conf")
     do {
       try defaults.write(to: tempURL, atomically: true, encoding: .utf8)
@@ -630,6 +638,66 @@ final class GhosttyRuntime {
       return
     }
     tempURL.path.withCString { ghostty_config_load_file(config, $0) }
+  }
+
+  /// Ticket and PR `link` rules plus the `link-color` rules that tint them by
+  /// state, from the board's `terminalReferenceCatalog`.
+  private static func referenceRules(settings: SettingsFile) -> String {
+    @Shared(.terminalReferenceCatalog) var catalog
+    return TerminalLinkRules.configLines(
+      teamKeys: configuredLinearTeamKeys(in: settings),
+      repositorySlugs: catalog.repositorySlugs
+    )
+      + TerminalLinkRules.colorConfigLines(catalog: catalog, toneHex: referenceToneHex)
+  }
+
+  private static func currentReferenceRules() -> String {
+    @Shared(.settingsFile) var settingsFile
+    return referenceRules(settings: settingsFile)
+  }
+
+  /// System colors resolved for the current appearance. The config is
+  /// rebuilt on every light/dark switch (`GhosttyColorSchemeSyncView`), so
+  /// the tint follows the theme.
+  private static func referenceToneHex(_ tone: TerminalReferenceCatalog.Tone) -> String {
+    let color: NSColor =
+      switch tone {
+      case .green: .systemGreen
+      case .yellow: .systemYellow
+      case .orange: .systemOrange
+      case .red: .systemRed
+      case .purple: .systemPurple
+      case .blue: .systemBlue
+      case .gray: .systemGray
+      }
+    var resolved = color
+    (NSApp?.effectiveAppearance ?? NSAppearance.currentDrawing()).performAsCurrentDrawingAppearance {
+      resolved = color.usingColorSpace(.sRGB) ?? color
+    }
+    let red = Int((resolved.redComponent * 255).rounded())
+    let green = Int((resolved.greenComponent * 255).rounded())
+    let blue = Int((resolved.blueComponent * 255).rounded())
+    return String(format: "#%02x%02x%02x", red, green, blue)
+  }
+
+  /// Reload ghostty when the board learns something that changes the
+  /// reference rules (a new repo, a ticket moving to review, a PR going
+  /// green). Debounced: PR fetches land in bursts, and every reload
+  /// re-reads the user's config from disk.
+  private func observeReferenceCatalog() {
+    @Shared(.terminalReferenceCatalog) var catalog
+    referenceCatalogObservation = $catalog.publisher
+      .removeDuplicates()
+      .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+      .sink { [weak self] _ in
+        MainActor.assumeIsolated {
+          guard let self else { return }
+          let rules = Self.currentReferenceRules()
+          guard rules != self.appliedReferenceRules else { return }
+          self.appliedReferenceRules = rules
+          self.reloadAppConfig()
+        }
+      }
   }
 
   /// Union of every repo's configured Linear team keys. The ghostty config is
