@@ -349,7 +349,7 @@ struct FullScreenTerminalView: View {
         priorityFlag
       }
       referenceChips(.pullRequests)
-      if session.reviewLoop != nil || canStartReviewLoop {
+      if (session.reviewLoop != nil && !session.isReviewLoopSpent) || canStartReviewLoop {
         ReviewLoopControl(
           state: session.reviewLoop,
           canStart: canStartReviewLoop,

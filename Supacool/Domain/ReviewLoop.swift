@@ -462,4 +462,19 @@ nonisolated extension AgentSession {
   var canStartReviewLoop: Bool {
     agent != nil && !isRemote && (reviewLoop?.canRestart ?? true) && !reviewablePullRequests.isEmpty
   }
+
+  /// A passed loop whose PRs have all merged has nothing left to say: the
+  /// header and card drop its "Passed" pill instead of letting it linger.
+  var isReviewLoopSpent: Bool {
+    reviewLoop?.phase == .passed && allPullRequestsMerged
+  }
+
+  /// True when the session has at least one PR and every one of them merged.
+  var allPullRequestsMerged: Bool {
+    let states = references.compactMap { reference -> PRState?? in
+      guard case .pullRequest(_, _, _, let state, _) = reference else { return nil }
+      return state
+    }
+    return !states.isEmpty && states.allSatisfy { $0 == .merged }
+  }
 }

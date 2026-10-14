@@ -74,6 +74,28 @@ struct ReviewLoopTests {
     #expect(!ReviewLoopState(phase: .diagnosing).canRestart)
   }
 
+  @Test func passedPillHidesOnceEveryPullRequestMerged() {
+    func session(_ phase: ReviewLoopPhase, _ states: [PRState?]) -> AgentSession {
+      AgentSession(
+        repositoryID: "/tmp/repo",
+        worktreeID: "/tmp/repo",
+        agent: .claude,
+        initialPrompt: "Fix",
+        displayName: "Fix",
+        reviewLoop: ReviewLoopState(phase: phase),
+        references: states.enumerated().map { index, state in
+          .pullRequest(owner: "acme", repo: "widgets", number: 40 + index, state: state, title: nil)
+        }
+      )
+    }
+    #expect(session(.passed, [.merged, .merged]).isReviewLoopSpent)
+    #expect(!session(.passed, [.merged, .open]).isReviewLoopSpent)
+    #expect(!session(.passed, [.merged, nil]).isReviewLoopSpent)
+    #expect(!session(.passed, [.merged, .closed]).isReviewLoopSpent)
+    #expect(!session(.passed, []).isReviewLoopSpent)
+    #expect(!session(.stopped, [.merged]).isReviewLoopSpent)
+  }
+
   @Test func reportParserExtractsPayloadFromFinalMessage() {
     let report = ReviewLoopReportParser.parse(
       "I finished the review.\nSUPACOOL_REVIEW_RESULT\n" + "{\"verdict\":\"changes\",\"reviewed_sha\":\"abc123\","
