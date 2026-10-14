@@ -40,6 +40,9 @@ nonisolated struct LinearIssue: Equatable, Sendable, Identifiable {
   /// Parent issue's title, cached for the group header so the inbox needn't
   /// fetch the parent separately.
   var parentTitle: String?
+  /// Linear's hex color for the workflow state (e.g. `#f2c94c`). Tints the
+  /// ticket id in terminal output.
+  var stateColor: String?
 }
 
 /// Minimal Linear API client. Originally just fetched a single issue title
@@ -238,7 +241,7 @@ private nonisolated enum LinearLive {
   /// mutation so both return the same `LinearIssue` shape.
   static let issueFields =
     "id identifier title description url createdAt completedAt canceledAt "
-    + "state { name type } assignee { displayName isMe } creator { displayName } "
+    + "state { name type color } assignee { displayName isMe } creator { displayName } "
     + "parent { identifier title }"
 
   static func currentAPIKey() -> String? {
@@ -458,7 +461,8 @@ private nonisolated enum LinearLive {
       completedAt: parseISODate(dict["completedAt"]),
       canceledAt: parseISODate(dict["canceledAt"]),
       parentIdentifier: parent?["identifier"] as? String,
-      parentTitle: (parent?["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+      parentTitle: (parent?["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+      stateColor: state?["color"] as? String
     )
   }
 

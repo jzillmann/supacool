@@ -369,7 +369,7 @@ final class GhosttySurfaceBridge {
   }
 
   /// Ghostty's `open` link action opens the matched text verbatim, so a bare
-  /// ticket id would end up as `open CEN-9398`. Claim the action for matches
+  /// ticket id would end up as `open CEN-9398` (and `repo#12` likewise). Claim the action for matches
   /// Supacool knows how to resolve and open the real URL ourselves; return
   /// `false` for everything else so ghostty's own opener still runs.
   ///
@@ -385,6 +385,7 @@ final class GhosttySurfaceBridge {
     guard openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let matched else { return false }
 
     @Shared(.settingsFile) var settingsFile
+    @Shared(.terminalReferenceCatalog) var catalog
     // Same key `SessionInfoPopover` reads through `@AppStorage`; read straight
     // from `UserDefaults` here because this is a plain class, not a view.
     let slug = UserDefaults.standard.string(forKey: "supacool.references.linearOrg") ?? ""
@@ -393,7 +394,7 @@ final class GhosttySurfaceBridge {
         forMatched: matched,
         teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
         linearOrgSlug: slug
-      )
+      ) ?? TerminalLinkRules.pullRequestURL(forMatched: matched, repositorySlugs: catalog.repositorySlugs)
     else { return false }
 
     NSWorkspace.shared.open(url)

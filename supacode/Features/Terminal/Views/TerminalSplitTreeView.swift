@@ -149,6 +149,10 @@ struct TerminalSplitTreeView: View {
               GhosttySurfaceSearchOverlay(surfaceView: surfaceView)
             }
           }
+          .overlay(alignment: .bottomLeading) {
+            // Supacool: status card for a ⌘-hovered ticket id / PR ref.
+            TerminalReferenceHoverCard(state: surfaceView.bridge.state)
+          }
           .overlay(alignment: .bottomTrailing) {
             // Supacool: per-pane agent chip. Bottom-trailing keeps it
             // clear of the search overlay and the top drag handle. Hit
