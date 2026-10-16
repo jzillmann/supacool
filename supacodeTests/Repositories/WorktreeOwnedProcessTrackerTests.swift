@@ -269,6 +269,32 @@ struct WorktreeOwnedProcessTrackerTests {
     #expect(tracker.adoptedByWorktree["/tmp/repos/b/wt"]?.map(\.pid) == [6002])
   }
 
+  @Test func releaseReachesANestedWorktreeAndSparesItsSiblings() async {
+    // `<repo>/ci-triage-worktrees/<wt>` buckets under `<repo>/ci-triage-worktrees`,
+    // two segments below the repos dir. Releasing the real worktree path has to
+    // find its processes anyway, and leave the sibling worktree's alone.
+    let recorder = TerminationRecorder()
+    let tracker = WorktreeOwnedProcessTracker(
+      cwdPrefix: reposPrefix,
+      minimumOrphanAge: 180,
+      now: { fixedNow },
+      enumerate: {
+        [
+          makeSnapshot(pid: 6101, ppid: 1, cwd: "/tmp/repos/a/nest/wt1/webapp", ageSec: 600),
+          makeSnapshot(pid: 6102, ppid: 1, cwd: "/tmp/repos/a/nest/wt2", ageSec: 600),
+        ]
+      },
+      terminate: { pid, signal in recorder.record(pid, signal) }
+    )
+
+    _ = await tracker.refresh()
+    let acted = tracker.release(worktreePath: "/tmp/repos/a/nest/wt1")
+
+    #expect(acted == [6101])
+    #expect(recorder.calls == [.init(pid: 6101, signal: SIGTERM)])
+    #expect(tracker.adoptedByWorktree["/tmp/repos/a/nest"]?.map(\.pid) == [6102])
+  }
+
   @Test func releaseOfUnknownPathIsANoOp() {
     let recorder = TerminationRecorder()
     let tracker = WorktreeOwnedProcessTracker(

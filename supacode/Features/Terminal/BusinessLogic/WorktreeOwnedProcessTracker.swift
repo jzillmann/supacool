@@ -168,17 +168,31 @@ final class WorktreeOwnedProcessTracker {
     // before the lookup.
     var key = worktreePath
     while key.count > 1 && key.hasSuffix("/") { key.removeLast() }
-    guard let processes = adoptedByWorktree.removeValue(forKey: key) else { return [] }
+    // Match on each process's cwd, not on the bucket key. Buckets are keyed
+    // by the first two segments below the repos dir, which is the wrong
+    // directory for a nested worktree (`<repo>/ci-triage-worktrees/<wt>`):
+    // releasing the real worktree path missed its bucket entirely, and its
+    // dev servers outlived the worktree.
     var acted: [pid_t] = []
-    for proc in processes {
-      trackerLogger.info(
-        "SIGTERM owned pid=\(proc.pid) worktree=\(key) "
-          + "exe=\(proc.executablePath ?? "?")"
-      )
-      terminate(proc.pid, SIGTERM)
-      acted.append(proc.pid)
+    for (bucket, processes) in adoptedByWorktree {
+      let released = processes.filter { Self.isPath($0.cwd, inside: key) }
+      guard !released.isEmpty else { continue }
+      let kept = processes.subtracting(released)
+      adoptedByWorktree[bucket] = kept.isEmpty ? nil : kept
+      for proc in released {
+        trackerLogger.info(
+          "SIGTERM owned pid=\(proc.pid) worktree=\(key) "
+            + "exe=\(proc.executablePath ?? "?")"
+        )
+        terminate(proc.pid, SIGTERM)
+        acted.append(proc.pid)
+      }
     }
     return acted
+  }
+
+  private nonisolated static func isPath(_ path: String, inside directory: String) -> Bool {
+    path == directory || path.hasPrefix(directory + "/")
   }
 
   /// Returns the absolute worktree directory that owns a process

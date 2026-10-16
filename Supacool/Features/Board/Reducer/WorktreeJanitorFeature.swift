@@ -57,6 +57,18 @@ struct WorktreeJanitorFeature {
     var orphanSessionIDs: [AgentSession.ID] = []
     var orphanBannerDismissed: Bool = false
 
+    // MARK: Stray processes
+
+    /// Detached processes still running inside this repo's worktrees —
+    /// typically a dev server an agent backgrounded. See `StrayProcessClient`.
+    var strayProcesses: IdentifiedArrayOf<StrayProcess> = []
+    var selectedStrayPIDs: Set<pid_t> = []
+    /// Directories the last stray scan covered; reused for the re-scan
+    /// after a stop.
+    var strayScanRoots: [String] = []
+    var isStoppingStrays: Bool = false
+    var strayStopErrors: [String] = []
+
     // MARK: Selection / delete
 
     var selectedIDs: Set<WorktreeInventoryEntry.ID> = []
@@ -285,6 +297,12 @@ struct WorktreeJanitorFeature {
     case removeOrphanCardsRequested
     case dismissOrphanBanner
 
+    // MARK: Stray processes
+    case _strayProcessesLoaded([StrayProcess], roots: [String])
+    case toggleStraySelection(pid: pid_t)
+    case stopSelectedStraysRequested
+    case _straysStopped(failedPIDs: [pid_t], remaining: [StrayProcess])
+
     // MARK: Dismissal
     case closeRequested
     case delegate(Delegate)
@@ -313,6 +331,13 @@ struct WorktreeJanitorFeature {
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(SupacoolWorktreePruneClient.self) var worktreePrune
   @Dependency(WorktreeDeleteScriptClient.self) var deleteScriptClient
+  @Dependency(StrayProcessClient.self) var strayProcessClient
+  @Dependency(TerminalClient.self) var terminalClient
+  @Dependency(\.continuousClock) var clock
+
+  /// Same threshold as `WorktreeOwnedProcessTracker`: a Go build briefly
+  /// reparents its compile workers to launchd, and those are not strays.
+  static let strayMinimumAge: TimeInterval = 180
 
   /// Fallback when `defaultBranchRef` throws. Git treats `origin/HEAD`
   /// as a symbolic alias in most contexts, so rev-list / diff calls
@@ -345,7 +370,7 @@ struct WorktreeJanitorFeature {
           globalDefaultPath: settingsFile.global.defaultWorktreeBaseDirectoryPath,
           repositoryOverridePath: repositorySettings.worktreeBaseDirectoryPath
         )
-        return .run { [inventory, worktreePrune, worktreeBaseDirectory] send in
+        return .run { [inventory, worktreePrune, worktreeBaseDirectory, strayProcessClient] send in
 
           // 1. Prune stale admin records so the list call returns
           //    ground truth. Silent on failure — prune is nice-to-have,
@@ -425,6 +450,22 @@ struct WorktreeJanitorFeature {
             inventoryPaths: inventoryPaths
           )
           await send(._listLoaded(rows: rows, orphanSessionIDs: orphanSessionIDs))
+
+          // 4b. Detached processes still running in these worktrees, or in
+          //     worktrees that are already gone. Sent only when there are
+          //     some, so the common case adds no action.
+          let strayRoots = strayScanRoots(
+            rows: rows,
+            worktreeBaseDirectoryPath: worktreeBaseDirectory.path(percentEncoded: false),
+            repositoryID: repositoryID
+          )
+          let strays = classifyStrayProcesses(
+            candidates: await strayProcessClient.scan(strayRoots, Self.strayMinimumAge),
+            rows: rows
+          )
+          if !strays.isEmpty {
+            await send(._strayProcessesLoaded(strays, roots: strayRoots))
+          }
 
           // 5. Per-row fan-out. Read the resolved base ref from the
           //    store via the send closure's current action payload is
@@ -554,7 +595,7 @@ struct WorktreeJanitorFeature {
           state.deletingIDs.insert(target.id)
         }
         state.deleteScheduledTotal = targets.count
-        return .run { [gitClient, deleteScriptClient] send in
+        return .run { [gitClient, deleteScriptClient, terminalClient] send in
           for target in targets {
             let result = await removeOrphanWorktree(
               gitClient: gitClient,
@@ -563,6 +604,11 @@ struct WorktreeJanitorFeature {
               target: target,
               repositoryRootURL: repositoryRootURL
             )
+            if result == .success {
+              // The removed worktree may still host a backgrounded dev
+              // server; stop what the owned-process tracker attributed to it.
+              await terminalClient.send(.releaseOwnedProcesses(worktreePath: target.id))
+            }
             await send(._deleteCompleted(id: target.id, result: result))
           }
         }
@@ -645,6 +691,55 @@ struct WorktreeJanitorFeature {
         state.orphanBannerDismissed = true
         return .none
 
+      // MARK: - Stray processes
+
+      case ._strayProcessesLoaded(let strays, let roots):
+        state.strayProcesses = IdentifiedArray(uniqueElements: strays)
+        state.selectedStrayPIDs = Set(strays.filter(\.isPreselected).map(\.pid))
+        state.strayScanRoots = roots
+        return .none
+
+      case .toggleStraySelection(let pid):
+        guard state.strayProcesses[id: pid] != nil else { return .none }
+        if state.selectedStrayPIDs.contains(pid) {
+          state.selectedStrayPIDs.remove(pid)
+        } else {
+          state.selectedStrayPIDs.insert(pid)
+        }
+        return .none
+
+      case .stopSelectedStraysRequested:
+        let targets = state.strayProcesses.filter { state.selectedStrayPIDs.contains($0.pid) }
+        guard !targets.isEmpty, !state.isStoppingStrays else { return .none }
+        state.isStoppingStrays = true
+        state.strayStopErrors = []
+        let pids = targets.flatMap { [$0.pid] + $0.descendantPIDs }
+        let roots = state.strayScanRoots
+        let rows = Array(state.rows)
+        return .run { [strayProcessClient, clock] send in
+          let failed = await strayProcessClient.terminate(pids)
+          // Give the processes a moment to exit before the re-scan, so the
+          // list shows what is really still running.
+          try? await clock.sleep(for: .seconds(1))
+          let remaining = classifyStrayProcesses(
+            candidates: await strayProcessClient.scan(roots, Self.strayMinimumAge),
+            rows: rows
+          )
+          await send(._straysStopped(failedPIDs: failed, remaining: remaining))
+        }
+
+      case ._straysStopped(let failedPIDs, let remaining):
+        let stopped = Set(state.selectedStrayPIDs)
+        state.isStoppingStrays = false
+        state.strayProcesses = IdentifiedArray(uniqueElements: remaining)
+        state.selectedStrayPIDs = stopped.intersection(remaining.map(\.pid))
+        state.strayStopErrors =
+          failedPIDs.map { "pid \($0): could not be signalled" }
+          + remaining.filter { stopped.contains($0.pid) }.map {
+            "pid \($0.pid): still running after SIGTERM"
+          }
+        return .none
+
       // MARK: - Dismissal
 
       case .closeRequested:
@@ -718,6 +813,26 @@ private func removeOrphanWorktree(
 }
 
 // MARK: - Helpers
+
+/// Directories whose detached processes count as this repo's strays: the
+/// worktree base directory (where worktrees that are gone used to live) and
+/// every worktree outside it. The repo root is left out — it is the user's own
+/// checkout, and the base directory equals it when worktrees live in-repo.
+nonisolated func strayScanRoots(
+  rows: [WorktreeInventoryEntry],
+  worktreeBaseDirectoryPath: String,
+  repositoryID: String
+) -> [String] {
+  let base = normalizePath(worktreeBaseDirectoryPath)
+  let scansBase = base != normalizePath(repositoryID)
+  var roots = scansBase ? [base] : []
+  for row in rows {
+    if case .repoRoot = row.status { continue }
+    if scansBase, row.id == base || row.id.hasPrefix(base + "/") { continue }
+    roots.append(row.id)
+  }
+  return roots
+}
 
 private func isDirty(_ status: WorktreeInventoryEntry.Status) -> Bool {
   if case .orphanDirty = status { return true }

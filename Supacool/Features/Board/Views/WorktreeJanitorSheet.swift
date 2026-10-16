@@ -34,6 +34,10 @@ struct WorktreeJanitorSheet: View {
         orphanBanner
         Divider()
       }
+      if !store.strayProcesses.isEmpty {
+        straySection
+        Divider()
+      }
       content
       Divider()
       footer
@@ -125,6 +129,111 @@ struct WorktreeJanitorSheet: View {
     return count == 1
       ? "1 session card references a missing worktree"
       : "\(count) session cards reference missing worktrees"
+  }
+
+  // MARK: - Stray processes
+
+  private var straySection: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 12) {
+        Image(systemName: "gearshape.2.fill")
+          .font(.title3)
+          .foregroundStyle(.orange)
+          .accessibilityHidden(true)
+        VStack(alignment: .leading, spacing: 2) {
+          Text(strayTitle)
+            .font(.callout.weight(.semibold))
+          Text(
+            "Started in the background (a dev server, for example) and left behind. "
+              + "Stop sends SIGTERM to each process and its children."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Spacer()
+        if store.isStoppingStrays {
+          ProgressView()
+            .controlSize(.small)
+        }
+        Button("Stop \(store.selectedStrayPIDs.count) selected") {
+          store.send(.stopSelectedStraysRequested)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.orange)
+        .disabled(store.selectedStrayPIDs.isEmpty || store.isStoppingStrays)
+        .help("Send SIGTERM to the selected processes and their children")
+      }
+      ScrollView {
+        VStack(alignment: .leading, spacing: 4) {
+          ForEach(store.strayProcesses) { process in
+            strayRow(process)
+          }
+        }
+      }
+      .frame(maxHeight: 140)
+      ForEach(store.strayStopErrors, id: \.self) { error in
+        Text(error)
+          .font(.caption)
+          .foregroundStyle(.red)
+      }
+    }
+    .padding(.horizontal, 20)
+    .padding(.vertical, 10)
+    .background(Color.orange.opacity(0.08))
+  }
+
+  private var strayTitle: String {
+    let count = store.strayProcesses.count
+    return count == 1
+      ? "1 detached process still runs in this repo's worktrees"
+      : "\(count) detached processes still run in this repo's worktrees"
+  }
+
+  private func strayRow(_ process: StrayProcess) -> some View {
+    let isSelected = store.selectedStrayPIDs.contains(process.pid)
+    return HStack(spacing: 10) {
+      Button {
+        store.send(.toggleStraySelection(pid: process.pid))
+      } label: {
+        Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+          .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+          .accessibilityLabel(isSelected ? "Deselect" : "Select")
+      }
+      .buttonStyle(.plain)
+      .help(isSelected ? "Keep this process running" : "Select this process to stop it")
+      Text(strayStatusLabel(process.status))
+        .font(.caption.weight(.medium))
+        .foregroundStyle(process.status == .cardOnBoard ? Color.secondary : Color.orange)
+        .frame(width: 110, alignment: .leading)
+      VStack(alignment: .leading, spacing: 1) {
+        Text(process.command)
+          .font(.caption.monospaced())
+          .lineLimit(1)
+          .truncationMode(.middle)
+          .help(process.command)
+        Text(strayDetail(process))
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+          .truncationMode(.head)
+      }
+      Spacer(minLength: 0)
+    }
+  }
+
+  private func strayStatusLabel(_ status: StrayProcess.Status) -> String {
+    switch status {
+    case .worktreeGone: "worktree gone"
+    case .noCard: "no card"
+    case .cardOnBoard: "card on board"
+    }
+  }
+
+  private func strayDetail(_ process: StrayProcess) -> String {
+    let age = process.startedAt.formatted(.relative(presentation: .named))
+    let children = process.descendantPIDs.count
+    let childText = children == 0 ? "" : " · +\(children) child process\(children == 1 ? "" : "es")"
+    return "pid \(process.pid) · started \(age)\(childText) · \(process.cwd)"
   }
 
   // MARK: - Content
