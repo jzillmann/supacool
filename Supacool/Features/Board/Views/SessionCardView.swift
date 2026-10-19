@@ -1374,7 +1374,7 @@ struct SessionReferenceSummaryChips: View {
 
   var body: some View {
     // A row at its natural width can be wider than a board card (ticket +
-    // PR stack + "N artifacts"). The card pins its width with
+    // "N artifacts" + PR stack). The card pins its width with
     // `.frame(width:)`, which centres an overflowing child, so the whole
     // card used to spill out on both sides and break the grid columns.
     // Try the full row, then a shorter artifact label, and as a last resort
@@ -1393,11 +1393,11 @@ struct SessionReferenceSummaryChips: View {
       if parts.showsTickets {
         ticketChips
       }
-      if parts.showsPullRequests {
-        pullRequestChips
-      }
       if parts.showsArtifacts {
         artifactChips(compact: compactArtifacts)
+      }
+      if parts.showsPullRequests {
+        pullRequestChips
       }
     }
     .lineLimit(1)
