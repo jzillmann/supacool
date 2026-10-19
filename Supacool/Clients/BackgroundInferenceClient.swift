@@ -193,9 +193,30 @@ private nonisolated enum BackgroundInferenceLive {
     return url
   }
 
-  /// Resolves the absolute path to the `claude` binary by running
-  /// `which claude` in a login shell (so the user's full PATH is active).
+  /// Resolves the absolute path to the `claude` binary: `which claude` in a
+  /// login shell first, then the well-known install locations. The fallback
+  /// matters because `zsh -l -c` is non-interactive and skips `.zshrc` —
+  /// where the native installer's `~/.local/bin` usually lands on PATH — so
+  /// `which` alone failed every session title for weeks.
   private static func resolveClaudePath() async throws -> URL {
+    do {
+      return try await whichClaude()
+    } catch {
+      let home = FileManager.default.homeDirectoryForCurrentUser.path
+      let candidates = [
+        "\(home)/.local/bin/claude",
+        "\(home)/.claude/local/claude",
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+      ]
+      guard let path = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else {
+        throw error
+      }
+      return URL(fileURLWithPath: path)
+    }
+  }
+
+  private static func whichClaude() async throws -> URL {
     let shellURL = URL(fileURLWithPath: loginShellPath())
     let whichURL = URL(fileURLWithPath: "/usr/bin/which")
     // Run: loginShell -l -c 'exec "$@"' -- /usr/bin/which claude
