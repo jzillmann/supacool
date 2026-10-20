@@ -411,7 +411,7 @@ struct PRPulseButton: View {
       slug: snapshot.slug,
       number: pullRequest.number
     ) else { return [] }
-    return PullRequestOwnership.holders(of: refKey, in: store.sessions)
+    return PullRequestOwnershipIndex.board(store.sessions).holders(of: refKey)
   }
 
   /// "+N" menu shown when more than one session holds the PR, so the overlap

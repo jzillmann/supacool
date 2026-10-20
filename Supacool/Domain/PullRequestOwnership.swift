@@ -129,22 +129,23 @@ nonisolated enum PullRequestRole: Equatable, Sendable {
 /// that saw it first. Ties break on `createdAt`, then on the id, so the owner
 /// never flips between renders.
 ///
-/// Pure and cheap: lookups only walk the sessions for the PR keys the caller
-/// asks about, so a card with no PR references costs nothing.
+/// These one-shot helpers build a `PullRequestOwnershipIndex` per call — fine
+/// for reducers, which ask once per action. Views ask once per card per
+/// render, so they go through `PullRequestOwnershipIndex.board(_:)` instead.
 nonisolated enum PullRequestOwnership {
   /// The owning session's id for `refKey`, or nil when no session holds it.
   static func ownerID(of refKey: String, in sessions: [AgentSession]) -> AgentSession.ID? {
-    rankedHolders(of: refKey, in: sessions).first?.session.id
+    PullRequestOwnershipIndex(sessions: sessions).ownerID(of: refKey)
   }
 
   /// The owning session for `refKey`, or nil when no session holds it.
   static func owner(of refKey: String, in sessions: [AgentSession]) -> AgentSession? {
-    rankedHolders(of: refKey, in: sessions).first?.session
+    PullRequestOwnershipIndex(sessions: sessions).holders(of: refKey).first
   }
 
   /// Every session holding `refKey`, owner first.
   static func holders(of refKey: String, in sessions: [AgentSession]) -> [AgentSession] {
-    rankedHolders(of: refKey, in: sessions).map(\.session)
+    PullRequestOwnershipIndex(sessions: sessions).holders(of: refKey)
   }
 
   /// `session`'s role for each PR it references, keyed by dedupe key.
@@ -152,37 +153,102 @@ nonisolated enum PullRequestOwnership {
     for session: AgentSession,
     in sessions: [AgentSession]
   ) -> [String: PullRequestRole] {
-    var roles: [String: PullRequestRole] = [:]
-    for reference in session.references where reference.isPullRequestReference {
-      let key = reference.dedupeKey
-      let ranked = rankedHolders(of: key, in: sessions)
-      guard let owner = ranked.first else { continue }
-      if owner.session.id == session.id {
-        let watchers = ranked.dropFirst()
-          .sorted { lhs, rhs in
-            lhs.seenAt != rhs.seenAt ? lhs.seenAt < rhs.seenAt : lhs.session.createdAt < rhs.session.createdAt
-          }
-          .map { label(for: $0.session) }
-        roles[key] = .owner(reason: owner.reason, sharedWith: watchers)
-      } else {
-        roles[key] = .watcher(
-          owner: label(for: owner.session),
-          acknowledged: session.pullRequestOwnership.acknowledgedWatching.contains(key),
-          isSettled: isSettled(key, in: ranked.map(\.session))
-        )
-      }
-    }
-    return roles
+    PullRequestOwnershipIndex(sessions: sessions).roles(for: session)
   }
 
   /// PR keys `session` references but does not own. Ball-court logic skips
   /// these: a watcher must not be parked, resurfaced, or auto-resumed by a PR
   /// another session is driving.
   static func watchedKeys(of session: AgentSession, in sessions: [AgentSession]) -> Set<String> {
+    PullRequestOwnershipIndex(sessions: sessions).watchedKeys(of: session)
+  }
+}
+
+/// Every PR's ranked holders, resolved in one pass over the sessions.
+///
+/// The board classifies each card on every render, and each card asks about
+/// its own PRs. Ranking per question walked every session for every PR of
+/// every card — quadratic in the board size, and with ~100 cards it kept the
+/// main thread busy most of the time. The index walks the sessions once;
+/// each question after that is a dictionary lookup.
+nonisolated struct PullRequestOwnershipIndex: Sendable {
+  /// Input sessions; `Holder.position` points into this array.
+  let sessions: [AgentSession]
+  private let holdersByKey: [String: [Holder]]
+  /// PRs some holder's cached state reports merged or closed — history.
+  private let settledKeys: Set<String>
+
+  init(sessions: [AgentSession]) {
+    var holdersByKey: [String: [Holder]] = [:]
+    var settledKeys = Set<String>()
+    for (position, session) in sessions.enumerated() {
+      var seenKeys = Set<String>()
+      for reference in session.references {
+        guard case .pullRequest(_, _, _, let state, _) = reference else { continue }
+        let key = reference.dedupeKey
+        if state == .merged || state == .closed { settledKeys.insert(key) }
+        guard seenKeys.insert(key).inserted else { continue }
+        let marks = session.pullRequestOwnership
+        let claimedAt = marks.claimedAt[key]
+        let reason: PullRequestOwnerReason =
+          claimedAt != nil ? .claimed : (marks.created.contains(key) ? .created : .firstSeen)
+        holdersByKey[key, default: []].append(
+          Holder(
+            position: position,
+            id: session.id,
+            createdAt: session.createdAt,
+            reason: reason,
+            claimedAt: claimedAt,
+            seenAt: marks.firstSeenAt[key] ?? session.createdAt
+          )
+        )
+      }
+    }
+    self.sessions = sessions
+    self.holdersByKey = holdersByKey.mapValues { $0.sorted(by: Self.outranks) }
+    self.settledKeys = settledKeys
+  }
+
+  /// The owning session's id for `refKey`, or nil when no session holds it.
+  func ownerID(of refKey: String) -> AgentSession.ID? {
+    holdersByKey[refKey]?.first?.id
+  }
+
+  /// Every session holding `refKey`, owner first.
+  func holders(of refKey: String) -> [AgentSession] {
+    (holdersByKey[refKey] ?? []).map { sessions[$0.position] }
+  }
+
+  /// `session`'s role for each PR it references, keyed by dedupe key.
+  func roles(for session: AgentSession) -> [String: PullRequestRole] {
+    var roles: [String: PullRequestRole] = [:]
+    for reference in session.references where reference.isPullRequestReference {
+      let key = reference.dedupeKey
+      guard let ranked = holdersByKey[key], let owner = ranked.first else { continue }
+      if owner.id == session.id {
+        let watchers = ranked.dropFirst()
+          .sorted { lhs, rhs in
+            lhs.seenAt != rhs.seenAt ? lhs.seenAt < rhs.seenAt : lhs.createdAt < rhs.createdAt
+          }
+          .map(label(for:))
+        roles[key] = .owner(reason: owner.reason, sharedWith: watchers)
+      } else {
+        roles[key] = .watcher(
+          owner: label(for: owner),
+          acknowledged: session.pullRequestOwnership.acknowledgedWatching.contains(key),
+          isSettled: settledKeys.contains(key)
+        )
+      }
+    }
+    return roles
+  }
+
+  /// PR keys `session` references but does not own.
+  func watchedKeys(of session: AgentSession) -> Set<String> {
     var keys = Set<String>()
     for reference in session.references where reference.isPullRequestReference {
       let key = reference.dedupeKey
-      if let ownerID = ownerID(of: key, in: sessions), ownerID != session.id {
+      if let ownerID = ownerID(of: key), ownerID != session.id {
         keys.insert(key)
       }
     }
@@ -191,29 +257,17 @@ nonisolated enum PullRequestOwnership {
 
   // MARK: - Ranking
 
-  private struct Holder {
-    let session: AgentSession
+  private struct Holder: Sendable {
+    let position: Int
+    let id: AgentSession.ID
+    let createdAt: Date
     let reason: PullRequestOwnerReason
     let claimedAt: Date?
     let seenAt: Date
   }
 
-  private static func rankedHolders(of refKey: String, in sessions: [AgentSession]) -> [Holder] {
-    let target = PullRequestKey(refKey)
-    let holders = sessions.compactMap { session -> Holder? in
-      guard session.references.contains(where: { target.matches($0) }) else { return nil }
-      let marks = session.pullRequestOwnership
-      let claimedAt = marks.claimedAt[refKey]
-      let reason: PullRequestOwnerReason =
-        claimedAt != nil ? .claimed : (marks.created.contains(refKey) ? .created : .firstSeen)
-      return Holder(
-        session: session,
-        reason: reason,
-        claimedAt: claimedAt,
-        seenAt: marks.firstSeenAt[refKey] ?? session.createdAt
-      )
-    }
-    return holders.sorted(by: outranks)
+  private func label(for holder: Holder) -> PullRequestSessionLabel {
+    PullRequestSessionLabel(id: holder.id, name: sessions[holder.position].displayName)
   }
 
   private static func outranks(_ lhs: Holder, _ rhs: Holder) -> Bool {
@@ -224,10 +278,8 @@ nonisolated enum PullRequestOwnership {
       return lhsClaim > rhsClaim
     }
     if lhs.seenAt != rhs.seenAt { return lhs.seenAt < rhs.seenAt }
-    if lhs.session.createdAt != rhs.session.createdAt {
-      return lhs.session.createdAt < rhs.session.createdAt
-    }
-    return lhs.session.id.uuidString < rhs.session.id.uuidString
+    if lhs.createdAt != rhs.createdAt { return lhs.createdAt < rhs.createdAt }
+    return lhs.id.uuidString < rhs.id.uuidString
   }
 
   private static func rank(_ reason: PullRequestOwnerReason) -> Int {
@@ -237,42 +289,24 @@ nonisolated enum PullRequestOwnership {
     case .firstSeen: 2
     }
   }
+}
 
-  /// A merged or closed PR is history: any holder's cached state says so.
-  private static func isSettled(_ refKey: String, in sessions: [AgentSession]) -> Bool {
-    let target = PullRequestKey(refKey)
-    for session in sessions {
-      for reference in session.references where target.matches(reference) {
-        if case .pullRequest(_, _, _, let state, _) = reference, state == .merged || state == .closed {
-          return true
-        }
-      }
-    }
-    return false
-  }
+extension PullRequestOwnershipIndex {
+  @MainActor private static var boardCache: PullRequestOwnershipIndex?
 
-  private static func label(for session: AgentSession) -> PullRequestSessionLabel {
-    PullRequestSessionLabel(id: session.id, name: session.displayName)
-  }
-
-  /// A PR dedupe key matched against references field by field. The board
-  /// classifies every card on each render and each lookup walks every
-  /// session's references, so building `dedupeKey` strings there would
-  /// allocate per reference per card. Falls back to string comparison for a
-  /// key that doesn't parse.
-  private struct PullRequestKey {
-    let raw: String
-    let number: Int?
-
-    init(_ raw: String) {
-      self.raw = raw
-      self.number = raw.split(separator: "#").last.flatMap { Int($0) }
-    }
-
-    func matches(_ reference: SessionReference) -> Bool {
-      guard case .pullRequest(_, _, let refNumber, _, _) = reference else { return false }
-      if let number, number != refNumber { return false }
-      return reference.dedupeKey == raw
-    }
+  /// The index for the board's sessions, rebuilt only when they change.
+  ///
+  /// Every card's classification asks with the same `store.sessions` array.
+  /// The cache keeps that array, and `==` on an array whose storage is
+  /// shared returns at once without comparing elements, so an unchanged
+  /// board costs one pointer check per question. Keeping the array also
+  /// matters: while the cache holds it, a mutation must copy the storage,
+  /// so a changed board can never pass as the cached one.
+  @MainActor
+  static func board(_ sessions: [AgentSession]) -> PullRequestOwnershipIndex {
+    if let cached = boardCache, cached.sessions == sessions { return cached }
+    let index = PullRequestOwnershipIndex(sessions: sessions)
+    boardCache = index
+    return index
   }
 }

@@ -159,4 +159,25 @@ struct PullRequestOwnershipTests {
     let current = try JSONDecoder().decode(AgentSession.self, from: JSONEncoder().encode(legacy))
     #expect(current.referencesScannedAt != nil)
   }
+
+  @MainActor
+  @Test func boardIndexFollowsSessionChanges() {
+    let early = session("early", createdAt: 0)
+    let late = session("late", createdAt: 100)
+    var sessions = [early, late]
+    #expect(PullRequestOwnershipIndex.board(sessions).ownerID(of: key) == early.id)
+    #expect(PullRequestOwnershipIndex.board(sessions).watchedKeys(of: late) == [key])
+
+    // An in-place edit of the same array must not hit the stale index.
+    sessions[1].pullRequestOwnership.claimedAt[key] = base
+    #expect(PullRequestOwnershipIndex.board(sessions).ownerID(of: key) == late.id)
+    #expect(PullRequestOwnershipIndex.board(sessions).watchedKeys(of: sessions[0]) == [key])
+  }
+
+  @Test func indexCountsASessionOnceWhenItHoldsAPRTwice() {
+    let twice = session("twice", createdAt: 0, references: [pr, pr])
+    let other = session("other", createdAt: 100)
+    let index = PullRequestOwnershipIndex(sessions: [twice, other])
+    #expect(index.holders(of: key).map(\.id) == [twice.id, other.id])
+  }
 }

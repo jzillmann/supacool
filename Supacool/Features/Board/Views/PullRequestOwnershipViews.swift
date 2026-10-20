@@ -35,7 +35,7 @@ struct PullRequestOwnershipChipContext {
   static func board(_ store: StoreOf<BoardFeature>, session: AgentSession) -> Self {
     let id = session.id
     return Self(
-      roles: PullRequestOwnership.roles(for: session, in: store.sessions),
+      roles: PullRequestOwnershipIndex.board(store.sessions).roles(for: session),
       onClaim: { key in store.send(.claimPullRequest(id: id, dedupeKey: key)) },
       onAcknowledgeWatching: { key in store.send(.acknowledgePullRequestWatching(id: id, dedupeKey: key)) },
       onOpenSession: { target in store.send(.focusSession(id: target)) }

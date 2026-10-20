@@ -58,7 +58,7 @@ struct BoardSessionClassifier {
   /// reason chip) so bucket and chip never disagree; fall back to the
   /// branch-matched PR only when no snapshot has been fetched yet.
   func waitingExternally(for session: AgentSession) -> Bool {
-    let watched = allSessions.isEmpty ? [] : PullRequestOwnership.watchedKeys(of: session, in: allSessions)
+    let watched = allSessions.isEmpty ? [] : PullRequestOwnershipIndex.board(allSessions).watchedKeys(of: session)
     let states = prReferenceSnapshots.ballStates(of: session, excluding: watched)
     if !states.isEmpty {
       return PRBallState.sessionWaitsExternally(states)
