@@ -593,8 +593,6 @@ struct FullScreenTerminalView: View {
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
-        // No reason pill in this header, so every glyph stays on the chip.
-        suppressedIndicator: nil,
         actionablePullRequestKey: actionablePullRequestKey,
         pullRequestOwnership: pullRequestOwnership,
         ticketPreviewSource: inboxTickets[session.repositoryID] ?? [],

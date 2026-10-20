@@ -14,6 +14,18 @@ struct PRReasonChip: View {
   var pullRequestNumber: Int?
 
   var body: some View {
+    // A crowded card header drops the words before it truncates them: a pill
+    // cut down to "⊗ 1(" says nothing, the bare icon still reads as "CI
+    // failed" next to the PR chip's own glyph. The full text stays on hover.
+    ViewThatFits(in: .horizontal) {
+      capsule(showsLabel: true)
+      capsule(showsLabel: false)
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .help(accessibilityLabel)
+  }
+
+  private func capsule(showsLabel: Bool) -> some View {
     HStack(spacing: 3) {
       Image(systemName: ball.systemImage)
         .font(.caption2)
@@ -25,7 +37,7 @@ struct PRReasonChip: View {
           .lineLimit(1)
           .opacity(0.75)
       }
-      if let label = ball.reasonLabel {
+      if showsLabel, let label = ball.reasonLabel {
         Text(label)
           .font(.caption2.weight(.semibold))
           .lineLimit(1)
@@ -36,10 +48,6 @@ struct PRReasonChip: View {
     .padding(.vertical, 2)
     .background(color.opacity(0.12))
     .clipShape(Capsule())
-    // Truncatable so a long reason ("Ready to merge") can't push a fixed-width
-    // card past its column; the full text stays available on hover.
-    .fixedSize(horizontal: false, vertical: true)
-    .help(accessibilityLabel)
   }
 
   /// Always names the PR when we know it, even where the visible pill omits

@@ -272,7 +272,7 @@ struct PRBallStateTests {
     #expect(PRBallState.autoResumableConditions(snapshot: merged).isEmpty)
   }
 
-  // MARK: redundant-glyph suppression (reason pill vs inline chip)
+  // MARK: reason pill vs inline chip
 
   private func session(references: [SessionReference]) -> AgentSession {
     AgentSession(
@@ -295,27 +295,12 @@ struct PRBallStateTests {
     owner: "o", repo: "r", number: 1, state: .closed, title: nil
   )
 
-  @Test func conflictReasonSuppressesTheConflictGlyph() {
-    // The pill says "Conflicts" for this PR, so its own branch glyph is the
-    // duplicate — mark exactly it, on exactly this PR.
-    let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING")]
-    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
-    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .conflict))
-  }
-
-  @Test func ciFailedReasonSuppressesTheChecksGlyph() {
-    let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.failing)]
-    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1]))
-    #expect(indicator == SuppressedPRIndicator(dedupeKey: Self.pr1.dedupeKey, kind: .checks))
-  }
-
   @Test func lowGreptileKeepsTheScoreBadgeAndDropsThePill() {
     // The score belongs *on* the PR chip: its red "N/5" badge is the same
     // number in the same color, attached to the PR it grades. So the badge
     // stays and the detached "Score 2/5" pill stands down.
     let snapshots = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, greptileScore: 2)]
     let session = session(references: [Self.pr1])
-    #expect(snapshots.redundantIndicator(for: session) == nil)
     #expect(snapshots.actionableReason(for: session) == .greptileLow(2))
     #expect(snapshots.standaloneReason(for: session) == nil)
   }
@@ -323,51 +308,23 @@ struct PRBallStateTests {
   @Test func readyToMergeDropsThePillAndKeepsTheChip() {
     // The chip already reads "#1 ✓ 5/5" — a green checks-passed glyph beside a
     // green score, on the PR itself. That *is* the green light, so the detached
-    // "Ready to merge" capsule stands down and nothing on the chip is hidden.
+    // "Ready to merge" capsule stands down.
     let snapshots = [
       Self.pr1.dedupeKey: snapshot(
-        checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5)
+        checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5),
     ]
     let session = session(references: [Self.pr1])
     #expect(snapshots.actionableReason(for: session) == .readyToMerge)
     #expect(snapshots.standaloneReason(for: session) == nil)
-    #expect(snapshots.redundantIndicator(for: session) == nil)
   }
 
   @Test func glyphReasonsKeepTheirPill() {
-    // CI/conflict pills carry words the bare glyph doesn't, so they survive —
-    // it's the glyph that yields (see the suppression tests above).
+    // CI/conflict pills carry words the bare glyph doesn't, so they survive
+    // beside the chip's own glyph.
     let failing = [Self.pr1.dedupeKey: snapshot(checks: Self.failing)]
     #expect(failing.standaloneReason(for: session(references: [Self.pr1])) == .ciFailed(1))
     let conflicting = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING")]
     #expect(conflicting.standaloneReason(for: session(references: [Self.pr1])) == .mergeConflict)
-  }
-
-  @Test func glyphlessReasonSuppressesNothing() {
-    // "Ready to merge" / "Changes requested" have no per-chip glyph, so there's
-    // nothing to duplicate and every glyph stays.
-    let ready = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, reviewDecision: "APPROVED", greptileScore: 5)]
-    #expect(ready.redundantIndicator(for: session(references: [Self.pr1])) == nil)
-    let changes = [Self.pr1.dedupeKey: snapshot(checks: Self.passing, reviewDecision: "CHANGES_REQUESTED")]
-    #expect(changes.redundantIndicator(for: session(references: [Self.pr1])) == nil)
-  }
-
-  @Test func theirCourtSuppressesNothing() {
-    let running = [Self.pr1.dedupeKey: snapshot(checks: Self.running)]
-    #expect(running.redundantIndicator(for: session(references: [Self.pr1])) == nil)
-  }
-
-  @Test func suppressionTargetsOnlyTheWinningPR() {
-    // Two actionable PRs: CI-failed (priority 0) outranks conflict (priority 1),
-    // so the pill speaks for pr1. Only pr1's checks glyph is suppressed; pr2's
-    // conflict glyph is separate, real information and must survive.
-    let snapshots = [
-      Self.pr1.dedupeKey: snapshot(checks: Self.failing),
-      Self.pr2.dedupeKey: snapshot(checks: Self.passing, mergeable: "CONFLICTING"),
-    ]
-    let indicator = snapshots.redundantIndicator(for: session(references: [Self.pr1, Self.pr2]))
-    #expect(indicator?.kind(for: Self.pr1.dedupeKey) == .checks)
-    #expect(indicator?.kind(for: Self.pr2.dedupeKey) == nil)
   }
 
   @Test func closedPullRequestYieldsToItsSuccessor() {

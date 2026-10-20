@@ -685,15 +685,6 @@ struct SessionCardView: View {
     return number
   }
 
-  /// The one PR-chip glyph the header reason pill already spells out in words,
-  /// so the reference chip drops it and doesn't paint the same conflict / CI
-  /// state twice. Only when the pill is actually shown (same `showsReasonChip`
-  /// gate) — a card with no pill keeps every glyph.
-  private var suppressedPRIndicator: SuppressedPRIndicator? {
-    guard showsReasonChip else { return nil }
-    return prReferenceSnapshots.redundantIndicator(for: session, excluding: pullRequestOwnership.watchedKeys)
-  }
-
   /// Don't annotate cards whose agent is actively working or just starting —
   /// the PR reason only matters once the ball is back with the user.
   private var showsReasonChip: Bool {
@@ -771,7 +762,6 @@ struct SessionCardView: View {
           isAddLinkPromptShown = true
         },
       prReferenceSnapshots: prReferenceSnapshots,
-      suppressedIndicator: suppressedPRIndicator,
       actionablePullRequestKey: actionablePullRequestKey,
       pullRequestOwnership: pullRequestOwnership
     )
@@ -934,11 +924,6 @@ struct ReferenceChip: View {
   /// Latest checks/Greptile snapshot for a PR reference. Nil (and ignored
   /// for tickets) hides the CI glyph and score badge.
   var prSnapshot: PullRequestSnapshot?
-  /// The one glyph already spoken for by the session's triage reason pill, so
-  /// this chip drops it instead of painting the same conflict/CI state twice.
-  /// Only fires when the chip is the exact PR the pill is calling out. The
-  /// Greptile badge is never suppressed — the pill stands down for it instead.
-  var suppressedIndicator: SuppressedPRIndicator?
   /// PR ownership for this chip's session. Default context = no ownership UI.
   var pullRequestOwnership = PullRequestOwnershipChipContext()
 
@@ -995,13 +980,8 @@ struct ReferenceChip: View {
           .lineLimit(1)
         if case .pullRequest(_, _, _, let state, _) = reference, let prSnapshot,
           state?.showsLiveStatus ?? true {
-          let suppressed = suppressedIndicator?.kind(for: reference.dedupeKey)
-          if suppressed != .checks {
-            PRChecksGlyph(snapshot: prSnapshot)
-          }
-          if suppressed != .conflict {
-            PRConflictGlyph(snapshot: prSnapshot)
-          }
+          PRChecksGlyph(snapshot: prSnapshot)
+          PRConflictGlyph(snapshot: prSnapshot)
           GreptileScoreBadge(score: prSnapshot.greptileScore)
         }
       }
@@ -1311,10 +1291,6 @@ struct SessionReferenceSummaryChips: View {
   /// Latest checks/Greptile snapshot per PR reference (dedupeKey). Empty
   /// hides the CI/score indicators on chips and popover rows.
   var prReferenceSnapshots: [String: PullRequestSnapshot] = [:]
-  /// The one PR-chip glyph already spoken for by the caller's triage reason
-  /// pill, so the matching inline chip drops it instead of duplicating the
-  /// conflict/CI state. Nil when the caller shows no pill (or nothing overlaps).
-  var suppressedIndicator: SuppressedPRIndicator?
   /// `dedupeKey` of the PR whose ball is in the user's court. On a multi-PR
   /// session the collapsed stack chip features this PR, so its inline CI/score
   /// indicators describe the same PR the reason pill names.
@@ -1438,7 +1414,6 @@ struct SessionReferenceSummaryChips: View {
         onRemove: onRemoveReference.map { remove in { remove(pullRequest) } },
         onAddLink: onAddLink,
         prSnapshot: prReferenceSnapshots[pullRequest.dedupeKey],
-        suppressedIndicator: suppressedIndicator,
         pullRequestOwnership: pullRequestOwnership
       )
     } else if pullRequests.count > 1 {
@@ -1523,9 +1498,7 @@ nonisolated struct ReferenceStackPopoverPresentation: Equatable, Sendable {
   /// card's reason pill is spelling out. It wins outright, because a chip that
   /// features a *different* PR paints that PR's CI glyph and Greptile score
   /// beside the pill, and the two then read as a contradiction: a green
-  /// "✓ 5/5" chip sitting next to a red "2 checks failed". It also lets
-  /// `SuppressedPRIndicator` actually fire, since suppression only matches on
-  /// the featured PR's `dedupeKey`.
+  /// "✓ 5/5" chip sitting next to a red "2 checks failed".
   ///
   /// Without an actionable PR the old order stands: an open PR is the work in
   /// flight, so it wins over settled ones; drafts come next. With only settled

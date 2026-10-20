@@ -47,23 +47,16 @@ struct ReviewLoopControl: View {
     Button {
       isPopoverPresented.toggle()
     } label: {
-      HStack(spacing: 4) {
-        Image(systemName: phaseSystemImage(state))
-          .font(.caption2)
-          .accessibilityHidden(true)
-        Text(compactLabel(state))
-          .font(.caption2.weight(.semibold).monospacedDigit())
-          .lineLimit(1)
+      // Icon only when the header is too narrow — a truncated "⚠ D" reads as
+      // nothing, the bare phase icon still does.
+      ViewThatFits(in: .horizontal) {
+        activeCapsule(state, showsLabel: true)
+        activeCapsule(state, showsLabel: false)
       }
-      .foregroundStyle(phaseColor(state))
-      .padding(.horizontal, 6)
-      .padding(.vertical, 2)
-      .background(phaseColor(state).opacity(0.12))
-      .clipShape(Capsule())
     }
     .buttonStyle(.plain)
     .accessibilityLabel("Review loop, round \(state.round) of \(state.maximumRounds)")
-    .help("Review loop: round \(state.round) of \(state.maximumRounds) — click for details")
+    .help("Review loop: \(compactLabel(state)), round \(state.round) of \(state.maximumRounds) — click for details")
     .popover(isPresented: $isPopoverPresented, arrowEdge: .top) {
       ReviewLoopPopover(
         state: state,
@@ -75,6 +68,24 @@ struct ReviewLoopControl: View {
         onStop: onStop
       )
     }
+  }
+
+  private func activeCapsule(_ state: ReviewLoopState, showsLabel: Bool) -> some View {
+    HStack(spacing: 4) {
+      Image(systemName: phaseSystemImage(state))
+        .font(.caption2)
+        .accessibilityHidden(true)
+      if showsLabel {
+        Text(compactLabel(state))
+          .font(.caption2.weight(.semibold).monospacedDigit())
+          .lineLimit(1)
+      }
+    }
+    .foregroundStyle(phaseColor(state))
+    .padding(.horizontal, 6)
+    .padding(.vertical, 2)
+    .background(phaseColor(state).opacity(0.12))
+    .clipShape(Capsule())
   }
 
   private func compactLabel(_ state: ReviewLoopState) -> String {
