@@ -30,17 +30,20 @@ struct SessionReferenceScannerClient: Sendable {
 extension SessionReferenceScannerClient: DependencyKey {
   static let liveValue = Self(
     scan: { cwdPath, agentNativeSessionID, allowedPrefixes in
-      SessionReferenceScannerLive.scan(
-        cwdPath: cwdPath,
-        agentNativeSessionID: agentNativeSessionID,
-        allowedPrefixes: allowedPrefixes
-      )
+      guard !agentNativeSessionID.isEmpty,
+        let url = SessionReferenceScannerLive.locateJSONLURL(
+          cwdPath: cwdPath,
+          agentNativeSessionID: agentNativeSessionID
+        )
+      else { return SessionReferenceScan() }
+      return await SessionReferenceScanCache.shared.scanClaudeJSONL(at: url, allowedPrefixes: allowedPrefixes)
     },
     scanText: { text, allowedPrefixes in
       SessionReferenceScannerLive.scanText(text, allowedPrefixes: allowedPrefixes)
     },
     scanTerminalTranscript: { tabID, allowedPrefixes in
-      SessionReferenceScannerLive.scanTerminalTranscript(tabID: tabID, allowedPrefixes: allowedPrefixes)
+      guard let url = TranscriptReader.transcriptURL(rawTabID: tabID) else { return [] }
+      return await SessionReferenceScanCache.shared.scanTerminalTranscript(at: url, allowedPrefixes: allowedPrefixes)
     }
   )
 
@@ -169,59 +172,11 @@ nonisolated enum SessionReferenceScannerLive {
   /// that URL on success, so the pairing is precise: a session that merely
   /// reads or pastes the link never matches.
   static func scanJSONLDetailed(_ jsonl: String, allowedPrefixes: Set<String> = []) -> SessionReferenceScan {
-    var createToolUseIDs = Set<String>()
-    var createdKeys = Set<String>()
-    var firstSeen: [String: SessionReference] = [:]
-    var order: [String] = []
-    var highSignalKeys = Set<String>()
-    var toolResultMessageCounts: [String: Int] = [:]
-
-    func recordFirstSeen(_ ref: SessionReference) {
-      if firstSeen[ref.dedupeKey] == nil {
-        firstSeen[ref.dedupeKey] = ref
-        order.append(ref.dedupeKey)
-      }
-    }
-
+    var accumulator = ClaudeJSONLReferenceAccumulator(allowedPrefixes: allowedPrefixes)
     for line in jsonl.split(whereSeparator: \.isNewline) {
-      guard let data = String(line).data(using: .utf8) else { continue }
-      guard
-        let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-      else {
-        continue
-      }
-      guard let kind = obj["type"] as? String, kind == "user" || kind == "assistant" else {
-        continue
-      }
-      guard let message = obj["message"] as? [String: Any] else { continue }
-      createToolUseIDs.formUnion(pullRequestCreationToolUseIDs(in: message["content"]))
-      for ref in pullRequestsCreated(in: message["content"], byToolUseIDs: createToolUseIDs) {
-        createdKeys.insert(ref.dedupeKey)
-      }
-      let (highSignal, toolResult) = partitionText(from: message["content"])
-
-      for ref in scanText(highSignal, allowedPrefixes: allowedPrefixes) {
-        recordFirstSeen(ref)
-        highSignalKeys.insert(ref.dedupeKey)
-      }
-      var seenInMessage = Set<String>()
-      for ref in scanText(toolResult, allowedPrefixes: allowedPrefixes) {
-        recordFirstSeen(ref)
-        if seenInMessage.insert(ref.dedupeKey).inserted {
-          toolResultMessageCounts[ref.dedupeKey, default: 0] += 1
-        }
-      }
+      accumulator.consume(line: Data(line.utf8))
     }
-
-    let references = order.compactMap { key -> SessionReference? in
-      guard let ref = firstSeen[key] else { return nil }
-      // The `gh pr create` result is the PR's one tool-output appearance, so
-      // creation alone clears the noise bar a single tool dump otherwise fails.
-      if highSignalKeys.contains(key) || createdKeys.contains(key) { return ref }
-      if (toolResultMessageCounts[key] ?? 0) >= 2 { return ref }
-      return nil
-    }
-    return SessionReferenceScan(references: references, createdPullRequestKeys: createdKeys)
+    return accumulator.scan
   }
 
   /// Ids of the `tool_use` blocks in `content` that open a pull request.
@@ -341,55 +296,11 @@ nonisolated enum SessionReferenceScannerLive {
     _ entries: [TranscriptEntry],
     allowedPrefixes: Set<String> = []
   ) -> [SessionReference] {
-    var firstSeen: [String: SessionReference] = [:]
-    var order: [String] = []
-    var highSignalKeys = Set<String>()
-    var outputTurnCounts: [String: Int] = [:]
-
-    func recordFirstSeen(_ ref: SessionReference) {
-      if firstSeen[ref.dedupeKey] == nil {
-        firstSeen[ref.dedupeKey] = ref
-        order.append(ref.dedupeKey)
-      }
-    }
-
-    func observeHighSignal(_ text: String) {
-      for ref in scanText(text, allowedPrefixes: allowedPrefixes) {
-        recordFirstSeen(ref)
-        highSignalKeys.insert(ref.dedupeKey)
-      }
-    }
-
-    func observeOutputTurn(_ text: String) {
-      var seenInTurn = Set<String>()
-      for ref in scanText(text, allowedPrefixes: allowedPrefixes) {
-        recordFirstSeen(ref)
-        if seenInTurn.insert(ref.dedupeKey).inserted {
-          outputTurnCounts[ref.dedupeKey, default: 0] += 1
-        }
-      }
-    }
-
+    var accumulator = TerminalTranscriptReferenceAccumulator(allowedPrefixes: allowedPrefixes)
     for entry in entries {
-      switch entry {
-      case .input(let text, _):
-        observeHighSignal(text)
-      case .outputTurn(_, let delta, _):
-        observeOutputTurn(delta)
-      case .hookEvent(_, _, let title, let body, _, _, _, _):
-        if let title { observeHighSignal(title) }
-        if let body { observeHighSignal(body) }
-      default:
-        continue
-      }
+      accumulator.consume(entry)
     }
-
-    return order.compactMap { key in
-      guard let ref = firstSeen[key] else { return nil }
-      if highSignalKeys.contains(key) { return ref }
-      if (outputTurnCounts[key] ?? 0) >= 2 { return ref }
-      return nil
-    }
+    return accumulator.references
   }
 
   /// Single-pass regex extraction from plain text. `allowedPrefixes` scopes
