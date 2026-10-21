@@ -223,6 +223,32 @@ struct BoardView: View {
     store.send(.focusSession(id: session.id))
   }
 
+  /// The cards a snooze from `session`'s menu applies to: the whole
+  /// selection when the card is part of it, else just the card.
+  private func snoozeTargets(from session: AgentSession) -> [AgentSession] {
+    guard selectedSessionIDs.contains(session.id) else { return [session] }
+    return store.sessions.filter { selectedSessionIDs.contains($0.id) }
+  }
+
+  /// A live tab snoozes into Standby so the conversation is still there on wake.
+  private func snooze(from session: AgentSession, option: SnoozeOption) {
+    let targets = snoozeTargets(from: session)
+    if targets.count > 1 {
+      selectedSessionIDs.removeAll()
+    }
+    let availableRepositories = Array(repositories)
+    for target in targets {
+      store.send(
+        .snoozeSession(
+          id: target.id,
+          option: option,
+          keepAlive: sessionTabExists(target),
+          repositories: availableRepositories
+        )
+      )
+    }
+  }
+
   private func resumeSelectedSessions(routes: [BoardSelectedResumeRoute]) {
     guard !routes.isEmpty else { return }
     let availableRepositories = Array(repositories)
@@ -831,6 +857,7 @@ struct BoardView: View {
           onUnpark: flow.onUnpark,
           onResumePicker: flow.onResumePicker,
           onSnooze: flow.onSnooze,
+          snoozeCount: snoozeTargets(from: session).count,
           onToggleTag: { tagID in toggleTag(tagID, for: session) },
           onNewTag: { name in store.send(.pinSessionToNewGroup(id: session.id, name: name)) },
           onRemove: { store.send(.requestRemoveSession(id: session.id)) }
@@ -959,6 +986,7 @@ struct BoardView: View {
       onParkActive: flow.onParkActive,
       onUnpark: flow.onUnpark,
       onSnooze: flow.onSnooze,
+      snoozeCount: snoozeTargets(from: session).count,
       onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
       onAutoObserverPromptChanged: { prompt in store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt)) },
       onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
@@ -1145,17 +1173,7 @@ struct BoardView: View {
         }
         : nil,
       // Available on parked cards too: snoozing again just moves the wake time.
-      // A live tab snoozes into Standby so the conversation is still there on wake.
-      onSnooze: { option in
-        store.send(
-          .snoozeSession(
-            id: session.id,
-            option: option,
-            keepAlive: sessionHasTab,
-            repositories: Array(repositories)
-          )
-        )
-      }
+      onSnooze: { option in snooze(from: session, option: option) }
     )
   }
 
@@ -1455,6 +1473,7 @@ private struct SessionCardContainer: View {
   let onParkActive: (() -> Void)?
   let onUnpark: (() -> Void)?
   let onSnooze: ((SnoozeOption) -> Void)?
+  let snoozeCount: Int
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
@@ -1538,6 +1557,7 @@ private struct SessionCardContainer: View {
       onParkActive: onParkActive,
       onUnpark: onUnpark,
       onSnooze: onSnooze,
+      snoozeCount: snoozeCount,
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
       onAutoObserverRunNow: onAutoObserverRunNow,

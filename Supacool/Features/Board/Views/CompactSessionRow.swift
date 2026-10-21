@@ -21,6 +21,7 @@ struct CompactSessionRow: View {
   let onUnpark: (() -> Void)?
   let onResumePicker: (() -> Void)?
   let onSnooze: ((SnoozeOption) -> Void)?
+  var snoozeCount: Int = 1
   let onToggleTag: (SessionGroup.ID) -> Void
   let onNewTag: (String) -> Void
   let onRemove: () -> Void
@@ -116,7 +117,7 @@ struct CompactSessionRow: View {
       Button("Resume via Picker…", systemImage: "play.circle", action: onResumePicker)
     }
     if let onSnooze {
-      Section("Snooze Until") {
+      Section(SnoozeOption.menuTitle(count: snoozeCount)) {
         ForEach(SnoozeOption.allCases) { option in
           Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
         }

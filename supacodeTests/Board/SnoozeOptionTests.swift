@@ -14,6 +14,11 @@ struct SnoozeOptionTests {
     calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour, minute: minute))!
   }
 
+  @Test func menuTitleNamesTheSelectionCount() {
+    #expect(SnoozeOption.menuTitle(count: 1) == "Snooze Until")
+    #expect(SnoozeOption.menuTitle(count: 3) == "Snooze 3 Selected Until")
+  }
+
   @Test func laterTodayAddsThreeHours() {
     let now = Self.date(2026, 9, 15, 14, 30)
     #expect(SnoozeOption.laterToday.wakeDate(from: now, calendar: Self.calendar) == Self.date(2026, 9, 15, 17, 30))

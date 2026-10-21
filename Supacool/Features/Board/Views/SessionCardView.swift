@@ -40,6 +40,9 @@ struct SessionCardView: View {
   var onUnpark: (() -> Void)?
   /// Park/Standby with a wake-up time (see `SnoozeOption`).
   var onSnooze: ((SnoozeOption) -> Void)?
+  /// How many cards `onSnooze` acts on — more than one when this card is
+  /// part of a multi-selection.
+  var snoozeCount: Int = 1
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
   var onAutoObserverRunNow: (() -> Void)?
@@ -306,7 +309,7 @@ struct SessionCardView: View {
         {
           Divider()
         }
-        Section("Snooze Until") {
+        Section(SnoozeOption.menuTitle(count: snoozeCount)) {
           ForEach(SnoozeOption.allCases) { option in
             Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
           }

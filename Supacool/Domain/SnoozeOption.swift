@@ -23,6 +23,12 @@ nonisolated enum SnoozeOption: String, CaseIterable, Identifiable, Sendable {
     }
   }
 
+  /// Context-menu section header; names the count when a snooze applies to
+  /// a multi-selection.
+  static func menuTitle(count: Int) -> String {
+    count > 1 ? "Snooze \(count) Selected Until" : "Snooze Until"
+  }
+
   var systemImage: String {
     switch self {
     case .laterToday: "clock"
