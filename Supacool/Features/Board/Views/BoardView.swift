@@ -223,21 +223,45 @@ struct BoardView: View {
     store.send(.focusSession(id: session.id))
   }
 
-  /// The cards a snooze from `session`'s menu applies to: the whole
+  /// The cards a context-menu verb on `session` applies to: the whole
   /// selection when the card is part of it, else just the card.
-  private func snoozeTargets(from session: AgentSession) -> [AgentSession] {
+  private func menuTargets(from session: AgentSession) -> [AgentSession] {
     guard selectedSessionIDs.contains(session.id) else { return [session] }
     return store.sessions.filter { selectedSessionIDs.contains($0.id) }
   }
 
-  /// A live tab snoozes into Standby so the conversation is still there on wake.
-  private func snooze(from session: AgentSession, option: SnoozeOption) {
-    let targets = snoozeTargets(from: session)
+  private func parkTargets(from session: AgentSession) -> [AgentSession] {
+    menuTargets(from: session).filter { classify($0) != .parked }
+  }
+
+  private func standbyTargets(from session: AgentSession) -> [AgentSession] {
+    menuTargets(from: session).filter { classify($0) != .parked && sessionTabExists($0) }
+  }
+
+  private func menuCounts(for session: AgentSession) -> SelectionMenuCounts {
+    guard selectedSessionIDs.contains(session.id) else { return SelectionMenuCounts() }
+    let all = menuTargets(from: session).count
+    return SelectionMenuCounts(
+      park: parkTargets(from: session).count,
+      standby: standbyTargets(from: session).count,
+      snooze: all,
+      remove: all
+    )
+  }
+
+  /// Runs `perform` on each target; a multi-card action also ends the
+  /// selection, since the cards it covered just moved or went away.
+  private func performOnTargets(_ targets: [AgentSession], _ perform: (AgentSession) -> Void) {
     if targets.count > 1 {
       selectedSessionIDs.removeAll()
     }
+    targets.forEach(perform)
+  }
+
+  /// A live tab snoozes into Standby so the conversation is still there on wake.
+  private func snooze(from session: AgentSession, option: SnoozeOption) {
     let availableRepositories = Array(repositories)
-    for target in targets {
+    performOnTargets(menuTargets(from: session)) { target in
       store.send(
         .snoozeSession(
           id: target.id,
@@ -246,6 +270,26 @@ struct BoardView: View {
           repositories: availableRepositories
         )
       )
+    }
+  }
+
+  private func park(from session: AgentSession) {
+    let availableRepositories = Array(repositories)
+    performOnTargets(parkTargets(from: session)) { target in
+      store.send(.parkSession(id: target.id, repositories: availableRepositories))
+    }
+  }
+
+  private func standby(from session: AgentSession) {
+    performOnTargets(standbyTargets(from: session)) { target in
+      store.send(.parkActiveSession(id: target.id))
+    }
+  }
+
+  /// Dirty worktrees still get their confirmation, one prompt per card.
+  private func remove(from session: AgentSession) {
+    performOnTargets(menuTargets(from: session)) { target in
+      store.send(.requestRemoveSession(id: target.id))
     }
   }
 
@@ -857,10 +901,10 @@ struct BoardView: View {
           onUnpark: flow.onUnpark,
           onResumePicker: flow.onResumePicker,
           onSnooze: flow.onSnooze,
-          snoozeCount: snoozeTargets(from: session).count,
+          menuCounts: menuCounts(for: session),
           onToggleTag: { tagID in toggleTag(tagID, for: session) },
           onNewTag: { name in store.send(.pinSessionToNewGroup(id: session.id, name: name)) },
-          onRemove: { store.send(.requestRemoveSession(id: session.id)) }
+          onRemove: { remove(from: session) }
         )
         cardDragAndDrop(row, session: session)
           .id(session.id)
@@ -969,7 +1013,7 @@ struct BoardView: View {
       selectedResumeCount: selectedResumeCount,
       selectedPickerResumeCount: bulkResumeRoutes.filter(\.usesPicker).count,
       onTap: { handleCardTap(session) },
-      onRemove: { store.send(.requestRemoveSession(id: session.id)) },
+      onRemove: { remove(from: session) },
       onRename: { onRenameSession(session) },
       onTogglePriority: { store.send(.togglePriority(id: session.id)) },
       onSetStatusOverride: { status in
@@ -986,7 +1030,7 @@ struct BoardView: View {
       onParkActive: flow.onParkActive,
       onUnpark: flow.onUnpark,
       onSnooze: flow.onSnooze,
-      snoozeCount: snoozeTargets(from: session).count,
+      menuCounts: menuCounts(for: session),
       onAutoObserverToggle: { store.send(.toggleAutoObserver(id: session.id)) },
       onAutoObserverPromptChanged: { prompt in store.send(.setAutoObserverPrompt(id: session.id, prompt: prompt)) },
       onAutoObserverRunNow: { store.send(.autoObserverTriggered(id: session.id)) },
@@ -1130,21 +1174,8 @@ struct BoardView: View {
           )
         }
         : nil,
-      onPark: (sessionStatus != .parked)
-        ? {
-          store.send(
-            .parkSession(
-              id: session.id,
-              repositories: Array(repositories)
-            )
-          )
-        }
-        : nil,
-      onParkActive: (sessionStatus != .parked && sessionHasTab)
-        ? {
-          store.send(.parkActiveSession(id: session.id))
-        }
-        : nil,
+      onPark: (sessionStatus != .parked) ? { park(from: session) } : nil,
+      onParkActive: (sessionStatus != .parked && sessionHasTab) ? { standby(from: session) } : nil,
       // Unpark routing:
       //   • Still has a live tab (Park as Active) → just clear
       //     the parked bit; the running terminal stays untouched.
@@ -1473,7 +1504,7 @@ private struct SessionCardContainer: View {
   let onParkActive: (() -> Void)?
   let onUnpark: (() -> Void)?
   let onSnooze: ((SnoozeOption) -> Void)?
-  let snoozeCount: Int
+  let menuCounts: SelectionMenuCounts
   let onAutoObserverToggle: () -> Void
   let onAutoObserverPromptChanged: (String) -> Void
   let onAutoObserverRunNow: () -> Void
@@ -1557,7 +1588,7 @@ private struct SessionCardContainer: View {
       onParkActive: onParkActive,
       onUnpark: onUnpark,
       onSnooze: onSnooze,
-      snoozeCount: snoozeCount,
+      menuCounts: menuCounts,
       onAutoObserverToggle: onAutoObserverToggle,
       onAutoObserverPromptChanged: onAutoObserverPromptChanged,
       onAutoObserverRunNow: onAutoObserverRunNow,

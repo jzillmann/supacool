@@ -40,9 +40,9 @@ struct SessionCardView: View {
   var onUnpark: (() -> Void)?
   /// Park/Standby with a wake-up time (see `SnoozeOption`).
   var onSnooze: ((SnoozeOption) -> Void)?
-  /// How many cards `onSnooze` acts on — more than one when this card is
-  /// part of a multi-selection.
-  var snoozeCount: Int = 1
+  /// How many cards Park / Standby / Snooze / Remove act on — more than one
+  /// when this card is part of a multi-selection.
+  var menuCounts = SelectionMenuCounts()
   var onAutoObserverToggle: (() -> Void)?
   var onAutoObserverPromptChanged: ((String) -> Void)?
   var onAutoObserverRunNow: (() -> Void)?
@@ -293,10 +293,18 @@ struct SessionCardView: View {
         Button("Rerun with Same Prompt", systemImage: "arrow.clockwise", action: onRerun)
       }
       if let onPark {
-        Button("Park", systemImage: "parkingsign", action: onPark)
+        Button(
+          SelectionMenuCounts.label("Park", count: menuCounts.park),
+          systemImage: "parkingsign",
+          action: onPark
+        )
       }
       if let onParkActive {
-        Button("Standby", systemImage: "bolt.circle", action: onParkActive)
+        Button(
+          SelectionMenuCounts.label("Standby", count: menuCounts.standby),
+          systemImage: "bolt.circle",
+          action: onParkActive
+        )
       }
       if let onUnpark {
         Button("Unpark", systemImage: "play.circle", action: onUnpark)
@@ -309,7 +317,7 @@ struct SessionCardView: View {
         {
           Divider()
         }
-        Section(SnoozeOption.menuTitle(count: snoozeCount)) {
+        Section(SnoozeOption.menuTitle(count: menuCounts.snooze)) {
           ForEach(SnoozeOption.allCases) { option in
             Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
           }
@@ -370,7 +378,12 @@ struct SessionCardView: View {
         }
         Divider()
       }
-      Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
+      Button(
+        SelectionMenuCounts.label("Remove", count: menuCounts.remove),
+        systemImage: "trash",
+        role: .destructive,
+        action: onRemove
+      )
     }
     .alert("Link a work item", isPresented: $isAddLinkPromptShown) {
       TextField("Ticket id or GitHub PR URL", text: $addLinkText)

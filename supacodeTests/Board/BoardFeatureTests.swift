@@ -1917,6 +1917,94 @@ struct BoardFeatureTests {
     )
   }
 
+  @Test(.dependencies) func dirtyRemovalPromptsQueueOneAtATime() async {
+    let first = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-1",
+      removeBackingWorktreeOnDelete: true
+    )
+    let second = Self.sampleSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo/wt-2",
+      removeBackingWorktreeOnDelete: true
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [first, second] }
+    state.$trashedSessions.withLock { $0 = [] }
+    let trashedAt = Date(timeIntervalSince1970: 1_750_000_000)
+    let dirtyFile = ChangedFile(path: "notes.md", status: .untracked)
+    let firstWorkspace = BoardFeature.DirtyRemovalWorkspace(path: "/tmp/repo/wt-1", files: [dirtyFile])
+    let secondWorkspace = BoardFeature.DirtyRemovalWorkspace(path: "/tmp/repo/wt-2", files: [dirtyFile])
+    let firstPrompt = BoardFeature.DirtySessionRemovalConfirmationState(
+      sessionID: first.id,
+      displayName: first.displayName,
+      dirtyWorkspaces: [firstWorkspace],
+      checkFailures: []
+    )
+    let secondPrompt = BoardFeature.DirtySessionRemovalConfirmationState(
+      sessionID: second.id,
+      displayName: second.displayName,
+      dirtyWorkspaces: [secondWorkspace],
+      checkFailures: []
+    )
+
+    let clock = TestClock()
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(trashedAt)
+      $0.continuousClock = clock
+    }
+
+    await store.send(
+      ._sessionRemovalDirtyCheckResponse(id: first.id, dirtyWorkspaces: [firstWorkspace], checkFailures: [])
+    ) {
+      $0.dirtySessionRemovalConfirmation = firstPrompt
+    }
+    await store.send(
+      ._sessionRemovalDirtyCheckResponse(id: second.id, dirtyWorkspaces: [secondWorkspace], checkFailures: [])
+    ) {
+      $0.queuedDirtySessionRemovals = [secondPrompt]
+    }
+    // Cancel the first; the alert binding's trailing dismiss is a no-op.
+    await store.send(.dismissDirtySessionRemovalConfirmation) {
+      $0.dirtySessionRemovalConfirmation = nil
+    }
+    await store.send(.dismissDirtySessionRemovalConfirmation)
+    await clock.advance(by: BoardFeature.dirtyRemovalPresentGap)
+    await store.receive(._presentNextDirtySessionRemoval) {
+      $0.queuedDirtySessionRemovals = []
+      $0.dirtySessionRemovalConfirmation = secondPrompt
+    }
+    await store.send(.confirmDirtySessionRemoval(id: second.id)) {
+      $0.dirtySessionRemovalConfirmation = nil
+      $0.$sessions.withLock { $0 = [first] }
+      $0.$trashedSessions.withLock {
+        $0 = [
+          TrashedSession(
+            session: second,
+            repositoryID: "/tmp/repo",
+            worktreeID: "/tmp/repo/wt-2",
+            deleteBackingWorktree: false,
+            additionalWorktreeIDsToDelete: [],
+            trashedAt: trashedAt
+          ),
+        ]
+      }
+    }
+    await store.receive(
+      .delegate(
+        .sessionRemoved(
+          sessionID: second.id,
+          repositoryID: "/tmp/repo",
+          worktreeID: "/tmp/repo/wt-2",
+          deleteBackingWorktree: true,
+          additionalWorktreeIDsToDelete: []
+        )
+      )
+    )
+  }
+
   @Test(.dependencies) func removeSessionKeepsSharedOwnedWorktree() async {
     let worktreeID = "/tmp/repo/wt-1"
     let removed = Self.sampleSession(

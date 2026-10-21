@@ -21,7 +21,7 @@ struct CompactSessionRow: View {
   let onUnpark: (() -> Void)?
   let onResumePicker: (() -> Void)?
   let onSnooze: ((SnoozeOption) -> Void)?
-  var snoozeCount: Int = 1
+  var menuCounts = SelectionMenuCounts()
   let onToggleTag: (SessionGroup.ID) -> Void
   let onNewTag: (String) -> Void
   let onRemove: () -> Void
@@ -117,7 +117,7 @@ struct CompactSessionRow: View {
       Button("Resume via Picker…", systemImage: "play.circle", action: onResumePicker)
     }
     if let onSnooze {
-      Section(SnoozeOption.menuTitle(count: snoozeCount)) {
+      Section(SnoozeOption.menuTitle(count: menuCounts.snooze)) {
         ForEach(SnoozeOption.allCases) { option in
           Button(option.label, systemImage: option.systemImage) { onSnooze(option) }
         }
@@ -136,6 +136,11 @@ struct CompactSessionRow: View {
       isNewTagPromptShown = true
     }
     Divider()
-    Button("Remove", systemImage: "trash", role: .destructive, action: onRemove)
+    Button(
+      SelectionMenuCounts.label("Remove", count: menuCounts.remove),
+      systemImage: "trash",
+      role: .destructive,
+      action: onRemove
+    )
   }
 }

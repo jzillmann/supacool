@@ -182,6 +182,11 @@ struct BoardFeature {
     /// card is trashed and the worktree cleanup is dispatched.
     var dirtySessionRemovalConfirmation: DirtySessionRemovalConfirmationState?
 
+    /// Dirty-removal prompts waiting their turn. Removing a multi-selection
+    /// can turn up several dirty worktrees, but only one alert shows at a
+    /// time; the rest present one by one after it closes.
+    var queuedDirtySessionRemovals: [DirtySessionRemovalConfirmationState] = []
+
     /// Per-workspace status for configured server lifecycle scripts.
     /// Keyed by `AgentSession.currentWorkspacePath`, so multiple cards
     /// sharing a workspace show one coherent Start/Stop state.
@@ -628,6 +633,7 @@ struct BoardFeature {
     )
     case confirmDirtySessionRemoval(id: AgentSession.ID)
     case dismissDirtySessionRemovalConfirmation
+    case _presentNextDirtySessionRemoval
     /// `force` bypasses the per-workspace status cooldown — the manual refresh
     /// button sets it; the automatic card-appear / board-render triggers don't.
     case serverLifecycleStatusRequested(sessionID: AgentSession.ID, force: Bool)
@@ -1455,12 +1461,23 @@ struct BoardFeature {
         guard !dirtyWorkspaces.isEmpty || !checkFailures.isEmpty else {
           return removeSessionFromState(&state, id: id)
         }
-        state.dirtySessionRemovalConfirmation = DirtySessionRemovalConfirmationState(
+        let confirmation = DirtySessionRemovalConfirmationState(
           sessionID: id,
           displayName: session.displayName,
           dirtyWorkspaces: dirtyWorkspaces,
           checkFailures: checkFailures
         )
+        // A non-empty queue means a presenter is already scheduled, so join
+        // the line rather than jump it.
+        guard state.dirtySessionRemovalConfirmation == nil, state.queuedDirtySessionRemovals.isEmpty else {
+          if state.dirtySessionRemovalConfirmation?.sessionID != id,
+            !state.queuedDirtySessionRemovals.contains(where: { $0.sessionID == id })
+          {
+            state.queuedDirtySessionRemovals.append(confirmation)
+          }
+          return .none
+        }
+        state.dirtySessionRemovalConfirmation = confirmation
         return .none
 
       case .confirmDirtySessionRemoval(let id):
@@ -1468,13 +1485,31 @@ struct BoardFeature {
           return .none
         }
         state.dirtySessionRemovalConfirmation = nil
-        return removeSessionFromState(&state, id: id)
+        return .merge(
+          removeSessionFromState(&state, id: id),
+          presentNextDirtySessionRemovalAfterGap(state: state)
+        )
 
       case .dismissDirtySessionRemovalConfirmation:
+        // The alert's binding also sends this after a button already closed
+        // it; that second send must not cancel the next queued prompt.
+        guard state.dirtySessionRemovalConfirmation != nil else { return .none }
         state.dirtySessionRemovalConfirmation = nil
         // Cancelling keeps the card; drop the queued advance so a later
         // unrelated removal doesn't inherit a stale focus target.
         state.pendingRemovalAdvanceTarget = nil
+        return presentNextDirtySessionRemovalAfterGap(state: state)
+
+      case ._presentNextDirtySessionRemoval:
+        guard state.dirtySessionRemovalConfirmation == nil else { return .none }
+        while !state.queuedDirtySessionRemovals.isEmpty {
+          let next = state.queuedDirtySessionRemovals.removeFirst()
+          // Skip prompts whose card went away while it waited.
+          if state.sessions.contains(where: { $0.id == next.sessionID }) {
+            state.dirtySessionRemovalConfirmation = next
+            break
+          }
+        }
         return .none
 
       case .serverLifecycleStatusRequested(let sessionID, let force):
@@ -3545,6 +3580,18 @@ struct BoardFeature {
         )
       )
     )
+  }
+
+  /// Lets the closing alert finish its dismissal before the next one
+  /// presents — SwiftUI drops an alert that arrives mid-dismissal.
+  nonisolated static let dirtyRemovalPresentGap: Duration = .milliseconds(350)
+
+  fileprivate func presentNextDirtySessionRemovalAfterGap(state: State) -> Effect<Action> {
+    guard !state.queuedDirtySessionRemovals.isEmpty else { return .none }
+    return .run { [clock] send in
+      try await clock.sleep(for: Self.dirtyRemovalPresentGap)
+      await send(._presentNextDirtySessionRemoval)
+    }
   }
 
   fileprivate func removeSessionFromState(

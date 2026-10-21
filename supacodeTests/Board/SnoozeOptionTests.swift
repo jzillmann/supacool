@@ -17,6 +17,8 @@ struct SnoozeOptionTests {
   @Test func menuTitleNamesTheSelectionCount() {
     #expect(SnoozeOption.menuTitle(count: 1) == "Snooze Until")
     #expect(SnoozeOption.menuTitle(count: 3) == "Snooze 3 Selected Until")
+    #expect(SelectionMenuCounts.label("Park", count: 1) == "Park")
+    #expect(SelectionMenuCounts.label("Remove", count: 4) == "Remove 4 Selected")
   }
 
   @Test func laterTodayAddsThreeHours() {
