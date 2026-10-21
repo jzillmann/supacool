@@ -3269,6 +3269,27 @@ struct BoardFeatureTests {
     #expect(name == "c-nightly-regression please")
   }
 
+  @Test func deriveDisplayNameSkipsPathsAndURLs() {
+    let id = UUID()
+    let droppedFile = AgentSession.deriveDisplayName(
+      from: """
+        /var/folders/z5/_z25sg/T/TemporaryItems/Screenshot 2026-10-19 at 07.59.51.png
+
+        something with the auto-title doesn't work very well
+        """,
+      fallbackID: id
+    )
+    #expect(droppedFile == "something with the auto-title doesn")
+    let inline = AgentSession.deriveDisplayName(
+      from: "look at ~/Desktop/shot.png and https://example.com/x then fix it",
+      fallbackID: id
+    )
+    #expect(inline == "look at and then fix")
+    // A prompt that is nothing but a path keeps the old behavior.
+    let onlyPath = AgentSession.deriveDisplayName(from: "/Users/jz/shot.png", fallbackID: id)
+    #expect(onlyPath == "Users jz shot png")
+  }
+
   // MARK: - Auto-Observer
 
   @Test(.dependencies) func toggleAutoObserverFlipsFlag() async {

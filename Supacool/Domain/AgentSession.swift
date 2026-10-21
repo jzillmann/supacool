@@ -424,12 +424,15 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
 
   /// Pulls the first ~5 meaningful words from the prompt, title-cases them,
   /// and truncates to a short label. Falls back to "Session <short-id>".
+  /// File paths and URLs are skipped — a prompt that opens with a dropped
+  /// screenshot otherwise names the card "var folders z5 _z25sghd7…".
   nonisolated static func deriveDisplayName(from prompt: String, fallbackID: UUID) -> String {
     let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
       return "Session " + String(fallbackID.uuidString.prefix(8))
     }
-    let words = trimmed
+    let withoutPaths = stripPathsForDisplayName(trimmed)
+    let words = (withoutPaths.isEmpty ? trimmed : withoutPaths)
       .split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "-" && $0 != "_" })
       .prefix(5)
       .map(String.init)
@@ -438,6 +441,24 @@ nonisolated struct AgentSession: Identifiable, Hashable, Codable, Sendable {
     }
     let candidate = words.joined(separator: " ")
     return String(candidate.prefix(60))
+  }
+
+  /// Drops lines that start with a path (dropped files can contain spaces,
+  /// e.g. "…/Screenshot 2026-10-19 at 07.59.51.png", so the whole line goes)
+  /// and inline path/URL tokens. A lone leading slash is a slash command
+  /// ("/c-nightly-regression"), not a path, and is kept.
+  private nonisolated static func stripPathsForDisplayName(_ prompt: String) -> String {
+    func isPathLike(_ token: Substring) -> Bool {
+      token.hasPrefix("~/") || token.contains("://") || token.dropFirst().contains("/")
+    }
+    return prompt.split(whereSeparator: \.isNewline)
+      .compactMap { line -> String? in
+        let tokens = line.split(whereSeparator: \.isWhitespace)
+        guard let first = tokens.first, !isPathLike(first) else { return nil }
+        return tokens.filter { !isPathLike($0) }.joined(separator: " ")
+      }
+      .joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
   }
 }
 
