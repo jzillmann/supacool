@@ -84,13 +84,13 @@ struct ContentView: View {
       // being orphaned here. See Supacool/Features/Board/ for the UI.
       BoardRootView(
         store: boardStore,
-        repositories: store.repositories.repositories,
+        repositories: store.repositories.orderedRepositories,
         worktreeInfoByID: store.repositories.worktreeInfoByID,
         terminalManager: terminalManager,
         shortcutOverrides: store.settings.shortcutOverrides,
         onAddRepository: { store.send(.repositories(.setOpenPanelPresented(true))) },
         onConfigureRepositories: {
-          let firstRepo = store.repositories.repositories.first
+          let firstRepo = store.repositories.orderedRepositories.first
           let section: SettingsSection =
             firstRepo.map { .repository($0.id) } ?? .general
           store.send(.settings(.setSelection(section)))

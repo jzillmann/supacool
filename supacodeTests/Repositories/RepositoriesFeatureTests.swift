@@ -2832,6 +2832,34 @@ struct RepositoriesFeatureTests {
     )
   }
 
+  @Test func orderedRepositoriesFollowRepositoryOrderIDs() {
+    let repoA = makeRepository(id: "/tmp/repo-a", worktrees: [])
+    let repoB = makeRepository(id: "/tmp/repo-b", worktrees: [])
+    let repoC = makeRepository(id: "/tmp/repo-c", worktrees: [])
+    var state = makeState(repositories: [repoA, repoB, repoC])
+    state.repositoryOrderIDs = [repoC.id, repoA.id]
+
+    expectNoDifference(state.orderedRepositories.map(\.id), [repoC.id, repoA.id, repoB.id])
+  }
+
+  @Test(.dependencies) func repositoriesMovedPersistsNewOrder() async {
+    let repoA = makeRepository(id: "/tmp/repo-a", worktrees: [])
+    let repoB = makeRepository(id: "/tmp/repo-b", worktrees: [])
+    let repoC = makeRepository(id: "/tmp/repo-c", worktrees: [])
+    let saved = LockIsolated<[Repository.ID]?>(nil)
+    let store = TestStore(initialState: makeState(repositories: [repoA, repoB, repoC])) {
+      RepositoriesFeature()
+    } withDependencies: {
+      $0.repositoryPersistence.saveRepositoryOrderIDs = { saved.setValue($0) }
+    }
+
+    await store.send(.repositoriesMoved(IndexSet(integer: 2), 0)) {
+      $0.repositoryOrderIDs = [repoC.id, repoA.id, repoB.id]
+    }
+    await store.finish()
+    #expect(saved.value == [repoC.id, repoA.id, repoB.id])
+  }
+
   @Test func orderedUnpinnedWorktreesPutMissingFirst() {
     let repoRoot = "/tmp/repo"
     let worktree1 = makeWorktree(id: "/tmp/repo/wt1", name: "wt1", repoRoot: repoRoot)

@@ -3527,6 +3527,12 @@ extension RepositoriesFeature.State {
     orderedRepositoryRoots().map { $0.standardizedFileURL.path(percentEncoded: false) }
   }
 
+  /// Loaded repositories in the user's order (`repositoryOrderIDs`, set by
+  /// dragging in Settings). `repositories` itself stays in load order.
+  var orderedRepositories: IdentifiedArrayOf<Repository> {
+    IdentifiedArray(uniqueElements: orderedRepositoryIDs().compactMap { repositories[id: $0] })
+  }
+
   func repositoryID(for worktreeID: Worktree.ID?) -> Repository.ID? {
     selectedRow(for: worktreeID)?.repositoryID
   }

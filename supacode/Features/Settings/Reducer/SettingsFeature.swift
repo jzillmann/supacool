@@ -46,7 +46,6 @@ struct SettingsFeature {
     // nil = settings window closed, non-nil = open to this section.
     // The view layer opens the settings window when this becomes non-nil.
     var selection: SettingsSection?
-    var sortedRepositoryIDs: [Repository.ID] = []
     var repositorySettings: RepositorySettingsFeature.State?
     @Presents var alert: AlertState<Alert>?
 
@@ -130,7 +129,6 @@ struct SettingsFeature {
   enum Action: BindableAction {
     case task
     case settingsLoaded(GlobalSettings)
-    case repositoriesChanged(IdentifiedArrayOf<Repository>)
     case setSelection(SettingsSection?)
     case setSystemNotificationsEnabled(Bool)
     case setAllowArbitraryDeeplinkInput(Bool)
@@ -427,13 +425,6 @@ struct SettingsFeature {
         state.alert = nil
         state.autoDeleteArchivedWorktreesAfterDays = days
         return persist(state)
-
-      case .repositoriesChanged(let repositories):
-        state.sortedRepositoryIDs =
-          repositories
-          .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-          .map(\.id)
-        return .none
 
       case .setSelection(let selection):
         state.selection = selection

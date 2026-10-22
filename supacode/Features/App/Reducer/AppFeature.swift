@@ -235,7 +235,6 @@ struct AppFeature {
         )
         let worktrees = state.repositories.worktreesForInfoWatcher()
         var effects: [Effect<Action>] = [
-          .send(.settings(.repositoriesChanged(repositories))),
           // Live-refresh the New Terminal sheet's repo picker if it's open.
           // Without this, the picker freezes on whatever snapshot the
           // sheet was opened with — invisible to the user since they

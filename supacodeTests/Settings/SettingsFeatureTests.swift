@@ -327,37 +327,6 @@ struct SettingsFeatureTests {
     #expect(settingsFile.global.restoreTerminalLayoutEnabled == true)
   }
 
-  // MARK: - Sorted repositories.
-
-  @Test(.dependencies) func repositoriesChangedSortsByNameCaseInsensitive() async {
-    let repoC = Repository(
-      id: "/tmp/charlie",
-      rootURL: URL(fileURLWithPath: "/tmp/charlie"),
-      name: "Charlie",
-      worktrees: [],
-    )
-    let repoA = Repository(
-      id: "/tmp/alpha",
-      rootURL: URL(fileURLWithPath: "/tmp/alpha"),
-      name: "alpha",
-      worktrees: [],
-    )
-    let repoB = Repository(
-      id: "/tmp/bravo",
-      rootURL: URL(fileURLWithPath: "/tmp/bravo"),
-      name: "Bravo",
-      worktrees: [],
-    )
-
-    let store = TestStore(initialState: SettingsFeature.State()) {
-      SettingsFeature()
-    }
-
-    await store.send(.repositoriesChanged([repoC, repoA, repoB])) {
-      $0.sortedRepositoryIDs = [repoA.id, repoB.id, repoC.id]
-    }
-  }
-
   // MARK: - Keyboard shortcut overrides.
 
   @Test(.dependencies) func updateShortcutPersistsOverride() async {

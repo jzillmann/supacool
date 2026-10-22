@@ -76,11 +76,16 @@ struct SettingsView: View {
           .tag(SettingsSection.updates)
 
         Section("Repositories") {
-          ForEach(settingsStore.sortedRepositoryIDs, id: \.self) { repositoryID in
+          // Drag to reorder; the board's repo picker follows this order.
+          // Iterates the same IDs the reducer moves, so offsets line up.
+          ForEach(store.repositories.orderedRepositoryIDs(), id: \.self) { repositoryID in
             if let repository = repositories[id: repositoryID] {
               RepositoryLabel(name: repository.name, rootURL: repository.rootURL)
                 .tag(SettingsSection.repository(repository.id))
             }
+          }
+          .onMove { offsets, destination in
+            store.send(.repositories(.repositoriesMoved(offsets, destination)))
           }
         }
       }
