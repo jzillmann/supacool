@@ -878,6 +878,9 @@ struct BoardRootView: View {
           onAddRepository: onAddRepository,
           onConfigureRepositories: onConfigureRepositories
         )
+        if !store.sessionGroups.isEmpty {
+          SessionGroupsButton(store: store)
+        }
         if store.focusedSessionID == nil {
           BoardSearchField(store: store)
         }
@@ -885,9 +888,6 @@ struct BoardRootView: View {
           BoardVitalsChip(vitals: boardVitals)
         }
         PRPulseButton(store: store, repositories: repositories, sessionStatus: classify)
-        if !store.sessionGroups.isEmpty {
-          SessionGroupsButton(store: store)
-        }
         if let footprintStore {
           FootprintChip(store: footprintStore)
         }
