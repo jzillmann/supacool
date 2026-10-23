@@ -129,7 +129,8 @@ struct AppFeature {
           // retention window. Routes back through `deleteFromTrash` →
           // `.delegate(.sessionRemoved)` so the same git cleanup path
           // runs as for an explicit "Delete now" tap.
-          .send(.board(._sweepExpiredTrash))
+          .send(.board(._sweepExpiredTrash)),
+          .send(.board(._sweepStaleTranscripts))
         )
 
       case .scenePhaseChanged(let phase):

@@ -672,6 +672,9 @@ struct BoardFeature {
     /// Internal: fired on app launch. Iterates `trashedSessions`,
     /// permanent-deletes anything past `retentionWindow`.
     case _sweepExpiredTrash
+    /// Internal: fired on app launch. Deletes transcript files no session
+    /// or trashed session uses that went untouched for `transcriptStaleAge`.
+    case _sweepStaleTranscripts
     case togglePriority(id: AgentSession.ID)
     /// User tapped "Refresh worktree" in the full-screen terminal's
     /// overflow menu. Resolves the session's backing worktree id and
@@ -1237,6 +1240,11 @@ struct BoardFeature {
   @Dependency(LinearClient.self) var linearClient
   @Dependency(ServerLifecycleClient.self) var serverLifecycleClient
   @Dependency(PortReachabilityClient.self) var portReachabilityClient
+  @Dependency(TranscriptStoreClient.self) var transcriptStore
+
+  /// How long an unused transcript stays on disk — longer than the 3-day
+  /// trash window, so a restored session still finds its file.
+  static let transcriptStaleAge: TimeInterval = 7 * 24 * 60 * 60
   @Dependency(\.uuid) var uuid
   @Dependency(\.date) var date
   @Dependency(\.continuousClock) var clock
@@ -1640,6 +1648,23 @@ struct BoardFeature {
         guard !expiredIDs.isEmpty else { return .none }
         boardLogger.info("Trash sweep: nuking \(expiredIDs.count) expired entries")
         return .merge(expiredIDs.map { .send(.deleteFromTrash(id: $0)) })
+
+      case ._sweepStaleTranscripts:
+        // An empty board most likely means the sessions failed to load;
+        // sweeping then would delete the transcripts of every real session.
+        guard !state.sessions.isEmpty else { return .none }
+        let sessions = state.sessions + state.trashedSessions.map(\.session)
+        // Primary tabs use the session id; other terminals their own id, and
+        // a split pane records into its host tab's file.
+        let keep = Set(
+          sessions.flatMap { session in
+            [session.id] + session.terminals.flatMap { [$0.id, $0.hostTabID].compactMap(\.self) }
+          }
+        )
+        let modifiedBefore = date.now.addingTimeInterval(-Self.transcriptStaleAge)
+        return .run { [transcriptStore] _ in
+          _ = await transcriptStore.sweep(keep, modifiedBefore)
+        }
 
       case .markSessionActivity(let id):
         state.$sessions.withLock { sessions in

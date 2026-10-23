@@ -42,9 +42,9 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
   case input(text: String, at: Date)
 
   /// Plaintext rendered surface at an idle boundary. `delta` is the suffix
-  /// new since the previous snapshot — what the agent "said this turn." A
-  /// reader that only cares about turns can ignore `fullText` and stream
-  /// `delta`; a reader that wants grep-able archive uses `fullText`.
+  /// new since the previous snapshot — what the agent "said this turn."
+  /// `fullText` is legacy: older files carry the whole scrollback per turn;
+  /// the recorder now writes it empty, and an empty value is not encoded.
   case outputTurn(fullText: String, delta: String, at: Date)
 
   /// Busy-state edge for a surface. Usually a raw `onBusy` hook payload —
@@ -233,7 +233,7 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
       var d = encoder.container(keyedBy: DiscriminantKeys.self)
       try d.encode("outputTurn", forKey: .kind)
       var c = encoder.container(keyedBy: OutputKeys.self)
-      try c.encode(fullText, forKey: .fullText)
+      if !fullText.isEmpty { try c.encode(fullText, forKey: .fullText) }
       try c.encode(delta, forKey: .delta)
       try c.encode(at, forKey: .at)
     case .hookBusy(let active, let pid, let source, let surfaceID, let at):
@@ -319,32 +319,53 @@ nonisolated enum TranscriptEntry: Codable, Equatable, Hashable, Sendable {
   }
 }
 
-/// Computes the suffix of `newText` that's new relative to `previousText`,
+/// Computes the suffix of `next` that's new relative to `previous`,
 /// assuming the scrollback is append-mostly (which `ghostty_surface_read_text`
 /// with `GHOSTTY_POINT_SURFACE` effectively is — the buffer only grows, with
 /// trim-at-top when scrollback overflows).
 ///
-/// Strategy: find the longest common prefix, return everything after. If the
-/// buffer got trimmed at the top (previous lines scrolled past the scrollback
-/// cap), the common prefix will be shorter than `previousText`, and we'll
-/// return a delta that includes some already-seen content — which is the
-/// correct behavior: we'd rather re-emit than drop.
+/// 1. `previous` is a prefix of `next` → the rest of `next`.
+/// 2. Else the scrollback was trimmed at the top: find the tail of
+///    `previous` in `next` and return what follows it. Long sessions sit at
+///    the scrollback cap, so this is the common case for them; re-emitting
+///    the whole buffer here wrote MBs per turn.
+/// 3. Else (screen cleared or redrawn) → all of `next`.
+///
+/// The result is capped at `maxCharacters`, keeping the newest text.
 nonisolated enum TranscriptDelta {
+  /// Long enough that the tail of `previous` doesn't recur by chance.
+  static let anchorCharacters = 512
+  static let maxCharacters = 200_000
+
   static func compute(previous: String, next: String) -> String {
-    guard !previous.isEmpty else { return next }
-    // Walk by Character to stay Unicode-correct (emoji, combining marks, etc.)
-    var prevIter = previous.makeIterator()
-    var nextIter = next.makeIterator()
-    var commonPrefixCount = 0
-    while let p = prevIter.next(), let n = nextIter.next(), p == n {
-      commonPrefixCount += 1
+    capped(uncapped(previous: previous, next: next))
+  }
+
+  private static func uncapped(previous: String, next: String) -> Substring {
+    guard !previous.isEmpty else { return next[...] }
+    // Byte-wise prefix walk: a Character walk over MBs of scrollback is
+    // slow, and this runs on the main actor. `previous` is a whole string,
+    // so a full match ends on a scalar boundary of `next`.
+    var previousIndex = previous.utf8.startIndex
+    var nextIndex = next.utf8.startIndex
+    while previousIndex != previous.utf8.endIndex, nextIndex != next.utf8.endIndex,
+      previous.utf8[previousIndex] == next.utf8[nextIndex]
+    {
+      previous.utf8.formIndex(after: &previousIndex)
+      next.utf8.formIndex(after: &nextIndex)
     }
-    if commonPrefixCount >= previous.count {
-      // `previous` is fully contained in `next` — the suffix is the delta.
-      return String(next.dropFirst(commonPrefixCount))
+    if previousIndex == previous.utf8.endIndex {
+      return next[nextIndex...]
     }
-    // Scrollback trim: we diverged inside what we thought was `previous`.
-    // Return the whole `next` rather than attempt a realignment.
-    return next
+    let anchor = String(previous.suffix(anchorCharacters))
+    if let range = next.range(of: anchor, options: [.backwards, .literal]) {
+      return next[range.upperBound...]
+    }
+    return next[...]
+  }
+
+  private static func capped(_ delta: Substring) -> String {
+    guard delta.utf8.count > maxCharacters, delta.count > maxCharacters else { return String(delta) }
+    return "…[truncated]…\n" + delta.suffix(maxCharacters)
   }
 }

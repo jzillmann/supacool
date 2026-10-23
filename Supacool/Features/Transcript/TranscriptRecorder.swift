@@ -9,7 +9,8 @@ private nonisolated let recorderLogger = SupaLogger("Supacool.TranscriptRecorder
 ///
 /// Storage: one JSONL file per session at
 /// `~/Library/Application Support/io.morethan.supacool/transcripts/<tab-uuid>.jsonl`.
-/// One line = one `TranscriptEntry`. Append-only; rotation is a future concern.
+/// One line = one `TranscriptEntry`. Append-only. Files no session uses any
+/// more are deleted at launch once they go stale (`TranscriptStoreClient`).
 ///
 /// This recorder is deliberately ignorant of agent type. For Claude sessions
 /// there's a richer native transcript at `~/.claude/projects/.../...jsonl`,
@@ -74,7 +75,9 @@ final class TranscriptRecorder {
   /// Record the terminal surface at an idle boundary. `fullText` is the
   /// entire scrollback + visible content as returned by
   /// `ghostty_surface_read_text` with `GHOSTTY_POINT_SURFACE`. The recorder
-  /// computes the delta against the last snapshot for the same tab.
+  /// computes the delta against the last snapshot for the same tab and
+  /// writes only the delta: storing `fullText` too put the whole scrollback
+  /// (MBs on a long session) on every turn, and no reader used it.
   func snapshotOutput(tabID: TerminalTabID, fullText: String, at now: Date = Date()) {
     let previous = lastOutputByTab[tabID] ?? ""
     let delta = TranscriptDelta.compute(previous: previous, next: fullText)
@@ -82,12 +85,12 @@ final class TranscriptRecorder {
     // change (e.g. agent cleared the screen and redrew identical content).
     guard !delta.isEmpty else { return }
     lastOutputByTab[tabID] = fullText
-    enqueueWrite(tabID: tabID, entry: .outputTurn(fullText: fullText, delta: delta, at: now))
+    enqueueWrite(tabID: tabID, entry: .outputTurn(fullText: "", delta: delta, at: now))
   }
 
   /// Forget a session — called when the user deletes a session card. Clears
-  /// the in-memory delta state; the JSONL file on disk stays (user can
-  /// grep / archive / delete externally).
+  /// the in-memory delta state; the JSONL file on disk stays until the
+  /// launch sweep finds it stale.
   func forget(tabID: TerminalTabID) {
     lastOutputByTab.removeValue(forKey: tabID)
   }
