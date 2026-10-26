@@ -1972,18 +1972,32 @@ final class GhosttySurfaceScrollView: NSView {
     surfaceView.frame.origin = visibleRect.origin
   }
 
+  /// Runs on every scrollbar update from ghostty, which is every frame while
+  /// output streams or the user scrolls. Only touch AppKit geometry when it
+  /// moved: each frame or bounds change invalidates layout up the window,
+  /// and the window's SwiftUI root then re-measures its whole tree.
   private func synchronizeScrollView() {
-    documentView.frame.size.height = documentHeight()
+    var changed = false
+    let height = documentHeight()
+    if documentView.frame.size.height != height {
+      documentView.frame.size.height = height
+      changed = true
+    }
     if !isLiveScrolling {
       let cellHeight = surfaceView.currentCellSize().height
       if cellHeight > 0, let scrollbar {
         let offsetY =
           CGFloat(scrollbar.total - scrollbar.offset - scrollbar.length) * cellHeight
-        scrollView.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
+        if scrollView.contentView.bounds.origin != CGPoint(x: 0, y: offsetY) {
+          scrollView.contentView.scroll(to: CGPoint(x: 0, y: offsetY))
+          changed = true
+        }
         lastSentRow = Int(scrollbar.offset)
       }
     }
-    scrollView.reflectScrolledClipView(scrollView.contentView)
+    if changed {
+      scrollView.reflectScrolledClipView(scrollView.contentView)
+    }
   }
 
   private func handleLiveScroll() {

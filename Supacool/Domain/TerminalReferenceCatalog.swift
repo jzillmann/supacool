@@ -105,7 +105,14 @@ extension TerminalReferenceCatalog {
     var slugs = Set<String>()
     var snapshotsByKey: [String: SnapshotEntry] = [:]
 
-    for repo in pulseSnapshots.values {
+    // Two repos can share a GitHub slug, so the same PR can come from two
+    // snapshots. Newest last, so the freshest one wins and the result does
+    // not depend on dictionary order (which would flip the terminal colors
+    // and reload ghostty for nothing).
+    let pulseByAge = pulseSnapshots.values.sorted {
+      ($0.fetchedAt, $0.repositoryID) < ($1.fetchedAt, $1.repositoryID)
+    }
+    for repo in pulseByAge {
       guard let coordinates = PRPulseReference.coordinates(slug: repo.slug) else { continue }
       slugs.insert("\(coordinates.owner)/\(coordinates.repo)")
       for pullRequest in repo.pullRequests {

@@ -680,21 +680,33 @@ final class GhosttyRuntime {
     return String(format: "#%02x%02x%02x", red, green, blue)
   }
 
+  /// Shortest time between two reloads for reference rules.
+  ///
+  /// A reload is expensive and runs on the main thread: it re-reads the
+  /// user's config from disk, and every surface recompiles its `link` and
+  /// `link-color` regexes. With a busy board (dozens of surfaces, PRs whose
+  /// checks keep moving) a 1s debounce reloaded about once a second and took
+  /// half of the main thread, which made terminal scrolling stutter. Colors
+  /// that lag a PR's state by a few seconds are fine.
+  static let referenceReloadInterval: DispatchQueue.SchedulerTimeType.Stride = .seconds(20)
+
   /// Reload ghostty when the board learns something that changes the
   /// reference rules (a new repo, a ticket moving to review, a PR going
-  /// green). Debounced: PR fetches land in bursts, and every reload
-  /// re-reads the user's config from disk.
+  /// green). Debounced, because PR fetches land in bursts, then throttled to
+  /// `referenceReloadInterval`.
   private func observeReferenceCatalog() {
     @Shared(.terminalReferenceCatalog) var catalog
     referenceCatalogObservation = $catalog.publisher
       .removeDuplicates()
       .debounce(for: .seconds(1), scheduler: DispatchQueue.main)
+      .throttle(for: Self.referenceReloadInterval, scheduler: DispatchQueue.main, latest: true)
       .sink { [weak self] _ in
         MainActor.assumeIsolated {
           guard let self else { return }
           let rules = Self.currentReferenceRules()
           guard rules != self.appliedReferenceRules else { return }
           self.appliedReferenceRules = rules
+          Self.logger.info("Reference rules changed, reloading config (\(rules.utf8.count) bytes)")
           self.reloadAppConfig()
         }
       }

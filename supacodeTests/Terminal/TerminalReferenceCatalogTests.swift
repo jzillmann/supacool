@@ -70,6 +70,32 @@ struct TerminalReferenceCatalogTests {
     #expect(catalog.pullRequests["acme/web#8"]?.title == "Pulse PR")
   }
 
+  @Test func theNewestPulseSnapshotWinsWhenTwoReposShareASlug() {
+    func snapshot(_ repositoryID: String, isDraft: Bool, fetchedAt: TimeInterval) -> RepoPullRequestSnapshot {
+      let pullRequest = MonitoredPullRequest(
+        number: 8, title: "PR", url: "https://github.com/acme/web/pull/8", author: "me", isDraft: isDraft,
+        headRefName: "b", updatedAt: Date(timeIntervalSince1970: 0), reviewDecision: nil, mergeable: nil,
+        mergeStateStatus: nil, statusChecks: []
+      )
+      return RepoPullRequestSnapshot(
+        repositoryID: repositoryID, slug: "acme/web", pullRequests: [pullRequest],
+        fetchedAt: Date(timeIntervalSince1970: fetchedAt)
+      )
+    }
+    for (older, newer) in [("a", "b"), ("b", "a")] {
+      let catalog = TerminalReferenceCatalog.build(
+        sessions: [],
+        referenceSnapshots: [:],
+        pulseSnapshots: [
+          older: snapshot(older, isDraft: true, fetchedAt: 1),
+          newer: snapshot(newer, isDraft: false, fetchedAt: 2),
+        ],
+        linearIssues: [:]
+      )
+      #expect(catalog.pullRequests["acme/web#8"]?.tone != .gray)
+    }
+  }
+
   @Test func ticketsCarryLinearStateAndColor() {
     let issue = LinearIssue(
       id: "uuid", identifier: "CEN-7", title: "Fix it", stateName: "In Review", stateType: "started",
