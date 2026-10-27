@@ -780,6 +780,13 @@ struct BoardFeature {
     case linearInbox(PresentationAction<LinearInboxFeature.Action>)
 
     // MARK: New-terminal sheet
+    /// ⌘N, the toolbar "+" and the full-screen "New Terminal" button.
+    /// Carries no repository list on purpose: SwiftUI keeps the action
+    /// closure of a `.keyboardShortcut` button from its first render, so a
+    /// list captured there stayed at its launch-time value (no repo added
+    /// later, Settings order not yet loaded). AppFeature answers the
+    /// delegate with its live `orderedRepositories`.
+    case newTerminalRequested
     case openNewTerminalSheet(repositories: [Repository])
     /// Opens the new-terminal sheet from a focused session, keeping only
     /// the repository preference. Workspace/branch fields intentionally
@@ -1223,6 +1230,10 @@ struct BoardFeature {
     /// events that normally drive dirty count, ahead/behind, branch and
     /// PR state.
     case refreshWorktreeRequested(worktreeID: Worktree.ID)
+    /// The user asked for a New Terminal sheet. `fromSessionID` is the
+    /// focused session, whose repository the sheet keeps. AppFeature opens
+    /// the sheet with the current repository list in Settings order.
+    case newTerminalRequested(fromSessionID: AgentSession.ID?)
   }
 
   @Dependency(TerminalClient.self) var terminalClient
@@ -2048,6 +2059,9 @@ struct BoardFeature {
         guard state.sessions.contains(where: { $0.id == sessionID }) else { return .none }
         state.linearInbox = nil
         return .send(.focusSession(id: sessionID))
+
+      case .newTerminalRequested:
+        return .send(.delegate(.newTerminalRequested(fromSessionID: state.focusedSessionID)))
 
       case .openNewTerminalSheet(let repositories):
         state.newTerminalSheet = NewTerminalFeature.State(
