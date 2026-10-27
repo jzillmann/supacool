@@ -194,6 +194,11 @@ Rules:
   tab and even the focused session changed: ⌘⇧] moved once and then never again, ⌘1–⌘9 worked
   only sometimes. Send a bare intent (`cycleFocusedSessionTab(step:)`,
   `selectFocusedSessionTab(digit:)`) and let the reducer read `focusedSessionID` and live state.
+  The board's hidden ⌘N button did the same with the repository list: it opened the New
+  Terminal sheet with the launch-time list (no repo added later, load order instead of the
+  Settings order) while the toolbar "+" was correct. It now sends `newTerminalRequested`, and
+  AppFeature answers the delegate with live `orderedRepositories`. Data the board does not own
+  goes through a delegate, never through the closure.
 - **Never gate a menu shortcut on a `@FocusedValue` nobody sets.** `WindowCommands` used
   `closeSurfaceAction == nil` to decide whether ⌘W overlapped Ghostty's `close_surface`.
   The only setter was deleted with the sidebar in `8dae4c31`, so the guard silently inverted

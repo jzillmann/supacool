@@ -161,7 +161,7 @@ struct BoardRootView: View {
     // Global shortcuts available in both board and full-screen modes.
     .background(
       Button("") {
-        openNewTerminalFromCurrentContext()
+        store.send(.newTerminalRequested)
       }
       .keyboardShortcut("n", modifiers: .command)
       .hidden()
@@ -286,16 +286,7 @@ struct BoardRootView: View {
         showsRepositoryNameInHeader: showsFocusedHeaderRepositoryName,
         terminalManager: terminalManager,
         onBackToBoard: { store.send(.focusSession(id: nil)) },
-        onNewTerminal: {
-          // Keep the focused session's repository, but never carry over
-          // its worktree/branch into a fresh New Terminal sheet.
-          store.send(
-            .openNewTerminalSheetFromSession(
-              id: session.id,
-              repositories: Array(repositories)
-            )
-          )
-        },
+        onNewTerminal: { store.send(.newTerminalRequested) },
         onRerun: {
           store.send(
             .rerunDetachedSession(
@@ -913,7 +904,7 @@ struct BoardRootView: View {
     ToolbarSpacer(.flexible)
     ToolbarItem(placement: .primaryAction) {
       Button {
-        openNewTerminalFromCurrentContext()
+        store.send(.newTerminalRequested)
       } label: {
         Label("New Terminal", systemImage: "plus")
       }
@@ -978,22 +969,6 @@ struct BoardRootView: View {
           ? "Open cleanup archive (removed cards + worktrees)"
           : "Open cleanup archive — \(store.trashedSessions.count) recoverable card(s)"
       )
-    }
-  }
-
-  private func openNewTerminalFromCurrentContext() {
-    // If a session is focused (full-screen terminal view), keep only
-    // its repository preference. Workspace/branch fields start blank
-    // so ⌘N never reuses the previous worktree.
-    if let focusedID = store.focusedSessionID {
-      store.send(
-        .openNewTerminalSheetFromSession(
-          id: focusedID,
-          repositories: Array(repositories)
-        )
-      )
-    } else {
-      store.send(.openNewTerminalSheet(repositories: Array(repositories)))
     }
   }
 

@@ -240,7 +240,7 @@ struct AppFeature {
           // Without this, the picker freezes on whatever snapshot the
           // sheet was opened with — invisible to the user since they
           // assume "I added a repo, why isn't it here?" is a UI bug.
-          .send(.board(._repositoriesUpdated(repositories: Array(repositories)))),
+          .send(.board(._repositoriesUpdated(repositories: Array(state.repositories.orderedRepositories)))),
           .send(.commandPalette(.pruneRecency(recencyIDs))),
           .run { _ in
             await terminalClient.send(.prune(ids))
@@ -389,6 +389,15 @@ struct AppFeature {
 
       case .board(.delegate(.gettingStartedReevaluateRequested)):
         return evaluateGettingStartedEffect(state: state)
+
+      case .board(.delegate(.newTerminalRequested(let fromSessionID))):
+        let repositories = Array(state.repositories.orderedRepositories)
+        if let fromSessionID {
+          return .send(
+            .board(.openNewTerminalSheetFromSession(id: fromSessionID, repositories: repositories))
+          )
+        }
+        return .send(.board(.openNewTerminalSheet(repositories: repositories)))
 
       case .board(.delegate(.refreshWorktreeRequested(let worktreeID))):
         // Replay the same watcher events that normally drive branch,
