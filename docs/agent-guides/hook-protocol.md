@@ -237,7 +237,10 @@ changes nothing on the board. And every fingerprint read uses the `.active` scop
 (`GhosttySurfaceBridge.ScreenReadScope`): ghostty's `GHOSTTY_POINT_SCREEN` is *scrollback
 plus written rows*, not the viewport, so the former `.screen` read dragged a long-lived
 agent's whole scrollback through `String` and `split` once a second per tab — the main
-thread stalls that made a 40+ terminal board feel sluggish.
+thread stalls that made a 40+ terminal board feel sluggish. The scan's bookkeeping (miss counters,
+prompt candidates, quiet ticks) is `@ObservationIgnored`; views read only `screenWorkingTabs`,
+which changes when a tab starts or stops working. Observation is per-property, so an observed
+map the scan rewrites each tick redraws every card once a second.
 
 ### One state, not three booleans
 
