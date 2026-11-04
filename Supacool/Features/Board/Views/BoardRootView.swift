@@ -326,17 +326,10 @@ struct BoardRootView: View {
           }
           : nil,
         onPark: (sessionStatus != .parked)
-          ? {
-            store.send(
-              .parkSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
+          ? { putAwayFocusedSession(session.id, mode: .park) }
           : nil,
         onParkActive: (sessionStatus != .parked && sessionHasTab)
-          ? { store.send(.parkActiveSession(id: session.id)) }
+          ? { putAwayFocusedSession(session.id, mode: .standby) }
           : nil,
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
@@ -344,14 +337,7 @@ struct BoardRootView: View {
         // A live tab snoozes into Standby so the conversation is still there on wake.
         onSnooze: (sessionStatus != .parked)
           ? { option in
-            store.send(
-              .snoozeSession(
-                id: session.id,
-                option: option,
-                keepAlive: sessionHasTab,
-                repositories: Array(repositories)
-              )
-            )
+            putAwayFocusedSession(session.id, mode: .snooze(option, keepAlive: sessionHasTab))
           }
           : nil,
         onRemove: {
@@ -744,6 +730,20 @@ struct BoardRootView: View {
   private var hasUsableFocusHistory: Bool {
     let visibleIDs = Set(store.visibleSessions.map(\.id))
     return store.focusHistory.contains { $0 != store.focusedSessionID && visibleIDs.contains($0) }
+  }
+
+  /// Park / Standby / Snooze from the full-screen view: put the card away and
+  /// step to the next card in its bucket (same target as Remove), dropping
+  /// to the board only when it was the bucket's only card.
+  private func putAwayFocusedSession(_ id: AgentSession.ID, mode: BoardFeature.PutAwayMode) {
+    store.send(
+      .putAwayFocusedSession(
+        id: id,
+        mode: mode,
+        advanceTo: removalAdvanceTarget(removing: id),
+        repositories: Array(repositories)
+      )
+    )
   }
 
   /// Where focus should land after removing the focused card `id`. Mirrors

@@ -2138,6 +2138,70 @@ struct BoardFeatureTests {
     #expect(store.state.pendingRemovalAdvanceTarget == nil)
   }
 
+  @Test(.dependencies, arguments: [
+    BoardFeature.PutAwayMode.park,
+    .standby,
+    .snooze(.tomorrowMorning, keepAlive: true),
+  ])
+  func putAwayFocusedSessionAdvancesToNextCard(mode: BoardFeature.PutAwayMode) async {
+    // Park / Standby / Snooze from full screen steps to the next card in the
+    // bucket, like Remove does, instead of dropping to the board.
+    let current = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000C1")!,
+      displayName: "Current"
+    )
+    let next = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000C2")!,
+      displayName: "Next"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [current, next] }
+    state.focusedSessionID = current.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .putAwayFocusedSession(id: current.id, mode: mode, advanceTo: next.id, repositories: [])
+    )
+    await store.finish()
+
+    #expect(store.state.sessions.first { $0.id == current.id }?.parked == true)
+    #expect(store.state.focusedSessionID == next.id)
+  }
+
+  @Test(.dependencies) func putAwayFocusedSessionDropsToBoardWithoutTarget() async {
+    let current = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000D1")!,
+      displayName: "Current"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [current] }
+    state.focusedSessionID = current.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000DF")!
+    await store.send(
+      .putAwayFocusedSession(id: current.id, mode: .park, advanceTo: ghost, repositories: [])
+    )
+    await store.finish()
+
+    #expect(store.state.sessions[0].parked)
+    #expect(store.state.focusedSessionID == nil)
+  }
+
   @Test(.dependencies) func removeSessionDeletesConvertedWorktreeImmediately() async {
     // A repo-root session that used the "convert to worktree" popover
     // has `worktreeID == repositoryID` but a divergent

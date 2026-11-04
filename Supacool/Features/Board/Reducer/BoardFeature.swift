@@ -717,6 +717,15 @@ struct BoardFeature {
     )
     /// Periodic tick: unpark every snoozed session whose time has come.
     case _wakeSnoozedSessions
+    /// Full-screen Park / Standby / Snooze: put the focused card away, then
+    /// step to `advanceTo` (the next card in the same bucket) instead of
+    /// dropping to the board — same stepping as the full-screen Remove.
+    case putAwayFocusedSession(
+      id: AgentSession.ID,
+      mode: PutAwayMode,
+      advanceTo: AgentSession.ID?,
+      repositories: [Repository]
+    )
 
     // MARK: Composition (multi-terminal sessions)
     /// User tapped the `+` in the session-scoped tab strip. Appends a
@@ -1841,6 +1850,15 @@ struct BoardFeature {
 
       case ._wakeSnoozedSessions:
         return reduceWakeSnoozedSessions(state: &state)
+
+      case .putAwayFocusedSession(let id, let mode, let advanceTo, let repositories):
+        return reducePutAwayFocusedSession(
+          state: &state,
+          id: id,
+          mode: mode,
+          advanceTo: advanceTo,
+          repositories: repositories
+        )
 
       case .addShellTerminalToSession(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
