@@ -328,6 +328,7 @@ extension BoardFeature {
     ref: SessionReference,
     snapshot: PullRequestSnapshot
   ) -> Effect<Action> {
+    let snapshot = snapshot.keepingKnownMergeability(from: state.prReferenceSnapshots[ref.dedupeKey])
     let outcome = Self.pullRequestReturnOutcome(
       refKey: ref.dedupeKey,
       previous: state.prReferenceSnapshots[ref.dedupeKey],
