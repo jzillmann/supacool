@@ -3282,10 +3282,12 @@ struct BoardFeatureTests {
     }
 
     await store.send(.toggleRepository(id: "/tmp/repo")) {
+      $0.lastLocationByRepositoryFilter[[]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/repo"] }
     }
 
     await store.send(.toggleRepository(id: "/tmp/repo")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/repo"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = [] }
     }
   }
@@ -3301,6 +3303,7 @@ struct BoardFeatureTests {
     }
 
     await store.send(.showAllRepositories) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a", "/tmp/b"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = [] }
     }
   }
@@ -3316,7 +3319,90 @@ struct BoardFeatureTests {
     }
 
     await store.send(.focusRepository(id: "/tmp/c")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a", "/tmp/b"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/c"] }
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryRestoresLastOpenedSession() async {
+    // In repo A on session A2, switch to B and open B1, then back to A:
+    // A2 is reopened (not A's first card), and back to B reopens B1.
+    let a1 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A1")
+    let a2 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A2")
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a1, a2, b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+    state.focusedSessionID = a2.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(a2.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    }
+    await store.send(.focusSession(id: b1.id)) {
+      $0.focusedSessionID = b1.id
+    }
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+      $0.focusedSessionID = a2.id
+    }
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(a2.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+      $0.focusedSessionID = b1.id
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryRestoresBoardWhenLeftOnBoard() async {
+    // Left repo A on the board; coming back from a session in B lands on
+    // the board, not on a card.
+    let a1 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A1")
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a1, b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .board
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    }
+    await store.send(.focusSession(id: b1.id)) {
+      $0.focusedSessionID = b1.id
+    }
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+      $0.focusedSessionID = nil
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryIgnoresRememberedSessionThatIsGone() async {
+    // The remembered card was removed: keep the current location so the
+    // view's first-card fallback applies.
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    state.focusedSessionID = b1.id
+    state.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(ghost)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
     }
   }
 

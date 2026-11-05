@@ -96,6 +96,14 @@ struct BoardFeature {
     /// clears it so each full-screen run gets a fresh trail. Not persisted.
     var focusHistory: [AgentSession.ID] = []
 
+    /// Where the user last was (a full-screen session, or the board) under
+    /// each repo-filter selection, keyed by the selected repository IDs
+    /// (empty set = "All"). Switching the repo filter restores the location
+    /// remembered for the destination selection instead of always landing
+    /// on its first card. Recorded when a filter selection is left. Not
+    /// persisted, like `focusedSessionID`.
+    var lastLocationByRepositoryFilter: [Set<String>: BoardLocation] = [:]
+
     /// Where to land when the *focused* session is removed. Set by the
     /// full-screen "Remove" affordance so deleting an unwanted card while
     /// stepping through a bucket (⌘/) advances to the next card instead of
@@ -1983,21 +1991,21 @@ struct BoardFeature {
         return .none
 
       case .toggleRepository(let repositoryID):
-        state.$filters.withLock { filters in
-          if filters.selectedRepositoryIDs.contains(repositoryID) {
-            filters.selectedRepositoryIDs.remove(repositoryID)
-          } else {
-            filters.selectedRepositoryIDs.insert(repositoryID)
-          }
+        var selection = state.filters.selectedRepositoryIDs
+        if selection.contains(repositoryID) {
+          selection.remove(repositoryID)
+        } else {
+          selection.insert(repositoryID)
         }
+        switchRepositoryFilter(state: &state, to: selection)
         return .none
 
       case .focusRepository(let repositoryID):
-        state.$filters.withLock { $0.selectedRepositoryIDs = [repositoryID] }
+        switchRepositoryFilter(state: &state, to: [repositoryID])
         return .none
 
       case .showAllRepositories:
-        state.$filters.withLock { $0.selectedRepositoryIDs = [] }
+        switchRepositoryFilter(state: &state, to: [])
         return .none
 
       case .searchQueryChanged(let query):

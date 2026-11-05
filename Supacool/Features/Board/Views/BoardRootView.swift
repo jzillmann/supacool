@@ -987,10 +987,11 @@ struct BoardRootView: View {
     reconcileFocusedSessionAfterRepositoryFilterChange()
   }
 
-  /// When the shared toolbar changes repo filters from inside a focused
-  /// terminal, keep showing that terminal if it is still in scope; otherwise
-  /// jump to the first visible session for the newly selected repo, or the
-  /// board if that repo has no sessions yet.
+  /// Fallback after a repo-filter change. The reducer first restores the
+  /// location remembered for the new selection (see
+  /// `BoardFeature.switchRepositoryFilter`). If nothing was remembered and
+  /// the focused terminal left scope, jump to the first visible session for
+  /// the newly selected repo, or the board if that repo has no sessions yet.
   private func reconcileFocusedSessionAfterRepositoryFilterChange() {
     guard let focusedID = store.focusedSessionID else { return }
     if let focusedSession = store.sessions.first(where: { $0.id == focusedID }),
