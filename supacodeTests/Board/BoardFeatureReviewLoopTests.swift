@@ -48,6 +48,66 @@ extension BoardFeatureTests {
     #expect(input.contains("round 1 of 5"))
   }
 
+  @Test(.dependencies) func reviewLoopStartSkipsPullRequestsAnotherSessionOwns() async throws {
+    let foreignKey = "pr:acme/widgets#42"
+    let owner = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo-owner",
+      agent: .claude,
+      initialPrompt: "Open the PR",
+      displayName: "Owner",
+      references: [.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open, title: "Fix")],
+      pullRequestOwnership: PullRequestOwnershipMarks(created: [foreignKey])
+    )
+    var watcher = reviewLoopSession()
+    watcher.references.append(
+      .pullRequest(owner: "acme", repo: "widgets", number: 43, state: .open, title: "Follow-up")
+    )
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [owner, watcher] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.uuid = .incrementing
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.tabExists = { _, _ in true }
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(.startReviewLoop(id: watcher.id, repositories: [reviewLoopRepository()]))
+    await store.finish()
+
+    let loop = try #require(store.state.sessions.first { $0.id == watcher.id }?.reviewLoop)
+    #expect(loop.pullRequestURLs == ["https://github.com/acme/widgets/pull/43"])
+  }
+
+  @Test(.dependencies) func reviewLoopDoesNotStartWhenEveryPullRequestIsForeign() async throws {
+    let owner = AgentSession(
+      repositoryID: "/tmp/repo",
+      worktreeID: "/tmp/repo-owner",
+      agent: .claude,
+      initialPrompt: "Open the PR",
+      displayName: "Owner",
+      references: [.pullRequest(owner: "acme", repo: "widgets", number: 42, state: .open, title: "Fix")],
+      pullRequestOwnership: PullRequestOwnershipMarks(created: ["pr:acme/widgets#42"])
+    )
+    let watcher = reviewLoopSession()
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [owner, watcher] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.terminalClient.tabExists = { _, _ in true }
+      $0.terminalClient.send = { _ in Issue.record("No reviewer may start on a foreign PR") }
+    }
+
+    await store.send(.startReviewLoop(id: watcher.id, repositories: [reviewLoopRepository()]))
+    #expect(store.state.sessions.first { $0.id == watcher.id }?.reviewLoop == nil)
+  }
+
   @Test(.dependencies) func reviewLoopRoutesRequestedChangesToImplementer() async throws {
     let reviewerID = UUID()
     let session = reviewLoopSession(

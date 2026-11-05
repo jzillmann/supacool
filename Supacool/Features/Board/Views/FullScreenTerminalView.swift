@@ -353,7 +353,7 @@ struct FullScreenTerminalView: View {
         ReviewLoopControl(
           state: session.reviewLoop,
           canStart: canStartReviewLoop,
-          startSubject: session.reviewablePullRequestsLabel,
+          startSubject: session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys),
           onStart: onStartReviewLoop,
           onOpenReviewer: onOpenReviewLoopReviewer,
           onDiagnose: onDiagnoseReviewLoop,
@@ -441,7 +441,7 @@ struct FullScreenTerminalView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    session.canStartReviewLoop
+    session.canStartReviewLoop(excluding: pullRequestOwnership.watchedKeys)
   }
 
   /// Catch-all "⋮" menu right after the title for less-frequent session

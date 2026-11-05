@@ -445,22 +445,31 @@ enum ReviewLoopReportParser {
 nonisolated extension AgentSession {
   /// The PRs a review loop would read if it started now: every open, draft,
   /// or not-yet-resolved PR on the session. Merged and closed PRs are done.
-  var reviewablePullRequests: [SessionReference] {
+  ///
+  /// `watchedKeys` are PRs another session owns (`PullRequestOwnership`). A
+  /// review loop drives fixes into this session's terminal, so reviewing a PR
+  /// it only watches would push a second agent onto someone else's branch —
+  /// those stay out of the subject.
+  func reviewablePullRequests(excluding watchedKeys: Set<String> = []) -> [SessionReference] {
     references.filter { reference in
-      guard case .pullRequest(_, _, _, let state, _) = reference else { return false }
+      guard case .pullRequest(_, _, _, let state, _) = reference,
+        !watchedKeys.contains(reference.dedupeKey)
+      else { return false }
       return state == nil || state == .open || state == .draft
     }
   }
 
   /// `#42, #43` — what the start / restart controls name as their subject.
-  var reviewablePullRequestsLabel: String {
-    reviewablePullRequests.map(\.chipLabel).joined(separator: ", ")
+  func reviewablePullRequestsLabel(excluding watchedKeys: Set<String> = []) -> String {
+    reviewablePullRequests(excluding: watchedKeys).map(\.chipLabel).joined(separator: ", ")
   }
 
   /// A review loop can start (no loop yet) or start over (the loop ended or
-  /// is waiting on a human) as long as there is something open to review.
-  var canStartReviewLoop: Bool {
-    agent != nil && !isRemote && (reviewLoop?.canRestart ?? true) && !reviewablePullRequests.isEmpty
+  /// is waiting on a human) as long as there is something open to review that
+  /// this session owns.
+  func canStartReviewLoop(excluding watchedKeys: Set<String> = []) -> Bool {
+    agent != nil && !isRemote && (reviewLoop?.canRestart ?? true)
+      && !reviewablePullRequests(excluding: watchedKeys).isEmpty
   }
 
   /// A passed loop whose PRs have all merged has nothing left to say: the

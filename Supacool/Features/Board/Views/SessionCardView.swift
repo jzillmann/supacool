@@ -125,7 +125,7 @@ struct SessionCardView: View {
           ReviewLoopControl(
             state: session.reviewLoop,
             canStart: canStartReviewLoop,
-            startSubject: session.reviewablePullRequestsLabel,
+            startSubject: session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys),
             onStart: { onStartReviewLoop?() },
             onOpenReviewer: { onOpenReviewLoopReviewer?() },
             onDiagnose: { onDiagnoseReviewLoop?() },
@@ -338,7 +338,7 @@ struct SessionCardView: View {
       } else if session.reviewLoop != nil {
         if canStartReviewLoop, let onStartReviewLoop {
           Button(
-            "New Review Loop on \(session.reviewablePullRequestsLabel)",
+            "New Review Loop on \(session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys))",
             systemImage: "arrow.counterclockwise",
             action: onStartReviewLoop
           )
@@ -406,7 +406,7 @@ struct SessionCardView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    onStartReviewLoop != nil && session.canStartReviewLoop
+    onStartReviewLoop != nil && session.canStartReviewLoop(excluding: pullRequestOwnership.watchedKeys)
   }
 
   private func priorityButton(action: @escaping () -> Void) -> some View {
@@ -978,7 +978,10 @@ struct ReferenceChip: View {
       }
     } label: {
       HStack(spacing: 3) {
-        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
+        PullRequestOwnershipGlyph(
+          role: pullRequestOwnership.role(for: reference),
+          onOpenSession: pullRequestOwnership.onOpenSession
+        )
         if case .pullRequest(_, _, _, let state, _) = reference, let state {
           Image(systemName: state.systemImage)
             .font(.caption2)
@@ -1807,7 +1810,11 @@ private struct ReferenceStackChip: View {
       open(reference)
     } label: {
       HStack(spacing: 8) {
-        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
+        PullRequestOwnershipGlyph(
+          role: pullRequestOwnership.role(for: reference),
+          onOpenSession: pullRequestOwnership.onOpenSession,
+          afterOpen: { isPopoverShown = false }
+        )
         Image(systemName: rowSystemImage(for: reference))
           .font(.caption)
           .foregroundStyle(rowTint(for: reference))
