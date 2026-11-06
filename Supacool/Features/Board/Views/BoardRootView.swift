@@ -326,10 +326,10 @@ struct BoardRootView: View {
           }
           : nil,
         onPark: (sessionStatus != .parked)
-          ? { putAwayFocusedSession(session.id, mode: .park) }
+          ? { putAwayFocusedSession { _ in .park } }
           : nil,
         onParkActive: (sessionStatus != .parked && sessionHasTab)
-          ? { putAwayFocusedSession(session.id, mode: .standby) }
+          ? { putAwayFocusedSession { _ in .standby } }
           : nil,
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
@@ -337,7 +337,7 @@ struct BoardRootView: View {
         // A live tab snoozes into Standby so the conversation is still there on wake.
         onSnooze: (sessionStatus != .parked)
           ? { option in
-            putAwayFocusedSession(session.id, mode: .snooze(option, keepAlive: sessionHasTab))
+            putAwayFocusedSession { .snooze(option, keepAlive: sessionTabExists($0)) }
           }
           : nil,
         onRemove: {
@@ -735,11 +735,19 @@ struct BoardRootView: View {
   /// Park / Standby / Snooze from the full-screen view: put the card away and
   /// step to the next card in its bucket (same target as Remove), dropping
   /// to the board only when it was the bucket's only card.
-  private func putAwayFocusedSession(_ id: AgentSession.ID, mode: BoardFeature.PutAwayMode) {
+  ///
+  /// Reads the focused session at click time: the header `Menu` can keep the
+  /// closures of the card shown earlier, because the view stays mounted while
+  /// focus steps between cards. A captured id then re-parks that earlier card
+  /// and leaves the visible one where it is.
+  private func putAwayFocusedSession(_ mode: (AgentSession) -> BoardFeature.PutAwayMode) {
+    guard let id = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == id })
+    else { return }
     store.send(
       .putAwayFocusedSession(
         id: id,
-        mode: mode,
+        mode: mode(session),
         advanceTo: removalAdvanceTarget(removing: id),
         repositories: Array(repositories)
       )
