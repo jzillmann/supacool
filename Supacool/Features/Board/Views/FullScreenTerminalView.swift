@@ -241,7 +241,7 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut("e", modifiers: .command)
         .hidden()
         // Captures `session`: see `tabSelectionShortcuts` for why that goes stale.
-        .id(session.id)
+        .id(shellSplitShortcutIdentity)
     )
     .background(
       Button("Next Terminal in State") { onNextInCurrentState() }
@@ -394,8 +394,9 @@ struct FullScreenTerminalView: View {
     // the room.
     .background(session.isPriority ? priorityColor.opacity(0.10) : .clear)
     // This view stays mounted while focus moves between cards, and a `Menu` can
-    // keep the closures of the earlier card. New identity, new closures.
-    .id(session.id)
+    // keep the closures of the earlier card. New identity, new closures. The path
+    // is part of it because Reveal in Finder captures it, and it can change.
+    .id("\(session.id)#\(session.currentWorkspacePath)")
   }
 
   /// Hairline under the header — a 2 pt pink rule for priority sessions,
@@ -1005,6 +1006,13 @@ struct FullScreenTerminalView: View {
   /// right. Tracked = the tab's own (creation) surface plus every
   /// hook-adopted agent pane — a second agent's pane is never closed by
   /// ⌘E, only its plain shell siblings are.
+  /// Everything `toggleShellSplit` reads from `session`. A pane adopted after
+  /// the shortcut was built must count as tracked, or ⌘E would close it.
+  private var shellSplitShortcutIdentity: [String] {
+    [session.id.uuidString, session.worktreeID, session.repositoryID]
+      + session.terminals.map { "\($0.id)>\(String(describing: $0.hostTabID))" }
+  }
+
   private func toggleShellSplit() {
     guard let worktree = resolveWorktree() else { return }
     let state = terminalManager.state(for: worktree) { false }
@@ -1313,6 +1321,7 @@ struct FullScreenTerminalView: View {
             onAdd: onAddShellTerminal,
             onConvertToSplit: onConvertTerminalToSplit
           )
+          .id(session.id)
         }
         SingleSessionTerminalView(
           worktree: worktree,
@@ -1325,9 +1334,10 @@ struct FullScreenTerminalView: View {
       }
       .ignoresSafeArea(.container, edges: .bottom)
     } else if session.isRemote {
-      disconnectedRemoteState
+      // Their buttons own the default-action key, so they must not outlive the card.
+      disconnectedRemoteState.id(session.id)
     } else {
-      detachedState
+      detachedState.id(session.id)
     }
   }
 

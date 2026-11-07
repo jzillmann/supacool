@@ -351,7 +351,7 @@ struct BoardRootView: View {
         onReconnect: session.isRemote
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
-        onRename: { beginRename(session) },
+        onRename: { beginRename(session.id) },
         onTogglePriority: { store.send(.togglePriority(id: session.id)) },
         serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
         onServerLifecycleRefresh: {
@@ -503,7 +503,9 @@ struct BoardRootView: View {
     }
   }
 
-  private func beginRename(_ session: AgentSession) {
+  private func beginRename(_ id: AgentSession.ID) {
+    // Looked up at click time: a menu closure can hold an old copy of the name.
+    guard let session = store.sessions.first(where: { $0.id == id }) else { return }
     renameDraft = session.displayName
     renamingSessionID = session.id
   }
@@ -1022,7 +1024,7 @@ struct BoardRootView: View {
       terminalManager: terminalManager,
       classify: { classify($0) },
       onAddRepository: onAddRepository,
-      onRenameSession: { session in beginRename(session) },
+      onRenameSession: { session in beginRename(session.id) },
       highlightedSessionID: $highlightedSessionID,
       selectedSessionIDs: $selectedSessionIDs
     )
