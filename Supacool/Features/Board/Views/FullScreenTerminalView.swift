@@ -240,6 +240,8 @@ struct FullScreenTerminalView: View {
       Button("Toggle Shell Split") { toggleShellSplit() }
         .keyboardShortcut("e", modifiers: .command)
         .hidden()
+        // Captures `session`: see `tabSelectionShortcuts` for why that goes stale.
+        .id(session.id)
     )
     .background(
       Button("Next Terminal in State") { onNextInCurrentState() }
@@ -307,6 +309,8 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut(">", modifiers: [.command, .option])
     }
     .hidden()
+    // The closures cycle from a captured session: see `tabSelectionShortcuts`.
+    .id(session.id)
   }
 
   private var switcherShortcuts: some View {
@@ -370,7 +374,6 @@ struct FullScreenTerminalView: View {
           onRemove: { onRemoveNote($0.id) }
         )
       }
-      overflowMenu
       infoButton
       openDiffButton
       splitButton
@@ -379,6 +382,7 @@ struct FullScreenTerminalView: View {
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
       }
+      overflowMenu
       parkControl
       removeButton
     }
@@ -389,6 +393,9 @@ struct FullScreenTerminalView: View {
     // title is the explicit marker; the tint is what you notice from across
     // the room.
     .background(session.isPriority ? priorityColor.opacity(0.10) : .clear)
+    // This view stays mounted while focus moves between cards, and a `Menu` can
+    // keep the closures of the earlier card. New identity, new closures.
+    .id(session.id)
   }
 
   /// Hairline under the header — a 2 pt pink rule for priority sessions,
@@ -444,9 +451,11 @@ struct FullScreenTerminalView: View {
     session.canStartReviewLoop(excluding: pullRequestOwnership.watchedKeys)
   }
 
-  /// Catch-all "⋮" menu right after the title for less-frequent session
-  /// actions (priority, rename, Finder, debug, refresh). Keep entries here
-  /// that don't warrant dedicated toolbar real estate.
+  /// Catch-all "⋮" menu for less-frequent session actions (priority, rename,
+  /// Finder, debug, refresh). It sits beside the park control and trash so
+  /// every action on the session lives at the trailing edge; the leading
+  /// icons only change what you see. Keep entries here that don't warrant
+  /// dedicated toolbar real estate.
   private var overflowMenu: some View {
     Menu {
       Button(action: onTogglePriority) {
