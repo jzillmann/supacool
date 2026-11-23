@@ -54,6 +54,10 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   /// outside its launch dir without the shell cwd being reset.
   let additionalDirsFlag: String?
 
+  /// Flag that must precede the initial prompt (agy's `-i`, since a bare
+  /// positional arg isn't an interactive prompt there). `nil` = positional.
+  let promptFlag: String?
+
   /// Convenience: whether this agent exposes a remote-control launch flag.
   var supportsRemoteControl: Bool { remoteControlFlag != nil }
 
@@ -105,6 +109,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
   static var claude: AgentType { AgentRegistry.builtin(id: "claude") }
   static var codex: AgentType { AgentRegistry.builtin(id: "codex") }
   static var pi: AgentType { AgentRegistry.builtin(id: "pi") }
+  static var antigravity: AgentType { AgentRegistry.builtin(id: "antigravity") }
 
   // MARK: - Display
 
@@ -124,6 +129,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     modelFlag: String? = nil,
     knownModels: [String] = [],
     additionalDirsFlag: String? = nil,
+    promptFlag: String? = nil,
     icon: AgentIcon,
     tintColorName: String,
     launchTemplate: String = "{binary}{flags} {prompt}",
@@ -141,6 +147,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     self.modelFlag = modelFlag
     self.knownModels = knownModels
     self.additionalDirsFlag = additionalDirsFlag
+    self.promptFlag = promptFlag
     self.icon = icon
     self.tintColorName = tintColorName
     self.launchTemplate = launchTemplate
@@ -174,7 +181,7 @@ nonisolated struct AgentType: Hashable, Codable, Sendable, Identifiable {
     return launchTemplate
       .replacingOccurrences(of: "{binary}", with: binary)
       .replacingOccurrences(of: "{flags}", with: flagFragment)
-      .replacingOccurrences(of: "{prompt}", with: Self.shellQuote(prompt))
+      .replacingOccurrences(of: "{prompt}", with: (promptFlag.map { "\($0) " } ?? "") + Self.shellQuote(prompt))
   }
 
   /// Command used when no prompt is provided.

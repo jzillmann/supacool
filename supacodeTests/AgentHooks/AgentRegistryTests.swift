@@ -44,6 +44,17 @@ struct AgentRegistryTests {
     #expect(picker == "pi -r")
   }
 
+  // MARK: - Antigravity-specific shape
+
+  @Test func antigravityCommandsUseAgyFlags() {
+    let agy = AgentType.antigravity
+    #expect(agy.command(prompt: "hi", bypassPermissions: true) == "agy --dangerously-skip-permissions -i 'hi'")
+    #expect(agy.command(prompt: "hi", model: "gemini-4-neon-high") == "agy --model 'gemini-4-neon-high' -i 'hi'")
+    #expect(agy.commandWithoutPrompt() == "agy")
+    #expect(agy.resumeCommand(sessionID: "abc") == "agy --conversation 'abc'")
+    #expect(agy.resumePickerCommand() == "agy --continue")
+  }
+
   // MARK: - Codable migration
 
   @Test func decodesLegacyClaudeStringFromOldOnDiskData() throws {
