@@ -6,7 +6,7 @@
 brew install mise librsvg       # librsvg only if you want to regenerate the icon
 cd /path/to/supacool
 mise trust                      # approve ~/.local/share/mise managing this dir
-mise install                    # pulls zig 0.16.0, swiftlint, xcsift, create-dmg
+mise install                    # pulls zig 0.17.0, swiftlint, xcsift, create-dmg
 ```
 
 ## Every build
