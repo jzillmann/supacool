@@ -1067,6 +1067,10 @@ struct BoardView: View {
       onReferencesPopoverOpened: {
         store.send(.refreshPRReferences(id: session.id))
       },
+      onRefreshPullRequests: {
+        store.send(.refreshPRReferences(id: session.id, force: true))
+      },
+      isRefreshingPullRequests: session.references.contains { store.prRefreshInFlight.contains($0.dedupeKey) },
       onRemoveReference: { reference in
         store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
       },
@@ -1519,6 +1523,8 @@ private struct SessionCardContainer: View {
   let onServerLifecycleStop: () -> Void
   let onAppear: (() -> Void)?
   let onReferencesPopoverOpened: (() -> Void)?
+  let onRefreshPullRequests: () -> Void
+  let isRefreshingPullRequests: Bool
   let onRemoveReference: ((SessionReference) -> Void)?
   let onAddReference: ((String) -> Void)?
   let pullRequestOwnership: PullRequestOwnershipChipContext
@@ -1600,6 +1606,8 @@ private struct SessionCardContainer: View {
       onDebug: onDebug,
       onAppear: onAppear,
       onReferencesPopoverOpened: onReferencesPopoverOpened,
+      onRefreshPullRequests: onRefreshPullRequests,
+      isRefreshingPullRequests: isRefreshingPullRequests,
       onRemoveReference: onRemoveReference,
       onAddReference: onAddReference,
       pullRequestOwnership: pullRequestOwnership,

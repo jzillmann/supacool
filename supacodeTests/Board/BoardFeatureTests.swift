@@ -677,6 +677,43 @@ struct BoardFeatureTests {
     )
   }
 
+  /// The popover's refresh button must fetch even inside the success cache
+  /// window — that's exactly when the user just merged on GitHub.
+  @Test(.dependencies) func forcedPRRefreshBypassesSuccessCache() async {
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 7, state: .open, title: "Ship it"
+    )
+    var session = Self.sampleSession()
+    session.references = [ref]
+    session.referencesScannedAt = Date()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let now = Date()
+    state.prRefreshSuccessAt[ref.dedupeKey] = now
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = TestClock()
+      $0.date = .constant(now)
+      $0.githubCLI.viewPullRequest = { _, _, _ in PullRequestSnapshot(state: .merged, title: "Ship it") }
+    }
+    store.exhaustivity = .off
+
+    // Cached: the throttled popover-open refresh does nothing.
+    await store.send(.refreshPRReferences(id: session.id))
+    await store.finish()
+    #expect(store.state.sessions.first?.references == [ref])
+
+    await store.send(.refreshPRReferences(id: session.id, force: true))
+    await store.skipReceivedActions()
+    await store.finish()
+    #expect(
+      store.state.sessions.first?.references
+        == [.pullRequest(owner: "acme", repo: "widgets", number: 7, state: .merged, title: "Ship it")]
+    )
+  }
+
   /// When a PR fanout flips a session's PR from their court (CI running) to
   /// the user's (CI failed), the reducer emits a one-shot
   /// `pullRequestReturnedToCourt` delegate so AppFeature can notify.

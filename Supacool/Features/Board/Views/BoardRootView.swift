@@ -409,6 +409,10 @@ struct BoardRootView: View {
         onReferencesPopoverOpened: {
           store.send(.refreshPRReferences(id: session.id))
         },
+        onRefreshPullRequests: {
+          store.send(.refreshPRReferences(id: session.id, force: true))
+        },
+        isRefreshingPullRequests: session.references.contains { store.prRefreshInFlight.contains($0.dedupeKey) },
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },

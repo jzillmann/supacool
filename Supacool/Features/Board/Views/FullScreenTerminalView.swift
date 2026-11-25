@@ -111,6 +111,8 @@ struct FullScreenTerminalView: View {
   /// Cache-throttled refresh of parsed references/PR states when the PR
   /// reference popover opens.
   let onReferencesPopoverOpened: (() -> Void)?
+  var onRefreshPullRequests: (() -> Void)?
+  var isRefreshingPullRequests = false
 
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
@@ -601,6 +603,8 @@ struct FullScreenTerminalView: View {
       SessionReferenceSummaryChips(
         references: session.references,
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
+        onRefreshPullRequests: onRefreshPullRequests,
+        isRefreshingPullRequests: isRefreshingPullRequests,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
         actionablePullRequestKey: actionablePullRequestKey,

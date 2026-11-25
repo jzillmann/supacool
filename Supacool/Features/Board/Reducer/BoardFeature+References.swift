@@ -214,13 +214,14 @@ extension BoardFeature {
     )
   }
 
-  func reduceRefreshPRReferences(state: inout State, id: AgentSession.ID) -> Effect<Action> {
+  func reduceRefreshPRReferences(state: inout State, id: AgentSession.ID, force: Bool) -> Effect<Action> {
+    // `force` keeps the in-flight dedupe: it only drops the time throttles.
     let batch = Self.pickPRRefreshCandidates(
       sessions: state.sessions,
       sessionID: id,
       mode: .visible,
-      lastFailureAt: state.prRefreshFailureAt,
-      lastSuccessAt: state.prRefreshSuccessAt,
+      lastFailureAt: force ? [:] : state.prRefreshFailureAt,
+      lastSuccessAt: force ? [:] : state.prRefreshSuccessAt,
       jitter: state.prRefreshFailureJitter,
       inFlight: state.prRefreshInFlight,
       now: date.now

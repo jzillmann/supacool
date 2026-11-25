@@ -1009,8 +1009,10 @@ struct BoardFeature {
     )
     /// User-visible refresh hook for PR reference chips/popovers. Scoped
     /// to one session and throttled by `prStateCacheWindow` so repeated
-    /// clicks do not spawn repeated `gh pr view` calls.
-    case refreshPRReferences(id: AgentSession.ID)
+    /// clicks do not spawn repeated `gh pr view` calls. `force` (the popover's
+    /// refresh button) skips the success cache and failure backoff — the user
+    /// just merged something and wants to see it now.
+    case refreshPRReferences(id: AgentSession.ID, force: Bool = false)
     /// User unlinked a wrongly-associated reference from a card. Drops it
     /// from `references` and records its dedupe key in `dismissedReferenceKeys`
     /// so a later transcript rescan does not re-surface it.
@@ -2729,8 +2731,8 @@ struct BoardFeature {
       case .removeNote(let sessionID, let noteID):
         return reduceRemoveNote(state: &state, sessionID: sessionID, noteID: noteID)
 
-      case .refreshPRReferences(let id):
-        return reduceRefreshPRReferences(state: &state, id: id)
+      case .refreshPRReferences(let id, let force):
+        return reduceRefreshPRReferences(state: &state, id: id, force: force)
 
       case ._refreshPRStatus(let id, let ref):
         return reduceRefreshPRStatus(state: &state, id: id, ref: ref)
