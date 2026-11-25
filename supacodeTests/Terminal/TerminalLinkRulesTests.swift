@@ -167,4 +167,17 @@ struct TerminalLinkRulesPullRequestTests {
     #expect(lines.count > 1)
     #expect(lines.allSatisfy { $0.utf8.count < 4096 })
   }
+
+  @Test func osc8LinksOpenWebAndFilesButNotLaunchables() {
+    #expect(TerminalLinkRules.osc8URL("https://x.dev/a", isLaunchable: { _ in true })?.host == "x.dev")
+    #expect(TerminalLinkRules.osc8URL("file:///tmp/deck.html", isLaunchable: { _ in false })?.path == "/tmp/deck.html")
+    #expect(TerminalLinkRules.osc8URL("file:///tmp/run.command", isLaunchable: { _ in true }) == nil)
+    #expect(TerminalLinkRules.osc8URL("x-evil://boom", isLaunchable: { _ in false }) == nil)
+  }
+
+  @Test func tildePathsExpandToHome() {
+    let url = TerminalLinkRules.homePathURL(forMatched: "~/.gemini/deck.html", home: "/Users/me")
+    #expect(url?.path == "/Users/me/.gemini/deck.html")
+    #expect(TerminalLinkRules.homePathURL(forMatched: "/abs/x", home: "/Users/me") == nil)
+  }
 }

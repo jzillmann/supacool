@@ -381,8 +381,21 @@ final class GhosttySurfaceBridge {
     state.openUrlKind = openUrl.kind
     state.openUrl = matched
 
-    // An OSC 8 hyperlink already carries a real URL — never rewrite those.
-    guard openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let matched else { return false }
+    guard let matched else { return false }
+    // An OSC 8 hyperlink already carries a real URL — never rewrite it, but we
+    // must open it: ghostty drops OSC 8 links an embedder declines.
+    if openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 {
+      guard let url = TerminalLinkRules.osc8URL(matched, isLaunchable: Self.isLaunchable) else {
+        SupaLogger("Terminal").warning("Refused OSC 8 link: \(matched)")
+        return true
+      }
+      if url.isFileURL { NSWorkspace.shared.open(url) } else { WebBrowser.open(url) }
+      return true
+    }
+    if let url = TerminalLinkRules.homePathURL(forMatched: matched, home: NSHomeDirectory()) {
+      NSWorkspace.shared.open(url)
+      return true
+    }
 
     @Shared(.settingsFile) var settingsFile
     @Shared(.terminalReferenceCatalog) var catalog
@@ -399,6 +412,15 @@ final class GhosttySurfaceBridge {
 
     NSWorkspace.shared.open(url)
     return true
+  }
+
+  /// A file an OSC 8 producer could use to run code via Launch Services.
+  private static func isLaunchable(_ url: URL) -> Bool {
+    let runnable: Set = ["app", "command", "tool", "terminal", "workflow", "pkg", "mpkg", "scpt", "applescript"]
+    if runnable.contains(url.pathExtension.lowercased()) { return true }
+    var isDirectory: ObjCBool = false
+    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
+    return !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: url.path)
   }
 
   private func handleMouseAndLink(_ action: ghostty_action_s) -> Bool {
