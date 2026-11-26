@@ -2749,7 +2749,7 @@ struct WorktreeTerminalManagerTests {
 
     await Task.yield()
     await clock.advance(by: .seconds(5))
-    await Task.yield()
+    await yieldUntil { !manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID) }
 
     #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
   }
@@ -2786,7 +2786,7 @@ struct WorktreeTerminalManagerTests {
 
     await Task.yield()
     await clock.advance(by: .seconds(10))
-    await Task.yield()
+    await yieldUntil { manager.firstHookDeadmanFireCount == 1 }
 
     #expect(manager.firstHookDeadmanFireCount == 1)
   }
@@ -2961,5 +2961,14 @@ struct WorktreeTerminalManagerTests {
       ],
       selectedTabIndex: 0
     )
+  }
+
+  /// The expiry tasks resume from the test clock and then hop to the main actor, so
+  /// one `Task.yield()` is not always enough for them to run. Yield a bounded number
+  /// of times instead; the `#expect` after this still reports a real failure.
+  private func yieldUntil(maxYields: Int = 100, _ predicate: () -> Bool) async {
+    for _ in 0..<maxYields where !predicate() {
+      await Task.yield()
+    }
   }
 }

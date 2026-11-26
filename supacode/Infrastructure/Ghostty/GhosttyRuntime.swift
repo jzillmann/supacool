@@ -474,23 +474,47 @@ final class GhosttyRuntime {
     return GHOSTTY_CLIPBOARD_READ_STARTED
   }
 
-  /// Supacool auto-approves clipboard reads that libghostty wants confirmed
-  /// (OSC 52 and friends) — the same behaviour as before the clipboard API
-  /// grew MIME representations. The approval completes with exactly the
-  /// payload libghostty handed us, so the clipboard is never re-read.
+  /// Only an unsafe paste (ghostty's paste protection: ⌘V or a drop of text that
+  /// would run commands) asks the user. Supacool auto-approves the other clipboard
+  /// requests libghostty wants confirmed (OSC 52 and friends), as it always has.
+  nonisolated static func asksUserToConfirm(_ request: ghostty_clipboard_request_e) -> Bool {
+    request == GHOSTTY_CLIPBOARD_REQUEST_PASTE
+  }
+
+  /// Completes with exactly the payload libghostty handed us, so the clipboard is
+  /// never re-read. A cancelled paste is denied, so nothing reaches the terminal.
   private static func confirmReadClipboard(
     userdataBits: UInt?,
     value: ClipboardPayload,
     stateBits: UInt?,
     request: ghostty_clipboard_request_e
   ) {
-    _ = request
     let userdata = userdataBits.flatMap { UnsafeMutableRawPointer(bitPattern: $0) }
     let state = stateBits.flatMap { UnsafeMutableRawPointer(bitPattern: $0) }
     guard let bridge = surfaceBridge(fromUserdata: userdata), let surface = bridge.surface else {
       return
     }
-    completeClipboardRequest(surface, payload: value, state: state, confirmed: true)
+    guard asksUserToConfirm(request), let stateBits else {
+      completeClipboardRequest(surface, payload: value, state: state, confirmed: true)
+      return
+    }
+    // Claim a drop now (this runs inside ghostty_surface_paste_text); it reaches
+    // the transcript only if the user confirms.
+    let droppedText = bridge.takePendingDropPaste()
+    let text =
+      value.contents.first { $0.mime == "text/plain" }.flatMap { String(data: $0.data, encoding: .utf8) } ?? ""
+    // Tracked so closing the terminal while the prompt is up still denies (frees) it.
+    bridge.trackPasteRequest(stateBits)
+    PasteConfirmationAlert.present(text: text) { confirmed in
+      guard bridge.finishPasteRequest(stateBits), let surface = bridge.surface else { return }
+      let state = UnsafeMutableRawPointer(bitPattern: stateBits)
+      guard confirmed else {
+        ghostty_surface_deny_clipboard_request(surface, state)
+        return
+      }
+      completeClipboardRequest(surface, payload: value, state: state, confirmed: true)
+      if let droppedText { bridge.onInputTap?(droppedText) }
+    }
   }
 
   /// A clipboard read payload copied out of libghostty's borrowed C memory so

@@ -211,26 +211,4 @@ nonisolated enum TerminalLinkRules {
     )
     .sorted()
   }
-
-  // MARK: - OSC 8 hyperlinks and home paths
-
-  /// Since ghostty 77537c806 a macOS embedder that declines an OSC 8 link gets
-  /// nothing opened at all (ghostty fails closed), so we must open them. Policy:
-  /// web and mail links open; a local file opens unless it would run something.
-  static func osc8URL(_ raw: String, isLaunchable: (URL) -> Bool) -> URL? {
-    guard let url = URL(string: raw), let scheme = url.scheme?.lowercased() else { return nil }
-    switch scheme {
-    case "http", "https", "mailto": return url
-    case "file": return isLaunchable(url) ? nil : url
-    default: return nil
-    }
-  }
-
-  /// Ghostty resolves relative paths against the pwd only, so a `~/x` match
-  /// reaches `open` with a literal tilde and fails. Expand it ourselves.
-  static func homePathURL(forMatched matched: String, home: String) -> URL? {
-    let trimmed = matched.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard trimmed.hasPrefix("~/") else { return nil }
-    return URL(filePath: home + trimmed.dropFirst())
-  }
 }

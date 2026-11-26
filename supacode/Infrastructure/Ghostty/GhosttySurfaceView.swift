@@ -291,6 +291,11 @@ final class GhosttySurfaceView: NSView, Identifiable {
         runtime.unregisterSurface(surfaceRef)
         self.surfaceRef = nil
       }
+      // Ghostty holds a paste-confirmation request until it is answered; deny the
+      // ones whose prompt is still up so freeing the surface doesn't leak them.
+      for requestBits in bridge.takePendingPasteRequests() {
+        ghostty_surface_deny_clipboard_request(surface, UnsafeMutableRawPointer(bitPattern: requestBits))
+      }
       ghostty_surface_free(surface)
       self.surface = nil
       bridge.surface = nil
@@ -1606,8 +1611,7 @@ extension GhosttySurfaceView {
       let surfaceID = self.id
       Task { @MainActor [weak self] in
         guard let pasted = await handler(imageURL, surfaceID) else { return }
-        let escaped = NSPasteboard.ghosttyEscape(pasted)
-        self?.insertText(escaped, replacementRange: NSRange(location: 0, length: 0))
+        self?.pasteText(NSPasteboard.ghosttyEscape(pasted))
       }
       return true
     }
@@ -1627,9 +1631,23 @@ extension GhosttySurfaceView {
 
     guard let content else { return false }
     Task { @MainActor in
-      self.insertText(content, replacementRange: NSRange(location: 0, length: 0))
+      self.pasteText(content)
     }
     return true
+  }
+
+  /// Dropped text is untrusted, so it goes through the same paste protection as
+  /// a clipboard paste (unsafe text, e.g. with newlines, asks first) instead of
+  /// being typed in. Mirrors Ghostty 1.4.0's own macOS drop handling.
+  private func pasteText(_ text: String) {
+    guard let surface else { return }
+    let len = text.utf8CString.count
+    guard len > 1 else { return }
+    bridge.pasteDroppedText(text) { text in
+      text.withCString { ptr in
+        ghostty_surface_paste_text(surface, ptr, UInt(len - 1))
+      }
+    }
   }
 
   nonisolated private static func urlIsImage(_ url: URL) -> Bool {

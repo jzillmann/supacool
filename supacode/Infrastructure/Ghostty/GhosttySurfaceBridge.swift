@@ -31,6 +31,15 @@ final class GhosttySurfaceBridge {
   /// — this bridge stays agnostic so the same hook can be used for other
   /// consumers (e.g. screen-reader feedback) if they want different gating.
   var onInputTap: ((String) -> Void)?
+  /// Dropped text whose paste is in flight. A drop goes through ghostty's paste
+  /// protection, so it must reach `onInputTap` only once the paste actually
+  /// happens: never for a cancelled unsafe drop.
+  private var pendingDropPaste: String?
+  /// Paste-confirmation requests (ghostty's opaque request state, as bits) waiting
+  /// on the user. Ghostty frees a request only when it is completed or denied, so
+  /// `GhosttySurfaceView.closeSurface` denies whatever is still here before it frees
+  /// the surface; the alert's late answer then finds nothing to complete.
+  private var pendingPasteRequests: Set<UInt> = []
   /// Invoked when the user submits a command via a control-only keypress
   /// (Return/Enter). Kept separate from `onInputTap` so transcript logging
   /// can continue to ignore low-signal control keys while status tracking
@@ -370,8 +379,12 @@ final class GhosttySurfaceBridge {
 
   /// Ghostty's `open` link action opens the matched text verbatim, so a bare
   /// ticket id would end up as `open CEN-9398` (and `repo#12` likewise). Claim the action for matches
-  /// Supacool knows how to resolve and open the real URL ourselves; return
-  /// `false` for everything else so ghostty's own opener still runs.
+  /// Supacool knows how to resolve and open the real URL ourselves.
+  ///
+  /// Links from terminal output (`osc8`, `unknown`) go through `UntrustedURL`, like
+  /// Ghostty's own macOS app: since 1.4.0 the core's fallback opener refuses them on
+  /// macOS, so returning `false` would make the click do nothing. Only `text`/`html`
+  /// (Ghostty-originated, e.g. its config file) still fall back to the core opener.
   ///
   /// Returns `nil` when this isn't an open-URL action at all.
   private func handleOpenURL(_ action: ghostty_action_s) -> Bool? {
@@ -381,46 +394,95 @@ final class GhosttySurfaceBridge {
     state.openUrlKind = openUrl.kind
     state.openUrl = matched
 
-    guard let matched else { return false }
-    // An OSC 8 hyperlink already carries a real URL — never rewrite it, but we
-    // must open it: ghostty drops OSC 8 links an embedder declines.
-    if openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 {
-      guard let url = TerminalLinkRules.osc8URL(matched, isLaunchable: Self.isLaunchable) else {
-        SupaLogger("Terminal").warning("Refused OSC 8 link: \(matched)")
-        return true
-      }
-      if url.isFileURL { NSWorkspace.shared.open(url) } else { WebBrowser.open(url) }
-      return true
-    }
-    if let url = TerminalLinkRules.homePathURL(forMatched: matched, home: NSHomeDirectory()) {
+    let isTerminalOutput =
+      openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 || openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN
+    guard let matched else { return isTerminalOutput }
+
+    // An OSC 8 hyperlink already carries a real URL — never rewrite those.
+    if openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let url = referenceURL(forMatched: matched) {
       NSWorkspace.shared.open(url)
       return true
     }
+    guard isTerminalOutput else { return false }
+    Self.openUntrustedURL(
+      Self.untrustedTarget(forMatched: matched, isOSC8: openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8)
+    )
+    // Always handled: `false` would hand the link to the core's (refusing) fallback.
+    return true
+  }
 
+  /// Pastes dropped `text` via `paste` (ghostty_surface_paste_text) and reports it to
+  /// `onInputTap` once it lands. Safe text is pasted inside that call. Unsafe text makes
+  /// ghostty request confirmation from inside the same call (main thread, synchronous),
+  /// where `GhosttyRuntime` claims the text with `takePendingDropPaste()` and taps it
+  /// only if the user confirms.
+  func pasteDroppedText(_ text: String, paste: (String) -> Void) {
+    pendingDropPaste = text
+    paste(text)
+    // Not claimed by a confirmation request: ghostty pasted it already.
+    if let landed = takePendingDropPaste() {
+      onInputTap?(landed)
+    }
+  }
+
+  func trackPasteRequest(_ requestBits: UInt) {
+    pendingPasteRequests.insert(requestBits)
+  }
+
+  /// Removes a request once the user answered; false when it was already denied
+  /// (the surface closed while the prompt was up), so it must not be touched again.
+  func finishPasteRequest(_ requestBits: UInt) -> Bool {
+    pendingPasteRequests.remove(requestBits) != nil
+  }
+
+  /// Hands over every unanswered request, for the close path to deny.
+  func takePendingPasteRequests() -> [UInt] {
+    defer { pendingPasteRequests.removeAll() }
+    return Array(pendingPasteRequests)
+  }
+
+  /// Claims the in-flight drop for a paste confirmation (nil when the paste isn't a drop).
+  func takePendingDropPaste() -> String? {
+    defer { pendingDropPaste = nil }
+    return pendingDropPaste
+  }
+
+  /// The value `UntrustedURL` should judge. A plain `link` match may be a bare
+  /// path, which `UntrustedURL` rejects, so it becomes a file URL first (with `~`
+  /// expanded). Values with unsafe characters stay unchanged so they are rejected
+  /// before percent-encoding hides them. Mirrors Ghostty.App.openURL (v1.4.0).
+  nonisolated static func untrustedTarget(forMatched matched: String, isOSC8: Bool) -> String {
+    if isOSC8 || URL(string: matched)?.scheme != nil || UntrustedURL.containsUnsafeCharacters(matched) {
+      return matched
+    }
+    return URL(filePath: NSString(string: matched).standardizingPath).absoluteString
+  }
+
+  private static func openUntrustedURL(_ value: String) {
+    let target = UntrustedURL(value)
+    switch target.decision {
+    case .allow(let url) where ["http", "https"].contains(url.scheme?.lowercased()):
+      WebBrowser.open(url)
+    case .allow(let url):
+      NSWorkspace.shared.open(url)
+    case .confirm(let url):
+      UntrustedURLAlert.presentConfirmation(for: url, displayString: target.displayString)
+    case .deny(let reason):
+      UntrustedURLAlert.presentBlock(reason: reason, displayString: target.displayString)
+    }
+  }
+
+  private func referenceURL(forMatched matched: String) -> URL? {
     @Shared(.settingsFile) var settingsFile
     @Shared(.terminalReferenceCatalog) var catalog
     // Same key `SessionInfoPopover` reads through `@AppStorage`; read straight
     // from `UserDefaults` here because this is a plain class, not a view.
     let slug = UserDefaults.standard.string(forKey: "supacool.references.linearOrg") ?? ""
-    guard
-      let url = TerminalLinkRules.linearURL(
-        forMatched: matched,
-        teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
-        linearOrgSlug: slug
-      ) ?? TerminalLinkRules.pullRequestURL(forMatched: matched, repositorySlugs: catalog.repositorySlugs)
-    else { return false }
-
-    NSWorkspace.shared.open(url)
-    return true
-  }
-
-  /// A file an OSC 8 producer could use to run code via Launch Services.
-  private static func isLaunchable(_ url: URL) -> Bool {
-    let runnable: Set = ["app", "command", "tool", "terminal", "workflow", "pkg", "mpkg", "scpt", "applescript"]
-    if runnable.contains(url.pathExtension.lowercased()) { return true }
-    var isDirectory: ObjCBool = false
-    guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { return false }
-    return !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: url.path)
+    return TerminalLinkRules.linearURL(
+      forMatched: matched,
+      teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
+      linearOrgSlug: slug
+    ) ?? TerminalLinkRules.pullRequestURL(forMatched: matched, repositorySlugs: catalog.repositorySlugs)
   }
 
   private func handleMouseAndLink(_ action: ghostty_action_s) -> Bool {
