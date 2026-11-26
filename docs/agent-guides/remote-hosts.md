@@ -86,6 +86,8 @@ When `deferToSSHConfig == true`, the `[-p …] [-i …] [<user>@]<hostname>` blo
 
 The bootstrap script exports the required `SUPACOOL_*` tuple itself instead of using SSH `SetEnv`; `SetEnv` depends on the remote `sshd_config AcceptEnv` allow-list and silently drops arbitrary variables on default macOS/Linux sshd installs.
 
+When the remote has no `xterm-ghostty` terminfo, the bootstrap installs it with `tic -x -` from the bundled source (`Resources/terminfo/ghostty.terminfo`, emitted by `-Demit-terminfo=true` in the Makefile), the same thing `ghostty +ssh` does. A non-root `tic` writes to `~/.terminfo`, so this runs once per host. Only when `tic` is missing or fails does it fall back to `TERM=xterm-256color`.
+
 `identityFile` is stored as written (`~/.ssh/id_ed25519`); tilde-expand at command-build time, never at import time.
 
 ## Drift handling

@@ -57,9 +57,21 @@ struct RemoteSpawnClientTests {
   }
 
   @Test func bootstrapHandlesMissingTerminfo() {
-    let script = renderBootstrapScript(agentCommand: nil)
+    let script = renderBootstrapScript(agentCommand: nil, terminfoSource: nil)
     #expect(script.contains("infocmp xterm-ghostty"))
     #expect(script.contains("export TERM=xterm-256color"))
+    #expect(!script.contains("tic -x"))
+  }
+
+  @Test func bootstrapInstallsBundledTerminfoBeforeFallingBack() throws {
+    let source = "xterm-ghostty|ghostty|Ghostty,\n\tam, bce,\n"
+    let script = renderBootstrapScript(agentCommand: nil, terminfoSource: source)
+    let ticLine = try #require(script.split(separator: "\n").first { $0.contains("tic -x -") })
+    let encoded = try #require(ticLine.split(separator: " ").first { $0.count > 20 })
+    #expect(Data(base64Encoded: String(encoded)).flatMap { String(bytes: $0, encoding: .utf8) } == source)
+    let install = try #require(script.range(of: "tic -x -"))
+    let fallback = try #require(script.range(of: "export TERM=xterm-256color"))
+    #expect(install.lowerBound < fallback.lowerBound)
   }
 
   @Test func bootstrapAddsRemotePathFallbacksAndTmuxPreflight() {

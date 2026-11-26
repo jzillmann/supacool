@@ -233,7 +233,8 @@ private nonisolated func renderBootstrapCommand(script: String) -> String {
 nonisolated func renderBootstrapScript(
   agentCommand: String?,
   agent: AgentType? = nil,
-  environment: [(name: String, value: String)] = []
+  environment: [(name: String, value: String)] = [],
+  terminfoSource: String? = bundledGhosttyTerminfoSource
 ) -> String {
   let tmuxCommandPrefix =
     #"exec "$SUPACOOL_TMUX_BIN" new-session -A -s "$TMUX_SESSION" "#
@@ -274,13 +275,42 @@ nonisolated func renderBootstrapScript(
       exit 127
     fi
     mkdir -p ~/.supacool/hooks ~/.supacool/ssh
-    # Fall back when the remote doesn't have the custom terminfo installed.
-    if ! infocmp xterm-ghostty >/dev/null 2>&1; then
-      export TERM=xterm-256color
-    fi
+    \(renderTerminfoSetup(source: terminfoSource))
     \(tmuxEnvironment)
     \(hookInstall)
     \(execCommand)
+    """
+}
+
+/// Source of the bundled `xterm-ghostty` entry (`make build-ghostty-xcframework`
+/// emits it next to the compiled database). Nil in a build without it; the
+/// bootstrap then only falls back to `xterm-256color`.
+nonisolated let bundledGhosttyTerminfoSource: String? = {
+  guard
+    let url = Bundle.main.url(forResource: "ghostty", withExtension: "terminfo", subdirectory: "terminfo")
+  else { return nil }
+  return try? String(contentsOf: url, encoding: .utf8)
+}()
+
+/// Installs `xterm-ghostty` into the remote's `~/.terminfo` with `tic` the first
+/// time a host lacks it (what `ghostty +ssh` does), so remote sessions keep
+/// Ghostty's keys and colors. Falls back to `xterm-256color` when that fails.
+nonisolated func renderTerminfoSetup(source: String?) -> String {
+  let install =
+    source.map {
+      """
+        if command -v tic >/dev/null 2>&1; then
+          echo \(Data($0.utf8).base64EncodedString()) | base64 -d | tic -x - >/dev/null 2>&1 || true
+        fi
+
+      """
+    } ?? ""
+  return """
+    if ! infocmp xterm-ghostty >/dev/null 2>&1; then
+    \(install)  if ! infocmp xterm-ghostty >/dev/null 2>&1; then
+        export TERM=xterm-256color
+      fi
+    fi
     """
 }
 

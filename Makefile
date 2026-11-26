@@ -93,7 +93,7 @@ $(GHOSTTY_BUILD_OUTPUTS): $(GHOSTTY_PATCHES) | patch-ghostty
 	@# with a bare "process exited with code 70". Clear both ends first so the
 	@# rule is always re-runnable.
 	@rm -rf ThirdParty/ghostty/macos/GhosttyKit.xcframework
-	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false -Dxcframework-target=native
+	@cd ThirdParty/ghostty && mise exec -- zig build -Doptimize=ReleaseFast -Demit-xcframework=true -Dsentry=false -Demit-terminfo=true -Dxcframework-target=native
 	rm -rf $(GHOSTTY_XCFRAMEWORK_PATH)
 	rsync -a ThirdParty/ghostty/macos/GhosttyKit.xcframework Frameworks
 	@src="ThirdParty/ghostty/zig-out/share/ghostty"; \
