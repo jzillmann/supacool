@@ -1263,6 +1263,7 @@ struct BoardFeature {
   @Dependency(SupacoolWorktreePruneClient.self) var supacoolWorktreePrune
   @Dependency(RemoteSpawnClient.self) var remoteSpawnClient
   @Dependency(PiSettingsClient.self) var piSettingsClient
+  @Dependency(AntigravityHooksClient.self) var antigravityHooks
   @Dependency(GitClientDependency.self) var gitClient
   @Dependency(NativeSessionLocatorClient.self) var nativeSessionLocator
   @Dependency(PRMonitorClient.self) var prMonitor

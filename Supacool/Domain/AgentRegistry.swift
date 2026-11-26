@@ -141,8 +141,9 @@ nonisolated enum AgentRegistry {
   // - No model list: `agy models` ids churn per release; free-form still works,
   //   and "Default" sends no flag so agy's own default applies.
   // - Plan mode left off: agy uses `--mode plan`, not `--permission-mode plan`.
-  // - No hooks yet, so no busy state and no captured conversation id; the
-  //   picker falls back to `--continue` (agy's most recent conversation).
+  // - Hooks come from a Supacool-owned agy plugin (`AntigravityHooksInstaller`),
+  //   installed on spawn/resume; they capture the conversation id for Resume.
+  //   Without one, the picker falls back to `--continue` (most recent conversation).
   private static let antigravityBuiltin = AgentType(
     id: "antigravity",
     displayName: "Antigravity",

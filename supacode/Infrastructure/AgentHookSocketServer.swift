@@ -304,13 +304,40 @@ final class AgentHookSocketServer {
     }
 
     let body = payload.message ?? payload.lastAssistantMessage
+      ?? payload.transcriptPath.flatMap(lastAntigravityModelMessage(transcriptPath:))
     return AgentHookNotification(
       agent: agent,
-      event: payload.hookEventName ?? "unknown",
+      event: payload.hookEventName ?? payload.hookEventNameCamel ?? "unknown",
       title: payload.title,
       body: body,
-      sessionID: payload.sessionId
+      sessionID: payload.sessionId ?? payload.conversationId
     )
+  }
+
+  /// agy's `Stop` payload carries no final message, only its transcript path.
+  /// The last MODEL step with text is the turn's final message.
+  nonisolated static func lastAntigravityModelMessage(transcriptPath: String) -> String? {
+    // The path arrives over the socket: only ever read agy transcripts.
+    guard transcriptPath.contains("/.gemini/"), transcriptPath.hasSuffix(".jsonl"),
+      let handle = FileHandle(forReadingAtPath: transcriptPath)
+    else { return nil }
+    defer { try? handle.close() }
+    // shortcut: reads the last 256 KB only; a final message longer than that is dropped.
+    let tailBytes: UInt64 = 256 * 1024
+    guard let size = try? handle.seekToEnd() else { return nil }
+    try? handle.seek(toOffset: size > tailBytes ? size - tailBytes : 0)
+    guard let data = try? handle.readToEnd(), let text = String(data: data, encoding: .utf8) else { return nil }
+    struct Step: Decodable {
+      let source: String?
+      let content: String?
+    }
+    for line in text.split(separator: "\n").reversed() {
+      guard let step = try? JSONDecoder().decode(Step.self, from: Data(line.utf8)),
+        step.source == "MODEL", let content = step.content, !content.isEmpty
+      else { continue }
+      return content
+    }
+    return nil
   }
 }
 
@@ -332,6 +359,10 @@ private nonisolated struct AgentHookPayload: Decodable {
   let message: String?
   let lastAssistantMessage: String?
   let sessionId: String?
+  // Antigravity (agy) sends camelCase keys and no final message.
+  let hookEventNameCamel: String?
+  let conversationId: String?
+  let transcriptPath: String?
 
   enum CodingKeys: String, CodingKey {
     case hookEventName = "hook_event_name"
@@ -339,5 +370,8 @@ private nonisolated struct AgentHookPayload: Decodable {
     case message
     case lastAssistantMessage = "last_assistant_message"
     case sessionId = "session_id"
+    case hookEventNameCamel = "hookEventName"
+    case conversationId
+    case transcriptPath
   }
 }

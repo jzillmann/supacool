@@ -90,6 +90,7 @@ enum SessionSpawner {
   ) async throws -> AgentSession {
     @Dependency(TerminalClient.self) var terminalClient
     @Dependency(PiSettingsClient.self) var piSettingsClient
+    @Dependency(AntigravityHooksClient.self) var antigravityHooks
     @Dependency(SessionReferenceScannerClient.self) var scannerClient
 
     if request.agent?.id == "pi" {
@@ -97,6 +98,13 @@ enum SessionSpawner {
         try await piSettingsClient.install()
       } catch {
         sessionSpawnerLogger.warning("Failed to auto-install Pi extension: \(error)")
+      }
+    }
+    if request.agent?.id == AntigravityHooksInstaller.agentName {
+      do {
+        try await antigravityHooks.install()
+      } catch {
+        sessionSpawnerLogger.warning("Failed to auto-install agy hooks: \(error)")
       }
     }
 

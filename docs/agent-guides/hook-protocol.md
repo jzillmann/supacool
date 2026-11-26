@@ -126,6 +126,12 @@ Event wiring (see `ClaudeHookSettings` / `CodexHookSettings` for the current tru
   `session_id` rides along).
 - Codex mirrors the Claude wiring with an explicit Bash matcher on PreToolUse; pi is
   handled via a pi extension.
+- **agy (Antigravity)** gets a plugin Supacool owns completely,
+  `~/.gemini/config/plugins/supacool/` (`AntigravityHooksInstaller`), written on agy
+  spawn/resume. `PreInvocation` → busy on (`$PPID` is agy); `Stop` → busy off + notification.
+  agy's payload is camelCase (`hookEventName`, `conversationId`) and has no final message,
+  so `AgentHookSocketServer` reads it from the payload's `transcriptPath` (last `MODEL`
+  step; only paths under `/.gemini/`). Not installed on remote hosts yet.
 - **Hooks route by the hook process's environment**, so the agent must run its turns in
   the terminal's own process tree. Codex 0.158+ otherwise hands turns to a shared
   app-server daemon that inherits the `SUPACOOL_*` env of whichever terminal started it;

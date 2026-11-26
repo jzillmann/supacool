@@ -206,8 +206,8 @@ extension BoardFeature {
     let command = resumeCommand + "\r"
     return .run {
       [
-        terminalClient, piSettingsClient, gitClient, nativeSessionLocator, agent, worktree, repository, clock,
-        session,
+        terminalClient, piSettingsClient, antigravityHooks, gitClient, nativeSessionLocator, agent, worktree,
+        repository, clock, session,
       ] send in
       // Guardrail: never launch the resume command into a directory that no
       // longer exists. If this is an owns-worktree session whose checkout was
@@ -228,6 +228,13 @@ extension BoardFeature {
           try await piSettingsClient.install()
         } catch {
           boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+        }
+      }
+      if agent.id == AntigravityHooksInstaller.agentName {
+        do {
+          try await antigravityHooks.install()
+        } catch {
+          boardLogger.warning("Failed to auto-install agy hooks: \(error)")
         }
       }
       await terminalClient.send(
@@ -462,7 +469,7 @@ extension BoardFeature {
     state.focusedSessionID = id
     let command = pickerCommand + "\r"
     return .run {
-      [terminalClient, piSettingsClient, gitClient, agent, worktree, repository] send in
+      [terminalClient, piSettingsClient, antigravityHooks, gitClient, agent, worktree, repository] send in
       // Same cwd sensitivity as the captured-id path: the resume picker only
       // lists conversations belonging to the current directory's project, so a
       // missing worktree would show an empty (or wrong) picker.
@@ -479,6 +486,13 @@ extension BoardFeature {
           try await piSettingsClient.install()
         } catch {
           boardLogger.warning("Failed to auto-install Pi extension: \(error)")
+        }
+      }
+      if agent.id == AntigravityHooksInstaller.agentName {
+        do {
+          try await antigravityHooks.install()
+        } catch {
+          boardLogger.warning("Failed to auto-install agy hooks: \(error)")
         }
       }
       await terminalClient.send(
