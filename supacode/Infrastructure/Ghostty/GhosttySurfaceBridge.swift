@@ -370,8 +370,12 @@ final class GhosttySurfaceBridge {
 
   /// Ghostty's `open` link action opens the matched text verbatim, so a bare
   /// ticket id would end up as `open CEN-9398` (and `repo#12` likewise). Claim the action for matches
-  /// Supacool knows how to resolve and open the real URL ourselves; return
-  /// `false` for everything else so ghostty's own opener still runs.
+  /// Supacool knows how to resolve and open the real URL ourselves.
+  ///
+  /// Links from terminal output (`osc8`, `unknown`) go through `UntrustedURL`, like
+  /// Ghostty's own macOS app: since 1.4.0 the core's fallback opener refuses them on
+  /// macOS, so returning `false` would make the click do nothing. Only `text`/`html`
+  /// (Ghostty-originated, e.g. its config file) still fall back to the core opener.
   ///
   /// Returns `nil` when this isn't an open-URL action at all.
   private func handleOpenURL(_ action: ghostty_action_s) -> Bool? {
@@ -381,24 +385,59 @@ final class GhosttySurfaceBridge {
     state.openUrlKind = openUrl.kind
     state.openUrl = matched
 
-    // An OSC 8 hyperlink already carries a real URL — never rewrite those.
-    guard openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let matched else { return false }
+    let isTerminalOutput =
+      openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8 || openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_UNKNOWN
+    guard let matched else { return isTerminalOutput }
 
+    // An OSC 8 hyperlink already carries a real URL — never rewrite those.
+    if openUrl.kind != GHOSTTY_ACTION_OPEN_URL_KIND_OSC8, let url = referenceURL(forMatched: matched) {
+      NSWorkspace.shared.open(url)
+      return true
+    }
+    guard isTerminalOutput else { return false }
+    Self.openUntrustedURL(
+      Self.untrustedTarget(forMatched: matched, isOSC8: openUrl.kind == GHOSTTY_ACTION_OPEN_URL_KIND_OSC8)
+    )
+    // Always handled: `false` would hand the link to the core's (refusing) fallback.
+    return true
+  }
+
+  /// The value `UntrustedURL` should judge. A plain `link` match may be a bare
+  /// path, which `UntrustedURL` rejects, so it becomes a file URL first (with `~`
+  /// expanded). Values with unsafe characters stay unchanged so they are rejected
+  /// before percent-encoding hides them. Mirrors Ghostty.App.openURL (v1.4.0).
+  nonisolated static func untrustedTarget(forMatched matched: String, isOSC8: Bool) -> String {
+    if isOSC8 || URL(string: matched)?.scheme != nil || UntrustedURL.containsUnsafeCharacters(matched) {
+      return matched
+    }
+    return URL(filePath: NSString(string: matched).standardizingPath).absoluteString
+  }
+
+  private static func openUntrustedURL(_ value: String) {
+    let target = UntrustedURL(value)
+    switch target.decision {
+    case .allow(let url) where ["http", "https"].contains(url.scheme?.lowercased()):
+      WebBrowser.open(url)
+    case .allow(let url):
+      NSWorkspace.shared.open(url)
+    case .confirm(let url):
+      UntrustedURLAlert.presentConfirmation(for: url, displayString: target.displayString)
+    case .deny(let reason):
+      UntrustedURLAlert.presentBlock(reason: reason, displayString: target.displayString)
+    }
+  }
+
+  private func referenceURL(forMatched matched: String) -> URL? {
     @Shared(.settingsFile) var settingsFile
     @Shared(.terminalReferenceCatalog) var catalog
     // Same key `SessionInfoPopover` reads through `@AppStorage`; read straight
     // from `UserDefaults` here because this is a plain class, not a view.
     let slug = UserDefaults.standard.string(forKey: "supacool.references.linearOrg") ?? ""
-    guard
-      let url = TerminalLinkRules.linearURL(
-        forMatched: matched,
-        teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
-        linearOrgSlug: slug
-      ) ?? TerminalLinkRules.pullRequestURL(forMatched: matched, repositorySlugs: catalog.repositorySlugs)
-    else { return false }
-
-    NSWorkspace.shared.open(url)
-    return true
+    return TerminalLinkRules.linearURL(
+      forMatched: matched,
+      teamKeys: GhosttyRuntime.configuredLinearTeamKeys(in: settingsFile),
+      linearOrgSlug: slug
+    ) ?? TerminalLinkRules.pullRequestURL(forMatched: matched, repositorySlugs: catalog.repositorySlugs)
   }
 
   private func handleMouseAndLink(_ action: ghostty_action_s) -> Bool {

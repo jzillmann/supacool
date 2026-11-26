@@ -109,6 +109,12 @@ make test
 
 Watch for: ghostty C-API breaks (rare but possible) — `GhosttyRuntime`, `GhosttySurfaceBridge`, `GhosttySurfaceView` are the Swift sites that talk to the C API directly.
 
+Also watch for (learned on the v1.4.0 bump):
+- **Policy that lives in Ghostty's own macOS app.** Supacool *is* the macOS apprt, so a safety rule Ghostty adds in `macos/Sources/` does not reach us by itself — and the core may start relying on it (1.4.0's core refuses `osc8`/`unknown` links on macOS because its app checks them; our embedding had to copy `UntrustedURL`). Read `git -C ThirdParty/ghostty log <old>..<new> -- macos/ include/ghostty.h` and mirror what the embedding needs.
+- **Stage the new pin before any `make` target.** `ensure-submodules` treats an unstaged pin as a mismatch and resets the submodule to the committed commit.
+- **Zig version.** `minimum_zig_version` in `ThirdParty/ghostty/build.zig.zon` must match `mise.toml` (CI reads Zig from mise).
+- **Local patches.** `make patch-ghostty` may reject a hunk on context drift; re-cut per `patches/README.md`.
+
 ## When NOT to cherry-pick
 
 - If you haven't fetched upstream in a while and there's a 50+ commit pile-up. Browse, don't bulk-merge.
