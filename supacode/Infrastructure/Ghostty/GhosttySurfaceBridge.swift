@@ -31,6 +31,10 @@ final class GhosttySurfaceBridge {
   /// — this bridge stays agnostic so the same hook can be used for other
   /// consumers (e.g. screen-reader feedback) if they want different gating.
   var onInputTap: ((String) -> Void)?
+  /// Dropped text whose paste is in flight. A drop goes through ghostty's paste
+  /// protection, so it must reach `onInputTap` only once the paste actually
+  /// happens: never for a cancelled unsafe drop.
+  private var pendingDropPaste: String?
   /// Invoked when the user submits a command via a control-only keypress
   /// (Return/Enter). Kept separate from `onInputTap` so transcript logging
   /// can continue to ignore low-signal control keys while status tracking
@@ -400,6 +404,26 @@ final class GhosttySurfaceBridge {
     )
     // Always handled: `false` would hand the link to the core's (refusing) fallback.
     return true
+  }
+
+  /// Pastes dropped `text` via `paste` (ghostty_surface_paste_text) and reports it to
+  /// `onInputTap` once it lands. Safe text is pasted inside that call. Unsafe text makes
+  /// ghostty request confirmation from inside the same call (main thread, synchronous),
+  /// where `GhosttyRuntime` claims the text with `takePendingDropPaste()` and taps it
+  /// only if the user confirms.
+  func pasteDroppedText(_ text: String, paste: (String) -> Void) {
+    pendingDropPaste = text
+    paste(text)
+    // Not claimed by a confirmation request: ghostty pasted it already.
+    if let landed = takePendingDropPaste() {
+      onInputTap?(landed)
+    }
+  }
+
+  /// Claims the in-flight drop for a paste confirmation (nil when the paste isn't a drop).
+  func takePendingDropPaste() -> String? {
+    defer { pendingDropPaste = nil }
+    return pendingDropPaste
   }
 
   /// The value `UntrustedURL` should judge. A plain `link` match may be a bare

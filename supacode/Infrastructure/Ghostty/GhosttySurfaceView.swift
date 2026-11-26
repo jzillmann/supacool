@@ -1638,8 +1638,10 @@ extension GhosttySurfaceView {
     guard let surface else { return }
     let len = text.utf8CString.count
     guard len > 1 else { return }
-    text.withCString { ptr in
-      ghostty_surface_paste_text(surface, ptr, UInt(len - 1))
+    bridge.pasteDroppedText(text) { text in
+      text.withCString { ptr in
+        ghostty_surface_paste_text(surface, ptr, UInt(len - 1))
+      }
     }
   }
 

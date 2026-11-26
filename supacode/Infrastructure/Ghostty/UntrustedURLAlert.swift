@@ -67,7 +67,7 @@ enum UntrustedURLAlert {
     DispatchQueue.main.async(execute: action)
   }
 
-  private static func present(
+  static func present(
     _ alert: NSAlert,
     completion: @escaping (NSApplication.ModalResponse) -> Void
   ) {
@@ -78,7 +78,7 @@ enum UntrustedURLAlert {
     }
   }
 
-  private static func targetView(_ target: String) -> NSView {
+  static func targetView(_ target: String) -> NSView {
     let scrollView = NSScrollView(
       frame: NSRect(
         x: 0,
