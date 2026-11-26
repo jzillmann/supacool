@@ -291,6 +291,11 @@ final class GhosttySurfaceView: NSView, Identifiable {
         runtime.unregisterSurface(surfaceRef)
         self.surfaceRef = nil
       }
+      // Ghostty holds a paste-confirmation request until it is answered; deny the
+      // ones whose prompt is still up so freeing the surface doesn't leak them.
+      for requestBits in bridge.takePendingPasteRequests() {
+        ghostty_surface_deny_clipboard_request(surface, UnsafeMutableRawPointer(bitPattern: requestBits))
+      }
       ghostty_surface_free(surface)
       self.surface = nil
       bridge.surface = nil

@@ -494,7 +494,7 @@ final class GhosttyRuntime {
     guard let bridge = surfaceBridge(fromUserdata: userdata), let surface = bridge.surface else {
       return
     }
-    guard asksUserToConfirm(request) else {
+    guard asksUserToConfirm(request), let stateBits else {
       completeClipboardRequest(surface, payload: value, state: state, confirmed: true)
       return
     }
@@ -503,9 +503,11 @@ final class GhosttyRuntime {
     let droppedText = bridge.takePendingDropPaste()
     let text =
       value.contents.first { $0.mime == "text/plain" }.flatMap { String(data: $0.data, encoding: .utf8) } ?? ""
+    // Tracked so closing the terminal while the prompt is up still denies (frees) it.
+    bridge.trackPasteRequest(stateBits)
     PasteConfirmationAlert.present(text: text) { confirmed in
-      guard let surface = bridge.surface else { return }
-      let state = stateBits.flatMap { UnsafeMutableRawPointer(bitPattern: $0) }
+      guard bridge.finishPasteRequest(stateBits), let surface = bridge.surface else { return }
+      let state = UnsafeMutableRawPointer(bitPattern: stateBits)
       guard confirmed else {
         ghostty_surface_deny_clipboard_request(surface, state)
         return

@@ -35,6 +35,11 @@ final class GhosttySurfaceBridge {
   /// protection, so it must reach `onInputTap` only once the paste actually
   /// happens: never for a cancelled unsafe drop.
   private var pendingDropPaste: String?
+  /// Paste-confirmation requests (ghostty's opaque request state, as bits) waiting
+  /// on the user. Ghostty frees a request only when it is completed or denied, so
+  /// `GhosttySurfaceView.closeSurface` denies whatever is still here before it frees
+  /// the surface; the alert's late answer then finds nothing to complete.
+  private var pendingPasteRequests: Set<UInt> = []
   /// Invoked when the user submits a command via a control-only keypress
   /// (Return/Enter). Kept separate from `onInputTap` so transcript logging
   /// can continue to ignore low-signal control keys while status tracking
@@ -418,6 +423,22 @@ final class GhosttySurfaceBridge {
     if let landed = takePendingDropPaste() {
       onInputTap?(landed)
     }
+  }
+
+  func trackPasteRequest(_ requestBits: UInt) {
+    pendingPasteRequests.insert(requestBits)
+  }
+
+  /// Removes a request once the user answered; false when it was already denied
+  /// (the surface closed while the prompt was up), so it must not be touched again.
+  func finishPasteRequest(_ requestBits: UInt) -> Bool {
+    pendingPasteRequests.remove(requestBits) != nil
+  }
+
+  /// Hands over every unanswered request, for the close path to deny.
+  func takePendingPasteRequests() -> [UInt] {
+    defer { pendingPasteRequests.removeAll() }
+    return Array(pendingPasteRequests)
   }
 
   /// Claims the in-flight drop for a paste confirmation (nil when the paste isn't a drop).

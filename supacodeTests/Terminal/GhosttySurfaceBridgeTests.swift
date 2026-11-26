@@ -31,6 +31,26 @@ struct GhosttySurfaceBridgeTests {
     #expect(tapped.isEmpty)
   }
 
+  @Test func answeredPasteRequestIsNotDeniedOnClose() {
+    let bridge = GhosttySurfaceBridge()
+    bridge.trackPasteRequest(0xA1)
+
+    #expect(bridge.finishPasteRequest(0xA1))
+    #expect(bridge.takePendingPasteRequests().isEmpty)
+  }
+
+  @Test func closingWithAPromptUpDeniesTheRequestAndIgnoresTheLateAnswer() {
+    let bridge = GhosttySurfaceBridge()
+    bridge.trackPasteRequest(0xA1)
+    bridge.trackPasteRequest(0xB2)
+
+    // closeSurface: every unanswered request goes to ghostty_surface_deny_clipboard_request.
+    #expect(Set(bridge.takePendingPasteRequests()) == [0xA1, 0xB2])
+    #expect(bridge.takePendingPasteRequests().isEmpty)
+    // The alert answers after the close: the request is gone, so it is not completed twice.
+    #expect(!bridge.finishPasteRequest(0xA1))
+  }
+
   @Test func onlyUnsafePastesAskTheUser() {
     #expect(GhosttyRuntime.asksUserToConfirm(GHOSTTY_CLIPBOARD_REQUEST_PASTE))
     #expect(!GhosttyRuntime.asksUserToConfirm(GHOSTTY_CLIPBOARD_REQUEST_OSC_52_READ))
