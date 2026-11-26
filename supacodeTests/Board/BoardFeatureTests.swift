@@ -677,6 +677,43 @@ struct BoardFeatureTests {
     )
   }
 
+  /// The popover's refresh button must fetch even inside the success cache
+  /// window — that's exactly when the user just merged on GitHub.
+  @Test(.dependencies) func forcedPRRefreshBypassesSuccessCache() async {
+    let ref = SessionReference.pullRequest(
+      owner: "acme", repo: "widgets", number: 7, state: .open, title: "Ship it"
+    )
+    var session = Self.sampleSession()
+    session.references = [ref]
+    session.referencesScannedAt = Date()
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [session] }
+    let now = Date()
+    state.prRefreshSuccessAt[ref.dedupeKey] = now
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.continuousClock = TestClock()
+      $0.date = .constant(now)
+      $0.githubCLI.viewPullRequest = { _, _, _ in PullRequestSnapshot(state: .merged, title: "Ship it") }
+    }
+    store.exhaustivity = .off
+
+    // Cached: the throttled popover-open refresh does nothing.
+    await store.send(.refreshPRReferences(id: session.id))
+    await store.finish()
+    #expect(store.state.sessions.first?.references == [ref])
+
+    await store.send(.refreshPRReferences(id: session.id, force: true))
+    await store.skipReceivedActions()
+    await store.finish()
+    #expect(
+      store.state.sessions.first?.references
+        == [.pullRequest(owner: "acme", repo: "widgets", number: 7, state: .merged, title: "Ship it")]
+    )
+  }
+
   /// When a PR fanout flips a session's PR from their court (CI running) to
   /// the user's (CI failed), the reducer emits a one-shot
   /// `pullRequestReturnedToCourt` delegate so AppFeature can notify.
@@ -2138,6 +2175,70 @@ struct BoardFeatureTests {
     #expect(store.state.pendingRemovalAdvanceTarget == nil)
   }
 
+  @Test(.dependencies, arguments: [
+    BoardFeature.PutAwayMode.park,
+    .standby,
+    .snooze(.tomorrowMorning, keepAlive: true),
+  ])
+  func putAwayFocusedSessionAdvancesToNextCard(mode: BoardFeature.PutAwayMode) async {
+    // Park / Standby / Snooze from full screen steps to the next card in the
+    // bucket, like Remove does, instead of dropping to the board.
+    let current = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000C1")!,
+      displayName: "Current"
+    )
+    let next = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000C2")!,
+      displayName: "Next"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [current, next] }
+    state.focusedSessionID = current.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    await store.send(
+      .putAwayFocusedSession(id: current.id, mode: mode, advanceTo: next.id, repositories: [])
+    )
+    await store.finish()
+
+    #expect(store.state.sessions.first { $0.id == current.id }?.parked == true)
+    #expect(store.state.focusedSessionID == next.id)
+  }
+
+  @Test(.dependencies) func putAwayFocusedSessionDropsToBoardWithoutTarget() async {
+    let current = Self.sampleSession(
+      id: UUID(uuidString: "00000000-0000-0000-0000-0000000000D1")!,
+      displayName: "Current"
+    )
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [current] }
+    state.focusedSessionID = current.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    } withDependencies: {
+      $0.date = .constant(Date(timeIntervalSince1970: 1_750_000_000))
+      $0.terminalClient.send = { _ in }
+    }
+    store.exhaustivity = .off
+
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000DF")!
+    await store.send(
+      .putAwayFocusedSession(id: current.id, mode: .park, advanceTo: ghost, repositories: [])
+    )
+    await store.finish()
+
+    #expect(store.state.sessions[0].parked)
+    #expect(store.state.focusedSessionID == nil)
+  }
+
   @Test(.dependencies) func removeSessionDeletesConvertedWorktreeImmediately() async {
     // A repo-root session that used the "convert to worktree" popover
     // has `worktreeID == repositoryID` but a divergent
@@ -3218,10 +3319,12 @@ struct BoardFeatureTests {
     }
 
     await store.send(.toggleRepository(id: "/tmp/repo")) {
+      $0.lastLocationByRepositoryFilter[[]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/repo"] }
     }
 
     await store.send(.toggleRepository(id: "/tmp/repo")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/repo"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = [] }
     }
   }
@@ -3237,6 +3340,7 @@ struct BoardFeatureTests {
     }
 
     await store.send(.showAllRepositories) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a", "/tmp/b"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = [] }
     }
   }
@@ -3252,7 +3356,90 @@ struct BoardFeatureTests {
     }
 
     await store.send(.focusRepository(id: "/tmp/c")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a", "/tmp/b"]] = .board
       $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/c"] }
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryRestoresLastOpenedSession() async {
+    // In repo A on session A2, switch to B and open B1, then back to A:
+    // A2 is reopened (not A's first card), and back to B reopens B1.
+    let a1 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A1")
+    let a2 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A2")
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a1, a2, b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+    state.focusedSessionID = a2.id
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(a2.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    }
+    await store.send(.focusSession(id: b1.id)) {
+      $0.focusedSessionID = b1.id
+    }
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+      $0.focusedSessionID = a2.id
+    }
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(a2.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+      $0.focusedSessionID = b1.id
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryRestoresBoardWhenLeftOnBoard() async {
+    // Left repo A on the board; coming back from a session in B lands on
+    // the board, not on a card.
+    let a1 = Self.sampleSession(repositoryID: "/tmp/a", displayName: "A1")
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    let state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [a1, b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/b")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/a"]] = .board
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    }
+    await store.send(.focusSession(id: b1.id)) {
+      $0.focusedSessionID = b1.id
+    }
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
+      $0.focusedSessionID = nil
+    }
+  }
+
+  @Test(.dependencies) func switchingRepositoryIgnoresRememberedSessionThatIsGone() async {
+    // The remembered card was removed: keep the current location so the
+    // view's first-card fallback applies.
+    let b1 = Self.sampleSession(repositoryID: "/tmp/b", displayName: "B1")
+    let ghost = UUID(uuidString: "00000000-0000-0000-0000-0000000000FF")!
+    var state = BoardFeature.State()
+    state.$sessions.withLock { $0 = [b1] }
+    state.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/b"] }
+    state.focusedSessionID = b1.id
+    state.lastLocationByRepositoryFilter[["/tmp/a"]] = .session(ghost)
+
+    let store = TestStore(initialState: state) {
+      BoardFeature()
+    }
+
+    await store.send(.focusRepository(id: "/tmp/a")) {
+      $0.lastLocationByRepositoryFilter[["/tmp/b"]] = .session(b1.id)
+      $0.$filters.withLock { $0.selectedRepositoryIDs = ["/tmp/a"] }
     }
   }
 

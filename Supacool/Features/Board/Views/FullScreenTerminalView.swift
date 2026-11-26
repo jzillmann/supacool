@@ -111,6 +111,8 @@ struct FullScreenTerminalView: View {
   /// Cache-throttled refresh of parsed references/PR states when the PR
   /// reference popover opens.
   let onReferencesPopoverOpened: (() -> Void)?
+  var onRefreshPullRequests: (() -> Void)?
+  var isRefreshingPullRequests = false
 
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
@@ -240,6 +242,8 @@ struct FullScreenTerminalView: View {
       Button("Toggle Shell Split") { toggleShellSplit() }
         .keyboardShortcut("e", modifiers: .command)
         .hidden()
+        // Captures `session`: see `tabSelectionShortcuts` for why that goes stale.
+        .id(shellSplitShortcutIdentity)
     )
     .background(
       Button("Next Terminal in State") { onNextInCurrentState() }
@@ -307,6 +311,8 @@ struct FullScreenTerminalView: View {
         .keyboardShortcut(">", modifiers: [.command, .option])
     }
     .hidden()
+    // The closures cycle from a captured session: see `tabSelectionShortcuts`.
+    .id(session.id)
   }
 
   private var switcherShortcuts: some View {
@@ -353,7 +359,7 @@ struct FullScreenTerminalView: View {
         ReviewLoopControl(
           state: session.reviewLoop,
           canStart: canStartReviewLoop,
-          startSubject: session.reviewablePullRequestsLabel,
+          startSubject: session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys),
           onStart: onStartReviewLoop,
           onOpenReviewer: onOpenReviewLoopReviewer,
           onDiagnose: onDiagnoseReviewLoop,
@@ -370,7 +376,6 @@ struct FullScreenTerminalView: View {
           onRemove: { onRemoveNote($0.id) }
         )
       }
-      overflowMenu
       infoButton
       openDiffButton
       splitButton
@@ -379,6 +384,7 @@ struct FullScreenTerminalView: View {
       if let serverLifecycle {
         serverLifecycleControl(serverLifecycle)
       }
+      overflowMenu
       parkControl
       removeButton
     }
@@ -389,6 +395,10 @@ struct FullScreenTerminalView: View {
     // title is the explicit marker; the tint is what you notice from across
     // the room.
     .background(session.isPriority ? priorityColor.opacity(0.10) : .clear)
+    // This view stays mounted while focus moves between cards, and a `Menu` can
+    // keep the closures of the earlier card. New identity, new closures. The path
+    // is part of it because Reveal in Finder captures it, and it can change.
+    .id("\(session.id)#\(session.currentWorkspacePath)")
   }
 
   /// Hairline under the header — a 2 pt pink rule for priority sessions,
@@ -441,12 +451,14 @@ struct FullScreenTerminalView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    session.canStartReviewLoop
+    session.canStartReviewLoop(excluding: pullRequestOwnership.watchedKeys)
   }
 
-  /// Catch-all "⋮" menu right after the title for less-frequent session
-  /// actions (priority, rename, Finder, debug, refresh). Keep entries here
-  /// that don't warrant dedicated toolbar real estate.
+  /// Catch-all "⋮" menu for less-frequent session actions (priority, rename,
+  /// Finder, debug, refresh). It sits beside the park control and trash so
+  /// every action on the session lives at the trailing edge; the leading
+  /// icons only change what you see. Keep entries here that don't warrant
+  /// dedicated toolbar real estate.
   private var overflowMenu: some View {
     Menu {
       Button(action: onTogglePriority) {
@@ -591,6 +603,8 @@ struct FullScreenTerminalView: View {
       SessionReferenceSummaryChips(
         references: session.references,
         onPullRequestsPopoverOpened: onReferencesPopoverOpened,
+        onRefreshPullRequests: onRefreshPullRequests,
+        isRefreshingPullRequests: isRefreshingPullRequests,
         onRemoveReference: onRemoveReference,
         prReferenceSnapshots: prReferenceSnapshots,
         actionablePullRequestKey: actionablePullRequestKey,
@@ -996,6 +1010,13 @@ struct FullScreenTerminalView: View {
   /// right. Tracked = the tab's own (creation) surface plus every
   /// hook-adopted agent pane — a second agent's pane is never closed by
   /// ⌘E, only its plain shell siblings are.
+  /// Everything `toggleShellSplit` reads from `session`. A pane adopted after
+  /// the shortcut was built must count as tracked, or ⌘E would close it.
+  private var shellSplitShortcutIdentity: [String] {
+    [session.id.uuidString, session.worktreeID, session.repositoryID]
+      + session.terminals.map { "\($0.id)>\(String(describing: $0.hostTabID))" }
+  }
+
   private func toggleShellSplit() {
     guard let worktree = resolveWorktree() else { return }
     let state = terminalManager.state(for: worktree) { false }
@@ -1304,6 +1325,7 @@ struct FullScreenTerminalView: View {
             onAdd: onAddShellTerminal,
             onConvertToSplit: onConvertTerminalToSplit
           )
+          .id(session.id)
         }
         SingleSessionTerminalView(
           worktree: worktree,
@@ -1316,9 +1338,10 @@ struct FullScreenTerminalView: View {
       }
       .ignoresSafeArea(.container, edges: .bottom)
     } else if session.isRemote {
-      disconnectedRemoteState
+      // Their buttons own the default-action key, so they must not outlive the card.
+      disconnectedRemoteState.id(session.id)
     } else {
-      detachedState
+      detachedState.id(session.id)
     }
   }
 

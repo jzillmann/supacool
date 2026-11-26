@@ -1343,6 +1343,11 @@ final class WorktreeTerminalState {
   }
 
   func setAllSurfacesOccluded() {
+    // The sidebar-era "selected worktree" no longer says what is on screen: a
+    // background selection change must not pause the session view showing
+    // this state (frozen terminal, keys still reach the PTY). That view
+    // pauses its surfaces itself in `releaseSessionView`.
+    guard sessionViewToken == nil else { return }
     for surface in surfaces.values {
       surface.setOcclusion(false)
       surface.focusDidChange(false)

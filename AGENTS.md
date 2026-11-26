@@ -108,7 +108,7 @@ Without **both** moves, a second instance silently shares — and can corrupt �
 **In, shipped** — the full feature → files map lives in [`docs/agent-guides/features.md`](./docs/agent-guides/features.md). Headlines:
 - Matrix Board primary UI — card per agent session, Waiting on Me / In Progress buckets, repo filter, full-screen terminal on tap, tray, bookmarks/drafts, 3-day trash.
 - Session persistence across relaunches (per-session directory store); detached vs interrupted state; Rerun (fresh) and Resume (with captured agent session id).
-- New Terminal sheet: prompt, agent (Claude/Codex/pi via the agent registry), repo picker, optional worktree, PR-URL and Linear-ticket prefill.
+- New Terminal sheet: prompt, agent (Claude/Codex/pi/Antigravity via the agent registry), repo picker, optional worktree, PR-URL and Linear-ticket prefill.
 - Linear inbox, PR Pulse (checks/Greptile/ball-court), Worktree Janitor, fleet vitals, transcript recording, remote SSH sessions (ssh + tmux + forwarded hook socket).
 - Forward-compatible Codable on all persisted types; single-instance guard; Metal-free ghostty build.
 

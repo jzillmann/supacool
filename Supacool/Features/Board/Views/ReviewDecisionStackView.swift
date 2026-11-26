@@ -27,6 +27,8 @@ struct ReviewDecisionStackView: View {
       if let current = decisions.first(where: { $0.id == selectedID }) ?? decisions.first,
         let loop = current.reviewLoop
       {
+        // PRs another session owns never join a review subject.
+        let watchedKeys = PullRequestOwnershipIndex.board(store.sessions).watchedKeys(of: current)
         Group {
           if isCollapsed {
             collapsedPill(count: decisions.count)
@@ -41,7 +43,8 @@ struct ReviewDecisionStackView: View {
               onOpen: { store.send(.focusSession(id: current.id)) },
               onInspect: { store.send(.openReviewLoopReviewer(id: current.id)) },
               onChoose: { choice in store.send(.reviewDecision(choice, sessionID: current.id)) },
-              onRestart: current.canStartReviewLoop
+              restartSubject: current.reviewablePullRequestsLabel(excluding: watchedKeys),
+              onRestart: current.canStartReviewLoop(excluding: watchedKeys)
                 ? { store.send(.startReviewLoop(id: current.id, repositories: Array(repositories))) }
                 : nil,
               onDiagnose: { store.send(.diagnoseReviewLoop(id: current.id)) },
@@ -121,6 +124,8 @@ private struct ReviewDecisionCard: View {
   let onOpen: () -> Void
   let onInspect: () -> Void
   let onChoose: (ReviewDecisionChoice) -> Void
+  /// `#42, #43` — the PRs a restart would review.
+  let restartSubject: String
   /// Nil when the session has nothing open to review any more.
   let onRestart: (() -> Void)?
   let onDiagnose: () -> Void
@@ -220,7 +225,7 @@ private struct ReviewDecisionCard: View {
           .help("Run one bounded pass to identify the root cause of non-convergence")
         if let onRestart {
           Button(
-            "Start new review on \(session.reviewablePullRequestsLabel)",
+            "Start new review on \(restartSubject)",
             systemImage: "arrow.counterclockwise",
             action: onRestart
           )

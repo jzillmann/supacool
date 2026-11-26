@@ -3,6 +3,7 @@ import ComposableArchitecture
 import ConcurrencyExtras
 import Dependencies
 import Foundation
+import Observation
 import Testing
 
 @testable import Supacool
@@ -809,6 +810,76 @@ struct WorktreeTerminalManagerTests {
         #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
         #expect(manager.agentActivity(worktreeID: worktree.id, tabID: tabID) == .idle)
       }
+    }
+  }
+
+  /// The 1 s scan must not invalidate the board when nothing changed. It used
+  /// to rewrite the observed screen-working map on every tick, which redrew
+  /// every card once a second on an idle board.
+  @Test func screenScanWithoutChangeDoesNotInvalidateObservers() async {
+    await withMainSerialExecutor {
+      let clock = TestClock()
+      let screenContents = LockIsolated("✻ Growing… (12s · esc to interrupt)")
+      let worktree = makeWorktree()
+      let manager = WorktreeTerminalManager(
+        runtime: GhosttyRuntime(),
+        socketServer: AgentHookSocketServer(testingSocketPath: "/tmp/supacool-test-scan-no-invalidate"),
+        awaitingInputActivityPollInterval: .seconds(1),
+        screenWorkingMissGrace: 3,
+        startPromptScreenScanning: false,
+        clock: clock,
+        readScreenContents: { _, _ in screenContents.value }
+      )
+      let sessionID = UUID()
+      let tabID = manager.state(for: worktree).registerTestTab(tabID: sessionID).tabId
+      @Shared(.agentSessions) var sessions: [AgentSession]
+      $sessions.withLock {
+        $0 = [
+          AgentSession(
+            id: sessionID, repositoryID: worktree.id, worktreeID: worktree.id, agent: .claude, initialPrompt: "x"
+          ),
+        ]
+      }
+
+      func observe() -> LockIsolated<Bool> {
+        let invalidated = LockIsolated(false)
+        withObservationTracking {
+          MainActor.assumeIsolated {
+            _ = manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID)
+          }
+        } onChange: {
+          invalidated.setValue(true)
+        }
+        return invalidated
+      }
+
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+
+      // Still working: a tick changes nothing a view can see.
+      let whileWorking = observe()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      #expect(!whileWorking.value)
+
+      // The hint leaves the screen: misses within the grace stay silent…
+      screenContents.setValue(">")
+      let duringGrace = observe()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      #expect(!duringGrace.value)
+      #expect(manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+
+      // …and the drop to idle is a real change, so observers hear it.
+      let atDrop = observe()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      #expect(atDrop.value)
+      #expect(!manager.isAgentBusy(worktreeID: worktree.id, tabID: tabID))
+
+      // Idle ticks after that stay silent too.
+      let whileIdle = observe()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      await manager.sampleAwaitingInputPromptScreensForTesting()
+      #expect(!whileIdle.value)
     }
   }
 

@@ -126,8 +126,11 @@ nonisolated enum TerminalLinkRules {
         return #"(?:(?<![\w./-])(?:"# + owner + "/)?" + repo + "#|github\\.com/" + owner + "/" + repo
           + "/pull/)" + numberAlternation(bySlug[slug, default: []])
       }
+      // Case-sensitive on purpose: `(?i)` made every surface spend about a
+      // third of a config reload on Unicode case folding. A ref typed in a
+      // different case than GitHub's stays uncolored, but is still a link.
       for chunk in chunked(alternatives) {
-        lines.append(#"link-color = (?i)(?:"# + chunk.joined(separator: "|") + #")\b,"# + toneHex(tone))
+        lines.append(#"link-color = (?:"# + chunk.joined(separator: "|") + #")\b,"# + toneHex(tone))
       }
     }
 

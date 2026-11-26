@@ -150,7 +150,7 @@ final class WorktreeTerminalManager {
   /// Optional so tests can disable the live OS scan; production wiring
   /// in `SupacoolApp` injects a real instance.
   private let ownedProcessTracker: WorktreeOwnedProcessTracker?
-  private var ownedProcessRefreshTickCount: Int = 0
+  @ObservationIgnored private var ownedProcessRefreshTickCount: Int = 0
   private let readScreenContentsOverride: ((Worktree.ID, TerminalTabID) -> String?)?
   /// Surface-scoped sibling of `readScreenContentsOverride`. Separate rather
   /// than a widened signature so tests that only care about a single-pane tab
@@ -165,9 +165,11 @@ final class WorktreeTerminalManager {
   private var awaitingInputExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var awaitingInputDebounceTasks: [UUID: Task<Void, Never>] = [:]
   private var awaitingInputActivityTasks: [UUID: Task<Void, Never>] = [:]
-  private var awaitingInputPromptCandidates: [UUID: AwaitingInputPromptCandidate] = [:]
+  // The 1s scan rewrites these on every tick and no view reads them, so they
+  // stay out of observation (see `screenWorkingTabs`).
+  @ObservationIgnored private var awaitingInputPromptCandidates: [UUID: AwaitingInputPromptCandidate] = [:]
   private var awaitingInputPromptScanTask: Task<Void, Never>?
-  private var awaitingInputPromptScanTickCount: Int = 0
+  @ObservationIgnored private var awaitingInputPromptScanTickCount: Int = 0
   private var deferredWorkByTab: [UUID: DeferredWorkTracker] = [:]
   private var deferredWorkExpiryTasks: [UUID: Task<Void, Never>] = [:]
   private var optimisticBusyByTab: [UUID: OptimisticBusyTracker] = [:]
@@ -175,11 +177,25 @@ final class WorktreeTerminalManager {
   /// Supacool-only. Tabs whose agent is currently painting its interrupt
   /// hint. Refreshed by the 1s screen scan; no expiry task — the scan is
   /// the clock.
-  private var screenWorkingByTab: [UUID: ScreenWorkingTracker] = [:]
+  ///
+  /// Not observed: the scan writes it for nearly every tab on every tick
+  /// (miss counters, removals of absent keys), and observation is
+  /// per-property, not per-key. When views read it directly, each tick
+  /// invalidated every card on the board, so a 118-session board redrew
+  /// once a second while nothing happened. Views read `screenWorkingTabs`,
+  /// which changes only when a tab starts or stops working.
+  @ObservationIgnored private var screenWorkingByTab: [UUID: ScreenWorkingTracker] = [:] {
+    didSet {
+      let working = screenWorkingByTab.mapValues(\.worktreeID)
+      if working != screenWorkingTabs { screenWorkingTabs = working }
+    }
+  }
+  /// Observed projection of `screenWorkingByTab`: tab → its worktree.
+  private var screenWorkingTabs: [UUID: Worktree.ID] = [:]
   /// Consecutive scan ticks a tab has produced neither a hook signal nor an
   /// interrupt hint. Past `screenWorkingQuietTickLimit` the tab drops out of
   /// the working-screen scan until a hook or a submit wakes it.
-  private var screenWorkingQuietTicks: [UUID: Int] = [:]
+  @ObservationIgnored private var screenWorkingQuietTicks: [UUID: Int] = [:]
   /// Per-tab one-shot timer that snapshots the surface and writes a
   /// synthetic lifecycle event when no agent hook lands within
   /// `firstHookDeadmanDelay`. Cancelled the moment any hook is observed
@@ -957,7 +973,7 @@ final class WorktreeTerminalManager {
     // The agent's own interrupt hint. Third source, and the only one that
     // survives a turn spent thinking with no tool call — the hook stream is
     // silent there, sometimes for minutes. See `isAgentWorkingScreen`.
-    if screenWorkingByTab[tabID.rawValue]?.worktreeID == worktreeID { return true }
+    if screenWorkingTabs[tabID.rawValue] == worktreeID { return true }
     return optimisticBusyByTab[tabID.rawValue]?.worktreeID == worktreeID
   }
 

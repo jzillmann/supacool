@@ -149,7 +149,7 @@ struct TerminalLinkRulesPullRequestTests {
       lines == """
         link-color = \\b(?:CEN-(?:3))\\b,#990099
         link-color = \\b(?:CEN-(?:1|2))\\b,#f2c94c
-        link-color = (?i)(?:(?:(?<![\\w./-])(?:acme/)?rocket#|github\\.com/acme/rocket/pull/)(?:5|9))\\b,#00ff00
+        link-color = (?:(?:(?<![\\w./-])(?:acme/)?rocket#|github\\.com/acme/rocket/pull/)(?:5|9))\\b,#00ff00
 
         """
     )

@@ -104,6 +104,9 @@ $(GHOSTTY_BUILD_OUTPUTS): $(GHOSTTY_PATCHES) | patch-ghostty
 	rsync -a --delete "$$src/" "$$dst/"; \
 	mkdir -p "$$terminfo_dst"; \
 	rsync -a --delete "$$terminfo_src/" "$$terminfo_dst/"
+	@# rsync -a keeps the source's old mtimes. Without this the outputs stay older
+	@# than the patches, and every build re-runs zig once per output.
+	@touch $(GHOSTTY_BUILD_OUTPUTS)
 
 build-app: build-ghostty-xcframework # Build the macOS app (Debug)
 	bash -o pipefail -c 'xcodebuild -project supacool.xcodeproj -scheme supacool -configuration Debug build -skipMacroValidation -clonedSourcePackagesDirPath "$(SPM_CACHE_DIR)" 2>&1 $(FORMATTER)'

@@ -686,9 +686,10 @@ final class GhosttyRuntime {
   /// user's config from disk, and every surface recompiles its `link` and
   /// `link-color` regexes. With a busy board (dozens of surfaces, PRs whose
   /// checks keep moving) a 1s debounce reloaded about once a second and took
-  /// half of the main thread, which made terminal scrolling stutter. Colors
-  /// that lag a PR's state by a few seconds are fine.
-  static let referenceReloadInterval: DispatchQueue.SchedulerTimeType.Stride = .seconds(20)
+  /// half of the main thread, which made terminal scrolling stutter. Even
+  /// throttled, one reload still blocks the main thread for a second or more
+  /// on a busy board, so colors may lag a PR's state by up to a minute.
+  static let referenceReloadInterval: DispatchQueue.SchedulerTimeType.Stride = .seconds(60)
 
   /// Reload ghostty when the board learns something that changes the
   /// reference rules (a new repo, a ticket moving to review, a PR going

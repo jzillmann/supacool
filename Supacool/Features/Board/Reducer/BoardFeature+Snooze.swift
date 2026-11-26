@@ -30,6 +30,42 @@ extension BoardFeature {
     return parkEffect
   }
 
+  /// Runs the Park / Standby / Snooze reducer, then hands focus to
+  /// `advanceTo` when the put-away card was the focused one. The target must
+  /// still exist; otherwise focus stays dropped (→ board), like the park
+  /// reducers do on their own.
+  func reducePutAwayFocusedSession(
+    state: inout State,
+    id: AgentSession.ID,
+    mode: PutAwayMode,
+    advanceTo: AgentSession.ID?,
+    repositories: [Repository]
+  ) -> Effect<Action> {
+    let wasFocused = state.focusedSessionID == id
+    let effect: Effect<Action> =
+      switch mode {
+      case .park:
+        reduceParkSession(state: &state, id: id, repositories: repositories)
+      case .standby:
+        reduceParkActiveSession(state: &state, id: id)
+      case .snooze(let option, let keepAlive):
+        reduceSnoozeSession(
+          state: &state,
+          id: id,
+          option: option,
+          keepAlive: keepAlive,
+          repositories: repositories
+        )
+      }
+    if wasFocused, state.focusedSessionID == nil,
+      let advanceTo, advanceTo != id,
+      state.sessions.contains(where: { $0.id == advanceTo })
+    {
+      state.focusedSessionID = advanceTo
+    }
+    return effect
+  }
+
   func reduceWakeSnoozedSessions(state: inout State) -> Effect<Action> {
     let now = date.now
     let due = state.sessions.filter { session in
@@ -94,3 +130,12 @@ extension BoardFeature {
 }
 
 private nonisolated struct SnoozeWakeTickerCancelID: Hashable, Sendable {}
+
+extension BoardFeature {
+  /// How a full-screen card is put away (see `Action.putAwayFocusedSession`).
+  nonisolated enum PutAwayMode: Equatable, Sendable {
+    case park
+    case standby
+    case snooze(SnoozeOption, keepAlive: Bool)
+  }
+}

@@ -250,3 +250,7 @@ Rules for anything that closes a terminal:
 - `GhosttySurfaceView.needsCloseConfirmation` wraps `ghostty_surface_needs_confirm_quit` for
   the tab case (which has no callback flag to read) and carries a DEBUG-only override,
   because unit tests have no live Ghostty app and would otherwise always see `false`.
+
+## The main window's minimum size is fixed, not measured
+
+A SwiftUI `Window` takes its minimum size from its content: on every constraint pass `NSHostingView` asks the whole view tree for its smallest size (`updateWindowContentSizeExtremaIfNecessary`). With a busy board that walk was about 15% of the main thread while scrolling or typing. `FixedMinimumSizeLayout` (`Supacool/App/`) wraps the main window's content and answers the size question itself (640×420), so the board is only laid out, never measured. To change the window's minimum size, change that constant — a `.frame(minWidth:)` deeper in the tree no longer reaches the window.

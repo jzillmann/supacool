@@ -302,14 +302,16 @@ struct SupacoolApp: App {
 
   var body: some Scene {
     Window("Supacool", id: WindowID.main) {
-      GhosttyColorSchemeSyncView(ghostty: ghostty) {
-        ContentView(store: store, terminalManager: terminalManager)
-          .environment(ghosttyShortcuts)
-          .environment(commandKeyObserver)
-          .environment(\.openURL, .preferredBrowser)
+      FixedMinimumSizeLayout(minimumSize: CGSize(width: 640, height: 420)) {
+        GhosttyColorSchemeSyncView(ghostty: ghostty) {
+          ContentView(store: store, terminalManager: terminalManager)
+            .environment(ghosttyShortcuts)
+            .environment(commandKeyObserver)
+            .environment(\.openURL, .preferredBrowser)
+        }
+        .openSettingsOnSelection(store: store)
+        .openDeeplinkCheatsheetOnRequest(store: store)
       }
-      .openSettingsOnSelection(store: store)
-      .openDeeplinkCheatsheetOnRequest(store: store)
     }
     .handlesExternalEvents(matching: [])
     .environment(ghosttyShortcuts)

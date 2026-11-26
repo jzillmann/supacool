@@ -16,11 +16,13 @@ extension BoardFeature {
     id: AgentSession.ID,
     repositories: [Repository]
   ) -> Effect<Action> {
-    guard let session = state.sessions.first(where: { $0.id == id }),
-      session.canStartReviewLoop,
+    guard let session = state.sessions.first(where: { $0.id == id }) else { return .none }
+    // PRs another session owns are that session's to review and fix.
+    let watchedKeys = PullRequestOwnershipIndex(sessions: state.sessions).watchedKeys(of: session)
+    guard session.canStartReviewLoop(excluding: watchedKeys),
       let repository = repositories.first(where: { $0.id == session.repositoryID })
     else { return .none }
-    let pullRequestURLs = Self.actionablePullRequestURLs(in: session)
+    let pullRequestURLs = Self.actionablePullRequestURLs(in: session, excluding: watchedKeys)
     guard let firstPullRequestURL = pullRequestURLs.first else { return .none }
 
     let primaryTabID = TerminalTabID(rawValue: session.primaryTerminalID)
@@ -936,14 +938,21 @@ extension BoardFeature {
   nonisolated static let reviewLoopCommitlessTurnLimit = 3
   nonisolated static let maximumStoredReviewReportLength = 12_000
 
-  nonisolated static func actionablePullRequestURL(in session: AgentSession) -> String? {
-    actionablePullRequestURLs(in: session).first
+  nonisolated static func actionablePullRequestURL(
+    in session: AgentSession,
+    excluding watchedKeys: Set<String> = []
+  ) -> String? {
+    actionablePullRequestURLs(in: session, excluding: watchedKeys).first
   }
 
   /// Every PR on the session that a review can act on: open, draft, or not
   /// yet resolved. Merged and closed PRs are history, not review subjects.
-  nonisolated static func actionablePullRequestURLs(in session: AgentSession) -> [String] {
-    session.reviewablePullRequests.compactMap { reference in
+  /// `watchedKeys` drops PRs another session owns.
+  nonisolated static func actionablePullRequestURLs(
+    in session: AgentSession,
+    excluding watchedKeys: Set<String> = []
+  ) -> [String] {
+    session.reviewablePullRequests(excluding: watchedKeys).compactMap { reference in
       guard case .pullRequest(let owner, let repo, let number, _, _) = reference else { return nil }
       return "https://github.com/\(owner)/\(repo)/pull/\(number)"
     }

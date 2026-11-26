@@ -55,7 +55,7 @@ nonisolated enum AgentRegistry {
 
   // MARK: - Built-ins
 
-  private static let builtins: [AgentType] = [claudeBuiltin, codexBuiltin, piBuiltin]
+  private static let builtins: [AgentType] = [claudeBuiltin, codexBuiltin, piBuiltin, antigravityBuiltin]
 
   private static let builtinByID: [String: AgentType] = Dictionary(
     uniqueKeysWithValues: builtins.map { ($0.id, $0) }
@@ -133,6 +133,30 @@ nonisolated enum AgentRegistry {
     launchTemplate: "{binary}{flags} {prompt}",
     resumeTemplate: "{binary} --session {id}{flags}",
     resumePickerTemplate: "{binary} -r{flags}",
+    skillSyntax: nil,
+    isBuiltin: true
+  )
+
+  // Antigravity CLI (`agy`, Google). Flags verified against agy 1.5.15 `--help`.
+  // - No model list: `agy models` ids churn per release; free-form still works,
+  //   and "Default" sends no flag so agy's own default applies.
+  // - Plan mode left off: agy uses `--mode plan`, not `--permission-mode plan`.
+  // - No hooks yet, so no busy state and no captured conversation id; the
+  //   picker falls back to `--continue` (agy's most recent conversation).
+  private static let antigravityBuiltin = AgentType(
+    id: "antigravity",
+    displayName: "Antigravity",
+    binary: "agy",
+    bypassPermissionsFlag: "--dangerously-skip-permissions",
+    supportsPlanMode: false,
+    modelFlag: "--model",
+    additionalDirsFlag: "--add-dir",
+    promptFlag: "-i",
+    icon: .symbol("sparkles"),
+    tintColorName: "blue",
+    launchTemplate: "{binary}{flags} {prompt}",
+    resumeTemplate: "{binary} --conversation {id}{flags}",
+    resumePickerTemplate: "{binary} --continue{flags}",
     skillSyntax: nil,
     isBuiltin: true
   )

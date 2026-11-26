@@ -64,6 +64,10 @@ struct SessionCardView: View {
   /// Called when the PR reference popover opens so visible PR states get
   /// a cache-throttled refresh without adding extra chrome to the popover.
   var onReferencesPopoverOpened: (() -> Void)?
+  /// Manual, unthrottled PR refresh from the popover's refresh button.
+  var onRefreshPullRequests: (() -> Void)?
+  /// True while any of this session's PRs is being fetched.
+  var isRefreshingPullRequests = false
   /// Unlink a wrongly-associated Linear ticket / GitHub PR reference.
   var onRemoveReference: ((SessionReference) -> Void)?
   /// Manually link a work item: the raw text (a pasted PR URL or a typed
@@ -125,7 +129,7 @@ struct SessionCardView: View {
           ReviewLoopControl(
             state: session.reviewLoop,
             canStart: canStartReviewLoop,
-            startSubject: session.reviewablePullRequestsLabel,
+            startSubject: session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys),
             onStart: { onStartReviewLoop?() },
             onOpenReviewer: { onOpenReviewLoopReviewer?() },
             onDiagnose: { onDiagnoseReviewLoop?() },
@@ -338,7 +342,7 @@ struct SessionCardView: View {
       } else if session.reviewLoop != nil {
         if canStartReviewLoop, let onStartReviewLoop {
           Button(
-            "New Review Loop on \(session.reviewablePullRequestsLabel)",
+            "New Review Loop on \(session.reviewablePullRequestsLabel(excluding: pullRequestOwnership.watchedKeys))",
             systemImage: "arrow.counterclockwise",
             action: onStartReviewLoop
           )
@@ -406,7 +410,7 @@ struct SessionCardView: View {
   }
 
   private var canStartReviewLoop: Bool {
-    onStartReviewLoop != nil && session.canStartReviewLoop
+    onStartReviewLoop != nil && session.canStartReviewLoop(excluding: pullRequestOwnership.watchedKeys)
   }
 
   private func priorityButton(action: @escaping () -> Void) -> some View {
@@ -770,6 +774,8 @@ struct SessionCardView: View {
     SessionReferenceSummaryChips(
       references: session.references,
       onPullRequestsPopoverOpened: onReferencesPopoverOpened,
+      onRefreshPullRequests: onRefreshPullRequests,
+      isRefreshingPullRequests: isRefreshingPullRequests,
       onRemoveReference: onRemoveReference,
       onAddLink: onAddReference == nil
         ? nil
@@ -978,7 +984,10 @@ struct ReferenceChip: View {
       }
     } label: {
       HStack(spacing: 3) {
-        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
+        PullRequestOwnershipGlyph(
+          role: pullRequestOwnership.role(for: reference),
+          onOpenSession: pullRequestOwnership.onOpenSession
+        )
         if case .pullRequest(_, _, _, let state, _) = reference, let state {
           Image(systemName: state.systemImage)
             .font(.caption2)
@@ -1298,6 +1307,9 @@ private struct RelatedTicketsSection: View {
 struct SessionReferenceSummaryChips: View {
   let references: [SessionReference]
   var onPullRequestsPopoverOpened: (() -> Void)?
+  /// Manual PR refresh from the popover header. Nil hides the button.
+  var onRefreshPullRequests: (() -> Void)?
+  var isRefreshingPullRequests = false
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)?
   /// Manually attach a work item. Surfaced as "Add link…" in each chip's
@@ -1438,6 +1450,8 @@ struct SessionReferenceSummaryChips: View {
         references: pullRequests,
         linearOrgSlug: linearOrgSlug,
         onPopoverOpened: onPullRequestsPopoverOpened,
+        onRefresh: onRefreshPullRequests,
+        isRefreshing: isRefreshingPullRequests,
         onRemoveReference: onRemoveReference,
         onAddLink: onAddLink,
         prReferenceSnapshots: prReferenceSnapshots,
@@ -1570,6 +1584,11 @@ private struct ReferenceStackChip: View {
   let references: [SessionReference]
   let linearOrgSlug: String
   var onPopoverOpened: (() -> Void)?
+  /// Manual refresh button in the popover header. Nil hides it.
+  var onRefresh: (() -> Void)?
+  /// Shows a spinner in place of the refresh button while a fetch runs —
+  /// manual or automatic.
+  var isRefreshing = false
   /// Unlink a wrongly-associated reference. Nil hides the affordance.
   var onRemoveReference: ((SessionReference) -> Void)?
   /// Manually attach another work item. Nil hides the affordance.
@@ -1722,9 +1741,13 @@ private struct ReferenceStackChip: View {
 
   private var popoverContent: some View {
     VStack(alignment: .leading, spacing: 8) {
-      Label(kind.title, systemImage: kind.systemImage)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
+      HStack {
+        Label(kind.title, systemImage: kind.systemImage)
+          .font(.caption.weight(.semibold))
+          .foregroundStyle(.secondary)
+        Spacer(minLength: 12)
+        refreshControl
+      }
       VStack(alignment: .leading, spacing: 4) {
         ForEach(popoverPresentation.primaryReferences, id: \.dedupeKey) { reference in
           referenceRow(reference)
@@ -1747,6 +1770,24 @@ private struct ReferenceStackChip: View {
     }
     .padding(12)
     .frame(minWidth: 220, maxWidth: 420, alignment: .leading)
+  }
+
+  @ViewBuilder
+  private var refreshControl: some View {
+    if isRefreshing {
+      ProgressView()
+        .controlSize(.mini)
+        .help("Refreshing pull request status…")
+    } else if let onRefresh {
+      Button(action: onRefresh) {
+        Image(systemName: "arrow.clockwise")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
+      .buttonStyle(.plain)
+      .help("Refresh pull request status now")
+      .accessibilityLabel("Refresh pull requests")
+    }
   }
 
   @ViewBuilder
@@ -1807,7 +1848,11 @@ private struct ReferenceStackChip: View {
       open(reference)
     } label: {
       HStack(spacing: 8) {
-        PullRequestOwnershipGlyph(role: pullRequestOwnership.role(for: reference))
+        PullRequestOwnershipGlyph(
+          role: pullRequestOwnership.role(for: reference),
+          onOpenSession: pullRequestOwnership.onOpenSession,
+          afterOpen: { isPopoverShown = false }
+        )
         Image(systemName: rowSystemImage(for: reference))
           .font(.caption)
           .foregroundStyle(rowTint(for: reference))

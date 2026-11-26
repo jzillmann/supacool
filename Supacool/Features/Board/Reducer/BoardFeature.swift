@@ -96,6 +96,14 @@ struct BoardFeature {
     /// clears it so each full-screen run gets a fresh trail. Not persisted.
     var focusHistory: [AgentSession.ID] = []
 
+    /// Where the user last was (a full-screen session, or the board) under
+    /// each repo-filter selection, keyed by the selected repository IDs
+    /// (empty set = "All"). Switching the repo filter restores the location
+    /// remembered for the destination selection instead of always landing
+    /// on its first card. Recorded when a filter selection is left. Not
+    /// persisted, like `focusedSessionID`.
+    var lastLocationByRepositoryFilter: [Set<String>: BoardLocation] = [:]
+
     /// Where to land when the *focused* session is removed. Set by the
     /// full-screen "Remove" affordance so deleting an unwanted card while
     /// stepping through a bucket (⌘/) advances to the next card instead of
@@ -717,6 +725,15 @@ struct BoardFeature {
     )
     /// Periodic tick: unpark every snoozed session whose time has come.
     case _wakeSnoozedSessions
+    /// Full-screen Park / Standby / Snooze: put the focused card away, then
+    /// step to `advanceTo` (the next card in the same bucket) instead of
+    /// dropping to the board — same stepping as the full-screen Remove.
+    case putAwayFocusedSession(
+      id: AgentSession.ID,
+      mode: PutAwayMode,
+      advanceTo: AgentSession.ID?,
+      repositories: [Repository]
+    )
 
     // MARK: Composition (multi-terminal sessions)
     /// User tapped the `+` in the session-scoped tab strip. Appends a
@@ -992,8 +1009,10 @@ struct BoardFeature {
     )
     /// User-visible refresh hook for PR reference chips/popovers. Scoped
     /// to one session and throttled by `prStateCacheWindow` so repeated
-    /// clicks do not spawn repeated `gh pr view` calls.
-    case refreshPRReferences(id: AgentSession.ID)
+    /// clicks do not spawn repeated `gh pr view` calls. `force` (the popover's
+    /// refresh button) skips the success cache and failure backoff — the user
+    /// just merged something and wants to see it now.
+    case refreshPRReferences(id: AgentSession.ID, force: Bool = false)
     /// User unlinked a wrongly-associated reference from a card. Drops it
     /// from `references` and records its dedupe key in `dismissedReferenceKeys`
     /// so a later transcript rescan does not re-surface it.
@@ -1842,6 +1861,15 @@ struct BoardFeature {
       case ._wakeSnoozedSessions:
         return reduceWakeSnoozedSessions(state: &state)
 
+      case .putAwayFocusedSession(let id, let mode, let advanceTo, let repositories):
+        return reducePutAwayFocusedSession(
+          state: &state,
+          id: id,
+          mode: mode,
+          advanceTo: advanceTo,
+          repositories: repositories
+        )
+
       case .addShellTerminalToSession(let id, let repositories):
         guard let session = state.sessions.first(where: { $0.id == id }) else {
           return .none
@@ -1965,21 +1993,21 @@ struct BoardFeature {
         return .none
 
       case .toggleRepository(let repositoryID):
-        state.$filters.withLock { filters in
-          if filters.selectedRepositoryIDs.contains(repositoryID) {
-            filters.selectedRepositoryIDs.remove(repositoryID)
-          } else {
-            filters.selectedRepositoryIDs.insert(repositoryID)
-          }
+        var selection = state.filters.selectedRepositoryIDs
+        if selection.contains(repositoryID) {
+          selection.remove(repositoryID)
+        } else {
+          selection.insert(repositoryID)
         }
+        switchRepositoryFilter(state: &state, to: selection)
         return .none
 
       case .focusRepository(let repositoryID):
-        state.$filters.withLock { $0.selectedRepositoryIDs = [repositoryID] }
+        switchRepositoryFilter(state: &state, to: [repositoryID])
         return .none
 
       case .showAllRepositories:
-        state.$filters.withLock { $0.selectedRepositoryIDs = [] }
+        switchRepositoryFilter(state: &state, to: [])
         return .none
 
       case .searchQueryChanged(let query):
@@ -2703,8 +2731,8 @@ struct BoardFeature {
       case .removeNote(let sessionID, let noteID):
         return reduceRemoveNote(state: &state, sessionID: sessionID, noteID: noteID)
 
-      case .refreshPRReferences(let id):
-        return reduceRefreshPRReferences(state: &state, id: id)
+      case .refreshPRReferences(let id, let force):
+        return reduceRefreshPRReferences(state: &state, id: id, force: force)
 
       case ._refreshPRStatus(let id, let ref):
         return reduceRefreshPRStatus(state: &state, id: id, ref: ref)

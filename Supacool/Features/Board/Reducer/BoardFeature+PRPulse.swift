@@ -73,6 +73,7 @@ extension BoardFeature {
     refKey: String,
     snapshot: PullRequestSnapshot
   ) -> Effect<Action> {
+    let snapshot = snapshot.keepingKnownMergeability(from: state.prReferenceSnapshots[refKey])
     // Apply the fetched state to every session that references this
     // PR. Single network result, all sessions updated.
     let outcome = Self.pullRequestReturnOutcome(
@@ -178,6 +179,7 @@ extension BoardFeature {
     // was in flight; don't resurrect its snapshot.
     if state.prPulseTargets.contains(where: { $0.repositoryID == snapshot.repositoryID }) {
       snapshot.fetchedAt = date.now
+      snapshot = snapshot.keepingKnownMergeability(from: state.prPulseSnapshots[snapshot.repositoryID])
       state.prPulseSnapshots[snapshot.repositoryID] = snapshot
       // Drop ignore keys for this repo's PRs that are no longer open
       // (merged/closed) so the "N ignored" count stays truthful.

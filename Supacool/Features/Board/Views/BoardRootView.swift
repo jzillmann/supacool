@@ -326,17 +326,10 @@ struct BoardRootView: View {
           }
           : nil,
         onPark: (sessionStatus != .parked)
-          ? {
-            store.send(
-              .parkSession(
-                id: session.id,
-                repositories: Array(repositories)
-              )
-            )
-          }
+          ? { putAwayFocusedSession { _ in .park } }
           : nil,
         onParkActive: (sessionStatus != .parked && sessionHasTab)
-          ? { store.send(.parkActiveSession(id: session.id)) }
+          ? { putAwayFocusedSession { _ in .standby } }
           : nil,
         onUnpark: (sessionStatus == .parked && sessionHasTab)
           ? { store.send(.unparkSession(id: session.id)) }
@@ -344,14 +337,7 @@ struct BoardRootView: View {
         // A live tab snoozes into Standby so the conversation is still there on wake.
         onSnooze: (sessionStatus != .parked)
           ? { option in
-            store.send(
-              .snoozeSession(
-                id: session.id,
-                option: option,
-                keepAlive: sessionHasTab,
-                repositories: Array(repositories)
-              )
-            )
+            putAwayFocusedSession { .snooze(option, keepAlive: sessionTabExists($0)) }
           }
           : nil,
         onRemove: {
@@ -365,7 +351,7 @@ struct BoardRootView: View {
         onReconnect: session.isRemote
           ? { store.send(.reconnectRemoteSession(id: session.id)) }
           : nil,
-        onRename: { beginRename(session) },
+        onRename: { beginRename(session.id) },
         onTogglePriority: { store.send(.togglePriority(id: session.id)) },
         serverLifecycle: store.serverLifecycleByWorkspace[session.currentWorkspacePath],
         onServerLifecycleRefresh: {
@@ -423,6 +409,10 @@ struct BoardRootView: View {
         onReferencesPopoverOpened: {
           store.send(.refreshPRReferences(id: session.id))
         },
+        onRefreshPullRequests: {
+          store.send(.refreshPRReferences(id: session.id, force: true))
+        },
+        isRefreshingPullRequests: session.references.contains { store.prRefreshInFlight.contains($0.dedupeKey) },
         onRemoveReference: { reference in
           store.send(.removeReference(id: session.id, dedupeKey: reference.dedupeKey))
         },
@@ -517,7 +507,9 @@ struct BoardRootView: View {
     }
   }
 
-  private func beginRename(_ session: AgentSession) {
+  private func beginRename(_ id: AgentSession.ID) {
+    // Looked up at click time: a menu closure can hold an old copy of the name.
+    guard let session = store.sessions.first(where: { $0.id == id }) else { return }
     renameDraft = session.displayName
     renamingSessionID = session.id
   }
@@ -744,6 +736,28 @@ struct BoardRootView: View {
   private var hasUsableFocusHistory: Bool {
     let visibleIDs = Set(store.visibleSessions.map(\.id))
     return store.focusHistory.contains { $0 != store.focusedSessionID && visibleIDs.contains($0) }
+  }
+
+  /// Park / Standby / Snooze from the full-screen view: put the card away and
+  /// step to the next card in its bucket (same target as Remove), dropping
+  /// to the board only when it was the bucket's only card.
+  ///
+  /// Reads the focused session at click time: the header `Menu` can keep the
+  /// closures of the card shown earlier, because the view stays mounted while
+  /// focus steps between cards. A captured id then re-parks that earlier card
+  /// and leaves the visible one where it is.
+  private func putAwayFocusedSession(_ mode: (AgentSession) -> BoardFeature.PutAwayMode) {
+    guard let id = store.focusedSessionID,
+      let session = store.sessions.first(where: { $0.id == id })
+    else { return }
+    store.send(
+      .putAwayFocusedSession(
+        id: id,
+        mode: mode(session),
+        advanceTo: removalAdvanceTarget(removing: id),
+        repositories: Array(repositories)
+      )
+    )
   }
 
   /// Where focus should land after removing the focused card `id`. Mirrors
@@ -987,10 +1001,11 @@ struct BoardRootView: View {
     reconcileFocusedSessionAfterRepositoryFilterChange()
   }
 
-  /// When the shared toolbar changes repo filters from inside a focused
-  /// terminal, keep showing that terminal if it is still in scope; otherwise
-  /// jump to the first visible session for the newly selected repo, or the
-  /// board if that repo has no sessions yet.
+  /// Fallback after a repo-filter change. The reducer first restores the
+  /// location remembered for the new selection (see
+  /// `BoardFeature.switchRepositoryFilter`). If nothing was remembered and
+  /// the focused terminal left scope, jump to the first visible session for
+  /// the newly selected repo, or the board if that repo has no sessions yet.
   private func reconcileFocusedSessionAfterRepositoryFilterChange() {
     guard let focusedID = store.focusedSessionID else { return }
     if let focusedSession = store.sessions.first(where: { $0.id == focusedID }),
@@ -1013,7 +1028,7 @@ struct BoardRootView: View {
       terminalManager: terminalManager,
       classify: { classify($0) },
       onAddRepository: onAddRepository,
-      onRenameSession: { session in beginRename(session) },
+      onRenameSession: { session in beginRename(session.id) },
       highlightedSessionID: $highlightedSessionID,
       selectedSessionIDs: $selectedSessionIDs
     )

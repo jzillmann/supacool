@@ -46,16 +46,38 @@ struct PullRequestOwnershipChipContext {
 /// The leading chip glyph for a PR another session owns: a yellow warning
 /// while the overlap is unconfirmed, a quiet eye once the user said this
 /// session only watches (or the PR is settled). Nothing for an owned PR.
+///
+/// With `onOpenSession` wired the glyph is a button that jumps to the owning
+/// session — the same verb as the "Open Owner" menu item, one click away.
+/// `afterOpen` lets a popover close itself.
 struct PullRequestOwnershipGlyph: View {
   let role: PullRequestRole?
+  var onOpenSession: ((AgentSession.ID) -> Void)?
+  var afterOpen: () -> Void = {}
 
   var body: some View {
-    if let role, role.isWatcher {
-      Image(systemName: role.needsAttention ? "exclamationmark.triangle.fill" : "eye")
-        .font(.caption2)
-        .foregroundStyle(role.needsAttention ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
-        .accessibilityLabel(role.needsAttention ? "Owned by another session" : "Watching")
+    if let role, case .watcher(let owner, _, _) = role {
+      if let onOpenSession {
+        Button {
+          onOpenSession(owner.id)
+          afterOpen()
+        } label: {
+          glyph(role)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Owned by “\(owner.name)” — click to open that session")
+      } else {
+        glyph(role)
+      }
     }
+  }
+
+  private func glyph(_ role: PullRequestRole) -> some View {
+    Image(systemName: role.needsAttention ? "exclamationmark.triangle.fill" : "eye")
+      .font(.caption2)
+      .foregroundStyle(role.needsAttention ? AnyShapeStyle(.yellow) : AnyShapeStyle(.secondary))
+      .accessibilityLabel(role.needsAttention ? "Owned by another session" : "Watching")
   }
 }
 

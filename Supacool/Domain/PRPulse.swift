@@ -30,9 +30,9 @@ nonisolated struct MonitoredPullRequest: Equatable, Sendable, Identifiable {
   /// Raw gh value: "", "APPROVED", "CHANGES_REQUESTED", "REVIEW_REQUIRED".
   let reviewDecision: String?
   /// Raw `gh` mergeability ("MERGEABLE" / "CONFLICTING" / "UNKNOWN" / nil).
-  let mergeable: String?
+  var mergeable: String?
   /// Raw `gh` merge-state status ("CLEAN" / "DIRTY" / "BLOCKED" / ...).
-  let mergeStateStatus: String?
+  var mergeStateStatus: String?
   /// Individual status checks as reported by `gh pr list`. Kept raw so the
   /// popover can expand a per-check breakdown with links to each CI run.
   let statusChecks: [GithubPullRequestStatusCheck]
